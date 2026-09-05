@@ -34,6 +34,7 @@ from models import (  # noqa: E402
     FolderPlan,
     NonJobRouting,
     OtherCategory,
+    TimeWindow,
     TriageItem,
 )
 
@@ -351,6 +352,44 @@ class TestMainWindow:
         window = MainWindow(settings, InMemoryCredentialStore())
         yield window
         window.close()
+
+    def test_startup_does_not_read_the_keychain(self, qapp, tmp_path):
+        """Reading the Keychain also imports keyring, which is the single
+        largest avoidable cost between launching and seeing a window."""
+        settings = Settings(icloud_email="you@icloud.example", provider="gemini")
+        store = InMemoryCredentialStore()
+        reads = []
+        original = store.get_provider_key
+        store.get_provider_key = lambda name: (reads.append(name), original(name))[1]
+
+        window = MainWindow(settings, store)
+        try:
+            assert reads == []
+            # It happens once the window is up, and the answer is then reused.
+            window._probe_api_keys()
+            assert reads
+            before = len(reads)
+            window.store_has_key(settings.provider)
+            window.store_has_key(settings.provider)
+            assert len(reads) == before
+        finally:
+            window.close()
+
+    def test_key_cache_is_dropped_when_settings_change(self, window):
+        window._key_present["gemini"] = True
+        window.forget_key_cache("gemini")
+        assert "gemini" not in window._key_present
+        window._key_present["gemini"] = True
+        window.forget_key_cache()
+        assert window._key_present == {}
+
+    def test_calendar_popup_is_built_only_when_the_custom_range_is_used(self, window):
+        """QDateEdit.setCalendarPopup builds a whole QCalendarWidget, which is
+        about a tenth of a second a field. Nobody should pay that on launch."""
+        assert window.start_date.calendarPopup() is False
+        window._window_selected(TimeWindow.CUSTOM)
+        assert window.start_date.calendarPopup() is True
+        assert window.end_date.calendarPopup() is True
 
     def test_constructs_and_starts_empty(self, window):
         assert window.model.rowCount() == 0

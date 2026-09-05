@@ -8,6 +8,8 @@ import stat
 
 import pytest
 
+import config
+
 from config import (
     ANTHROPIC_ACCOUNT,
     CredentialError,
@@ -331,3 +333,54 @@ class TestInMemoryStore:
     def test_is_not_persistent(self):
         InMemoryCredentialStore().set_anthropic_key("sk-ant-x")
         assert InMemoryCredentialStore().get_anthropic_key() == ""
+
+
+# --------------------------------------------------------------------------
+# Carrying settings across the rename
+# --------------------------------------------------------------------------
+def test_settings_survive_the_rename(tmp_path, monkeypatch):
+    """Renaming the app moved its Application Support directory. Without this
+    the rename would look, to anyone upgrading, like their settings vanished."""
+    support = tmp_path / "Application Support"
+    legacy = support / config.LEGACY_APP_NAME
+    legacy.mkdir(parents=True)
+    (legacy / "settings.json").write_text(
+        json.dumps({"icloud_email": "you@icloud.example", "imap_port": 993}),
+        encoding="utf-8",
+    )
+    (legacy / "agent-status.json").write_text("{}", encoding="utf-8")
+
+    current = support / "Mail Manager"
+    monkeypatch.setattr(config, "app_support_dir", lambda: current)
+    monkeypatch.delenv("ICLOUD_TRIAGE_HOME", raising=False)
+
+    assert config.Settings.load().icloud_email == "you@icloud.example"
+    # Everything beside the settings comes too, and the originals stay put so
+    # an older build still finds its own copy.
+    assert (current / "agent-status.json").is_file()
+    assert (legacy / "settings.json").is_file()
+
+
+def test_migration_never_overwrites_current_settings(tmp_path, monkeypatch):
+    support = tmp_path / "Application Support"
+    legacy = support / config.LEGACY_APP_NAME
+    legacy.mkdir(parents=True)
+    (legacy / "settings.json").write_text(
+        json.dumps({"icloud_email": "old@icloud.example"}), encoding="utf-8")
+
+    current = support / "Mail Manager"
+    current.mkdir(parents=True)
+    (current / "settings.json").write_text(
+        json.dumps({"icloud_email": "new@icloud.example"}), encoding="utf-8")
+
+    monkeypatch.setattr(config, "app_support_dir", lambda: current)
+    monkeypatch.delenv("ICLOUD_TRIAGE_HOME", raising=False)
+
+    assert config.migrate_legacy_support_files() == []
+    assert config.Settings.load().icloud_email == "new@icloud.example"
+
+
+def test_migration_is_skipped_when_the_home_is_overridden(tmp_path, monkeypatch):
+    monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+    assert config.legacy_app_support_dir() is None
+    assert config.migrate_legacy_support_files() == []

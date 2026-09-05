@@ -1569,6 +1569,8 @@ class MainWindow(QMainWindow):
         self.folder_plan: Optional[FolderPlan] = FolderPlan(
             root=settings.folder_root, other_root=settings.other_folder_root
         )
+        #: Which providers have a key in the Keychain. See store_has_key.
+        self._key_present: Dict[str, bool] = {}
         self._prompt_cache: Dict[str, str] = {}
         self._prompt_engine: Optional[llm_engine.LLMEngine] = None
         self._prompt_engine_key: Optional[tuple] = None
@@ -1759,11 +1761,12 @@ class MainWindow(QMainWindow):
         self.window_label.setToolTip("The period the next scan will cover.")
         row.addWidget(self.window_label)
 
+        # The calendar popup is not built here: setCalendarPopup constructs a
+        # full QCalendarWidget, which is about a tenth of a second per field.
+        # _sync_range_visibility turns it on the first time the fields show.
         self.start_date = QDateEdit()
-        self.start_date.setCalendarPopup(True)
         self.start_date.setDisplayFormat("d MMM yyyy")
         self.end_date = QDateEdit()
-        self.end_date.setCalendarPopup(True)
         self.end_date.setDisplayFormat("d MMM yyyy")
         today = QDate.currentDate()
         self.start_date.setDate(_stored_date(self.settings.custom_start, today.addDays(-7)))
@@ -1842,7 +1845,7 @@ class MainWindow(QMainWindow):
                     lambda checked=False, p=name, m=choice.value: self._switch_model(p, m)
                 )
                 section.addAction(action)
-            if spec.needs_api_key and not self.store_has_key(name):
+            if spec.needs_api_key and not self.store_has_key(name, probe=False):
                 section.addSeparator()
                 missing = QAction("No API key stored - open Settings…", self)
                 missing.triggered.connect(self.open_settings)
@@ -1864,11 +1867,41 @@ class MainWindow(QMainWindow):
         self.model_menu.addAction(more)
         self._refresh_model_button()
 
-    def store_has_key(self, provider: str) -> bool:
+    def store_has_key(self, provider: str, probe: bool = True) -> bool:
+        """Whether a key is stored for `provider`.
+
+        Answers are cached: reading the Keychain is a system call, and the
+        first one also pays for importing ``keyring``. With `probe` false the
+        Keychain is left alone and an unknown provider is assumed to be set up,
+        which keeps that cost off the path between launch and a visible window.
+        """
+        cached = self._key_present.get(provider)
+        if cached is not None:
+            return cached
+        if not probe:
+            return True
         try:
-            return bool(self.store.get_provider_key(provider))
+            cached = bool(self.store.get_provider_key(provider))
         except CredentialError:
-            return False
+            cached = False
+        self._key_present[provider] = cached
+        return cached
+
+    def _probe_api_keys(self) -> None:
+        """Fill the key cache once the window is up, and show any warning then."""
+        before = dict(self._key_present)
+        for name, _label, _blurb in providers.provider_choices():
+            if providers.provider_class(name).needs_api_key:
+                self.store_has_key(name)
+        if self._key_present != before:
+            self._rebuild_model_menu()
+
+    def forget_key_cache(self, provider: Optional[str] = None) -> None:
+        """Drop what store_has_key remembered, after a key is added or removed."""
+        if provider is None:
+            self._key_present.clear()
+        else:
+            self._key_present.pop(provider, None)
 
     def _refresh_model_button(self) -> None:
         if hasattr(self, "preview"):
@@ -1878,7 +1911,8 @@ class MainWindow(QMainWindow):
             (c.label for c in spec.models if c.value == self.settings.model),
             self.settings.model,
         )
-        warn = spec.needs_api_key and not self.store_has_key(self.settings.provider)
+        warn = spec.needs_api_key and not self.store_has_key(
+            self.settings.provider, probe=False)
         self.model_button.setText(f"⚙︎  {pretty}" + ("  ⚠︎" if warn else ""))
         self.model_button.setToolTip(
             f"{spec.label} · {self.settings.model}\n"
@@ -2177,6 +2211,7 @@ class MainWindow(QMainWindow):
         if not self._first_run_checked:
             self._first_run_checked = True
             QTimer.singleShot(0, self, self._first_run_check)
+            QTimer.singleShot(0, self, self._probe_api_keys)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self.shutdown()
@@ -2401,6 +2436,8 @@ class MainWindow(QMainWindow):
             dialog.persist_credentials(new_settings)
         except CredentialError as exc:
             QMessageBox.warning(self, "Keychain", str(exc))
+        # Keys may have just been added or cleared.
+        self.forget_key_cache()
 
         preserved = (
             self.settings.window_geometry,
@@ -2432,6 +2469,9 @@ class MainWindow(QMainWindow):
 
     def _sync_range_visibility(self) -> None:
         custom = self.settings.window is TimeWindow.CUSTOM
+        if custom and not self.start_date.calendarPopup():
+            for field in (self.start_date, self.end_date):
+                field.setCalendarPopup(True)
         for widget in self.range_widgets:
             widget.setVisible(custom)
         self._refresh_window_label()
