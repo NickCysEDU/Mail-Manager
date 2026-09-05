@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# Build "Mail Manager.app" from a clean checkout.
+#
+#   ./build_app.sh            # venv + deps + icon + tests + bundle
+#   ./build_app.sh --skip-tests
+#
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+PYTHON_BIN="${PYTHON_BIN:-}"
+SKIP_TESTS=0
+for arg in "$@"; do
+  case "$arg" in
+    --skip-tests) SKIP_TESTS=1 ;;
+    *) echo "unknown option: $arg" >&2; exit 2 ;;
+  esac
+done
+
+# --- 1. Find a Python 3.11+ interpreter -------------------------------------
+# Homebrew keeps python@3.x un-linked, so PATH alone is not enough; the
+# framework and Cellar locations are searched too.
+is_supported() {
+  [[ -x "$1" ]] && "$1" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)'     >/dev/null 2>&1
+}
+
+if [[ -z "$PYTHON_BIN" ]]; then
+  # An existing .venv already knows which interpreter works here.
+  if is_supported ".venv/bin/python"; then
+    PYTHON_BIN="$(cd .venv/bin && ./python -c 'import sys; print(sys.base_prefix)')/bin/python3"
+    is_supported "$PYTHON_BIN" || PYTHON_BIN=""
+  fi
+fi
+
+if [[ -z "$PYTHON_BIN" ]]; then
+  for candidate in python3.14 python3.13 python3.12 python3.11 python3; do
+    if command -v "$candidate" >/dev/null 2>&1 && is_supported "$(command -v "$candidate")"; then
+      PYTHON_BIN="$(command -v "$candidate")"
+      break
+    fi
+  done
+fi
+
+if [[ -z "$PYTHON_BIN" ]]; then
+  for candidate in \
+      /opt/homebrew/opt/python@3.1[1-9]/bin/python3.1[1-9] \
+      /usr/local/opt/python@3.1[1-9]/bin/python3.1[1-9] \
+      /Library/Frameworks/Python.framework/Versions/3.1[1-9]/bin/python3.1[1-9]; do
+    if is_supported "$candidate"; then
+      PYTHON_BIN="$candidate"
+      break
+    fi
+  done
+fi
+
+if [[ -z "$PYTHON_BIN" ]]; then
+  echo "error: Python 3.11+ not found." >&2
+  echo "       Install it with:  brew install python@3.12" >&2
+  echo "       Or point at one:  PYTHON_BIN=/path/to/python3.12 ./build_app.sh" >&2
+  exit 1
+fi
+echo "==> Using $PYTHON_BIN ($("$PYTHON_BIN" --version))"
+
+# --- 2. Virtual environment --------------------------------------------------
+if [[ ! -d .venv ]]; then
+  echo "==> Creating .venv"
+  "$PYTHON_BIN" -m venv .venv
+fi
+# shellcheck disable=SC1091
+source .venv/bin/activate
+python -m pip install --upgrade pip --quiet
+echo "==> Installing dependencies"
+python -m pip install --quiet -r requirements-dev.txt
+
+# --- 3. Icon -----------------------------------------------------------------
+if [[ ! -f assets/icon.icns ]]; then
+  echo "==> Generating the app icon"
+  QT_QPA_PLATFORM=offscreen python tools/make_icon.py
+fi
+
+# --- 4. Tests ----------------------------------------------------------------
+if [[ "$SKIP_TESTS" -eq 0 ]]; then
+  echo "==> Running the test suite"
+  QT_QPA_PLATFORM=offscreen python -m pytest
+fi
+
+# --- 5. Bundle ---------------------------------------------------------------
+echo "==> Building the .app bundle"
+rm -rf build "dist/Mail Manager.app" "dist/iCloud Job Triage"
+python -m PyInstaller --clean --noconfirm MailManager.spec
+
+APP="dist/Mail Manager.app"
+if [[ ! -d "$APP" ]]; then
+  echo "error: build did not produce $APP" >&2
+  exit 1
+fi
+
+# --- 6. Ad-hoc signature -----------------------------------------------------
+# Unsigned bundles are quarantined by Gatekeeper on first launch. An ad-hoc
+# signature is enough for a local build; replace "-" with your Developer ID
+# to distribute it.
+echo "==> Signing (ad-hoc)"
+codesign --force --deep --sign - "$APP" 2>/dev/null || \
+  echo "    (codesign unavailable — right-click → Open on first launch)"
+xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
+
+SIZE="$(du -sh "$APP" | cut -f1)"
+echo
+echo "==> Done. $APP ($SIZE)"
+echo "    open \"$APP\"                       # run it"
+echo "    cp -R \"$APP\" /Applications/        # install it"

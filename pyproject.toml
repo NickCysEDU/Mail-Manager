@@ -1,0 +1,32 @@
+[project]
+name = "icloud-job-triage"
+version = "1.0.0"
+description = "Scan, summarise and categorise job-search email in iCloud Mail with Claude."
+requires-python = ">=3.11"
+readme = "README.md"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+# A hung test must never wedge the build; the suite runs in ~12s.
+addopts = "-q --strict-markers --strict-config --timeout=60 --timeout-method=thread"
+filterwarnings = [
+    "error::DeprecationWarning:gui",
+    "error::DeprecationWarning:models",
+    "error::DeprecationWarning:imap_engine",
+    "error::DeprecationWarning:llm_engine",
+    "error::DeprecationWarning:config",
+    "error::DeprecationWarning:workers",
+]
+
+[tool.coverage.run]
+source = ["."]
+omit = ["tests/*", "tools/*", ".venv/*", "build/*", "dist/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
