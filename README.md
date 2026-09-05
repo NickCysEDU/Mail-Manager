@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/icon.png" width="128" alt="Mail Manager">
+<img src="docs/assets/icon-128.png" width="112" height="112" alt="Mail Manager">
 
 # Mail Manager
 
@@ -13,7 +13,7 @@
 
 ![macOS 13+](https://img.shields.io/badge/macOS-13%2B-black)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue)
-![Tests](https://img.shields.io/badge/tests-1%2C017%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-1%2C037%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
 <img src="docs/screenshot.png" width="900" alt="The approval table, with a summary, category, destination folder and confidence score for every message">
@@ -169,7 +169,7 @@ log. [Full details in SECURITY.md](SECURITY.md).
 
 ```bash
 ./dev demo      # the app with sample mail, no setup
-./dev test      # 1,017 tests, about 30 seconds
+./dev test      # 1,037 tests, about 30 seconds
 ./dev eval      # sorter accuracy against the labelled fixture
 ./dev fake      # the whole pipeline in the terminal, offline
 ```

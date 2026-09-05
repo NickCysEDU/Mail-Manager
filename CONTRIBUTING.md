@@ -41,3 +41,31 @@ fall.
 Precision matters more than recall here. A message the sorter is unsure about
 goes to Needs Review, which costs a few seconds. A message it is confidently
 wrong about ends up in a folder nobody checks.
+
+## The icon
+
+The icon is drawn in code, not stored as art. `tools/make_icon.py` renders
+every size the app and the website need:
+
+```bash
+python tools/make_icon.py
+```
+
+That writes `assets/icon.png` and `assets/icon.icns` for the bundle, and the
+favicon, logo and social card under `docs/assets/`. Commit the results; the
+build does not regenerate them.
+
+Two things are worth knowing before changing it:
+
+- The outline is not a rounded rectangle and not a superellipse. macOS keeps a
+  straight edge out to about 60% of the half-width and then turns through a
+  corner fitting an exponent of 1.8. Those numbers were measured off
+  `Mail.app`, and `tests/test_icons.py` holds them, because a shape that is
+  even slightly rounder reads as "not a Mac app" next to the system icons.
+- Below 44 points the drawing changes rather than shrinking: the shadow goes,
+  the gradient flattens, and the envelope grows to fill the space a margin
+  would otherwise waste. Check `icon_16x16` after any edit.
+
+The GitHub repository card is `docs/assets/social-preview.png`. GitHub has no
+file convention for it, so it has to be uploaded by hand once, under
+**Settings -> General -> Social preview**.

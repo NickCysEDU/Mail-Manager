@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import sys
 import tempfile
 from dataclasses import asdict, dataclass, field, fields
@@ -72,8 +73,58 @@ def app_support_dir() -> Path:
     return base / APP_NAME
 
 
+#: The directory used before the app was renamed to Mail Manager. Settings
+#: written under the old name are moved across on first load, the same way the
+#: Keychain service name was left alone so stored credentials keep working.
+LEGACY_APP_NAME = "iCloud Job Triage"
+
+
+def legacy_app_support_dir() -> Optional[Path]:
+    """Where settings lived under the previous name, if that path is different."""
+    if os.environ.get("ICLOUD_TRIAGE_HOME"):
+        return None
+    current = app_support_dir()
+    legacy = current.parent / LEGACY_APP_NAME
+    return None if legacy == current else legacy
+
+
 def settings_path() -> Path:
     return app_support_dir() / "settings.json"
+
+
+def migrate_legacy_support_files() -> list:
+    """Carry pre-rename data across. Returns the paths that were brought over.
+
+    The originals are left where they are, so downgrading to an older build
+    still finds its own configuration.
+    """
+    legacy_dir = legacy_app_support_dir()
+    if legacy_dir is None or not legacy_dir.is_dir():
+        return []
+    current_dir = app_support_dir()
+    moved = []
+    try:
+        candidates = sorted(legacy_dir.iterdir())
+    except OSError as exc:
+        log.warning("Could not read %s (%s).", legacy_dir, exc)
+        return []
+    for source in candidates:
+        if not source.is_file() or source.name.startswith("."):
+            continue
+        target = current_dir / source.name
+        if target.exists():
+            continue
+        try:
+            current_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+            os.chmod(target, 0o600)
+        except OSError as exc:
+            log.warning("Could not carry %s over (%s).", source.name, exc)
+            continue
+        moved.append(target)
+    if moved:
+        log.info("Carried %d file(s) over from the previous application name.", len(moved))
+    return moved
 
 
 def log_dir() -> Path:
@@ -230,7 +281,9 @@ class Settings:
     # -- disk ------------------------------------------------------------
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "Settings":
-        path = path or settings_path()
+        if path is None:
+            migrate_legacy_support_files()
+            path = settings_path()
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:

@@ -399,7 +399,7 @@ When you want it pointed at your own inbox:
 | `./dev test` | The test suite. Extra arguments pass through to pytest. |
 | `./dev cov` | The suite with a coverage report. |
 | `./dev watch` | Re-run the tests on every file change (needs `fswatch`). |
-| `./dev build` | Build `iCloud Job Triage.app`. |
+| `./dev build` | Build `Mail Manager.app`. |
 | `./dev install` | Copy the built app to `/Applications`. |
 | `./dev logs` | Follow the log file. |
 | `./dev shell` | A Python REPL with every module imported and `items` preloaded. |
@@ -448,7 +448,7 @@ bound to the twelve sample rows:
 
 ```bash
 ./dev config     # settings, and which credentials exist
-./dev logs       # tail -f ~/Library/Logs/iCloud Job Triage/triage.log
+./dev logs       # tail -f ~/Library/Logs/Mail Manager/triage.log
 ./dev run -v     # DEBUG logging, mirrored to the terminal
 ```
 
@@ -579,8 +579,8 @@ ad-hoc signature:
 Then:
 
 ```bash
-open "dist/iCloud Job Triage.app"           # run it
-cp -R "dist/iCloud Job Triage.app" /Applications/   # install it
+open "dist/Mail Manager.app"           # run it
+cp -R "dist/Mail Manager.app" /Applications/   # install it
 ```
 
 Once it's in `/Applications`, it behaves like any other Mac app: launch it from
@@ -599,8 +599,8 @@ QT_QPA_PLATFORM=offscreen python -m pytest               # 1,005 tests
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
 
-codesign --force --deep --sign - "dist/iCloud Job Triage.app"
-xattr -dr com.apple.quarantine "dist/iCloud Job Triage.app"
+codesign --force --deep --sign - "dist/Mail Manager.app"
+xattr -dr com.apple.quarantine "dist/Mail Manager.app"
 ```
 
 Options:
@@ -621,7 +621,9 @@ halves what PyInstaller would otherwise collect.
 ## Getting your credentials
 
 Both secrets go straight into the **macOS Keychain** under the service name
-`iCloud Job Triage`. Neither is ever written to a file — you can verify that in
+`iCloud Job Triage`. That was the app's original name; the service name was
+deliberately left alone when it was renamed, so an upgrade does not strand the
+credentials you already stored. Neither secret is ever written to a file — you can verify that in
 Keychain Access, and there's a test asserting the settings file contains no
 secret material.
 
@@ -856,7 +858,7 @@ once** — never both, never neither.
 - Attachments are never uploaded — only their filenames.
 - Credentials live in the macOS Keychain. The settings file (mode `0600`) holds
   no secrets.
-- Logs go to `~/Library/Logs/iCloud Job Triage/triage.log`, rotated at 2 MB. The
+- Logs go to `~/Library/Logs/Mail Manager/triage.log`, rotated at 2 MB. The
   HTTP libraries are pinned to `WARNING` so URLs don't leak into them.
 - The status bar shows a running token count and cost estimate. A typical email
   is ~1–2 K input tokens; at Opus 5 rates a 100-message scan is roughly $0.60–1.20,
@@ -878,7 +880,7 @@ points you at Settings — the two are deliberately distinguished.
 **macOS says the app "cannot be opened because the developer cannot be verified"**
 `build_app.sh` signs ad hoc and clears the quarantine flag. If you copied the
 bundle from elsewhere, right-click → **Open** once, or run
-`xattr -dr com.apple.quarantine "/Applications/iCloud Job Triage.app"`.
+`xattr -dr com.apple.quarantine "/Applications/Mail Manager.app"`.
 
 **A scan found fewer messages than expected**
 IMAP `SINCE` has one-day granularity, so the app widens the server-side search by
@@ -899,6 +901,6 @@ network timeout expires.
 
 **The app won't start after a rebuild**
 ```bash
-"dist/iCloud Job Triage.app/Contents/MacOS/iCloud Job Triage" --self-test
+"dist/Mail Manager.app/Contents/MacOS/Mail Manager" --self-test
 ```
 runs inside the bundle and reports which dependency failed to resolve.

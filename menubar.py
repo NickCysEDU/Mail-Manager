@@ -10,8 +10,10 @@ from __future__ import annotations
 import logging
 from typing import Callable, Optional
 
-from PySide6.QtCore import QObject, QPoint, Qt, Signal
-from PySide6.QtGui import QAction, QActionGroup, QColor, QIcon, QPainter, QPixmap
+from PySide6.QtCore import QObject, QRectF, Qt, Signal
+from PySide6.QtGui import (
+    QAction, QActionGroup, QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap,
+)
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
 import scheduler
@@ -27,22 +29,45 @@ QUICK_SCANS = (
 )
 
 
+#: Menu bar artwork, in pixels at 2x. macOS gives a status item a 24 point bar
+#: and expects the artwork to sit inside roughly 18 to 22 points of it, so this
+#: draws at 2x and lets Qt hand a correctly sized NSImage to the status bar.
+_BAR_CANVAS = (46, 33)
+_BAR_MARGIN = 2.0
+_BAR_STROKE = 3.0
+
+
 def menu_bar_icon() -> QIcon:
     """A monochrome template icon, so macOS tints it for light and dark bars."""
-    size = 36
-    pixmap = QPixmap(size, size)
+    width, height = _BAR_CANVAS
+    pixmap = QPixmap(width, height)
     pixmap.fill(Qt.GlobalColor.transparent)
+
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    pen = painter.pen()
-    pen.setColor(QColor(0, 0, 0))
-    pen.setWidthF(2.6)
+
+    pen = QPen(QColor(0, 0, 0))
+    pen.setWidthF(_BAR_STROKE)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
     painter.setPen(pen)
     painter.setBrush(Qt.BrushStyle.NoBrush)
-    # An envelope: readable at 16 points, which is all a menu bar gives you.
-    painter.drawRoundedRect(6, 10, 24, 17, 3, 3)
-    painter.drawPolyline([QPoint(7, 12), QPoint(18, 21), QPoint(29, 12)])
+
+    # The stroke straddles the path, so the path is inset by half of it. That
+    # puts the same _BAR_MARGIN of clear space on all four sides.
+    inset = _BAR_MARGIN + _BAR_STROKE / 2.0
+    body = QRectF(inset, inset, width - 2 * inset, height - 2 * inset)
+    painter.drawRoundedRect(body, 4.0, 4.0)
+
+    # The flap starts on the body outline rather than inside it, so the two
+    # shapes meet cleanly instead of leaving a hairline gap.
+    flap = QPainterPath()
+    flap.moveTo(body.left(), body.top() + body.height() * 0.16)
+    flap.lineTo(body.center().x(), body.top() + body.height() * 0.60)
+    flap.lineTo(body.right(), body.top() + body.height() * 0.16)
+    painter.drawPath(flap)
     painter.end()
+
     icon = QIcon(pixmap)
     icon.setIsMask(True)          # let macOS handle light and dark
     return icon
