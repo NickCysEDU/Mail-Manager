@@ -16,6 +16,8 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
+import providers
+import rulesets
 import scheduler
 from models import APP_DISPLAY_NAME, TimeWindow
 
@@ -80,6 +82,8 @@ class MenuBarController(QObject):
     openRequested = Signal()
     settingsRequested = Signal()
     scheduleChanged = Signal(int)            # minutes, 0 for off
+    modelChanged = Signal(str, str)          # provider, model
+    rulesetChanged = Signal(str)             # the field-specific rule set
     quitRequested = Signal()
 
     def __init__(self, parent=None) -> None:
@@ -88,6 +92,12 @@ class MenuBarController(QObject):
         self._menu: Optional[QMenu] = None
         self._status_action: Optional[QAction] = None
         self._interval_actions: dict = {}
+        self._model_actions: dict = {}
+        self._ruleset_actions: dict = {}
+        self._provider = ""
+        self._model = ""
+        self._ruleset = ""
+        self._schedule_minutes = 0
 
     # -- lifecycle -------------------------------------------------------
     def available(self) -> bool:
@@ -118,6 +128,7 @@ class MenuBarController(QObject):
     def rebuild(self, schedule_minutes: int = 0) -> None:
         if self._menu is None:
             return
+        self._schedule_minutes = schedule_minutes
         menu = self._menu
         menu.clear()
 
@@ -132,6 +143,8 @@ class MenuBarController(QObject):
                 lambda checked=False, w=window: self.quickScanRequested.emit(w)
             )
             menu.addAction(action)
+        menu.addSeparator()
+        self._add_model_menu(menu)
         menu.addSeparator()
 
         schedule_menu = menu.addMenu("Scan automatically")
@@ -162,7 +175,71 @@ class MenuBarController(QObject):
         quit_action.triggered.connect(self.quitRequested.emit)
         menu.addAction(quit_action)
 
+    def _add_model_menu(self, menu: QMenu) -> None:
+        """The backend, its models, and the offline vocabulary, one menu down.
+
+        Named after the current choice so the menu bar answers "what is this
+        about to use?" without opening anything.
+        """
+        model_menu = menu.addMenu(f"Model: {self._model_label()}")
+
+        models = QActionGroup(self)
+        models.setExclusive(True)
+        self._model_actions = {}
+        for name, label, _blurb in providers.provider_choices():
+            spec = providers.provider_class(name)
+            section = model_menu.addMenu(label)
+            for choice in spec.models:
+                action = QAction(choice.label, self)
+                action.setCheckable(True)
+                action.setChecked((name, choice.value) == (self._provider, self._model))
+                action.triggered.connect(
+                    lambda checked=False, p=name, m=choice.value:
+                    self.modelChanged.emit(p, m)
+                )
+                models.addAction(action)
+                section.addAction(action)
+                self._model_actions[(name, choice.value)] = action
+
+        model_menu.addSeparator()
+        rules_menu = model_menu.addMenu("Local rule set (field)")
+        fields = QActionGroup(self)
+        fields.setExclusive(True)
+        self._ruleset_actions = {}
+        for name, label, blurb in rulesets.choices():
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setChecked(name == self._ruleset)
+            action.setToolTip(blurb)
+            action.triggered.connect(
+                lambda checked=False, r=name: self.rulesetChanged.emit(r)
+            )
+            fields.addAction(action)
+            rules_menu.addAction(action)
+            self._ruleset_actions[name] = action
+
+    def _model_label(self) -> str:
+        """The current model's readable name, or its raw value if unknown."""
+        if not self._provider:
+            return "not set"
+        try:
+            spec = providers.provider_class(self._provider)
+        except (KeyError, ValueError):
+            return self._model or "not set"
+        return next((c.label for c in spec.models if c.value == self._model),
+                    self._model or spec.label)
+
+    def set_model(self, provider: str, model: str, ruleset: str = "") -> None:
+        """Follow a change made elsewhere, so both menus agree."""
+        changed = (provider, model, ruleset) != (self._provider, self._model, self._ruleset)
+        self._provider, self._model, self._ruleset = provider, model, ruleset
+        if changed and self._menu is not None:
+            # The title carries the model name, so the whole menu is rebuilt
+            # rather than only the check marks.
+            self.rebuild(self._schedule_minutes)
+
     def set_schedule(self, minutes: int) -> None:
+        self._schedule_minutes = minutes
         for value, action in self._interval_actions.items():
             action.setChecked(value == minutes)
 

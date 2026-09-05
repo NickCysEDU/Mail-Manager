@@ -18,6 +18,7 @@ from models import (
     TimeWindow,
     TriageItem,
     TriageSummary,
+    clock,
     imap_since_date,
     resolve_window,
     sanitize_folder_component,
@@ -612,3 +613,53 @@ class TestEmailMessage:
     def test_date_is_rendered_in_local_time(self):
         message = EmailMessage(uid="1", date=datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc))
         assert message.local_date().utcoffset() == datetime.now().astimezone().utcoffset()
+
+
+# --------------------------------------------------------------------------
+# Reading the clock
+# --------------------------------------------------------------------------
+class TestClock:
+    """12-hour time, because that is how the times in this app get read aloud."""
+
+    @pytest.mark.parametrize("hour, minute, expected", [
+        (0, 5, "12:05 AM"),          # midnight is 12 AM, not 0 AM
+        (7, 12, "7:12 AM"),          # no leading zero on the hour
+        (11, 59, "11:59 AM"),
+        (12, 0, "12:00 PM"),         # noon is 12 PM, the other easy one to get wrong
+        (12, 30, "12:30 PM"),
+        (13, 30, "1:30 PM"),
+        (23, 45, "11:45 PM"),
+    ])
+    def test_reads_the_way_a_person_says_it(self, hour, minute, expected):
+        assert clock(datetime(2026, 9, 5, hour, minute)) == expected
+
+    def test_minutes_keep_their_leading_zero(self):
+        assert clock(datetime(2026, 9, 5, 9, 5)) == "9:05 AM"
+
+
+class TestMessageDates:
+    def _message(self, moment):
+        return EmailMessage(uid="1", subject="s", sender_name="Alex",
+                            sender_email="you@icloud.example",
+                            date=moment.astimezone())
+
+    def test_recent_mail_shows_the_time_with_a_meridiem(self):
+        now = datetime.now().astimezone().replace(hour=15, minute=0, second=0, microsecond=0)
+        today = self._message(now - timedelta(hours=2))
+        assert today.date_human(now) == f"Today  {clock((now - timedelta(hours=2)))}"
+        assert today.date_human(now).endswith(("AM", "PM"))
+
+    def test_older_mail_within_the_year_keeps_the_meridiem(self):
+        now = datetime.now().astimezone().replace(hour=12, minute=0, second=0, microsecond=0)
+        older = self._message(now - timedelta(days=40))
+        rendered = older.date_human(now)
+        assert rendered.endswith(("AM", "PM"))
+
+    def test_a_year_old_message_drops_the_clock_entirely(self):
+        now = datetime.now().astimezone().replace(hour=12, minute=0, second=0, microsecond=0)
+        ancient = self._message(now - timedelta(days=400))
+        assert ":" not in ancient.date_human(now)
+
+    def test_the_tooltip_form_is_also_12_hour(self):
+        moment = datetime(2026, 9, 5, 19, 20).astimezone()
+        assert "7:20 PM" in self._message(moment).date_full()
