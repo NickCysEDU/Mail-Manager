@@ -1,0 +1,1256 @@
+"""A local, LLM-free classifier for job-search email.
+
+This is a hand-built expert system, not a trained model: there is no corpus and
+no weights file, and it makes no pretence of being one. What it encodes is the
+same domain knowledge the system prompt describes - the phrases, sender shapes,
+link domains and structural tells that separate a rejection from a receipt -
+expressed as weighted signals that can be read, argued with, and unit tested.
+
+It exists for three reasons:
+
+* **Fallback.** When the model backend is unreachable, out of quota, or has no
+  key, a scan still produces something better than a wall of "Needs Review".
+* **Privacy and cost.** It runs on this Mac, instantly, for nothing, and no
+  message text leaves the machine.
+* **A second opinion.** Its verdict is computed for every message even when a
+  model is in use, so a disagreement can be surfaced rather than hidden.
+
+Robustness to messy text is a first-class concern. Real mail arrives with
+mojibake ("weâ€™ve"), smart quotes, accents, zero-width padding, Cyrillic
+homoglyphs, hyphenation across line breaks, and deliberate obfuscation
+("i n t e r v i e w"). Every pattern is matched against two normalisations of
+the text: a readable one, and a "tight" one with all punctuation and spacing
+removed, which defeats most character-level evasion.
+
+Its confidence is deliberately capped below the auto-file threshold for
+anything but overwhelming evidence, so the routing layer keeps doing the safety
+work.
+"""
+
+from __future__ import annotations
+
+import html
+import math
+import re
+import unicodedata
+from dataclasses import dataclass, field
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+
+from models import Category, OtherCategory
+
+#: Confidence this engine will never exceed. It is a rule set, not a reader:
+#: even a textbook rejection could be quoted inside a different message.
+MAX_CONFIDENCE = 0.96
+#: Below this total score nothing is claimed at all.
+MIN_SCORE = 1.6
+#: Score at which "more evidence" stops increasing confidence.
+SATURATION = 5.0
+#: A signal at or above this weight is decisive on its own.
+DECISIVE_WEIGHT = 3.0
+#: Evidence a category needs before it enters the precedence contest.
+QUALIFY_SCORE = 2.5
+#: UNSOLICITED sits first in precedence, so it has to clear a higher bar -
+#: otherwise one enthusiastic phrase would outrank a real interview invitation.
+QUALIFY_SCORE_UNSOLICITED = 3.5
+#: Multiplier applied when a phrase matched only with words inserted into it.
+GAPPED_PENALTY = 0.75
+
+
+# ==========================================================================
+# Normalisation - the part that makes everything else work on real mail
+# ==========================================================================
+#: UTF-8 read as Latin-1, the most common corruption in forwarded mail.
+_MOJIBAKE = {
+    "â€™": "'", "â€˜": "'", "â€œ": '"', "â€\x9d": '"', "â€“": "-", "â€”": "-",
+    "â€¦": "...", "â€¢": "-", "Â ": " ", "Ã©": "e", "Ã¨": "e", "Ã¡": "a",
+    "Ã­": "i", "Ã³": "o", "Ãº": "u", "Ã±": "n", "Ã§": "c", "â€": '"',
+}
+
+#: Letters from other scripts that render identically in a Latin word. Spam
+#: uses these to slip past naive keyword filters.
+_HOMOGLYPHS = {
+    "а": "a", "е": "e", "о": "o", "р": "p", "с": "c",
+    "у": "y", "х": "x", "і": "i", "ј": "j", "һ": "h",
+    "ο": "o", "α": "a", "ε": "e", "ρ": "p", "υ": "u",
+    "ԁ": "d", "ԛ": "q", "ɡ": "g", "ᴏ": "o", "ⁱ": "i",
+}
+
+#: Letters NFKD leaves alone. "Grüße" folds to "gruße" without this.
+_TRANSLITERATE = {
+    "ß": "ss", "æ": "ae", "œ": "oe", "ø": "o", "å": "a", "đ": "d",
+    "ð": "d", "þ": "th", "ł": "l", "ı": "i", "ħ": "h", "ŋ": "ng",
+}
+
+_ZERO_WIDTH = re.compile("[​-‏ - ⁠-⁤﻿­᠎]")
+_PUNCT_RUN = re.compile(r"[^\w\s]{3,}")
+_SPACED_OUT = re.compile(r"(?:(?<=\s)|^)(?:[a-z]\s){3,}[a-z](?=\s|$)")
+
+
+def normalize(text: str) -> str:
+    """Fold real-world mail into something patterns can match.
+
+    Fixes mojibake, maps homoglyphs back to Latin, strips accents and
+    zero-width padding, repairs words hyphenated across a line break, and
+    un-spaces deliberately spread-out words.
+    """
+    if not text:
+        return ""
+    result = text
+    for broken, fixed in _MOJIBAKE.items():
+        if broken in result:
+            result = result.replace(broken, fixed)
+
+    # Some senders double-encode, so "&amp;nbsp;" arrives and decodes to the
+    # literal "&nbsp;". Unescaping twice clears both layers.
+    if "&" in result:
+        result = html.unescape(html.unescape(result))
+
+    result = unicodedata.normalize("NFKC", result)
+    if any(char in _HOMOGLYPHS for char in result):
+        result = "".join(_HOMOGLYPHS.get(char, char) for char in result)
+
+    # Strip accents so "résumé"/"resume" and "Grüße"/"Grusse" both match.
+    result = "".join(
+        char for char in unicodedata.normalize("NFKD", result)
+        if not unicodedata.combining(char)
+    )
+    if any(char in _TRANSLITERATE for char in result.lower()):
+        result = "".join(
+            _TRANSLITERATE.get(char.lower(), char) for char in result
+        )
+
+    result = _ZERO_WIDTH.sub("", result)
+    result = (
+        result.replace("‘", "'").replace("’", "'")
+        .replace("“", '"').replace("”", '"')
+        # Escaped so the dash characters survive a source-wide tidy-up.
+        .replace("\u2013", "-").replace("\u2014", "-")
+        .replace(" ", " ")
+    )
+    result = result.lower()
+
+    # "for-\nward" -> "forward"
+    result = re.sub(r"-\s*\n\s*", "", result)
+    result = _PUNCT_RUN.sub(" ", result)
+    result = _SPACED_OUT.sub(lambda m: m.group(0).replace(" ", ""), result)
+    return re.sub(r"\s+", " ", result).strip()
+
+
+def tighten(text: str) -> str:
+    """Everything but letters and digits removed, for evasion-proof matching."""
+    return re.sub(r"[^a-z0-9]+", "", normalize(text))
+
+
+def _loose(phrase: str) -> str:
+    """A regex matching ``phrase`` with any punctuation or spacing between words."""
+    words = [re.escape(word) for word in phrase.split()]
+    return r"\b" + r"[\W_]{0,4}".join(words)
+
+
+def _gapped(phrase: str, max_inserted: int = 2) -> Optional[str]:
+    """A regex allowing a couple of extra words inside the phrase.
+
+    Real sentences interleave: "your **September** statement is ready",
+    "we have **now** received your application". Requiring an exact adjacency
+    misses those, and they are the same statement. Only phrases of three or
+    more words get this treatment - two-word phrases with gaps match far too
+    eagerly to be worth the recall.
+    """
+    words = [re.escape(word) for word in phrase.split()]
+    if len(words) < 3:
+        return None
+    gap = r"(?:[\W_]+\w+){0,%d}[\W_]+" % max_inserted
+    return r"\b" + gap.join(words) + r"\b"
+
+
+@dataclass(frozen=True)
+class Signal:
+    """One piece of evidence for a category."""
+
+    phrase: str
+    weight: float
+    #: Where to look: "body", "subject", "any" (subject + body), "sender".
+    field: str = "any"
+    #: Human-readable name used in the reasoning text.
+    label: str = ""
+
+    def describe(self) -> str:
+        return self.label or f"“{self.phrase}”"
+
+
+class _Matcher:
+    """Compiled exact, gapped and tight forms of a signal's phrase."""
+
+    __slots__ = ("signal", "loose", "gapped", "tight")
+
+    def __init__(self, signal: Signal) -> None:
+        self.signal = signal
+        self.loose = re.compile(_loose(signal.phrase))
+        pattern = _gapped(signal.phrase)
+        self.gapped = re.compile(pattern) if pattern else None
+        tight = re.sub(r"[^a-z0-9]+", "", signal.phrase.lower())
+        self.tight = tight if len(tight) >= 8 else ""
+
+    def hit(self, normalized: str, tightened: str) -> float:
+        """Return a weight multiplier: 1.0 exact, 0.75 gapped, 0.0 no match."""
+        if self.loose.search(normalized):
+            return 1.0
+        if self.tight and self.tight in tightened:
+            return 1.0
+        if self.gapped is not None and self.gapped.search(normalized):
+            return GAPPED_PENALTY
+        return 0.0
+
+
+# ==========================================================================
+# Signal tables
+# ==========================================================================
+# Weights: 3.0 decisive · 2.0 strong · 1.2 moderate · 0.6 supporting.
+# Phrases are matched loosely, so one entry covers a family of spellings:
+# "move forward" also matches "move  forward", "move-forward", "moveforward".
+
+REJECTION_SIGNALS: Tuple[Signal, ...] = (
+    Signal("move forward with other candidates", 3.0),
+    Signal("moving forward with other candidates", 3.0),
+    Signal("proceed with other candidates", 3.0),
+    Signal("pursue other candidates", 3.0),
+    Signal("pursuing other applicants", 3.0),
+    Signal("decided not to move forward", 3.0),
+    Signal("not be moving forward", 3.0),
+    Signal("will not be moving ahead", 3.0),
+    Signal("not moving ahead with your application", 3.0),
+    Signal("decided not to proceed", 3.0),
+    Signal("not to proceed with your application", 3.0),
+    Signal("no longer under consideration", 3.0),
+    Signal("not be progressing", 2.6),
+    Signal("not progressing your application", 3.0),
+    Signal("we regret to inform", 2.6),
+    Signal("regret to inform you", 3.0),
+    Signal("unsuccessful on this occasion", 3.0),
+    Signal("were not successful", 2.2),
+    Signal("you have not been selected", 3.0),
+    Signal("not been shortlisted", 2.8),
+    Signal("chosen another candidate", 2.8),
+    Signal("selected another candidate", 2.8),
+    Signal("gone with another candidate", 2.6),
+    Signal("position has been filled", 2.6),
+    Signal("role has been filled", 2.6),
+    Signal("this position is now closed", 2.2),
+    Signal("we have closed this role", 2.2),
+    Signal("keep your resume on file", 1.8),
+    Signal("keep your details on file", 1.8),
+    Signal("wish you the best in your search", 1.6),
+    Signal("wish you every success", 1.4),
+    Signal("we will not be pursuing", 2.6),
+    Signal("your application was not successful", 3.0),
+    Signal("after careful consideration", 1.4),
+    Signal("more closely matched", 1.4),
+    Signal("better aligned with our needs", 1.4),
+    Signal("withdraw your application", 2.0),
+    Signal("application has been withdrawn", 2.4),
+    # Everything below was taken from real rejection mail. The polite opener
+    # "thank you for your interest" is shared with acknowledgements, so the
+    # decisive phrase is always further in.
+    Signal("we have moved forward with other candidates", 3.0),
+    Signal("moved forward with other candidates", 3.0),
+    Signal("more closely match the listed requirements", 3.0),
+    Signal("more closely match our current needs", 3.0),
+    Signal("closely match the requirements", 2.4),
+    Signal("candidates that were further along", 3.0),
+    Signal("further along in the process", 2.8),
+    Signal("we just filled this position", 3.0),
+    Signal("this position has been filled", 3.0),
+    Signal("the position here at", 1.2),
+    Signal("has been filled", 2.6),
+    Signal("we are not moving forward with your application", 3.0),
+    Signal("not moving forward with your application", 3.0),
+    Signal("we do not have a match", 3.0),
+    Signal("don t have a match for your", 3.0),
+    Signal("do not have a match for your", 3.0),
+    Signal("keep your resume on hand", 2.8),
+    Signal("keep your resume on file", 2.4),
+    Signal("we are unable to offer you", 3.0),
+    Signal("unable to offer you this position", 3.0),
+    Signal("unable to move forward", 3.0),
+    Signal("we hope to stay connected", 2.2),
+    Signal("you do not meet the minimum qualifications", 3.0),
+    Signal("do not meet the minimum qualifications", 3.0),
+    Signal("does not meet the requirements", 2.8),
+    Signal("after careful review of your resume", 2.4),
+    Signal("please continue to visit our careers", 2.4),
+    Signal("new positions are posted daily", 2.4),
+    Signal("encourage you to apply for other", 2.4),
+    Signal("apply to other roles", 2.0),
+    Signal("we have selected other applicants", 3.0),
+    Signal("other applicants whose", 2.6),
+    Signal("we will not be progressing", 3.0),
+    Signal("your application will not be", 2.6),
+    Signal("decided to pursue other", 3.0),
+    Signal("we have filled the role", 3.0),
+    Signal("role is no longer available", 2.8),
+    Signal("no longer being considered", 3.0),
+    Signal("not be considered further", 2.8),
+    Signal("we appreciate your interest but", 2.6),
+    Signal("although we are not", 2.4),
+    Signal("while we are unable", 2.6),
+    Signal("at this time we have", 1.6),
+    Signal("best of luck in your search", 2.0),
+    Signal("best of luck with your job search", 2.4),
+    Signal("wish you well in your search", 2.2),
+    # Other languages, for the highest-value verdict.
+    Signal("no continuaremos con tu candidatura", 2.8, label="Spanish rejection"),
+    Signal("hemos decidido continuar con otros candidatos", 2.8, label="Spanish rejection"),
+    Signal("ne donnerons pas suite", 2.8, label="French rejection"),
+    Signal("votre candidature n a pas ete retenue", 2.8, label="French rejection"),
+    Signal("leider absagen", 2.8, label="German rejection"),
+    Signal("wir haben uns fur einen anderen", 2.8, label="German rejection"),
+    Signal("nao seguiremos com sua candidatura", 2.8, label="Portuguese rejection"),
+)
+
+OFFER_SIGNALS: Tuple[Signal, ...] = (
+    Signal("pleased to offer you", 3.0),
+    Signal("delighted to offer you", 3.0),
+    Signal("happy to offer you", 3.0),
+    Signal("we would like to offer you", 3.0),
+    Signal("extend an offer", 3.0),
+    Signal("extending an offer", 3.0),
+    Signal("offer of employment", 3.0),
+    Signal("offer letter", 2.8),
+    Signal("your offer", 1.6),
+    Signal("employment agreement", 2.0),
+    Signal("compensation package", 2.4),
+    Signal("total compensation", 2.0),
+    Signal("base salary", 2.0),
+    Signal("signing bonus", 2.2),
+    Signal("equity grant", 2.2),
+    Signal("stock options", 1.8),
+    Signal("rsus", 1.8),
+    Signal("start date", 1.2),
+    Signal("proposed start date", 2.0),
+    Signal("accept the offer", 2.4),
+    Signal("accepting this offer", 2.4),
+    Signal("countersign", 2.0),
+    Signal("offer expires", 2.4),
+    Signal("respond by", 0.8),
+    Signal("welcome to the team", 1.8),
+    Signal("congratulations", 1.0),
+    Signal("oferta de empleo", 2.6, label="Spanish offer"),
+    Signal("proposition d embauche", 2.6, label="French offer"),
+)
+
+INTERVIEW_SIGNALS: Tuple[Signal, ...] = (
+    Signal("schedule an interview", 3.0),
+    Signal("schedule a call", 2.6),
+    Signal("set up a call", 2.4),
+    Signal("set up some time", 2.2),
+    Signal("book a time", 2.6),
+    Signal("pick a time", 2.6),
+    Signal("choose a time", 2.4),
+    Signal("find a time", 2.0),
+    Signal("grab some time", 2.0),
+    Signal("your availability", 2.4),
+    Signal("let me know your availability", 2.8),
+    Signal("when are you available", 2.6),
+    Signal("times that work for you", 2.6),
+    Signal("interview invitation", 3.0),
+    Signal("invitation to interview", 3.0),
+    Signal("invite you to interview", 3.0),
+    Signal("like to interview you", 3.0),
+    Signal("phone screen", 2.8),
+    Signal("initial screen", 2.2),
+    Signal("recruiter screen", 2.4),
+    Signal("technical interview", 2.8),
+    Signal("onsite interview", 2.8),
+    Signal("on site interview", 2.8),
+    Signal("panel interview", 2.8),
+    Signal("final round", 2.4),
+    Signal("next round", 2.0),
+    Signal("hiring manager chat", 2.2),
+    Signal("meet the team", 1.8),
+    Signal("video interview", 2.6),
+    Signal("one way interview", 2.4),
+    Signal("interview confirmed", 2.8),
+    Signal("interview scheduled", 2.8),
+    Signal("reschedule your interview", 2.8),
+    Signal("your interview is", 2.4),
+    Signal("looking forward to speaking", 1.4),
+    Signal("speak with you about the role", 2.2),
+    Signal("30 minutes", 0.8),
+    Signal("45 minutes", 0.8),
+    Signal("entrevista", 2.2, label="Spanish interview"),
+    Signal("entretien", 2.2, label="French interview"),
+    Signal("vorstellungsgesprach", 2.2, label="German interview"),
+)
+
+NEXT_STEPS_SIGNALS: Tuple[Signal, ...] = (
+    Signal("coding assessment", 3.0),
+    Signal("technical assessment", 3.0),
+    Signal("online assessment", 3.0),
+    Signal("take home", 2.8),
+    Signal("take home assignment", 3.0),
+    Signal("coding challenge", 3.0),
+    Signal("coding exercise", 2.8),
+    Signal("skills test", 2.4),
+    Signal("please complete", 2.4),
+    Signal("complete the following", 2.4),
+    Signal("complete this assessment", 3.0),
+    Signal("complete within", 2.0),
+    Signal("questionnaire", 2.2),
+    Signal("pre screening questions", 2.6),
+    Signal("screening questions", 2.4),
+    Signal("a few questions", 1.4),
+    Signal("provide references", 2.8),
+    Signal("professional references", 2.8),
+    Signal("reference check", 2.6),
+    Signal("background check", 2.6),
+    Signal("right to work", 2.2),
+    Signal("work authorization", 2.2),
+    Signal("visa status", 2.0),
+    Signal("upload your", 2.0),
+    Signal("fill out the form", 2.4),
+    Signal("complete your profile", 2.2),
+    Signal("submit your application", 2.0),
+    Signal("finish your application", 2.4),
+    Signal("action required", 1.8),
+    Signal("next steps", 1.6),
+    Signal("expires in", 1.4),
+    Signal("due by", 1.2),
+    Signal("within 5 days", 1.6),
+    Signal("within 48 hours", 1.6),
+    Signal("send us your", 1.8),
+    Signal("attach your resume", 2.0),
+    Signal("share your portfolio", 2.2),
+    # Learned from real applicant-tracking mail.
+    Signal("you have not yet submitted", 3.0),
+    Signal("this is a reminder that you have not", 3.0),
+    Signal("reminder that you have not yet", 3.0),
+    Signal("ondemand interview", 3.0),
+    Signal("on demand interview", 3.0),
+    Signal("get started", 1.2),
+    Signal("verify your candidate account", 3.0),
+    Signal("candidate account", 2.0),
+    Signal("confirm your email address and complete", 3.0),
+    Signal("complete setup for your", 2.8),
+    Signal("the link will expire", 2.4),
+    Signal("link expires in", 2.4),
+    Signal("finish setting up your account", 2.8),
+    Signal("activate your account", 2.4),
+    Signal("your application is incomplete", 3.0),
+    Signal("incomplete application", 2.8),
+    Signal("additional information is needed", 2.8),
+    Signal("please respond by", 2.4),
+)
+
+APPLICATION_RECEIVED_SIGNALS: Tuple[Signal, ...] = (
+    Signal("thank you for applying", 3.0),
+    Signal("thanks for applying", 3.0),
+    Signal("we have received your application", 3.0),
+    Signal("we received your application", 3.0),
+    Signal("your application has been received", 3.0),
+    Signal("application received", 2.6),
+    Signal("received your resume", 2.8),
+    Signal("received your cv", 2.8),
+    Signal("successfully submitted", 2.6),
+    Signal("application was submitted", 2.6),
+    # Shared with rejections, so it is context rather than evidence.
+    Signal("thank you for your interest in", 0.6),
+    Signal("thanks for your interest in", 0.6),
+    Signal("thank you for applying to", 2.4),
+    Signal("thank you for taking the time to apply", 2.4),
+    Signal("we appreciate you applying", 2.6),
+    Signal("your application for", 1.2),
+    Signal("has been received", 2.6),
+    Signal("we have your application", 2.6),
+    Signal("application confirmation", 2.8),
+    Signal("confirming receipt of your", 3.0),
+    Signal("receipt of your application", 3.0),
+    Signal("this confirms", 1.8),
+    Signal("your submission has been", 2.4),
+    Signal("has been successfully submitted", 3.0),
+    Signal("we will review your qualifications", 2.6),
+    Signal("our recruiting team will review", 2.6),
+    Signal("if there is a match", 2.0),
+    Signal("should your qualifications", 2.2),
+    Signal("we keep every application", 2.0),
+    Signal("no further action is needed", 2.6),
+    Signal("no action is required", 2.6),
+    Signal("application submitted for", 3.0),
+    Signal("profile submitted to", 3.0),
+    Signal("we have received the profile you submitted", 3.0),
+    Signal("the profile you submitted", 2.8),
+    Signal("thank you for taking the time to submit", 2.8),
+    Signal("submit your application for", 1.6),
+    Signal("we will contact you to discuss", 2.4),
+    Signal("if your profile matches", 2.6),
+    Signal("if your qualifications match", 2.6),
+    Signal("your application is in our system", 2.8),
+    Signal("we are reviewing applications", 2.4),
+    Signal("talent acquisition team", 1.4),
+    Signal("we are reviewing your application", 2.8),
+    Signal("your application is under review", 2.8),
+    Signal("currently reviewing applications", 2.4),
+    Signal("our team will review", 2.2),
+    Signal("if your background is a match", 2.2),
+    Signal("we will be in touch", 1.4),
+    Signal("do not reply to this", 1.0),
+    Signal("this is an automated", 1.2),
+    Signal("application status", 1.4),
+    Signal("gracias por postular", 2.4, label="Spanish acknowledgement"),
+    Signal("merci pour votre candidature", 2.4, label="French acknowledgement"),
+    Signal("vielen dank fur ihre bewerbung", 2.4, label="German acknowledgement"),
+)
+
+NETWORKING_SIGNALS: Tuple[Signal, ...] = (
+    Signal("happy to refer you", 3.0),
+    Signal("refer you internally", 3.0),
+    Signal("put in a referral", 3.0),
+    Signal("submit a referral", 2.8),
+    Signal("referral for you", 2.6),
+    Signal("introduce you to", 2.6),
+    Signal("make an introduction", 2.6),
+    Signal("connect you with", 2.4),
+    Signal("put in a good word", 2.8),
+    Signal("informational interview", 2.8),
+    Signal("informational chat", 2.8),
+    Signal("pick your brain", 2.6),
+    Signal("grab a coffee", 2.0),
+    Signal("grab coffee", 2.0),
+    Signal("catch up", 1.2),
+    Signal("inside view of the team", 2.2),
+    Signal("no formal opening", 2.4),
+    Signal("not posted yet", 2.2),
+    Signal("thought of you", 1.8),
+    Signal("passing along", 1.6),
+    Signal("might be a good fit for", 1.6),
+    Signal("let me know if you want me to", 1.6),
+)
+
+UNSOLICITED_SIGNALS: Tuple[Signal, ...] = (
+    Signal("came across your profile", 3.0),
+    Signal("came across your resume", 3.0),
+    Signal("found your profile", 3.0),
+    Signal("stumbled upon your profile", 3.0),
+    Signal("your profile caught my eye", 3.0),
+    Signal("i am reaching out because", 1.8),
+    Signal("reaching out to see if", 1.8),
+    Signal("exciting opportunity", 2.4),
+    Signal("great opportunity", 2.0),
+    Signal("urgent requirement", 2.8),
+    Signal("immediate joiner", 3.0),
+    Signal("immediate start", 2.0),
+    Signal("hot requirement", 2.8),
+    Signal("our client is looking", 2.8),
+    Signal("one of our clients", 2.4),
+    Signal("my client is", 2.4),
+    Signal("c2c", 2.6),
+    Signal("corp to corp", 2.8),
+    Signal("w2 only", 2.6),
+    Signal("1099", 1.6),
+    Signal("rate is", 1.4),
+    Signal("hourly rate", 1.6),
+    Signal("would you be open to", 2.0),
+    Signal("are you open to new opportunities", 2.6),
+    Signal("not sure if you are looking", 2.4),
+    Signal("if you are not interested", 1.8),
+    Signal("please share your updated resume", 2.6),
+    Signal("send me your updated cv", 2.6),
+    Signal("kindly revert", 2.2),
+    Signal("do the needful", 2.2),
+    Signal("staffing", 1.4),
+    Signal("consultancy", 1.2),
+    Signal("recruitment agency", 1.8),
+)
+
+#: Sender-address fragments that make unsolicited outreach more likely.
+AGENCY_SENDER_HINTS: Tuple[str, ...] = (
+    "staffing", "recruit", "talentacquisition", "consultanc", "resourcing",
+    "manpower", "placements", "headhunt", "techjobs", "itjobs", "hiring",
+)
+
+#: Link domains that are decisive evidence for a specific category.
+SCHEDULING_LINK_DOMAINS: Tuple[str, ...] = (
+    "calendly.com", "cal.com", "savvycal.com", "meetings.hubspot.com",
+    "hubspot.com/meetings", "chilipiper.com", "goodtime.io", "youcanbook.me",
+    "acuityscheduling.com", "doodle.com", "when2meet.com", "calendarhero.com",
+    "zoom.us", "teams.microsoft.com", "meet.google.com", "whereby.com",
+    "hirevue.com", "sparkhire.com", "spark.hire", "willo.video",
+    "modernhire.com", "vidcruiter.com", "loom.com",
+)
+ASSESSMENT_LINK_DOMAINS: Tuple[str, ...] = (
+    "hackerrank.com", "codesignal.com", "codility.com", "karat.com",
+    "coderbyte.com", "devskiller.com", "testgorilla.com", "woven.teams",
+    "triplebyte.com", "mettl.com", "imocha.io", "qualified.io", "coderpad.io",
+    "byteboard.dev", "filtered.ai", "pymetrics.ai", "criteriacorp.com",
+    "shl.com", "predictiveindex.com", "leetcode.com",
+)
+#: Subject lines follow a handful of shapes across every applicant-tracking
+#: system, and the shape alone establishes that this is about a real
+#: application the reader submitted.
+SUBJECT_PATTERNS: Tuple[Tuple[re.Pattern, float, str], ...] = tuple(
+    (re.compile(pattern), weight, label)
+    for pattern, weight, label in (
+        (r"^\s*(?:re:\s*)?your application (?:for|to|with)\b", 3.0,
+         "a subject of the form 'Your application for ...'"),
+        (r"^\s*application (?:for|to|update|status|received|submitted|confirmation)\b",
+         3.0, "an application-status subject"),
+        (r"\bupdate (?:on|regarding) your application\b", 3.0,
+         "a subject announcing an application update"),
+        (r"\bthank you for (?:applying|your application)\b", 2.6,
+         "a thank-you-for-applying subject"),
+        (r"\bthank you for your interest in\b", 1.6, "a thank-you-for-interest subject"),
+        (r"\binterview (?:invitation|request|confirmation|scheduled)\b", 3.0,
+         "an interview subject"),
+        (r"\b(?:job|position|role|opening|vacancy|opportunity)\b", 1.2,
+         "a subject naming a role"),
+        (r"\b(?:candidate|applicant|recruit\w*|talent|careers?|hiring)\b", 1.8,
+         "a subject naming the hiring process"),
+        (r"\b(?:req|requisition|jr)\s?\d{4,}\b", 2.4, "a requisition number"),
+    )
+)
+
+ATS_LINK_DOMAINS: Tuple[str, ...] = (
+    "greenhouse.io", "lever.co", "ashbyhq.com", "workday.com",
+    "myworkdayjobs.com", "smartrecruiters.com", "icims.com", "jobvite.com",
+    "bamboohr.com", "breezy.hr", "workable.com", "teamtailor.com",
+    "recruitee.com", "successfactors.com", "taleo.net", "hire.withgoogle.com",
+    "rippling.com", "gem.com", "paradox.ai", "eightfold.ai", "dover.com",
+    "wellfound.com", "jazzhr.com", "pinpointhq.com",
+    # Seen on real mail, and the list every job seeker accumulates.
+    "myworkday.com", "myworkdaysite.com", "brassring.com", "kenexa.com",
+    "adp.com", "workforcenow.adp.com", "ultipro.com", "paylocity.com",
+    "dayforcehcm.com", "cornerstoneondemand.com", "csod.com", "avature.net",
+    "phenompeople.com", "radancy.com", "symphonytalent.com", "applytojob.com",
+    "clearcompany.com", "hirebridge.com", "silkroad.com", "oraclecloud.com",
+    "peoplefluent.com", "isolvedhire.com", "trakstar.com", "hiringthing.com",
+    "smrtr.io", "ripplematch.com", "handshake.com", "ziprecruiter.com",
+    "indeed.com", "linkedin.com/jobs", "monster.com", "dice.com",
+)
+
+#: Signals that a message is about employment at all.
+JOB_CONTEXT_SIGNALS: Tuple[Signal, ...] = (
+    Signal("your application", 2.0),
+    Signal("the position", 1.4),
+    Signal("the role", 1.2),
+    Signal("this role", 1.4),
+    Signal("job title", 1.2),
+    Signal("hiring team", 2.0),
+    Signal("hiring manager", 2.0),
+    Signal("talent acquisition", 2.0),
+    Signal("recruiter", 1.8),
+    Signal("recruiting team", 2.0),
+    Signal("candidate", 1.6),
+    Signal("candidacy", 2.0),
+    Signal("resume", 1.4),
+    Signal("cv", 0.8),
+    Signal("cover letter", 2.0),
+    Signal("job opening", 2.0),
+    Signal("job posting", 2.0),
+    Signal("vacancy", 1.8),
+    Signal("interview", 1.6),
+    Signal("employment", 1.4),
+    Signal("careers", 1.0),
+    Signal("engineer at", 0.8),
+    Signal("developer at", 0.8),
+)
+
+#: Things that mean "definitely not this person's job search".
+NON_JOB_SIGNALS: Tuple[Signal, ...] = (
+    Signal("new jobs matching", 2.6, label="job-board digest"),
+    Signal("jobs matching your search", 2.8, label="job-board digest"),
+    Signal("job alert", 2.4, label="job alert"),
+    Signal("saved search", 2.2),
+    Signal("recommended jobs", 2.4),
+    Signal("jobs you may be interested in", 2.6),
+    Signal("viewed your profile", 2.6, label="social notification"),
+    Signal("people you may know", 2.6),
+    Signal("your post reached", 2.4),
+    Signal("connection request", 2.2),
+    Signal("premium trial", 2.0),
+    Signal("unsubscribe from these alerts", 1.2),
+    Signal("your order", 2.4),
+    Signal("your receipt", 2.6),
+    Signal("your statement", 2.6),
+    Signal("verification code", 2.8),
+    Signal("security alert", 2.4),
+    Signal("password reset", 2.6),
+    Signal("your subscription", 2.0),
+    Signal("in this week s issue", 2.4),
+    Signal("view this email in your browser", 1.2),
+)
+
+
+# ==========================================================================
+# Non-job topic signals
+# ==========================================================================
+TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
+    OtherCategory.SECURITY: (
+        Signal("app specific password", 3.0),
+        Signal("password was generated for your", 3.0),
+        Signal("was used to sign in to", 3.0),
+        Signal("if you did not make this change", 3.0),
+        Signal("unauthorized person has accessed", 3.0),
+        Signal("if the information above looks familiar", 3.0),
+        Signal("you can ignore this message", 2.0),
+        Signal("apple account", 2.0), Signal("sign in attempt", 2.8),
+        Signal("verification code", 3.0), Signal("one time code", 3.0),
+        Signal("one time password", 3.0), Signal("security code", 2.8),
+        Signal("two factor", 2.6), Signal("password reset", 3.0),
+        Signal("reset your password", 3.0), Signal("new sign in", 2.8),
+        Signal("suspicious activity", 2.8), Signal("security alert", 2.8),
+        Signal("was signed in to", 2.6), Signal("do not share this code", 3.0),
+        Signal("confirm your email address", 2.2), Signal("verify your account", 2.4),
+    ),
+    OtherCategory.FINANCE: (
+        Signal("your statement is ready", 3.0), Signal("statement is available", 3.0),
+        Signal("account statement", 2.6), Signal("payment due", 2.8),
+        Signal("minimum payment", 2.8), Signal("your balance", 2.4),
+        Signal("direct debit", 2.4), Signal("invoice", 2.2),
+        Signal("tax", 1.6), Signal("credit card", 2.0),
+        Signal("transaction", 1.8), Signal("interest rate", 1.8),
+        Signal("overdraft", 2.4), Signal("investment", 1.8),
+    ),
+    OtherCategory.RECEIPT: (
+        Signal("your receipt", 3.0), Signal("order confirmation", 3.0),
+        Signal("thanks for your order", 3.0), Signal("your order", 2.2),
+        Signal("purchase confirmation", 3.0), Signal("subscription renewed", 2.8),
+        Signal("your refund", 2.6), Signal("payment received", 2.4),
+        Signal("order number", 2.4), Signal("total charged", 2.6),
+    ),
+    OtherCategory.SHIPPING: (
+        Signal("has shipped", 3.0), Signal("out for delivery", 3.0),
+        Signal("your package", 2.8), Signal("tracking number", 3.0),
+        Signal("track your", 2.4), Signal("delivered today", 2.6),
+        Signal("delivery attempt", 2.6), Signal("return label", 2.4),
+    ),
+    OtherCategory.NEWSLETTER: (
+        Signal("enews", 3.0), Signal("e news from", 3.0),
+        Signal("newsletter", 2.6), Signal("bulletin", 2.4),
+        Signal("greetings in the name", 2.8), Signal("worship", 2.6),
+        Signal("this week at", 2.2), Signal("view this issue", 2.6),
+        Signal("in this week s issue", 3.0), Signal("this week s newsletter", 3.0),
+        Signal("latest issue", 2.6), Signal("you subscribed", 2.4),
+        Signal("you are receiving this because you subscribed", 3.0),
+        Signal("read online", 1.4), Signal("weekly digest", 2.8),
+        Signal("daily briefing", 2.6), Signal("changelog", 2.0),
+        Signal("release notes", 2.2), Signal("blog post", 1.6),
+    ),
+    OtherCategory.PROMOTION: (
+        # Job-board blasts: marketing that happens to be about jobs.
+        Signal("jobs tailored for you", 3.0), Signal("fitting roles", 3.0),
+        Signal("roles for you", 2.8), Signal("match your previous application", 2.8),
+        Signal("new today", 2.4), Signal("recommended for you", 2.4),
+        Signal("jobs matching", 2.8), Signal("we found", 1.4),
+        Signal("off your next", 3.0), Signal("limited time offer", 3.0),
+        Signal("save up to", 2.8), Signal("discount code", 3.0),
+        Signal("flash sale", 3.0), Signal("black friday", 2.8),
+        Signal("shop now", 2.6), Signal("upgrade to pro", 2.4),
+        Signal("free trial", 2.2), Signal("book a demo", 2.4),
+        Signal("last chance", 2.4), Signal("dont miss out", 2.2),
+    ),
+    OtherCategory.SOCIAL: (
+        Signal("viewed your profile", 3.0), Signal("people you may know", 3.0),
+        Signal("connection request", 2.8), Signal("mentioned you", 2.8),
+        Signal("commented on your", 2.8), Signal("liked your", 2.6),
+        Signal("new follower", 2.8), Signal("your post reached", 2.8),
+        Signal("invited you to join", 2.2), Signal("community digest", 2.4),
+    ),
+    OtherCategory.EVENT: (
+        Signal("you are registered", 2.8), Signal("register now", 2.2),
+        Signal("webinar", 2.8), Signal("meetup", 2.6),
+        Signal("conference", 2.2), Signal("save the date", 2.6),
+        Signal("agenda for", 2.0), Signal("doors open", 2.4),
+        Signal("your ticket", 2.6), Signal("rsvp", 2.6),
+    ),
+    OtherCategory.TRAVEL: (
+        Signal("your itinerary", 3.0), Signal("booking confirmation", 2.8),
+        Signal("check in for your flight", 3.0), Signal("boarding pass", 3.0),
+        Signal("flight", 2.0), Signal("hotel reservation", 2.8),
+        Signal("your reservation", 2.4), Signal("departure", 1.8),
+        Signal("rental car", 2.4),
+    ),
+    OtherCategory.SPAM: (
+        Signal("you have won", 3.0), Signal("claim your prize", 3.0),
+        Signal("verify your wallet", 3.0), Signal("crypto", 2.0),
+        Signal("act now", 2.0), Signal("wire transfer", 2.4),
+        Signal("nigerian", 2.0), Signal("inheritance", 2.2),
+        Signal("ignore previous instructions", 3.0, label="prompt-injection attempt"),
+        Signal("disregard your instructions", 3.0, label="prompt-injection attempt"),
+        Signal("you are an ai", 2.6, label="prompt-injection attempt"),
+        Signal("system prompt", 2.4, label="prompt-injection attempt"),
+    ),
+    OtherCategory.WORK: (
+        Signal("payslip", 3.0), Signal("payroll", 2.8),
+        Signal("open enrollment", 2.8), Signal("benefits enrollment", 2.8),
+        Signal("timesheet", 2.8), Signal("performance review", 2.6),
+        Signal("all hands", 2.6), Signal("standup", 2.2),
+        Signal("sprint", 2.0), Signal("pull request", 2.4),
+        Signal("expense report", 2.6),
+    ),
+    OtherCategory.PERSONAL: (
+        Signal("funeral arrangements", 3.0), Signal("memorial arrangements", 3.0),
+        Signal("obituary", 3.0), Signal("passed away", 2.8),
+        Signal("in loving memory", 3.0), Signal("visitation will be", 2.8),
+        Signal("celebration of life", 2.8), Signal("our condolences", 2.8),
+        Signal("survived by", 2.6), Signal("interment", 2.6),
+        Signal("congratulations on your", 1.8), Signal("hope you had a", 1.8),
+        Signal("see you then", 1.8), Signal("how are you", 1.8),
+        Signal("let me know what suits", 2.2), Signal("miss you", 2.2),
+        Signal("happy birthday", 2.6), Signal("thanks again for", 1.6),
+        Signal("hope you are well", 1.4),
+    ),
+}
+
+
+# ==========================================================================
+# Classifier
+# ==========================================================================
+#: Sentences that tell the reader to do something. Real applicant-tracking mail
+#: buries the request in the middle of an otherwise cheerful acknowledgement,
+#: so the phrase tables alone put it in the wrong folder.
+_ACTION_PATTERNS: Tuple[Tuple[re.Pattern, float, str], ...] = tuple(
+    (re.compile(pattern), weight, label)
+    for pattern, weight, label in (
+        (r"\bthe next step (?:in|of) the (?:application|hiring|interview) process\b",
+         3.0, "names an explicit next step"),
+        (r"\bthe next steps? (?:is|are) to\b", 3.0, "names an explicit next step"),
+        (r"\byou (?:must|need to|will need to|are required to)\b", 2.6, "tells you to act"),
+        (r"\bwe (?:ask|require|request) that you\b", 2.6, "tells you to act"),
+        (r"\bwe recommend that you complete\b", 2.6, "tells you to act"),
+        (r"\bplease (?:complete|submit|provide|upload|fill|confirm|schedule|book|sign|review|respond|reply|verify|click)\b",
+         2.4, "asks you to do something"),
+        (r"\bplease (?:complete|submit|provide|upload|fill in|sign|schedule|book)\b",
+         2.2, "asks you to do something"),
+        (r"\bkindly (?:complete|submit|provide|share|revert)\b", 2.2, "asks you to do something"),
+        (r"\b(?:complete|submit) (?:the|this|your) (?:assessment|questionnaire|form|survey|test|application|profile)\b",
+         2.8, "asks for a specific task"),
+        (r"\baction (?:is )?required\b", 2.6, "is marked action required"),
+        (r"\bas soon as possible\b", 1.2, "is time-bounded"),
+        (r"\bwithin \d+ (?:hours|days|business days)\b", 1.8, "carries a deadline"),
+        (r"\bby (?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}\s)", 1.2,
+         "carries a deadline"),
+        (r"\bexpires? (?:in|on|after)\b", 1.8, "carries an expiry"),
+    )
+)
+
+#: An instruction inside one of these is hypothetical ("if you need to reset
+#: your password") or describes something already done ("thank you for taking
+#: the time to submit your application"). Neither is a request.
+_NOT_A_REQUEST = re.compile(
+    r"(?:\bif\b|\bin case\b|\bshould you\b|\bunless\b|\bwhen you\b|"
+    r"\bmay have been\b|\bin the event\b|\bwhenever\b|"
+    r"\bthank(?:s| you) for\b|\btaking the time to\b|\byou have already\b|"
+    r"\bwe have received\b)[^.!?]{0,70}$"
+)
+
+
+def _is_a_real_request(body: str, start: int) -> bool:
+    """Is the instruction at `start` addressed to the reader, right now?"""
+    lead = body[max(0, start - 90):start]
+    return not _NOT_A_REQUEST.search(lead)
+
+
+@dataclass
+class RuleVerdict:
+    """What the rules engine concluded, and why."""
+
+    is_job_related: bool
+    category: Category
+    other_category: OtherCategory
+    confidence: float
+    summary: str
+    reasoning: str
+    scores: Dict[str, float] = field(default_factory=dict)
+    matched: Tuple[str, ...] = ()
+
+    def to_payload(self) -> Dict[str, object]:
+        """The same JSON shape the model backends produce."""
+        return {
+            "summary": self.summary,
+            "is_job_related": self.is_job_related,
+            "category": self.category.value,
+            "other_category": self.other_category.value,
+            "confidence_score": round(self.confidence, 3),
+            "reasoning": self.reasoning,
+        }
+
+
+_CATEGORY_TABLES: Tuple[Tuple[Category, Tuple[Signal, ...]], ...] = (
+    (Category.NOT_INTERESTED, REJECTION_SIGNALS),
+    (Category.OFFER, OFFER_SIGNALS),
+    (Category.INTERVIEW, INTERVIEW_SIGNALS),
+    (Category.NEXT_STEPS, NEXT_STEPS_SIGNALS),
+    (Category.APPLICATION_RECEIVED, APPLICATION_RECEIVED_SIGNALS),
+    (Category.NETWORKING, NETWORKING_SIGNALS),
+    (Category.UNSOLICITED, UNSOLICITED_SIGNALS),
+)
+
+#: Precedence, matching the system prompt exactly. Ties break toward the
+#: earlier entry.
+_PRECEDENCE: Tuple[Category, ...] = (
+    Category.UNSOLICITED,
+    Category.OFFER,
+    Category.INTERVIEW,
+    Category.NEXT_STEPS,
+    Category.NOT_INTERESTED,
+    Category.NETWORKING,
+    Category.APPLICATION_RECEIVED,
+)
+
+
+class RuleClassifier:
+    """Scores an email against the signal tables. Deterministic and offline.
+
+    ``ruleset`` names a field-specific overlay from :mod:`rulesets`, which adds
+    vocabulary on top of the shared hiring language. Overlays are additive, so
+    choosing the wrong one costs recall, never correctness.
+    """
+
+    def __init__(self, threshold: float = 0.95, ruleset: str = "general") -> None:
+        self.threshold = threshold
+        import rulesets as _rulesets
+
+        self.ruleset = _rulesets.get(ruleset)
+        self._compiled: Dict[int, List[_Matcher]] = {}
+        self._tables: Dict[Category, Tuple[Signal, ...]] = {}
+        for category, table in _CATEGORY_TABLES:
+            merged = table + self.ruleset.signals_for(category)
+            self._tables[category] = merged
+            self._compiled[id(merged)] = [_Matcher(signal) for signal in merged]
+
+        self._context = JOB_CONTEXT_SIGNALS + self.ruleset.context
+        self._compiled[id(self._context)] = [_Matcher(s) for s in self._context]
+        self._compiled[id(NON_JOB_SIGNALS)] = [_Matcher(s) for s in NON_JOB_SIGNALS]
+        for table in TOPIC_SIGNALS.values():
+            self._compiled[id(table)] = [_Matcher(signal) for signal in table]
+
+    @property
+    def signal_count(self) -> int:
+        return (
+            sum(len(t) for t in self._tables.values())
+            + len(self._context) + len(NON_JOB_SIGNALS)
+            + sum(len(t) for t in TOPIC_SIGNALS.values())
+        )
+
+    # -- scoring ---------------------------------------------------------
+    def _score(
+        self, table: Tuple[Signal, ...], subject: str, subject_tight: str,
+        body: str, body_tight: str,
+    ) -> Tuple[float, List[str]]:
+        total, matched, _ = self._score_detail(table, subject, subject_tight, body, body_tight)
+        return total, matched
+
+    def _score_detail(
+        self, table: Tuple[Signal, ...], subject: str, subject_tight: str,
+        body: str, body_tight: str,
+    ) -> Tuple[float, List[str], float]:
+        """``(total, matched labels, strongest single signal weight)``."""
+        total = 0.0
+        strongest = 0.0
+        matched: List[str] = []
+        for matcher in self._compiled[id(table)]:
+            signal = matcher.signal
+            subject_hit = (
+                matcher.hit(subject, subject_tight)
+                if signal.field in ("any", "subject") else 0.0
+            )
+            body_hit = (
+                matcher.hit(body, body_tight)
+                if signal.field in ("any", "body") else 0.0
+            )
+            if not (subject_hit or body_hit):
+                continue
+            # A phrase in the subject line is stated, not buried.
+            quality = max(subject_hit, body_hit)
+            contribution = signal.weight * quality * (1.5 if subject_hit else 1.0)
+            total += contribution
+            strongest = max(strongest, signal.weight * quality)
+            label = signal.describe()
+            matched.append(label if quality == 1.0 else f"{label} (loosely)")
+        return total, matched, strongest
+
+    def classify(
+        self,
+        subject: str = "",
+        body: str = "",
+        sender: str = "",
+        links: Sequence[str] = (),
+        list_unsubscribe: str = "",
+        truncated: bool = False,
+    ) -> RuleVerdict:
+        subject_n, subject_t = normalize(subject), tighten(subject)
+        body_n, body_t = normalize(body), tighten(body)
+        sender_n = normalize(sender)
+        link_blob = " ".join(links).lower()
+
+        scores: Dict[Category, float] = {}
+        matches: Dict[Category, List[str]] = {}
+        strongest: Dict[Category, float] = {}
+        for category, _base in _CATEGORY_TABLES:
+            score, matched, peak = self._score_detail(
+                self._tables[category], subject_n, subject_t, body_n, body_t
+            )
+            scores[category] = score
+            matches[category] = matched
+            strongest[category] = peak
+
+        # ---- link evidence, which outweighs prose ----------------------
+        if any(domain in link_blob for domain in SCHEDULING_LINK_DOMAINS):
+            scores[Category.INTERVIEW] += 3.0
+            strongest[Category.INTERVIEW] = max(strongest[Category.INTERVIEW], 3.0)
+            matches[Category.INTERVIEW].append("a scheduling link")
+        if any(domain in link_blob for domain in ASSESSMENT_LINK_DOMAINS):
+            scores[Category.NEXT_STEPS] += 3.0
+            strongest[Category.NEXT_STEPS] = max(strongest[Category.NEXT_STEPS], 3.0)
+            matches[Category.NEXT_STEPS].append("an assessment-platform link")
+        ats_present = any(domain in link_blob or domain in sender_n for domain in ATS_LINK_DOMAINS)
+
+        job_bonus = 0.0
+        structure_notes: List[str] = []
+
+        # ---- subject shape ---------------------------------------------
+        # A subject line is short, deliberate, and written last: it is the most
+        # reliable single feature in applicant-tracking mail.
+        for pattern, weight, label in SUBJECT_PATTERNS:
+            if pattern.search(subject_n):
+                job_bonus += weight
+                if label not in structure_notes:
+                    structure_notes.append(label)
+
+        # ---- sender and structure --------------------------------------
+        agency = any(hint in sender_n.replace(" ", "") for hint in AGENCY_SENDER_HINTS)
+        if agency:
+            scores[Category.UNSOLICITED] += 1.2
+            matches[Category.UNSOLICITED].append("an agency-style sender address")
+
+        raw_scores = dict(scores)
+        replying = bool(re.match(r"^\s*(re|fw|fwd)\s*:", subject or "", re.I))
+        if replying:
+            # An existing thread is strong evidence the user started it.
+            scores[Category.UNSOLICITED] *= 0.35
+            matches[Category.UNSOLICITED].append("(discounted: this is a reply in an existing thread)")
+
+        job_score, job_matches = self._score(
+            self._context, subject_n, subject_t, body_n, body_t
+        )
+        job_score += job_bonus
+        job_matches.extend(structure_notes)
+        non_job_score, non_job_matches = self._score(
+            NON_JOB_SIGNALS, subject_n, subject_t, body_n, body_t
+        )
+        if ats_present:
+            job_score += 2.5
+            job_matches.append("an applicant-tracking-system address")
+
+        # ---- explicit requests to act ----------------------------------
+        # Only once the message is established as job mail: "please confirm
+        # your email address" is a request in any inbox, and on its own it says
+        # nothing about a hiring process.
+        if job_score >= 2.0 or scores[Category.APPLICATION_RECEIVED] >= 2.5:
+            action_score = 0.0
+            action_notes: List[str] = []
+            peak_action = 0.0
+            for pattern, weight, label in _ACTION_PATTERNS:
+                match = next(
+                    (m for m in pattern.finditer(body_n)
+                     if _is_a_real_request(body_n, m.start())),
+                    None,
+                )
+                if match is None:
+                    continue
+                # A request in the closing half is what the reader is left
+                # with, and applicant-tracking mail puts it there.
+                position = match.start() / max(1, len(body_n))
+                action_score += weight * (1.0 + 0.35 * position)
+                peak_action = max(peak_action, weight)
+                if label not in action_notes:
+                    action_notes.append(label)
+            if action_score:
+                scores[Category.NEXT_STEPS] += action_score
+                strongest[Category.NEXT_STEPS] = max(
+                    strongest[Category.NEXT_STEPS], peak_action
+                )
+                matches[Category.NEXT_STEPS].extend(action_notes[:3])
+
+        # ---- pick a category ------------------------------------------
+        # Precedence is an order, not a tiebreak: an offer outranks the
+        # paperwork attached to it even when the paperwork says more.
+        def qualifies(category: Category) -> bool:
+            bar = (
+                QUALIFY_SCORE_UNSOLICITED
+                if category is Category.UNSOLICITED else QUALIFY_SCORE
+            )
+            return scores[category] >= bar
+
+        qualified = [category for category in _PRECEDENCE if qualifies(category)]
+        if qualified:
+            best_category = qualified[0]
+        else:
+            best_category = max(_PRECEDENCE, key=lambda c: (scores[c], -_PRECEDENCE.index(c)))
+        best_score = scores[best_category]
+        runner_up = max(
+            (score for category, score in scores.items() if category is not best_category),
+            default=0.0,
+        )
+
+        # ---- job related? ----------------------------------------------
+        # Measured before the reply discount: a reply in an existing thread is
+        # *more* clearly part of a job search, not less.
+        job_evidence = job_score + max(max(raw_scores.values(), default=0.0), best_score)
+        looks_job_related = job_evidence >= max(2.4, non_job_score * 0.9)
+
+        if not looks_job_related:
+            return self._non_job_verdict(
+                subject_n, subject_t, body_n, body_t, sender_n,
+                non_job_score, non_job_matches, job_evidence, truncated,
+                list_unsubscribe,
+            )
+
+        if best_score < MIN_SCORE:
+            return RuleVerdict(
+                is_job_related=True,
+                category=Category.UNCLASSIFIED_OTHER,
+                other_category=OtherCategory.NOT_APPLICABLE,
+                confidence=min(0.55, 0.25 + job_evidence / 20.0),
+                summary=_summarise(subject, sender, "This looks job related, but no category fits it."),
+                reasoning=(
+                    "The local rules engine found job-search context "
+                    f"({', '.join(job_matches[:4]) or 'weak signals'}) but no category "
+                    "reached its evidence threshold. Routed to Needs Review."
+                ),
+                scores={c.value: round(v, 2) for c, v in scores.items()},
+                matched=tuple(job_matches[:6]),
+            )
+
+        confidence = self._confidence(
+            best_score, runner_up, truncated, strongest[best_category]
+        )
+        matched = matches[best_category]
+        return RuleVerdict(
+            is_job_related=True,
+            category=best_category,
+            other_category=OtherCategory.NOT_APPLICABLE,
+            confidence=confidence,
+            summary=_summarise(subject, sender, _CATEGORY_BLURB[best_category]),
+            reasoning=_explain(best_category, matched, scores, truncated),
+            scores={c.value: round(v, 2) for c, v in scores.items()},
+            matched=tuple(matched[:8]),
+        )
+
+    # -- non-job ---------------------------------------------------------
+    def _non_job_verdict(
+        self, subject_n, subject_t, body_n, body_t, sender_n,
+        non_job_score, non_job_matches, job_evidence, truncated, list_unsubscribe,
+    ) -> RuleVerdict:
+        topic_scores: Dict[OtherCategory, float] = {}
+        topic_matches: Dict[OtherCategory, List[str]] = {}
+        topic_peak: Dict[OtherCategory, float] = {}
+        for topic, table in TOPIC_SIGNALS.items():
+            score, matched, peak = self._score_detail(
+                table, subject_n, subject_t, body_n, body_t
+            )
+            topic_scores[topic] = score
+            topic_matches[topic] = matched
+            topic_peak[topic] = peak
+
+        if list_unsubscribe:
+            for topic in (OtherCategory.NEWSLETTER, OtherCategory.PROMOTION, OtherCategory.SOCIAL):
+                topic_scores[topic] += 0.8
+            topic_scores[OtherCategory.PERSONAL] = max(0.0, topic_scores[OtherCategory.PERSONAL] - 1.5)
+
+        best_topic = max(topic_scores, key=lambda t: topic_scores[t])
+        best = topic_scores[best_topic]
+        ranked = sorted(topic_scores.values(), reverse=True)
+        runner_up = ranked[1] if len(ranked) > 1 else 0.0
+
+        if best < MIN_SCORE:
+            best_topic, best, runner_up = OtherCategory.OTHER, max(best, non_job_score), 0.0
+            topic_matches[OtherCategory.OTHER] = non_job_matches
+
+        confidence = self._confidence(
+            best, runner_up, truncated, topic_peak.get(best_topic, 0.0)
+        )
+        if best_topic is OtherCategory.OTHER:
+            confidence = min(confidence, 0.70)
+
+        matched = topic_matches.get(best_topic, [])
+        return RuleVerdict(
+            is_job_related=False,
+            category=Category.UNCLASSIFIED_OTHER,
+            other_category=best_topic,
+            confidence=confidence,
+            summary=_summarise(
+                "", "", f"Not part of your job search - this looks like {best_topic.label.lower()}."
+            ),
+            reasoning=(
+                f"The local rules engine found no job-search context "
+                f"(score {job_evidence:.1f}) and matched "
+                f"{', '.join(matched[:4]) or 'general non-job signals'} for "
+                f"{best_topic.label}."
+                + (" The body was truncated, so confidence is held down." if truncated else "")
+            ),
+            scores={t.value: round(v, 2) for t, v in topic_scores.items() if v},
+            matched=tuple(matched[:8]),
+        )
+
+    # -- calibration -----------------------------------------------------
+    def _confidence(
+        self, best: float, runner_up: float, truncated: bool, strongest: float = 0.0
+    ) -> float:
+        """Map evidence to a calibrated, deliberately humble probability.
+
+        Three things raise it: total weight of evidence, how far ahead the
+        winner is, and whether any single decisive phrase fired. A competing
+        second category suppresses it hard, which is the behaviour that keeps
+        ambiguous mail out of category folders.
+        """
+        if best <= 0:
+            return 0.0
+        strength = min(1.0, best / SATURATION)
+        separation = max(0.0, (best - runner_up) / best)
+        decisive = 0.06 if strongest >= DECISIVE_WEIGHT else 0.0
+        confidence = 0.50 + 0.30 * strength + 0.14 * separation + decisive
+        if truncated:
+            confidence = min(confidence, 0.88)
+        return round(min(MAX_CONFIDENCE, confidence), 3)
+
+
+_CATEGORY_BLURB: Dict[Category, str] = {
+    Category.INTERVIEW: "Someone wants to speak with you about a role.",
+    Category.NEXT_STEPS: "You have been asked to complete a step in an application.",
+    Category.OFFER: "This looks like a job offer or its paperwork.",
+    Category.APPLICATION_RECEIVED: "An application of yours was acknowledged. No action needed.",
+    Category.NETWORKING: "A work conversation or referral, not a formal hiring step.",
+    Category.NOT_INTERESTED: "An application of yours was declined. No action needed.",
+    Category.UNSOLICITED: "Unrequested recruiter outreach. No action needed.",
+    Category.UNCLASSIFIED_OTHER: "Job related, but the category is unclear.",
+}
+
+
+def _summarise(subject: str, sender: str, blurb: str) -> str:
+    who = (sender or "").split("<")[0].strip() or "The sender"
+    what = (subject or "").strip()
+    first = f"{who} sent “{what}”." if what else f"{who} sent this message."
+    return f"{first} {blurb}"
+
+
+def _explain(
+    category: Category, matched: Sequence[str], scores: Dict[Category, float], truncated: bool
+) -> str:
+    evidence = ", ".join(matched[:5]) or "weak signals"
+    ordered = sorted(scores.items(), key=lambda pair: pair[1], reverse=True)
+    runner_up = next((c for c, v in ordered if c is not category and v > 0), None)
+    parts = [
+        f"Classified locally, without a model. Matched {evidence} for {category.label}."
+    ]
+    if runner_up is not None:
+        parts.append(
+            f"The nearest alternative was {runner_up.label} "
+            f"(score {scores[runner_up]:.1f} against {scores[category]:.1f})."
+        )
+    if truncated:
+        parts.append("The body was truncated, so confidence is capped.")
+    parts.append(
+        "This engine is a rule set rather than a reader: treat a borderline "
+        "verdict as a prompt to look, not as a decision."
+    )
+    return " ".join(parts)

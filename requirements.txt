@@ -1,0 +1,6 @@
+# Runtime dependencies for iCloud Mail Job Triage.
+# Verified against the exact versions listed in the comments.
+
+PySide6>=6.6.0          # tested with 6.11.2 — native macOS GUI
+anthropic>=1.0.0        # tested with 1.3.0  — structured outputs, beta fallbacks
+keyring>=24.0.0         # tested with 25.7.0 — macOS Keychain credential storage
