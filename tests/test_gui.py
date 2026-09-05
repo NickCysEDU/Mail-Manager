@@ -391,6 +391,23 @@ class TestMainWindow:
         assert window.start_date.calendarPopup() is True
         assert window.end_date.calendarPopup() is True
 
+    def test_the_scan_window_is_spelled_out_with_am_and_pm(self, window):
+        """It reads "covering 4 Sep, 7:12 AM to 5 Sep, 7:12 AM" before a scan."""
+        import re
+
+        window._window_selected(TimeWindow.LAST_24_HOURS)
+        plain = re.sub(r"<[^>]+>", "", window.window_label.text())
+        assert plain.startswith("covering ")
+        assert plain.count("AM") + plain.count("PM") == 2
+        assert ", " in plain
+
+    def test_the_menu_bar_is_told_which_model_is_selected(self, window):
+        window._switch_model("rules", "rules-v1")
+        assert window.menu_bar._provider == "rules"
+        assert window.menu_bar._model == "rules-v1"
+        window._switch_ruleset("finance")
+        assert window.menu_bar._ruleset == "finance"
+
     def test_constructs_and_starts_empty(self, window):
         assert window.model.rowCount() == 0
         assert window.apply_button.isEnabled() is False

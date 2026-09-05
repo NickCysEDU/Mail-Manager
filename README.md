@@ -13,7 +13,7 @@
 
 ![macOS 13+](https://img.shields.io/badge/macOS-13%2B-black)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue)
-![Tests](https://img.shields.io/badge/tests-1%2C037%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-1%2C059%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
 <img src="docs/screenshot.png" width="900" alt="The approval table, with a summary, category, destination folder and confidence score for every message">
@@ -156,8 +156,9 @@ Background scans file only what the app would have pre-ticked. Everything else
 waits for you.
 
 A menu bar icon gives you a quick scan over the last 24 hours, 3 days or 7 days,
-the schedule, and the result of the last background run, without opening the
-window.
+the sorter it will use, the schedule, and the result of the last background run,
+without opening the window. The **Model** entry is named after whatever is
+currently selected, and switching there is the same as switching in the window.
 
 ## Privacy
 
@@ -169,7 +170,7 @@ log. [Full details in SECURITY.md](SECURITY.md).
 
 ```bash
 ./dev demo      # the app with sample mail, no setup
-./dev test      # 1,037 tests, about 30 seconds
+./dev test      # 1,059 tests, about 30 seconds
 ./dev eval      # sorter accuracy against the labelled fixture
 ./dev fake      # the whole pipeline in the terminal, offline
 ```

@@ -103,6 +103,7 @@ from models import (
     TimeWindow,
     TriageItem,
     TriageSummary,
+    clock,
     resolve_window,
 )
 from flowlayout import FlowLayout, Spacer
@@ -1591,7 +1592,12 @@ class MainWindow(QMainWindow):
         self.menu_bar.settingsRequested.connect(lambda: self.open_settings())
         self.menu_bar.quickScanRequested.connect(self._quick_scan)
         self.menu_bar.scheduleChanged.connect(self.set_schedule)
+        self.menu_bar.modelChanged.connect(self._switch_model)
+        self.menu_bar.rulesetChanged.connect(self._switch_ruleset)
         self.menu_bar.quitRequested.connect(QApplication.quit)
+        # The window was built before the controller existed, so hand it the
+        # current choice now rather than waiting for the first change.
+        self._sync_menu_bar_model()
 
         self.schedule_timer = QTimer(self)
         self.schedule_timer.setSingleShot(False)
@@ -1903,6 +1909,11 @@ class MainWindow(QMainWindow):
         else:
             self._key_present.pop(provider, None)
 
+    def _sync_menu_bar_model(self) -> None:
+        if hasattr(self, "menu_bar"):
+            self.menu_bar.set_model(
+                self.settings.provider, self.settings.model, self.settings.ruleset)
+
     def _refresh_model_button(self) -> None:
         if hasattr(self, "preview"):
             self.preview.set_backend_label(self.settings.provider_label.split(" (")[0])
@@ -1919,6 +1930,7 @@ class MainWindow(QMainWindow):
             + ("No API key stored for this backend - click to fix.\n" if warn else "")
             + "Click to switch backend or model (⌘M)"
         )
+        self._sync_menu_bar_model()
 
     def _switch_ruleset(self, name: str) -> None:
         """Pick the field-specific vocabulary the offline rules engine uses."""
@@ -2487,11 +2499,15 @@ class MainWindow(QMainWindow):
             return
         start, end = start.astimezone(), end.astimezone()
         same_year = start.year == end.year == datetime.now().year
-        fmt = "%-d %b %H:%M" if same_year else "%-d %b %Y %H:%M"
+        fmt = "%-d %b" if same_year else "%-d %b %Y"
+
+        def spell(moment) -> str:
+            return f"{moment.strftime(fmt)}, {clock(moment)}"
+
         self.window_label.setText(
             f"<span style='opacity:0.7'>covering</span> "
-            f"<b>{start.strftime(fmt)}</b> "
-            f"<span style='opacity:0.7'>to</span> <b>{end.strftime(fmt)}</b>"
+            f"<b>{spell(start)}</b> "
+            f"<span style='opacity:0.7'>to</span> <b>{spell(end)}</b>"
         )
         self.window_label.setTextFormat(Qt.TextFormat.RichText)
 

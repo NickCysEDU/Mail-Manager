@@ -435,13 +435,13 @@ class EmailMessage:
         day = local.date()
         delta = (today - day).days
         if delta == 0:
-            return f"Today  {local:%H:%M}"
+            return f"Today  {clock(local)}"
         if delta == 1:
-            return f"Yesterday  {local:%H:%M}"
+            return f"Yesterday  {clock(local)}"
         if 1 < delta < 7:
-            return f"{local:%a}  {local:%H:%M}"
+            return f"{local:%a}  {clock(local)}"
         if day.year == today.year:
-            return f"{local.day} {local:%b}  {local:%H:%M}"
+            return f"{local.day} {local:%b}  {clock(local)}"
         return f"{local.day} {local:%b} {local.year}"
 
     def date_full(self) -> str:
@@ -449,7 +449,16 @@ class EmailMessage:
         local = self.local_date()
         if local is None:
             return "No date on this message"
-        return f"{local:%A %d %B %Y}, {local:%H:%M} {local:%Z}".strip()
+        return f"{local:%A %d %B %Y}, {clock(local)} {local:%Z}".strip()
+
+
+def clock(moment: datetime) -> str:
+    """Wall-clock time, 12 hour with AM or PM.
+
+    Built by hand rather than with %I and %p: those follow the C locale, and
+    this needs to read the same way wherever the app runs.
+    """
+    return f"{moment.hour % 12 or 12}:{moment:%M} {'AM' if moment.hour < 12 else 'PM'}"
 
 
 @dataclass
