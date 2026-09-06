@@ -93,7 +93,7 @@ class TestTableModel:
         ]
         assert headers[1:] == [
             "Sender", "Subject", "Received", "Summary", "Category",
-            "Folder", "Confidence", "Reasoning",
+            "Folder", "Confidence", "Reasoning", "Mailbox",
         ]
 
     def test_every_header_carries_an_explanatory_tooltip(self, model):
@@ -407,6 +407,54 @@ class TestMainWindow:
         assert window.menu_bar._model == "rules-v1"
         window._switch_ruleset("finance")
         assert window.menu_bar._ruleset == "finance"
+
+    def test_the_mailbox_picker_stays_out_of_the_way_until_it_is_needed(self, window):
+        """One mailbox is not a choice, so it gets neither a button nor a column."""
+        assert window.account_button.isVisible() is False
+        assert window.table.isColumnHidden(TriageTableModel.COL_ACCOUNT)
+
+    def test_a_second_mailbox_brings_out_the_picker(self, qapp):
+        from accounts import Account
+        # Explicit hosts: the example domains are deliberately not real ones,
+        # so nothing here can be guessed from the address.
+        settings = Settings(icloud_email="you@icloud.example")
+        settings.mailboxes = [
+            Account(address="you@icloud.example", host="imap.mail.me.com"),
+            Account(address="work@elsewhere.example", host="imap.elsewhere.example"),
+        ]
+        settings = settings.normalized()
+        subject = MainWindow(settings, InMemoryCredentialStore())
+        subject.show()
+        try:
+            assert subject.account_button.isVisible() is True
+            assert not subject.table.isColumnHidden(TriageTableModel.COL_ACCOUNT)
+            labels = [a.text() for a in subject.account_menu.actions() if a.text()]
+            assert "All mailboxes" in labels
+            # Picking one narrows the next scan to it.
+            chosen = subject.settings.accounts[1]
+            subject._select_account(chosen.id)
+            assert [a.id for a in subject.settings.scan_accounts] == [chosen.id]
+        finally:
+            subject.close()
+
+    def test_switching_profile_rebuilds_the_folder_plan(self, window):
+        assert window.folder_plan.all_folders[0] == "Job Search"
+        window._switch_profile("everyday")
+        folders = window.folder_plan.all_folders
+        assert folders[0] == "Sorted Mail"
+        assert "Sorted Mail/Job Search" in folders
+        # And non-job mail is now filed rather than left where it is.
+        assert window.settings.routing.name == "FILE"
+
+    def test_switching_profile_refiles_rows_already_on_screen(self, window):
+        window.model.set_items([make_item("1"), make_item("4", classification={
+            "is_job_related": False, "category": Category.UNCLASSIFIED_OTHER,
+            "other_category": OtherCategory.NEWSLETTER, "confidence_score": 0.99})])
+        before = window.model.items[0].target_folder
+        window._switch_profile("everyday")
+        after = window.model.items[0].target_folder
+        assert before != after
+        assert after.startswith("Sorted Mail")
 
     def test_constructs_and_starts_empty(self, window):
         assert window.model.rowCount() == 0

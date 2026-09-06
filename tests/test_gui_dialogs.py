@@ -558,7 +558,8 @@ class TestScanWiring:
         subject.start_scan()
         assert captured, "start_scan did not construct a worker"
         assert captured["api_key"] == "AIza-test"
-        assert captured["icloud_password"] == "app-specific"
+        # One password per mailbox now, keyed by account id.
+        assert list(captured["mailbox_password"].values()) == ["app-specific"]
         assert captured["settings"].provider == "gemini"
         assert captured["window_start"] < captured["window_end"]
 

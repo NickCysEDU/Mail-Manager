@@ -267,7 +267,7 @@ class TestLiveSwitching:
 
         window = MainWindow(Settings(icloud_email="a@b.com", provider="gemini"),
                             InMemoryCredentialStore())
-        worker = ScanWorker(settings=window.settings, icloud_password="p", api_key="k",
+        worker = ScanWorker(settings=window.settings, mailbox_password="p", api_key="k",
                             window_start=None, window_end=None)
         worker._classifier = LLMEngine(api_key="k", provider="gemini")
         try:
@@ -284,7 +284,7 @@ class TestLiveSwitching:
         settings the scan is about to build its engine from."""
         from workers import ScanWorker
 
-        worker = ScanWorker(settings=Settings(), icloud_password="", api_key="",
+        worker = ScanWorker(settings=Settings(), mailbox_password="", api_key="",
                             window_start=None, window_end=None)
         assert worker.switch_model("rules", "rules-v1") is True
         assert worker.settings.provider == "rules"
@@ -368,7 +368,7 @@ class TestSwitchingBeforeTheEngineExists:
         from workers import ScanWorker
 
         return ScanWorker(settings=Settings(icloud_email="a@b.com", provider="gemini"),
-                          icloud_password="p", api_key="k",
+                          mailbox_password="p", api_key="k",
                           window_start=None, window_end=None)
 
     def test_it_updates_the_settings_the_scan_will_use(self, qapp):
@@ -399,7 +399,7 @@ class TestSwitchingBeforeTheEngineExists:
                     return False        # nothing to swap yet
 
             window.scan_worker = Pending(
-                settings=window.settings, icloud_password="p", api_key="k",
+                settings=window.settings, mailbox_password="p", api_key="k",
                 window_start=None, window_end=None,
             )
             window._switch_model("rules", "rules-v1")

@@ -29,6 +29,7 @@ from PySide6.QtCore import (
 from PySide6.QtCore import QPointF  # noqa: E402  (grouped with Qt imports below)
 from PySide6.QtGui import (
     QAction,
+    QActionGroup,
     QColor,
     QFontMetrics,
     QDesktopServices,
@@ -79,6 +80,7 @@ from PySide6.QtWidgets import (
 
 import config
 import llm_engine
+import profiles
 import providers
 import rulesets
 import scheduler
@@ -159,6 +161,7 @@ class TriageTableModel(QAbstractTableModel):
     COL_FOLDER = 6
     COL_CONFIDENCE = 7
     COL_REASONING = 8
+    COL_ACCOUNT = 9
 
     #: Short enough to survive a narrow column; the long form is the tooltip.
     HEADERS = (
@@ -171,6 +174,7 @@ class TriageTableModel(QAbstractTableModel):
         "Folder",
         "Confidence",
         "Reasoning",
+        "Mailbox",
     )
     HEADER_TOOLTIPS = (
         "Tick to include this message when you apply folder moves.",
@@ -182,6 +186,7 @@ class TriageTableModel(QAbstractTableModel):
         "Where it will be filed. Hover for the full path.",
         "How confident the model is. Below the threshold it goes to Needs Review.",
         "Why it decided that. The full text is in the preview below.",
+        "Which mailbox this arrived in. Hidden unless more than one is set up.",
     )
 
     selectionChanged = Signal()
@@ -253,6 +258,8 @@ class TriageTableModel(QAbstractTableModel):
             return Qt.CheckState.Checked if item.approved else Qt.CheckState.Unchecked
 
         if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
+            if column == self.COL_ACCOUNT:
+                return item.email.account_label
             if column == self.COL_SENDER:
                 return item.email.sender_short
             if column == self.COL_SUBJECT:
@@ -1482,7 +1489,7 @@ class SettingsDialog(QDialog):
         self._worker = ConnectionTestWorker(
             mode=mode,
             settings=settings,
-            icloud_password=self.password_edit.text(),
+            mailbox_password=self.password_edit.text(),
             api_key=self.api_key_edit.text(),
             parent=self,
         )
@@ -1567,9 +1574,7 @@ class MainWindow(QMainWindow):
         self.apply_worker: Optional[ApplyWorker] = None
         #: Every background thread this window has started and not yet reaped.
         self._workers: List[QThread] = []
-        self.folder_plan: Optional[FolderPlan] = FolderPlan(
-            root=settings.folder_root, other_root=settings.other_folder_root
-        )
+        self.folder_plan: Optional[FolderPlan] = settings.folder_plan()
         #: Which providers have a key in the Keychain. See store_has_key.
         self._key_present: Dict[str, bool] = {}
         self._prompt_cache: Dict[str, str] = {}
@@ -1663,6 +1668,7 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(TriageTableModel.COL_DATE, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(TriageTableModel.COL_CONFIDENCE, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(TriageTableModel.COL_SUMMARY, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(TriageTableModel.COL_ACCOUNT, QHeaderView.ResizeMode.Fixed)
         header.setTextElideMode(Qt.TextElideMode.ElideRight)
         self._reset_columns()
 
@@ -1717,11 +1723,20 @@ class MainWindow(QMainWindow):
         # The reasoning is shown in full in the preview pane, so the summary -
         # which is the column people actually read across - gets the stretch.
         TriageTableModel.COL_REASONING: 210,
+        TriageTableModel.COL_ACCOUNT: 120,
     }
 
     def _reset_columns(self) -> None:
         for column, width in self.COLUMN_WIDTHS.items():
             self.table.setColumnWidth(column, width)
+        self._sync_account_column()
+
+    def _sync_account_column(self) -> None:
+        """The mailbox column earns its space only when there is a choice."""
+        if not hasattr(self, "table"):
+            return
+        self.table.setColumnHidden(
+            TriageTableModel.COL_ACCOUNT, not self.settings.multi_account)
 
     def _apply_density(self, lines: int) -> None:
         """Switch between one-line rows and wrapped multi-line rows."""
@@ -1803,6 +1818,15 @@ class MainWindow(QMainWindow):
         self.model_button.setMenu(self.model_menu)
         row.addWidget(self.model_button)
 
+        # Only worth the space once there is more than one mailbox.
+        self.account_button = QToolButton()
+        self.account_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.account_button.setMinimumHeight(30)
+        self.account_button.setStyleSheet("QToolButton { padding: 4px 22px 4px 10px; }")
+        self.account_menu = QMenu(self)
+        self.account_button.setMenu(self.account_menu)
+        row.addWidget(self.account_button)
+
         self.stop_button = QPushButton("Stop All")
         self.stop_button.setMinimumHeight(30)
         self.stop_button.setEnabled(False)
@@ -1828,6 +1852,7 @@ class MainWindow(QMainWindow):
         row.addWidget(self.apply_button)
 
         self._sync_range_visibility()
+        self._rebuild_account_menu()
         return frame
 
     # -- model switcher --------------------------------------------------
@@ -1857,6 +1882,17 @@ class MainWindow(QMainWindow):
                 missing.triggered.connect(self.open_settings)
                 section.addAction(missing)
         self.model_menu.addSeparator()
+        profile_menu = self.model_menu.addMenu("What to sort")
+        for name, label, blurb in profiles.choices():
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setChecked(name == self.settings.sort_profile)
+            action.setStatusTip(blurb)
+            action.setToolTip(blurb)
+            action.triggered.connect(
+                lambda checked=False, p=name: self._switch_profile(p))
+            profile_menu.addAction(action)
+
         rules_menu = self.model_menu.addMenu("Local rule set (field)")
         for name, label, blurb in rulesets.choices():
             action = QAction(label, self)
@@ -1872,6 +1908,66 @@ class MainWindow(QMainWindow):
         more.triggered.connect(lambda: self.open_settings(tab=1))
         self.model_menu.addAction(more)
         self._refresh_model_button()
+
+    # -- mailbox switcher ------------------------------------------------
+    def _rebuild_account_menu(self) -> None:
+        """Which mailbox the next scan reads: one of them, or all of them."""
+        if not hasattr(self, "account_menu"):
+            return
+        self.account_menu.clear()
+        mailboxes = self.settings.enabled_accounts
+        self.account_button.setVisible(len(mailboxes) > 1)
+        if len(mailboxes) <= 1:
+            return
+
+        group = QActionGroup(self)
+        group.setExclusive(True)
+        every = QAction("All mailboxes", self)
+        every.setCheckable(True)
+        every.setChecked(not self.settings.active_account)
+        every.triggered.connect(lambda: self._select_account(""))
+        group.addAction(every)
+        self.account_menu.addAction(every)
+        self.account_menu.addSeparator()
+
+        for account in mailboxes:
+            action = QAction(f"{account.label}  ({account.address})", self)
+            action.setCheckable(True)
+            action.setChecked(account.id == self.settings.active_account)
+            action.triggered.connect(
+                lambda checked=False, a=account.id: self._select_account(a))
+            group.addAction(action)
+            self.account_menu.addAction(action)
+
+        self.account_menu.addSeparator()
+        manage = QAction("Mailboxes…", self)
+        manage.triggered.connect(lambda: self.open_settings(tab=0))
+        self.account_menu.addAction(manage)
+        self._refresh_account_button()
+
+    def _refresh_account_button(self) -> None:
+        chosen = self.settings.account_by_id(self.settings.active_account)
+        name = chosen.label if chosen else "All mailboxes"
+        self.account_button.setText(f"✉︎  {name}")
+        self.account_button.setToolTip(
+            "Which mailbox the next scan reads.\n"
+            + (f"Currently {chosen.address}." if chosen
+               else f"Currently all {len(self.settings.enabled_accounts)} of them.")
+        )
+
+    def _select_account(self, account_id: str) -> None:
+        self.settings.active_account = account_id
+        try:
+            self.settings.save()
+        except OSError as exc:
+            log.warning("Could not save settings: %s", exc)
+        chosen = self.settings.account_by_id(account_id)
+        self._append_log(
+            f"Next scan will read {chosen.label}." if chosen
+            else "Next scan will read every mailbox."
+        )
+        self._refresh_account_button()
+        self._sync_account_column()
 
     def store_has_key(self, provider: str, probe: bool = True) -> bool:
         """Whether a key is stored for `provider`.
@@ -1909,6 +2005,17 @@ class MainWindow(QMainWindow):
         else:
             self._key_present.pop(provider, None)
 
+    def _mailbox_passwords(self) -> Dict[str, str]:
+        """One password per mailbox the next task will touch."""
+        return {
+            account.id: self.store.get_mailbox_password(account.address)
+            for account in self.settings.scan_accounts
+        }
+
+    def _mailboxes_missing_a_password(self) -> List[str]:
+        return [a.label for a in self.settings.scan_accounts
+                if not self.store.get_mailbox_password(a.address)]
+
     def _sync_menu_bar_model(self) -> None:
         if hasattr(self, "menu_bar"):
             self.menu_bar.set_model(
@@ -1931,6 +2038,35 @@ class MainWindow(QMainWindow):
             + "Click to switch backend or model (⌘M)"
         )
         self._sync_menu_bar_model()
+
+    def _switch_profile(self, name: str) -> None:
+        """Change what gets a folder of its own, and rebuild the folder plan."""
+        if name == self.settings.sort_profile:
+            return
+        chosen = profiles.get(name)
+        self.settings.sort_profile = chosen.name
+        self.settings.non_job_routing = chosen.non_job_routing.value
+        self.settings = self.settings.normalized()
+        try:
+            self.settings.save()
+        except OSError as exc:
+            log.warning("Could not save settings: %s", exc)
+        self.folder_plan = self.settings.folder_plan(
+            self.folder_plan.delimiter if self.folder_plan else "/")
+        self._append_log(f"Sorting profile: {chosen.label}. {chosen.blurb}")
+        self._retarget_items()
+        self._rebuild_model_menu()
+
+    def _retarget_items(self) -> None:
+        """Re-file the rows already on screen under the new folder plan."""
+        items = list(self.model.items)
+        if not items:
+            return
+        for item in items:
+            item.folders = self.folder_plan
+            item.non_job_routing = self.settings.routing
+        self.model.set_items(items)
+        self._update_status()
 
     def _switch_ruleset(self, name: str) -> None:
         """Pick the field-specific vocabulary the offline rules engine uses."""
@@ -2428,9 +2564,7 @@ class MainWindow(QMainWindow):
         (self.settings.window_geometry, self.settings.splitter_state,
          self.settings.table_state) = preserved
         self.settings.save()
-        self.folder_plan = FolderPlan(
-            root=self.settings.folder_root, other_root=self.settings.other_folder_root
-        )
+        self.folder_plan = self.settings.folder_plan()
         self._rebuild_model_menu()
         self._toggle_menu_bar(self.settings.menu_bar_icon)
         self.set_schedule(self.settings.schedule_minutes)
@@ -2463,9 +2597,7 @@ class MainWindow(QMainWindow):
         except OSError as exc:
             QMessageBox.warning(self, "Settings", f"Could not save settings: {exc}")
 
-        self.folder_plan = FolderPlan(
-            root=self.settings.folder_root, other_root=self.settings.other_folder_root
-        )
+        self.folder_plan = self.settings.folder_plan()
         self.table.setItemDelegateForColumn(
             TriageTableModel.COL_CONFIDENCE,
             ConfidenceDelegate(self.settings.confidence_threshold, self.table),
@@ -2536,16 +2668,18 @@ class MainWindow(QMainWindow):
             if not self.settings.is_configured():
                 return
         try:
-            password = self.store.get_icloud_password(self.settings.icloud_email)
+            passwords = self._mailbox_passwords()
+            missing = self._mailboxes_missing_a_password()
             api_key = self.store.get_provider_key(self.settings.provider)
         except CredentialError as exc:
             QMessageBox.critical(self, "Keychain", str(exc))
             return
-        if not password:
+        if missing:
             QMessageBox.warning(
                 self, "Missing password",
-                "No iCloud app-specific password is stored for "
-                f"{self.settings.icloud_email}. Add one in Settings.",
+                "No app password is stored for "
+                + ", ".join(missing)
+                + ". Add one in Settings.",
             )
             self.open_settings()
             return
@@ -2570,7 +2704,7 @@ class MainWindow(QMainWindow):
 
         self.scan_worker = ScanWorker(
             settings=self.settings,
-            icloud_password=password,
+            mailbox_password=passwords,
             api_key=api_key,
             window_start=start,
             window_end=end,
@@ -2589,9 +2723,7 @@ class MainWindow(QMainWindow):
         """Populate the window from bundled samples. No I/O of any kind."""
         import demo_data
 
-        plan = FolderPlan(
-            root=self.settings.folder_root, other_root=self.settings.other_folder_root
-        )
+        plan = self.settings.folder_plan()
         self.folder_plan = plan
         self._prompt_cache.clear()
         self.preview.clear()
@@ -2694,7 +2826,7 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            password = self.store.get_icloud_password(self.settings.icloud_email)
+            passwords = self._mailbox_passwords()
         except CredentialError as exc:
             QMessageBox.critical(self, "Keychain", str(exc))
             return
@@ -2702,7 +2834,7 @@ class MainWindow(QMainWindow):
         self._set_busy(True, "Filing messages…")
         self.apply_worker = ApplyWorker(
             settings=self.settings,
-            icloud_password=password,
+            mailbox_password=passwords,
             plans=plans,
             extra_folders=required_folders(items, self.folder_plan),
             parent=self,

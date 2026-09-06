@@ -16,11 +16,15 @@ import tempfile
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
+import accounts as accounts_mod
+import profiles
 import providers
+from accounts import Account
 from models import (
     APP_NAME,
+    FolderPlan,
     DEFAULT_CONFIDENCE_THRESHOLD,
     DEFAULT_FOLDER_ROOT,
     DEFAULT_OTHER_ROOT,
@@ -143,6 +147,13 @@ def log_dir() -> Path:
 class Settings:
     """Non-secret, user-visible configuration."""
 
+    #: Every mailbox the app knows about. The five fields below it describe
+    #: the first one and are kept in step with it, because the app shipped
+    #: with a single mailbox and plenty of code still reads it that way.
+    mailboxes: List[Account] = field(default_factory=list)
+    #: Which mailbox the window is showing. Empty means all of them.
+    active_account: str = ""
+
     icloud_email: str = ""
     imap_host: str = DEFAULT_IMAP_HOST
     imap_port: int = DEFAULT_IMAP_PORT
@@ -160,6 +171,9 @@ class Settings:
     max_body_chars: int = 4000
     concurrency: int = 4
     batch_size: int = 6
+
+    #: What the app is being used for, which decides the folder layout.
+    sort_profile: str = profiles.DEFAULT_PROFILE
 
     folder_root: str = DEFAULT_FOLDER_ROOT
     other_folder_root: str = DEFAULT_OTHER_ROOT
@@ -198,6 +212,14 @@ class Settings:
         """Return a copy with every field clamped into a usable range."""
         data = asdict(self)
         data["icloud_email"] = str(data["icloud_email"]).strip()
+        data["mailboxes"] = [
+            m if isinstance(m, Account) else Account.from_dict(m)
+            for m in (data.get("mailboxes") or [])
+            if isinstance(m, (Account, Mapping))
+        ]
+        data["active_account"] = str(data.get("active_account", "")).strip()
+        if not profiles.exists(str(data.get("sort_profile", ""))):
+            data["sort_profile"] = profiles.DEFAULT_PROFILE
         data["imap_host"] = str(data["imap_host"]).strip() or DEFAULT_IMAP_HOST
         data["imap_port"] = _valid_int(data["imap_port"], 1, 65535, DEFAULT_IMAP_PORT)
         data["source_mailbox"] = str(data["source_mailbox"]).strip() or "INBOX"
@@ -219,6 +241,12 @@ class Settings:
         data["folder_root"] = str(data["folder_root"]).strip() or DEFAULT_FOLDER_ROOT
         data["other_folder_root"] = str(data["other_folder_root"]).strip() or DEFAULT_OTHER_ROOT
         data["non_job_routing"] = NonJobRouting.parse(data["non_job_routing"]).value
+        # A profile whose whole point is sorting the rest of the inbox cannot
+        # also be set to leave the rest of the inbox alone; that combination
+        # would file nothing at all and look like a broken app.
+        if (profiles.get(data["sort_profile"]).sorts_everything
+                and NonJobRouting.parse(data["non_job_routing"]) is NonJobRouting.LEAVE):
+            data["non_job_routing"] = NonJobRouting.FILE.value
         data["max_messages"] = _clamp_int(data["max_messages"], 1, 5000, 400)
         data["row_lines"] = _clamp_int(data["row_lines"], 1, 6, 3)
         data["schedule_minutes"] = _clamp_int(data["schedule_minutes"], 0, 10080, 0)
@@ -231,7 +259,9 @@ class Settings:
                     "hide_non_job", "fallback_to_rules", "auto_file_background",
                     "background_agent", "menu_bar_icon"):
             data[key] = bool(data[key])
-        return Settings(**data)
+        settled = Settings(**data)
+        settled._sync_mailboxes()
+        return settled
 
     @property
     def window(self) -> TimeWindow:
@@ -258,7 +288,95 @@ class Settings:
         return bool(self.provider_class.on_device)
 
     def is_configured(self) -> bool:
-        return bool(self.icloud_email)
+        return any(a.is_configured for a in self.mailboxes) or bool(self.icloud_email)
+
+    # -- mailboxes -------------------------------------------------------
+    def _sync_mailboxes(self) -> None:
+        """Reconcile the mailbox list with the original single-mailbox fields.
+
+        The app shipped with one mailbox described by five flat fields, and a
+        good deal of code still reads them. Rather than rewrite all of it, the
+        first mailbox and those fields are kept as two views of one thing: an
+        older settings file grows a mailbox, and a newer one keeps the flat
+        fields pointing at whichever mailbox comes first.
+        """
+        if not self.mailboxes and self.icloud_email:
+            self.mailboxes = [Account.for_address(
+                self.icloud_email,
+                host=self.imap_host,
+                port=self.imap_port,
+                source_mailbox=self.source_mailbox,
+                connections=self.imap_connections,
+            )]
+        if self.mailboxes:
+            first = self.mailboxes[0]
+            self.icloud_email = first.address
+            self.imap_host = first.host
+            self.imap_port = first.port
+            self.source_mailbox = first.source_mailbox
+            self.imap_connections = first.connections
+        accounts_mod.assign_colors(self.mailboxes)
+        accounts_mod.unique_labels(self.mailboxes)
+        known = {a.id for a in self.mailboxes}
+        if self.active_account not in known:
+            self.active_account = ""
+
+    @property
+    def accounts(self) -> List[Account]:
+        """Every mailbox, configured or not."""
+        return list(self.mailboxes)
+
+    @property
+    def enabled_accounts(self) -> List[Account]:
+        return [a for a in self.mailboxes if a.enabled and a.is_configured]
+
+    @property
+    def scan_accounts(self) -> List[Account]:
+        """The mailboxes the next scan will read: the selected one, or all."""
+        chosen = [a for a in self.enabled_accounts
+                  if not self.active_account or a.id == self.active_account]
+        return chosen or self.enabled_accounts or [self.primary_account]
+
+    @property
+    def primary_account(self) -> Account:
+        """The first mailbox, invented from the flat fields if there is none.
+
+        Settings built in code rather than loaded from disk may have no
+        mailbox list at all. Rather than make every caller handle that, this
+        always returns something connectable.
+        """
+        if self.mailboxes:
+            return self.mailboxes[0]
+        return Account.for_address(
+            self.icloud_email,
+            host=self.imap_host,
+            port=self.imap_port,
+            source_mailbox=self.source_mailbox,
+            connections=self.imap_connections,
+        )
+
+    def account_by_id(self, account_id: str) -> Optional[Account]:
+        return next((a for a in self.mailboxes if a.id == account_id), None)
+
+    @property
+    def multi_account(self) -> bool:
+        return len(self.enabled_accounts) > 1
+
+    # -- profile ---------------------------------------------------------
+    @property
+    def profile(self) -> "profiles.Profile":
+        return profiles.get(self.sort_profile)
+
+    def folder_plan(self, delimiter: str = "/") -> FolderPlan:
+        """The folder layout implied by the current profile and roots."""
+        active = self.profile
+        return FolderPlan(
+            root=self.folder_root,
+            other_root=self.other_folder_root,
+            delimiter=delimiter or "/",
+            detailed_job_folders=active.detailed_job_folders,
+            topics=active.topics,
+        )
 
     # -- serialisation ---------------------------------------------------
     def to_dict(self) -> Dict[str, Any]:
@@ -444,15 +562,21 @@ class CredentialStore:
     def icloud_account(email: str) -> str:
         return f"icloud:{(email or '').strip().lower()}"
 
-    def get_icloud_password(self, email: str) -> str:
+    def get_mailbox_password(self, email: str) -> str:
+        """The stored password for a mailbox, whichever provider it is on."""
         if not (email or "").strip():
             return ""
         return self.get(self.icloud_account(email))
 
-    def set_icloud_password(self, email: str, password: str) -> None:
+    def set_mailbox_password(self, email: str, password: str) -> None:
         if not (email or "").strip():
-            raise CredentialError("Enter your iCloud email address before saving the password.")
+            raise CredentialError("Enter the email address before saving the password.")
         self.set(self.icloud_account(email), password)
+
+    #: The original names. Keychain entries are keyed by address, so these
+    #: were never iCloud-specific in practice, only in what they were called.
+    get_icloud_password = get_mailbox_password
+    set_icloud_password = set_mailbox_password
 
     @staticmethod
     def provider_account(provider: str) -> str:
