@@ -13,7 +13,7 @@
 
 ![macOS 13+](https://img.shields.io/badge/macOS-13%2B-black)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue)
-![Tests](https://img.shields.io/badge/tests-1%2C059%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-1%2C109%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
 <img src="docs/screenshot.png" width="900" alt="The approval table, with a summary, category, destination folder and confidence score for every message">
@@ -146,6 +146,53 @@ Job Search/
 Existing folders with those names are reused, not duplicated, and the check is
 case-insensitive. You can rename the parent folder in Settings.
 
+## Sorting more than a job search
+
+The sorter was always scoring two things: which job-search category a message
+belongs to, and which of twelve everyday topics it is. Only the first got
+folders. Under **⚙︎ → What to sort** you choose which distinctions are worth a
+folder of their own:
+
+| Profile | Job folders | Everything else |
+| --- | --- | --- |
+| **Job search** *(default)* | seven | left in your inbox |
+| **Job search and everyday mail** | seven | filed under `Sorted Mail/` |
+| **Everyday mail** | one | filed under `Sorted Mail/` |
+| **Essentials only** | one | six folders: security, finance, receipts, travel, newsletters, promotions |
+
+The everyday topics are Security, Finance, Receipts, Shipping, Travel, Events,
+Work, Personal, Social, Newsletters, Promotions and Junk. All of it runs on the
+same offline rules, so none of it needs an API key.
+
+Changing profile refiles the rows already on screen. Nothing moves until you
+press Apply, as ever.
+
+## More than one mailbox
+
+Mail Manager talks plain IMAP, so it is not limited to iCloud. Add mailboxes in
+**Settings → Mailboxes**; typing the address is usually enough, since the domain
+picks the server for you:
+
+| | Server | What to paste |
+| --- | --- | --- |
+| iCloud | `imap.mail.me.com` | app-specific password |
+| Gmail | `imap.gmail.com` | app password (needs 2-Step Verification, and IMAP enabled in Gmail) |
+| Outlook / Microsoft 365 | `outlook.office365.com` | app password |
+| Yahoo, AOL | | app password |
+| Fastmail, Zoho, GMX | | app password |
+| Proton Mail | `127.0.0.1:1143` | via the Proton Bridge app |
+| Anything else | you type it | whatever your provider uses |
+
+Every one of these still accepts password authentication over IMAP, so none of
+it needs OAuth. Work and school Microsoft accounts are the exception worth
+knowing about: an administrator can switch password sign-in off for the whole
+tenant, and no app password will help if they have.
+
+With more than one mailbox set up, a **✉︎ picker** appears in the toolbar for
+scanning one of them or all of them at once, and the table grows a Mailbox
+column. Each mailbox keeps its own password in the Keychain and gets its own
+folders on its own server.
+
 ## Running on its own
 
 Set an interval in the **Schedule** menu and Mail Manager scans on a timer. Turn
@@ -170,7 +217,7 @@ log. [Full details in SECURITY.md](SECURITY.md).
 
 ```bash
 ./dev demo      # the app with sample mail, no setup
-./dev test      # 1,059 tests, about 30 seconds
+./dev test      # 1,109 tests, about 35 seconds
 ./dev eval      # sorter accuracy against the labelled fixture
 ./dev fake      # the whole pipeline in the terminal, offline
 ```

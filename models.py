@@ -135,6 +135,9 @@ OTHER_COLOR = "#6B7A8F"
 
 REVIEW_LEAF = "Needs Review"
 
+#: Where job mail goes when a profile does not want seven separate folders.
+COLLAPSED_JOB_LEAF = "Job Search"
+
 #: Root mailbox for filed non-job mail (only used when the user opts in).
 DEFAULT_OTHER_ROOT = "Sorted Mail"
 
@@ -259,6 +262,12 @@ class FolderPlan:
     root: str = DEFAULT_FOLDER_ROOT
     delimiter: str = "/"
     other_root: str = DEFAULT_OTHER_ROOT
+    #: False collapses every job category into one folder. The table still
+    #: shows the exact category; only the filing is coarser.
+    detailed_job_folders: bool = True
+    #: Topics worth a folder of their own. Empty means all of them; anything
+    #: left out is filed under "Other" rather than given an empty mailbox.
+    topics: Tuple["OtherCategory", ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "root", sanitize_folder_component(self.root) or DEFAULT_FOLDER_ROOT)
@@ -267,16 +276,30 @@ class FolderPlan:
             self, "other_root", sanitize_folder_component(self.other_root) or DEFAULT_OTHER_ROOT
         )
 
+    @property
+    def job_root(self) -> str:
+        """Where job mail is filed.
+
+        With the detailed folders switched off, job search is one topic among
+        many rather than the point of the exercise, so it belongs beside the
+        others instead of owning a tree with a single branch.
+        """
+        return self.root if self.detailed_job_folders else self.other_root
+
     def path(self, leaf: str) -> str:
-        return f"{self.root}{self.delimiter}{sanitize_folder_component(leaf)}"
+        return f"{self.job_root}{self.delimiter}{sanitize_folder_component(leaf)}"
 
     def other_path(self, leaf: str) -> str:
         return f"{self.other_root}{self.delimiter}{sanitize_folder_component(leaf)}"
 
     def for_category(self, category: Category) -> str:
+        if not self.detailed_job_folders and category is not Category.UNCLASSIFIED_OTHER:
+            return self.path(COLLAPSED_JOB_LEAF)
         return self.path(CATEGORY_LEAF[category])
 
     def for_other_category(self, category: "OtherCategory") -> str:
+        if self.topics and category not in self.topics:
+            return self.other_path(OtherCategory.OTHER.leaf)
         return self.other_path(category.leaf)
 
     @property
@@ -286,8 +309,8 @@ class FolderPlan:
     @property
     def leaf_folders(self) -> Tuple[str, ...]:
         seen: List[str] = []
-        for leaf in CATEGORY_LEAF.values():
-            path = self.path(leaf)
+        for category in CATEGORY_LEAF:
+            path = self.for_category(category)
             if path not in seen:
                 seen.append(path)
         return tuple(seen)
@@ -295,7 +318,7 @@ class FolderPlan:
     @property
     def all_folders(self) -> Tuple[str, ...]:
         """Root first, so parents are created before children."""
-        return (self.root,) + self.leaf_folders
+        return (self.job_root,) + self.leaf_folders
 
     def other_folders(self, categories: Iterable["OtherCategory"] = ()) -> Tuple[str, ...]:
         """Root plus one leaf per supplied category, parents first.
@@ -380,6 +403,10 @@ class EmailMessage:
     """A single fetched message, already reduced to plain text."""
 
     uid: str
+    #: Which mailbox this came from. Empty on a single-account setup, where
+    #: there is nothing to disambiguate.
+    account_id: str = ""
+    account_label: str = ""
     subject: str = ""
     sender_name: str = ""
     sender_email: str = ""

@@ -55,6 +55,17 @@ QUALIFY_SCORE_UNSOLICITED = 3.5
 #: Multiplier applied when a phrase matched only with words inserted into it.
 GAPPED_PENALTY = 0.75
 
+#: How much to discount transactional topics on mail that carries an
+#: unsubscribe header. The lighter figure applies when the sender vouches for
+#: the topic - a courier, an airline, a bank writing from its own domain. The
+#: heavier one applies when nothing corroborates the wording, which is the
+#: case a marketing email borrowing travel or shopping language falls into.
+TRANSACTIONAL_IN_BULK = 0.72
+TRANSACTIONAL_IN_BULK_UNVOUCHED = 0.45
+
+#: Topics that describe a transaction rather than a broadcast.
+TRANSACTIONAL_TOPICS: Tuple["OtherCategory", ...] = ()
+
 
 # ==========================================================================
 # Normalisation - the part that makes everything else work on real mail
@@ -682,6 +693,10 @@ NON_JOB_SIGNALS: Tuple[Signal, ...] = (
 # ==========================================================================
 # Non-job topic signals
 # ==========================================================================
+#: Everyday topics, for mail that is not part of a job search. These carry the
+#: same weights as the job tables (3.0 decisive, 2.0 strong, 1.2 moderate) and
+#: are scored the same way. Sender-field signals are the sharpest of the lot: a
+#: courier's own domain settles the question in a way prose rarely does.
 TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
     OtherCategory.SECURITY: (
         Signal("app specific password", 3.0),
@@ -699,6 +714,27 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("suspicious activity", 2.8), Signal("security alert", 2.8),
         Signal("was signed in to", 2.6), Signal("do not share this code", 3.0),
         Signal("confirm your email address", 2.2), Signal("verify your account", 2.4),
+        # A code that expires is a code, whatever the surrounding wording.
+        Signal("sign in code", 3.0), Signal("login code", 3.0),
+        Signal("authentication code", 3.0), Signal("your code is", 2.8),
+        Signal("code expires", 2.8), Signal("expires in 10 minutes", 2.6),
+        Signal("expires in 15 minutes", 2.6), Signal("valid for 10 minutes", 2.6),
+        Signal("sign in from a new device", 3.0), Signal("new device signed in", 3.0),
+        Signal("we noticed a new sign in", 3.0), Signal("unusual sign in", 3.0),
+        Signal("log in attempt", 2.8), Signal("unusual activity", 2.6),
+        Signal("your password has been changed", 3.0),
+        Signal("your password was changed", 3.0),
+        Signal("your account has been locked", 3.0),
+        Signal("temporarily locked", 2.6), Signal("confirm it s you", 2.8),
+        Signal("two step verification", 2.8), Signal("authenticator app", 2.6),
+        Signal("backup codes", 2.6), Signal("passkey", 2.6),
+        Signal("trusted device", 2.4), Signal("recovery email", 2.4),
+        Signal("recovery phone", 2.4), Signal("revoke access", 2.4),
+        Signal("third party access", 2.2), Signal("we will never ask", 2.4),
+        Signal("data breach", 2.8), Signal("involved in a breach", 3.0),
+        Signal("okta.com", 2.4, field="sender", label="an identity provider"),
+        Signal("duosecurity.com", 2.4, field="sender", label="an identity provider"),
+        Signal("authy.com", 2.4, field="sender", label="an identity provider"),
     ),
     OtherCategory.FINANCE: (
         Signal("your statement is ready", 3.0), Signal("statement is available", 3.0),
@@ -708,6 +744,27 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("tax", 1.6), Signal("credit card", 2.0),
         Signal("transaction", 1.8), Signal("interest rate", 1.8),
         Signal("overdraft", 2.4), Signal("investment", 1.8),
+        # Money owed or moved, as opposed to money already spent on something.
+        Signal("your bill is ready", 3.0), Signal("your invoice is ready", 3.0),
+        Signal("payment is due", 2.8), Signal("payment scheduled", 2.6),
+        Signal("autopay", 2.6), Signal("automatic payment", 2.6),
+        Signal("account balance", 2.6), Signal("available balance", 2.8),
+        Signal("low balance", 2.8), Signal("insufficient funds", 3.0),
+        Signal("deposit posted", 2.8), Signal("direct deposit", 2.8),
+        Signal("withdrawal", 2.4), Signal("your card ending in", 3.0),
+        Signal("card ending in", 2.8), Signal("credit score", 2.6),
+        Signal("annual percentage rate", 2.4), Signal("loan payment", 2.8),
+        Signal("student loan", 2.6), Signal("mortgage", 2.4),
+        Signal("escrow", 2.4), Signal("tax return", 2.6),
+        Signal("tax document", 2.8), Signal("premium is due", 2.6),
+        Signal("insurance policy", 2.4), Signal("policy renewal", 2.6),
+        Signal("e statement", 2.8), Signal("paperless statement", 2.8),
+        Signal("chase.com", 2.6, field="sender", label="a bank's own domain"),
+        Signal("bankofamerica.com", 2.6, field="sender", label="a bank's own domain"),
+        Signal("wellsfargo.com", 2.6, field="sender", label="a bank's own domain"),
+        Signal("capitalone.com", 2.6, field="sender", label="a bank's own domain"),
+        Signal("irs.gov", 2.8, field="sender", label="the tax authority"),
+        Signal("intuit.com", 2.2, field="sender", label="a tax or accounting service"),
     ),
     OtherCategory.RECEIPT: (
         Signal("your receipt", 3.0), Signal("order confirmation", 3.0),
@@ -715,12 +772,45 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("purchase confirmation", 3.0), Signal("subscription renewed", 2.8),
         Signal("your refund", 2.6), Signal("payment received", 2.4),
         Signal("order number", 2.4), Signal("total charged", 2.6),
+        # Money already spent. The tense is what separates this from Finance.
+        Signal("thank you for your purchase", 3.0),
+        Signal("thanks for your purchase", 3.0),
+        Signal("your order is confirmed", 3.0), Signal("order placed", 2.8),
+        Signal("we have received your order", 3.0),
+        Signal("here is your receipt", 3.0), Signal("transaction receipt", 3.0),
+        Signal("amount charged", 2.8), Signal("you were charged", 2.8),
+        Signal("charged to your", 2.6), Signal("payment successful", 2.8),
+        Signal("order summary", 2.6), Signal("order id", 2.4),
+        Signal("invoice number", 2.4), Signal("paid in full", 2.4),
+        Signal("itemized", 2.2), Signal("subscription confirmation", 2.8),
+        Signal("your subscription will renew", 2.8), Signal("renewal notice", 2.4),
+        Signal("auto renew", 2.4), Signal("refund has been issued", 3.0),
+        Signal("refund processed", 2.8), Signal("return has been received", 2.6),
+        Signal("stripe.com", 2.4, field="sender", label="a payment processor"),
+        Signal("squareup.com", 2.2, field="sender", label="a payment processor"),
     ),
     OtherCategory.SHIPPING: (
         Signal("has shipped", 3.0), Signal("out for delivery", 3.0),
         Signal("your package", 2.8), Signal("tracking number", 3.0),
         Signal("track your", 2.4), Signal("delivered today", 2.6),
         Signal("delivery attempt", 2.6), Signal("return label", 2.4),
+        # Where the parcel is, rather than what it cost.
+        Signal("your shipment", 2.8), Signal("shipment update", 3.0),
+        Signal("estimated delivery", 3.0), Signal("expected delivery", 2.8),
+        Signal("arriving today", 3.0), Signal("arriving tomorrow", 3.0),
+        Signal("has been delivered", 3.0), Signal("was delivered", 2.8),
+        Signal("delivery scheduled", 2.8), Signal("in transit", 2.8),
+        Signal("on its way", 2.6), Signal("label created", 2.6),
+        Signal("ready for pickup", 2.8), Signal("available for pickup", 2.8),
+        Signal("track your package", 3.0), Signal("track your order", 2.8),
+        Signal("tracking information", 2.8), Signal("signature required", 2.6),
+        Signal("missed delivery", 2.8), Signal("we could not deliver", 3.0),
+        Signal("courier", 2.2),
+        Signal("ups.com", 3.0, field="sender", label="a courier's own domain"),
+        Signal("fedex.com", 3.0, field="sender", label="a courier's own domain"),
+        Signal("usps.com", 3.0, field="sender", label="a courier's own domain"),
+        Signal("dhl.com", 3.0, field="sender", label="a courier's own domain"),
+        Signal("shipment-tracking", 2.8, field="sender", label="a shipping notifier"),
     ),
     OtherCategory.NEWSLETTER: (
         Signal("enews", 3.0), Signal("e news from", 3.0),
@@ -733,6 +823,19 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("read online", 1.4), Signal("weekly digest", 2.8),
         Signal("daily briefing", 2.6), Signal("changelog", 2.0),
         Signal("release notes", 2.2), Signal("blog post", 1.6),
+        # Editorial bulk mail, as opposed to bulk mail that is selling something.
+        Signal("view this email in your browser", 2.8), Signal("view in browser", 2.4),
+        Signal("you are receiving this email because", 2.4),
+        Signal("manage your preferences", 2.2), Signal("email preferences", 2.2),
+        Signal("unsubscribe from this list", 2.4), Signal("forward to a friend", 2.4),
+        Signal("top stories", 2.8), Signal("today s headlines", 3.0),
+        Signal("morning brief", 2.8), Signal("this week in", 2.6),
+        Signal("issue no", 2.4), Signal("roundup", 2.4),
+        Signal("digest", 2.4), Signal("curated", 2.2),
+        Signal("our latest post", 2.4), Signal("new article", 2.2),
+        Signal("edition", 1.8),
+        Signal("substack.com", 3.0, field="sender", label="a newsletter platform"),
+        Signal("beehiiv.com", 2.8, field="sender", label="a newsletter platform"),
     ),
     OtherCategory.PROMOTION: (
         # Job-board blasts: marketing that happens to be about jobs.
@@ -746,6 +849,18 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("shop now", 2.6), Signal("upgrade to pro", 2.4),
         Signal("free trial", 2.2), Signal("book a demo", 2.4),
         Signal("last chance", 2.4), Signal("dont miss out", 2.2),
+        # Bulk mail with something to sell.
+        Signal("sale ends", 3.0), Signal("ends tonight", 2.8),
+        Signal("today only", 2.8), Signal("deal of the day", 3.0),
+        Signal("exclusive offer", 2.8), Signal("special offer", 2.6),
+        Signal("for a limited time", 2.6), Signal("percent off", 2.8),
+        Signal("buy one get one", 3.0), Signal("free shipping", 2.6),
+        Signal("clearance", 2.8), Signal("new arrivals", 2.6),
+        Signal("back in stock", 2.6), Signal("your cart", 2.6),
+        Signal("you left something", 3.0), Signal("still thinking about", 2.4),
+        Signal("cyber monday", 2.8), Signal("early access", 2.2),
+        Signal("members only", 2.2), Signal("reward points", 2.4),
+        Signal("gift card", 2.2), Signal("coupon", 2.8),
     ),
     OtherCategory.SOCIAL: (
         Signal("viewed your profile", 3.0), Signal("people you may know", 3.0),
@@ -753,6 +868,17 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("commented on your", 2.8), Signal("liked your", 2.6),
         Signal("new follower", 2.8), Signal("your post reached", 2.8),
         Signal("invited you to join", 2.2), Signal("community digest", 2.4),
+        Signal("friend request", 3.0), Signal("started following you", 3.0),
+        Signal("tagged you", 2.8), Signal("endorsed you", 2.8),
+        Signal("replied to your", 2.6), Signal("shared a post", 2.6),
+        Signal("new message from", 2.4), Signal("upvoted", 2.6),
+        Signal("trending in your network", 2.6), Signal("your weekly stats", 2.2),
+        Signal("linkedin.com", 2.4, field="sender", label="a social network"),
+        Signal("facebookmail.com", 3.0, field="sender", label="a social network"),
+        Signal("instagram.com", 2.8, field="sender", label="a social network"),
+        Signal("reddit.com", 2.6, field="sender", label="a social network"),
+        Signal("discord.com", 2.6, field="sender", label="a social network"),
+        Signal("nextdoor.com", 2.8, field="sender", label="a social network"),
     ),
     OtherCategory.EVENT: (
         Signal("you are registered", 2.8), Signal("register now", 2.2),
@@ -760,6 +886,15 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("conference", 2.2), Signal("save the date", 2.6),
         Signal("agenda for", 2.0), Signal("doors open", 2.4),
         Signal("your ticket", 2.6), Signal("rsvp", 2.6),
+        Signal("registration confirmed", 3.0), Signal("event reminder", 3.0),
+        Signal("here is your ticket", 3.0), Signal("tickets are ready", 2.8),
+        Signal("add to calendar", 2.6), Signal("calendar invite", 2.8),
+        Signal("has invited you to", 2.4), Signal("join the event", 2.4),
+        Signal("starts tomorrow", 2.4), Signal("session recording", 2.2),
+        Signal("your seat", 2.2), Signal("venue", 2.0),
+        Signal("eventbrite.com", 3.0, field="sender", label="a ticketing service"),
+        Signal("meetup.com", 3.0, field="sender", label="a ticketing service"),
+        Signal("ticketmaster.com", 2.8, field="sender", label="a ticketing service"),
     ),
     OtherCategory.TRAVEL: (
         Signal("your itinerary", 3.0), Signal("booking confirmation", 2.8),
@@ -767,6 +902,25 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("flight", 2.0), Signal("hotel reservation", 2.8),
         Signal("your reservation", 2.4), Signal("departure", 1.8),
         Signal("rental car", 2.4),
+        Signal("trip confirmation", 3.0), Signal("flight confirmation", 3.0),
+        Signal("travel itinerary", 3.0), Signal("hotel confirmation", 3.0),
+        Signal("your trip", 2.6), Signal("upcoming trip", 2.8),
+        Signal("your flight", 2.6), Signal("flight status", 2.8),
+        Signal("gate change", 3.0), Signal("flight delayed", 3.0),
+        Signal("flight cancelled", 3.0), Signal("check in is now open", 3.0),
+        Signal("online check in", 2.8), Signal("seat assignment", 2.8),
+        Signal("booking reference", 2.8), Signal("reservation confirmed", 2.8),
+        Signal("check in date", 2.6), Signal("check out date", 2.6),
+        Signal("car rental", 2.6), Signal("your stay", 2.4),
+        Signal("baggage", 2.4), Signal("passport", 2.0),
+        Signal("united.com", 2.6, field="sender", label="an airline"),
+        Signal("delta.com", 2.6, field="sender", label="an airline"),
+        Signal("southwest.com", 2.6, field="sender", label="an airline"),
+        Signal("airbnb.com", 2.6, field="sender", label="a travel booking site"),
+        Signal("booking.com", 2.6, field="sender", label="a travel booking site"),
+        Signal("expedia.com", 2.6, field="sender", label="a travel booking site"),
+        Signal("marriott.com", 2.4, field="sender", label="a hotel chain"),
+        Signal("hilton.com", 2.4, field="sender", label="a hotel chain"),
     ),
     OtherCategory.SPAM: (
         Signal("you have won", 3.0), Signal("claim your prize", 3.0),
@@ -777,6 +931,16 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("disregard your instructions", 3.0, label="prompt-injection attempt"),
         Signal("you are an ai", 2.6, label="prompt-injection attempt"),
         Signal("system prompt", 2.4, label="prompt-injection attempt"),
+        Signal("congratulations you have been selected", 3.0),
+        Signal("click here to claim", 3.0), Signal("urgent action required", 2.6),
+        Signal("your account will be suspended", 2.8),
+        Signal("confirm your identity immediately", 2.8),
+        Signal("guaranteed returns", 3.0), Signal("investment opportunity", 2.6),
+        Signal("make money fast", 3.0), Signal("work from home earn", 3.0),
+        Signal("dear beloved", 3.0), Signal("kindly reply", 2.4),
+        Signal("beneficiary", 2.4), Signal("barrister", 2.6),
+        Signal("lottery", 2.8), Signal("bitcoin", 2.4),
+        Signal("risk free", 2.0), Signal("no obligation", 1.8),
     ),
     OtherCategory.WORK: (
         Signal("payslip", 3.0), Signal("payroll", 2.8),
@@ -785,6 +949,20 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("all hands", 2.6), Signal("standup", 2.2),
         Signal("sprint", 2.0), Signal("pull request", 2.4),
         Signal("expense report", 2.6),
+        Signal("your paystub", 3.0), Signal("pay stub", 3.0),
+        Signal("pto request", 2.8), Signal("time off request", 2.8),
+        Signal("vacation request", 2.6), Signal("holiday schedule", 2.4),
+        Signal("company holiday", 2.4), Signal("onboarding", 2.2),
+        Signal("offboarding", 2.4), Signal("help desk ticket", 2.4),
+        Signal("ticket assigned", 2.4), Signal("code review", 2.4),
+        Signal("merge request", 2.4), Signal("build failed", 2.6),
+        Signal("on call", 2.4), Signal("postmortem", 2.6),
+        Signal("quarterly review", 2.4), Signal("one on one", 2.2),
+        Signal("team meeting", 2.2),
+        Signal("atlassian.net", 2.6, field="sender", label="a work tool"),
+        Signal("slack.com", 2.4, field="sender", label="a work tool"),
+        Signal("asana.com", 2.4, field="sender", label="a work tool"),
+        Signal("notion.so", 2.2, field="sender", label="a work tool"),
     ),
     OtherCategory.PERSONAL: (
         Signal("funeral arrangements", 3.0), Signal("memorial arrangements", 3.0),
@@ -797,8 +975,29 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("let me know what suits", 2.2), Signal("miss you", 2.2),
         Signal("happy birthday", 2.6), Signal("thanks again for", 1.6),
         Signal("hope you are well", 1.4),
+        # Written by a person to a person. Bulk mail almost never says these.
+        Signal("love mom", 3.0), Signal("love dad", 3.0),
+        Signal("love you", 2.8), Signal("let s catch up", 2.6),
+        Signal("catch up soon", 2.4), Signal("thinking of you", 2.0),
+        Signal("just checking in", 1.4), Signal("give me a call", 2.4),
+        Signal("call me when", 2.4), Signal("talk soon", 1.8),
+        Signal("are you free", 1.6), Signal("see you at", 1.6),
+        Signal("grandma", 2.4), Signal("grandpa", 2.4),
+        Signal("baby shower", 2.6), Signal("new baby", 2.4),
+        Signal("get well", 2.4), Signal("happy anniversary", 2.6),
+        Signal("merry christmas", 2.2), Signal("happy holidays", 1.8),
     ),
 }
+
+
+#: Filled in here rather than at the top, where OtherCategory is not yet used.
+TRANSACTIONAL_TOPICS = (
+    OtherCategory.TRAVEL,
+    OtherCategory.RECEIPT,
+    OtherCategory.SHIPPING,
+    OtherCategory.FINANCE,
+    OtherCategory.SECURITY,
+)
 
 
 # ==========================================================================
@@ -939,9 +1138,18 @@ class RuleClassifier:
         total, matched, _ = self._score_detail(table, subject, subject_tight, body, body_tight)
         return total, matched
 
+    def _sender_backs(self, table: Tuple[Signal, ...], sender: str) -> bool:
+        """Whether the sender's own address supports this topic."""
+        if not sender:
+            return False
+        return any(
+            matcher.signal.field == "sender" and matcher.hit(sender, sender)
+            for matcher in self._compiled[id(table)]
+        )
+
     def _score_detail(
         self, table: Tuple[Signal, ...], subject: str, subject_tight: str,
-        body: str, body_tight: str,
+        body: str, body_tight: str, sender: str = "",
     ) -> Tuple[float, List[str], float]:
         """``(total, matched labels, strongest single signal weight)``."""
         total = 0.0
@@ -957,6 +1165,14 @@ class RuleClassifier:
                 matcher.hit(body, body_tight)
                 if signal.field in ("any", "body") else 0.0
             )
+            if signal.field == "sender":
+                # Who sent it is worth more than what it says: a courier's own
+                # domain settles the topic in a way prose never quite does.
+                if sender and matcher.hit(sender, sender):
+                    total += signal.weight
+                    strongest = max(strongest, signal.weight)
+                    matched.append(signal.describe())
+                continue
             if not (subject_hit or body_hit):
                 continue
             # A phrase in the subject line is stated, not buried.
@@ -1146,7 +1362,7 @@ class RuleClassifier:
         topic_peak: Dict[OtherCategory, float] = {}
         for topic, table in TOPIC_SIGNALS.items():
             score, matched, peak = self._score_detail(
-                table, subject_n, subject_t, body_n, body_t
+                table, subject_n, subject_t, body_n, body_t, sender_n
             )
             topic_scores[topic] = score
             topic_matches[topic] = matched
@@ -1156,6 +1372,18 @@ class RuleClassifier:
             for topic in (OtherCategory.NEWSLETTER, OtherCategory.PROMOTION, OtherCategory.SOCIAL):
                 topic_scores[topic] += 0.8
             topic_scores[OtherCategory.PERSONAL] = max(0.0, topic_scores[OtherCategory.PERSONAL] - 1.5)
+            # A boarding pass, a receipt or a login code is not marketing, and
+            # transactional mail almost never carries an unsubscribe header.
+            # Where one is present, travel and shopping vocabulary is usually
+            # metaphor - "check-in is now open" selling a training course. This
+            # is a discount rather than a veto, so a genuine confirmation that
+            # happens to carry the header still wins on its own evidence.
+            for topic in TRANSACTIONAL_TOPICS:
+                vouched = self._sender_backs(TOPIC_SIGNALS[topic], sender_n)
+                topic_scores[topic] *= (
+                    TRANSACTIONAL_IN_BULK if vouched
+                    else TRANSACTIONAL_IN_BULK_UNVOUCHED
+                )
 
         best_topic = max(topic_scores, key=lambda t: topic_scores[t])
         best = topic_scores[best_topic]
@@ -1202,11 +1430,19 @@ class RuleClassifier:
         winner is, and whether any single decisive phrase fired. A competing
         second category suppresses it hard, which is the behaviour that keeps
         ambiguous mail out of category folders.
+
+        Being far ahead of the field only counts for as much as the evidence
+        behind it. One weak phrase that nothing happens to contradict is not a
+        confident reading, it is a thin one, and undamped it scored the same
+        separation as an overwhelming case. The damping is by the square root
+        of the strength rather than the strength itself: a lone weak signal
+        should lose most of that credit, but an unambiguous message that
+        simply has nothing to argue with should keep nearly all of it.
         """
         if best <= 0:
             return 0.0
         strength = min(1.0, best / SATURATION)
-        separation = max(0.0, (best - runner_up) / best)
+        separation = max(0.0, (best - runner_up) / best) * math.sqrt(strength)
         decisive = 0.06 if strongest >= DECISIVE_WEIGHT else 0.0
         confidence = 0.50 + 0.30 * strength + 0.14 * separation + decisive
         if truncated:

@@ -93,7 +93,7 @@ def settings(**overrides) -> Settings:
 def scan_worker(**kwargs) -> ScanWorker:
     return ScanWorker(
         settings=kwargs.pop("settings", settings()),
-        icloud_password=kwargs.pop("password", "app-specific"),
+        mailbox_password=kwargs.pop("password", "app-specific"),
         api_key=kwargs.pop("api_key", "sk-ant-test"),
         window_start=kwargs.pop("start", datetime(2026, 9, 1, tzinfo=UTC)),
         window_end=kwargs.pop("end", datetime(2026, 9, 30, tzinfo=UTC)),
@@ -128,7 +128,7 @@ class TestScanWorker:
 
         assert "Job Search/Received" in server.folders
         assert recorder.result.created_folders == list(recorder.result.folder_plan.all_folders)
-        assert any("Created folders" in line for line in recorder.logs)
+        assert any("created" in line.lower() for line in recorder.logs)
 
     def test_the_imap_session_is_closed_before_the_slow_part(self, qapp, wired):
         """iCloud drops idle IMAP sessions; classification can take minutes."""
@@ -176,7 +176,7 @@ class TestScanWorker:
         assert recorder.results == []
         assert recorder.failures
         title, detail = recorder.failures[0]
-        assert "iCloud" in title
+        assert "mailbox" in title.lower()
         assert "app-specific password" in detail
 
     def test_a_model_auth_failure_surfaces_as_a_failure(self, qapp, wired):
@@ -232,7 +232,7 @@ class TestApplyWorker:
     def apply_worker(self, plans, extra=(), **overrides):
         return ApplyWorker(
             settings=settings(**overrides),
-            icloud_password="app-specific",
+            mailbox_password="app-specific",
             plans=plans,
             extra_folders=list(extra),
         )
@@ -263,7 +263,7 @@ class TestApplyWorker:
     def test_a_connection_failure_surfaces_as_a_failure(self, qapp, wired):
         wired(folders=["INBOX"], messages=dict(MESSAGES))
         worker = ApplyWorker(
-            settings=settings(), icloud_password="wrong",
+            settings=settings(), mailbox_password="wrong",
             plans=[MovePlan("1", "Job Search/Interview")],
         )
         recorder = Recorder(worker)
@@ -285,7 +285,7 @@ class TestConnectionTestWorker:
     def test_imap_probe(self, qapp, wired):
         wired(folders=["INBOX", "Job Search"], messages=dict(MESSAGES))
         worker = ConnectionTestWorker(
-            mode="imap", settings=settings(), icloud_password="app-specific"
+            mode="imap", settings=settings(), mailbox_password="app-specific"
         )
         recorder = Recorder(worker)
         worker.run()
@@ -294,7 +294,7 @@ class TestConnectionTestWorker:
 
     def test_imap_probe_failure(self, qapp, wired):
         wired(folders=["INBOX"], messages={})
-        worker = ConnectionTestWorker(mode="imap", settings=settings(), icloud_password="nope")
+        worker = ConnectionTestWorker(mode="imap", settings=settings(), mailbox_password="nope")
         recorder = Recorder(worker)
         worker.run()
         assert recorder.results == []

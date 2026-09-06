@@ -163,7 +163,7 @@ class TestScanWorkerTeardown:
     def test_cancelling_a_scan_closes_the_classifier(self, qapp):
         worker = ScanWorker(
             settings=Settings(icloud_email="a@b.com"),
-            icloud_password="pw", api_key="k",
+            mailbox_password="pw", api_key="k",
             window_start=None, window_end=None,
         )
         engine = LLMEngine(api_key="k", client=FakeAnthropic())
@@ -174,7 +174,7 @@ class TestScanWorkerTeardown:
 
     def test_cancelling_without_a_classifier_is_safe(self, qapp):
         worker = ScanWorker(
-            settings=Settings(), icloud_password="", api_key="",
+            settings=Settings(), mailbox_password="", api_key="",
             window_start=None, window_end=None,
         )
         worker.cancel()

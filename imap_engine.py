@@ -35,6 +35,7 @@ from email.message import Message
 from email.utils import parseaddr, parsedate_to_datetime
 from typing import Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
+import accounts
 import html_utils
 from models import DEFAULT_OTHER_ROOT, EmailMessage, FolderPlan, imap_since_date
 
@@ -411,6 +412,8 @@ class MovePlan:
     uid: str
     target_folder: str
     subject: str = ""
+    #: Which mailbox the message is in. Empty on a single-account setup.
+    account_id: str = ""
 
 
 @dataclass
@@ -485,10 +488,10 @@ class IMAPEngine:
     def connect(self, email_address: str, password: str) -> None:
         """Open a TLS connection and authenticate."""
         if not (email_address or "").strip():
-            raise IMAPAuthError("Enter your iCloud email address.")
+            raise IMAPAuthError("Enter the mailbox email address.")
         if not password:
             raise IMAPAuthError(
-                "Enter your iCloud app-specific password. Regular Apple ID passwords "
+                "Enter the app password for this mailbox. Ordinary account passwords "
                 "are rejected by IMAP when two-factor authentication is enabled."
             )
 
@@ -514,9 +517,8 @@ class IMAPEngine:
             self._safe_shutdown()
             if "AUTHENTICATIONFAILED" in detail.upper() or "invalid credentials" in detail.lower():
                 raise IMAPAuthError(
-                    "iCloud rejected those credentials. Use an app-specific password "
-                    "generated at account.apple.com (not your Apple ID password), and "
-                    "check the email address."
+                    "The server rejected those credentials. "
+                    + accounts.credential_hint(self.host)
                 ) from exc
             raise IMAPAuthError(f"Login failed: {detail}") from exc
         except (OSError, socket.timeout) as exc:
