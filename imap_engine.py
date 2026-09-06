@@ -952,6 +952,16 @@ class IMAPEngine:
                 message.truncated = True
                 message.original_length = true_size
             messages.append(message)
+        if len(messages) < len(uids):
+            # Every skipped item above is a message the caller asked for and
+            # will never see. Nothing observed in the wild reaches this, but a
+            # silent shortfall is the kind of thing that should never be
+            # silent, so say so rather than quietly returning fewer.
+            log.warning(
+                "Fetched %d of %d requested messages from %s; the server returned "
+                "something unparseable for the rest.",
+                len(messages), len(uids), mailbox,
+            )
         return messages
 
     def _clone(self) -> "IMAPEngine":
