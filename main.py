@@ -361,6 +361,12 @@ def main(argv: Optional[list] = None) -> int:
     from gui import MainWindow
 
     settings = Settings.load()
+
+    # Paint before the first window exists, so nothing is ever shown in the
+    # default palette and then repainted in front of the user.
+    import theme
+    theme.apply(app, settings.appearance_mode, settings.contrast, settings.readable)
+
     store = CredentialStore()
     window = MainWindow(settings, store, demo=args.demo, dry_run=args.dry_run)
     if args.demo:
@@ -372,9 +378,16 @@ def main(argv: Optional[list] = None) -> int:
     # returns. Nothing is left running after the app disappears.
     app.aboutToQuit.connect(window.shutdown)
 
-    window.show()
-    window.raise_()
-    window.activateWindow()
+    # With a menu bar item present, closing the window puts the app away
+    # rather than ending it; Quit is what ends it.
+    app.setQuitOnLastWindowClosed(not settings.menu_bar_icon)
+
+    if settings.start_in_menu_bar and window.menu_bar.visible():
+        log.info("Starting in the menu bar; the window is available from it.")
+    else:
+        window.show()
+        window.raise_()
+        window.activateWindow()
 
     try:
         return app.exec()

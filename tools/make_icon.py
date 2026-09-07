@@ -51,10 +51,11 @@ BODY = QRectF(105, 105, 814, 814)
 CORNER_SPAN = 0.40
 CORNER_N = 1.8
 
-# Two shades of one indigo and white. Anything more starts to look busy at
-# the sizes this actually gets seen at.
-SKY = QColor("#5B63F0")
-DEEP = QColor("#4338CA")
+# The same blue as the Scan & Analyze button, so the app, its icon and its
+# primary action are visibly one thing. Two shades of it and white; anything
+# more starts to look busy at the sizes this actually gets seen at.
+SKY = QColor("#4A86EE")
+DEEP = QColor("#2F6FE0")
 PAPER = QColor("#FFFFFF")
 
 
@@ -99,17 +100,61 @@ def _draw_shadow(painter: QPainter) -> None:
         painter.drawPath(squircle(grown, 256))
 
 
+def _draw_cycle(painter: QPainter, tiny: bool) -> None:
+    """An arrow coming back round on itself: this happens without you.
+
+    A full circle around the envelope rather than an arc behind it, so the two
+    shapes stay legible as two shapes. Dropped below 96 points, where the ring
+    closes up into a smudge and the envelope alone says more.
+    """
+    if tiny:
+        return
+    stroke = 38.0
+    ring = QRectF(0, 0, 596, 596)
+    ring.moveCenter(BODY.center())
+
+    pen = QPen(PAPER, stroke)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    # Open at the top right, where the arrowhead goes.
+    start_deg, span_deg = 58.0, -298.0
+    painter.drawArc(ring, int(start_deg * 16), int(span_deg * 16))
+
+    # The head sits at the start of the sweep, pointing along the tangent so
+    # the ring reads as turning rather than as a broken circle.
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QBrush(PAPER))
+    radius = ring.width() / 2.0
+    angle = math.radians(start_deg)
+    centre = QPointF(ring.center().x() + radius * math.cos(angle),
+                     ring.center().y() - radius * math.sin(angle))
+    # Clockwise tangent at that point.
+    tangent = angle - math.pi / 2.0
+    size = stroke * 1.45
+    head = QPainterPath()
+    for offset, distance in ((0.0, size * 1.15), (2.4, size), (-2.4, size)):
+        point = QPointF(
+            centre.x() + distance * math.cos(tangent + offset),
+            centre.y() - distance * math.sin(tangent + offset),
+        )
+        head.moveTo(point) if head.elementCount() == 0 else head.lineTo(point)
+    head.closeSubpath()
+    painter.drawPath(head)
+
+
 def _draw_envelope(painter: QPainter, body: QPainterPath, tiny: bool) -> None:
     """One white envelope. The flap is cut out of it rather than drawn on top,
     so the whole mark is two colours and stays crisp all the way down."""
-    width = 560.0 if tiny else 512.0
+    width = 560.0 if tiny else 366.0
     height = width * 0.6875                  # a 16:11 envelope, near enough to real
     envelope = QRectF(0, 0, width, height)
     envelope.moveCenter(BODY.center())
-    radius = 46.0
+    radius = 34.0 if not tiny else 46.0
 
     painter.save()
     painter.setClipPath(body)
+    _draw_cycle(painter, tiny)
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(QBrush(PAPER))
     painter.drawRoundedRect(envelope, radius, radius)
@@ -140,7 +185,7 @@ def _draw_envelope(painter: QPainter, body: QPainterPath, tiny: bool) -> None:
 def draw_icon(size: int = SIZE) -> QImage:
     """Render at `size`. Small renders drop the shadow and grow the mark, since
     at 16 points a margin is just wasted pixels."""
-    tiny = size < 44
+    tiny = size < 96
 
     image = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
     image.fill(Qt.GlobalColor.transparent)

@@ -174,6 +174,9 @@ class Settings:
 
     #: What the app is being used for, which decides the folder layout.
     sort_profile: str = profiles.DEFAULT_PROFILE
+    #: Topics the user has picked, overriding the profile's own list. Empty
+    #: means "whatever the profile says", which is the usual case.
+    topics: List[str] = field(default_factory=list)
 
     folder_root: str = DEFAULT_FOLDER_ROOT
     other_folder_root: str = DEFAULT_OTHER_ROOT
@@ -192,12 +195,22 @@ class Settings:
     show_log_panel: bool = False
     row_lines: int = 3
 
+    # Appearance. Three separate axes: which way round the colours go, how far
+    # apart the ends are, and whether the layout is tuned for reading.
+    appearance_mode: str = "system"      # system | light | dark
+    contrast: str = "normal"             # normal | high | maximum
+    readable: bool = False
+
     # Unattended scanning
     schedule_minutes: int = 0            # 0 means off
     background_window_minutes: int = 180
     auto_file_background: bool = False
     background_agent: bool = False       # keep running when the app is closed
     menu_bar_icon: bool = True
+    #: Closing the window leaves the menu bar item running instead of quitting.
+    close_to_menu_bar: bool = True
+    #: Launch straight to the menu bar, with no window.
+    start_in_menu_bar: bool = False
     hide_non_job: bool = False
 
     def __post_init__(self) -> None:
@@ -220,6 +233,8 @@ class Settings:
         data["active_account"] = str(data.get("active_account", "")).strip()
         if not profiles.exists(str(data.get("sort_profile", ""))):
             data["sort_profile"] = profiles.DEFAULT_PROFILE
+        known = {t.value for t in profiles.ALL_TOPICS}
+        data["topics"] = [str(t) for t in (data.get("topics") or []) if str(t) in known]
         data["imap_host"] = str(data["imap_host"]).strip() or DEFAULT_IMAP_HOST
         data["imap_port"] = _valid_int(data["imap_port"], 1, 65535, DEFAULT_IMAP_PORT)
         data["source_mailbox"] = str(data["source_mailbox"]).strip() or "INBOX"
@@ -249,6 +264,11 @@ class Settings:
             data["non_job_routing"] = NonJobRouting.FILE.value
         data["max_messages"] = _clamp_int(data["max_messages"], 1, 5000, 400)
         data["row_lines"] = _clamp_int(data["row_lines"], 1, 6, 3)
+        import theme as _theme
+        if data["appearance_mode"] not in dict(_theme.MODES):
+            data["appearance_mode"] = "system"
+        if data["contrast"] not in dict(_theme.CONTRASTS):
+            data["contrast"] = "normal"
         data["schedule_minutes"] = _clamp_int(data["schedule_minutes"], 0, 10080, 0)
         data["background_window_minutes"] = _clamp_int(
             data["background_window_minutes"], 15, 20160, 180
@@ -257,7 +277,8 @@ class Settings:
             data["last_window"] = TimeWindow.LAST_24_HOURS.name
         for key in ("auto_approve_non_job", "subscribe_new_folders", "show_log_panel",
                     "hide_non_job", "fallback_to_rules", "auto_file_background",
-                    "background_agent", "menu_bar_icon"):
+                    "background_agent", "menu_bar_icon", "close_to_menu_bar",
+                    "start_in_menu_bar", "readable"):
             data[key] = bool(data[key])
         settled = Settings(**data)
         settled._sync_mailboxes()
@@ -367,6 +388,14 @@ class Settings:
     def profile(self) -> "profiles.Profile":
         return profiles.get(self.sort_profile)
 
+    @property
+    def chosen_topics(self) -> tuple:
+        """Topics that get a folder: the user's picks, else the profile's."""
+        if not self.topics:
+            return self.profile.topics
+        picked = {t for t in self.topics}
+        return tuple(t for t in profiles.ALL_TOPICS if t.value in picked)
+
     def folder_plan(self, delimiter: str = "/") -> FolderPlan:
         """The folder layout implied by the current profile and roots."""
         active = self.profile
@@ -375,7 +404,7 @@ class Settings:
             other_root=self.other_folder_root,
             delimiter=delimiter or "/",
             detailed_job_folders=active.detailed_job_folders,
-            topics=active.topics,
+            topics=self.chosen_topics,
         )
 
     # -- serialisation ---------------------------------------------------
