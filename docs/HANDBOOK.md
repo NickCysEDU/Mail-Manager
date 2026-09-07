@@ -989,3 +989,30 @@ Whichever way it is signed, the Keychain asks once per identity. Press
 Unattended runs cannot answer any of these dialogs, so the headless paths read
 the Keychain with a timeout and fail with an explanation rather than waiting
 for a click that will never come.
+
+
+## Mailboxes
+
+**Settings → Mailboxes** lists every account, with a tick beside each one and a
+line saying what it still needs: *no address yet*, *no password yet*, or
+*ready*. Untick a mailbox to keep it but leave it out of scans.
+
+Choosing a provider fills in the server and the app-password link. If the
+address in the field belongs to a different provider - an iCloud address while
+Gmail is selected - it is cleared, and the reason is shown. That combination is
+not a change of server, it is a different mailbox, and keeping the old address
+is how an iCloud address ends up pointed at Gmail, connecting successfully to
+nothing.
+
+Edits are written into the selected mailbox as they are typed, so the list
+above is always describing what has actually been entered; there is no separate
+save for an individual mailbox. Nothing is written to disk or to the Keychain
+until Save.
+
+### If a password stops working after editing accounts
+
+Before this was fixed, a mailbox whose address said one thing and whose
+provider said another could save its password against the wrong address,
+overwriting the one already there. Generate a fresh app password for the
+mailbox that stopped working - the Get one… button beside the field opens the
+right page - and enter it again.

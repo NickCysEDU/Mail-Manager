@@ -41,6 +41,8 @@ from PySide6.QtGui import (
     QPalette,
 )
 from PySide6.QtWidgets import (
+    QListWidgetItem,
+    QListWidget,
     QFileDialog,
     QAbstractItemView,
     QStackedWidget,
@@ -1056,39 +1058,54 @@ class SettingsDialog(QDialog):
 
     # -- tabs ------------------------------------------------------------
     def _build_account_tab(self) -> QWidget:
-        """Every mailbox, not just the first one.
+        """Every mailbox, in a list you can see all of at once.
 
-        The app began with one iCloud account described by a handful of flat
-        fields. This is a list instead: pick a provider, type an address, paste
-        an app password. Everything below the address is filled in from the
-        provider and only matters if it is wrong.
+        The previous version hid the list behind a dropdown and captured edits
+        silently when you moved away from a field, which left no way to tell
+        whether anything had been kept. This shows every mailbox, marks which
+        ones are ready to scan, and writes each edit into the selected mailbox
+        as it is typed - so the list is the confirmation.
         """
         page = QWidget()
         outer = QVBoxLayout(page)
 
-        # -- which mailbox is being edited --------------------------------
-        picker_row = QHBoxLayout()
-        self.account_list = QComboBox()
-        self.account_list.setMinimumWidth(260)
-        self.account_list.currentIndexChanged.connect(self._account_selected)
-        picker_row.addWidget(QLabel("Mailbox"))
-        picker_row.addWidget(self.account_list, 1)
+        self.account_list = QListWidget()
+        self.account_list.setMinimumHeight(130)
+        self.account_list.setAlternatingRowColors(True)
+        self.account_list.currentRowChanged.connect(self._account_selected)
+        self.account_list.itemChanged.connect(self._account_ticked)
+        self.account_list.setToolTip(
+            "Every mailbox this app knows about. Untick one to leave it out of "
+            "scans without forgetting it."
+        )
+        outer.addWidget(self.account_list)
 
-        self.add_account_button = QToolButton()
-        self.add_account_button.setText("Add")
-        self.add_account_button.setToolTip("Add another mailbox")
+        buttons = QHBoxLayout()
+        self.add_account_button = QPushButton("Add mailbox")
+        self.add_account_button.setToolTip("Set up another mailbox")
         self.add_account_button.clicked.connect(self._add_account)
-        picker_row.addWidget(self.add_account_button)
+        buttons.addWidget(self.add_account_button)
 
-        self.remove_account_button = QToolButton()
-        self.remove_account_button.setText("Remove")
+        self.remove_account_button = QPushButton("Remove")
         self.remove_account_button.setToolTip(
-            "Forget this mailbox. Nothing in it is touched, and its password "
-            "is removed from the Keychain."
+            "Forget the selected mailbox. Nothing in it is touched, and its "
+            "password is removed from the Keychain."
         )
         self.remove_account_button.clicked.connect(self._remove_account)
-        picker_row.addWidget(self.remove_account_button)
-        outer.addLayout(picker_row)
+        buttons.addWidget(self.remove_account_button)
+
+        self.test_imap_button = QPushButton("Test this mailbox")
+        self.test_imap_button.setToolTip(
+            "Sign in to the selected mailbox now and report what happens")
+        self.test_imap_button.clicked.connect(lambda: self._run_test("imap"))
+        buttons.addWidget(self.test_imap_button)
+        buttons.addStretch(1)
+        outer.addLayout(buttons)
+
+        self.account_summary = QLabel()
+        self.account_summary.setWordWrap(True)
+        self.account_summary.setProperty("dim", "true")
+        outer.addWidget(self.account_summary)
         outer.addWidget(_separator())
 
         form = QFormLayout()
@@ -1135,40 +1152,50 @@ class SettingsDialog(QDialog):
         self.account_label_edit.setPlaceholderText("shown in the table and menus")
         form.addRow("Name", self.account_label_edit)
 
-        self.account_enabled = QCheckBox("Include this mailbox in scans")
-        self.account_enabled.setChecked(True)
-        form.addRow("", self.account_enabled)
-
-        form.addRow(_separator())
+        self.advanced_box = QGroupBox("Server")
+        self.advanced_box.setCheckable(True)
+        self.advanced_box.setChecked(False)
+        self.advanced_box.setToolTip(
+            "Filled in from the provider. Only worth opening if your provider "
+            "uses something unusual."
+        )
+        advanced = QFormLayout(self.advanced_box)
         self.host_edit = QLineEdit()
         self.port_spin = QSpinBox()
         self.port_spin.setRange(1, 65535)
         self.mailbox_edit = QLineEdit()
+        self.mailbox_edit.setPlaceholderText("INBOX")
         self.connections_spin = QSpinBox()
         self.connections_spin.setRange(1, 8)
+        advanced.addRow("IMAP host", self.host_edit)
+        advanced.addRow("IMAP port", self.port_spin)
+        advanced.addRow("Mailbox to scan", self.mailbox_edit)
+        advanced.addRow("Parallel connections", self.connections_spin)
+        form.addRow(self.advanced_box)
+
         self.fetch_kb_spin = QSpinBox()
         self.fetch_kb_spin.setRange(8, 4096)
         self.fetch_kb_spin.setSuffix(" KB")
-
-        self.test_imap_button = QPushButton("Test connection")
-        self.test_imap_button.clicked.connect(lambda: self._run_test("imap"))
-        test_row = QHBoxLayout()
-        test_row.addWidget(self.test_imap_button)
-        test_row.addStretch(1)
-
-        form.addRow("IMAP host", self.host_edit)
-        form.addRow("IMAP port", self.port_spin)
-        form.addRow("Mailbox to scan", self.mailbox_edit)
-        form.addRow("Parallel connections", self.connections_spin)
+        self.fetch_kb_spin.setToolTip(
+            "How much of each message to download. Enough for the text; the "
+            "rest is attachments, which are never read."
+        )
         form.addRow("Download per message", self.fetch_kb_spin)
-        form.addRow(test_row)
         outer.addLayout(form)
 
+        # Every field writes into the selected mailbox as it changes, so the
+        # list above is always showing the truth and there is nothing to press.
+        for widget in (self.email_edit, self.account_label_edit, self.host_edit,
+                       self.mailbox_edit):
+            widget.textChanged.connect(self._capture_account)
+        for widget in (self.port_spin, self.connections_spin):
+            widget.valueChanged.connect(self._capture_account)
+        self.password_edit.textChanged.connect(self._capture_account)
+
         note = QLabel(
-            "Passwords are stored in the macOS Keychain, never in a file. Every "
+            "Passwords go into the macOS Keychain, never into a file. Every "
             "provider here wants an app password rather than the one you sign "
-            "in with, which is a good thing: it can be revoked on its own "
-            "without changing anything else."
+            "in with, which is a good thing: it can be revoked on its own."
         )
         note.setWordWrap(True)
         note.setProperty("dim", "true")
@@ -1180,31 +1207,81 @@ class SettingsDialog(QDialog):
     def _load_accounts(self, settings: Settings) -> None:
         """Take a working copy of the mailbox list, editable until OK."""
         self._accounts: List[Account] = [replace(a) for a in settings.accounts]
-        if not self._accounts:
+        if not self._accounts and settings.icloud_email:
             self._accounts = [replace(settings.primary_account)]
-        self._account_index = 0
+        self._account_index = 0 if self._accounts else -1
         self._refresh_account_list()
+
+    def _account_status(self, account: Account) -> str:
+        """What still needs doing to this mailbox, in a few words."""
+        if not account.address:
+            return "no address yet"
+        if not accounts.valid_address(account.address):
+            return "that address does not look right"
+        if not account.host:
+            return "no server - choose a provider, or type a host"
+        if not self._password_for(account):
+            return "no password yet"
+        return "ready" if account.enabled else "ready, not scanned"
+
+    def _password_for(self, account: Account) -> str:
+        if account.address in self._account_passwords:
+            return self._account_passwords[account.address]
+        try:
+            return self._store.get_mailbox_password(account.address)
+        except CredentialError:
+            return ""
 
     def _refresh_account_list(self) -> None:
         self.account_list.blockSignals(True)
         self.account_list.clear()
         for account in self._accounts:
-            self.account_list.addItem(
-                account.describe() if account.address else "(new mailbox)")
-        self.account_list.setCurrentIndex(
-            min(self._account_index, len(self._accounts) - 1))
+            name = account.describe() if account.address else "New mailbox"
+            item = QListWidgetItem(f"{name}   —   {self._account_status(account)}")
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(
+                Qt.CheckState.Checked if account.enabled else Qt.CheckState.Unchecked)
+            item.setToolTip(
+                f"{account.address or 'No address yet'}\n"
+                f"{account.host or 'No server'}:{account.port}\n"
+                f"{self._account_status(account)}"
+            )
+            self.account_list.addItem(item)
+        if self._accounts:
+            self.account_list.setCurrentRow(
+                min(max(self._account_index, 0), len(self._accounts) - 1))
         self.account_list.blockSignals(False)
-        self.remove_account_button.setEnabled(len(self._accounts) > 1)
-        self._show_account(self._account_index)
+
+        ready = sum(1 for a in self._accounts if self._account_status(a).startswith("ready"))
+        total = len(self._accounts)
+        self.account_summary.setText(
+            f"{total} mailbox{'es' if total != 1 else ''}, {ready} ready to scan."
+            + ("" if ready == total else
+               " Anything not ready is listed above with what it still needs.")
+        )
+        self.remove_account_button.setEnabled(bool(self._accounts))
+        self.test_imap_button.setEnabled(bool(self._accounts))
+        for widget in (self.preset_combo, self.email_edit, self.password_edit,
+                       self.account_label_edit, self.advanced_box):
+            widget.setEnabled(bool(self._accounts))
+        if self._accounts:
+            self._show_account(min(max(self._account_index, 0), len(self._accounts) - 1))
+
+    def _account_ticked(self, item: QListWidgetItem) -> None:
+        row = self.account_list.row(item)
+        if 0 <= row < len(self._accounts):
+            self._accounts[row].enabled = item.checkState() == Qt.CheckState.Checked
+            self._refresh_account_list()
 
     def _show_account(self, index: int) -> None:
         if not (0 <= index < len(self._accounts)):
             return
         account = self._accounts[index]
         self._account_index = index
-        for widget in (self.preset_combo, self.email_edit, self.host_edit,
-                       self.port_spin, self.mailbox_edit, self.connections_spin,
-                       self.account_label_edit, self.account_enabled):
+        editors = (self.preset_combo, self.email_edit, self.host_edit,
+                   self.port_spin, self.mailbox_edit, self.connections_spin,
+                   self.account_label_edit, self.password_edit)
+        for widget in editors:
             widget.blockSignals(True)
         self.preset_combo.setCurrentIndex(
             max(0, self.preset_combo.findData(account.preset)))
@@ -1214,52 +1291,80 @@ class SettingsDialog(QDialog):
         self.mailbox_edit.setText(account.source_mailbox)
         self.connections_spin.setValue(account.connections)
         self.account_label_edit.setText(account.label)
-        self.account_enabled.setChecked(account.enabled)
-        for widget in (self.preset_combo, self.email_edit, self.host_edit,
-                       self.port_spin, self.mailbox_edit, self.connections_spin,
-                       self.account_label_edit, self.account_enabled):
+        self.password_edit.setText(self._password_for(account))
+        for widget in editors:
             widget.blockSignals(False)
-        try:
-            self.password_edit.setText(
-                self._store.get_mailbox_password(account.address))
-        except CredentialError:
-            self.password_edit.clear()
+        # Open the server box on its own when it holds something unexpected.
+        spec = accounts.host_for(account.preset)
+        self.advanced_box.setChecked(
+            bool(account.host) and account.host != spec.host)
         self._describe_preset(account.preset)
 
     def _capture_account(self) -> None:
-        """Fold the form back into the mailbox it belongs to."""
+        """Fold the form back into the mailbox it belongs to.
+
+        Called on every keystroke rather than only when the selection moves, so
+        the list is always describing what has actually been entered.
+        """
         if not (0 <= self._account_index < len(self._accounts)):
             return
         account = self._accounts[self._account_index]
+        address = self.email_edit.text().strip()
         account.preset = self.preset_combo.currentData() or "custom"
-        account.address = self.email_edit.text().strip()
+        account.address = address
         account.host = self.host_edit.text().strip()
         account.port = self.port_spin.value()
         account.source_mailbox = self.mailbox_edit.text().strip() or "INBOX"
         account.connections = self.connections_spin.value()
         account.label = self.account_label_edit.text().strip()
-        account.enabled = self.account_enabled.isChecked()
-        self._account_passwords[account.address] = self.password_edit.text()
+        if address:
+            self._account_passwords[address] = self.password_edit.text()
+        self._refresh_list_row(self._account_index)
+
+    def _refresh_list_row(self, index: int) -> None:
+        """Update one row in place, without rebuilding and stealing focus."""
+        item = self.account_list.item(index)
+        if item is None or not (0 <= index < len(self._accounts)):
+            return
+        account = self._accounts[index]
+        name = account.describe() if account.address else "New mailbox"
+        self.account_list.blockSignals(True)
+        item.setText(f"{name}   —   {self._account_status(account)}")
+        self.account_list.blockSignals(False)
+        ready = sum(1 for a in self._accounts
+                    if self._account_status(a).startswith("ready"))
+        total = len(self._accounts)
+        self.account_summary.setText(
+            f"{total} mailbox{'es' if total != 1 else ''}, {ready} ready to scan."
+        )
 
     def _account_selected(self, index: int) -> None:
-        self._capture_account()
+        if index < 0 or index == self._account_index:
+            return
         self._show_account(index)
 
     def _add_account(self) -> None:
-        self._capture_account()
+        """Start a new mailbox, and put the cursor where typing should begin."""
         self._accounts.append(Account())
         self._account_index = len(self._accounts) - 1
         self._refresh_account_list()
-        self.preset_combo.setFocus()
+        self.account_list.setCurrentRow(self._account_index)
+        self.email_edit.setFocus()
+        self.status.setText(
+            "New mailbox: choose a provider and type its address. It is kept "
+            "when you press OK."
+        )
 
     def _remove_account(self) -> None:
-        if len(self._accounts) <= 1:
+        if not (0 <= self._account_index < len(self._accounts)):
             return
         going = self._accounts[self._account_index]
         if going.address and QMessageBox.question(
             self, "Remove mailbox",
             f"Stop scanning {going.address}?\n\nNothing in the mailbox is "
             "touched. Its password is removed from the Keychain.",
+            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
+            QMessageBox.StandardButton.Cancel,
         ) != QMessageBox.StandardButton.Yes:
             return
         self._removed_accounts.append(going)
@@ -1272,8 +1377,8 @@ class SettingsDialog(QDialog):
 
         Changing the provider on a mailbox that already holds somebody else's
         address is not a change of server, it is a different mailbox. Keeping
-        the old address there is how an iCloud address ends up pointed at
-        Gmail's server, which then quietly scans nothing.
+        the old address is how an iCloud address ends up pointed at Gmail's
+        server, which then quietly scans nothing.
         """
         name = self.preset_combo.currentData() or "custom"
         spec = accounts.host_for(name)
@@ -1289,18 +1394,18 @@ class SettingsDialog(QDialog):
             self.password_edit.clear()
             self.account_label_edit.clear()
             self.status.setText(
-                f"{_html(address)} is {belongs_to.label}, so it has been cleared. "
-                f"Enter the {spec.label} address for this mailbox."
+                f"{_html(address)} is {belongs_to.label}, so it has been "
+                f"cleared. Enter the {spec.label} address for this mailbox."
             )
             address = ""
 
         self.email_edit.setPlaceholderText(
             f"you@{spec.domains[0]}" if spec.domains else "you@example.com")
-        self._describe_preset(name)
-
         placeholder = {label for _n, label in accounts.choices()}
         if self.account_label_edit.text().strip() in placeholder:
             self.account_label_edit.setText(address.split("@")[0] if address else "")
+        self._describe_preset(name)
+        self._capture_account()
 
     def _address_entered(self) -> None:
         """Fill in the server from the domain, unless it is already set."""
@@ -1312,12 +1417,11 @@ class SettingsDialog(QDialog):
         if current == "custom" and not guessed.is_custom:
             self.preset_combo.setCurrentIndex(
                 max(0, self.preset_combo.findData(guessed.name)))
-        # A name the user has not chosen is either blank or whatever the
-        # provider was called before an address was typed; both get replaced.
         current_label = self.account_label_edit.text().strip()
         placeholder = {label for _name, label in accounts.choices()}
         if not current_label or current_label in placeholder:
             self.account_label_edit.setText(address.split("@")[0])
+        self._capture_account()
 
     def _describe_preset(self, name: str) -> None:
         spec = accounts.host_for(name)
@@ -1960,6 +2064,22 @@ class SettingsDialog(QDialog):
         contrast_note.setProperty("dim", "true")
         form.addRow("", contrast_note)
 
+        self.help_check = QCheckBox("Explain things on hover")
+        self.help_check.setToolTip(
+            "The same switch as the ? in the corner of the window. With it on, "
+            "resting the pointer on anything explains what it does."
+        )
+        form.addRow("", self.help_check)
+        help_note = QLabel(
+            "Off by default, because a tooltip nobody asked for is in the way. "
+            "The circled ? at the top right of the window toggles the same "
+            "setting, and is filled in while it is on."
+        )
+        help_note.setWordWrap(True)
+        help_note.setProperty("dim", "true")
+        form.addRow("", help_note)
+        form.addRow(_separator())
+
         self.readable_check = QCheckBox("Tune the layout for reading")
         form.addRow("", self.readable_check)
         readable_note = QLabel(
@@ -2134,6 +2254,7 @@ class SettingsDialog(QDialog):
         self.contrast_combo.setCurrentIndex(
             max(0, self.contrast_combo.findData(settings.contrast)))
         self.readable_check.setChecked(settings.readable)
+        self.help_check.setChecked(settings.help_mode)
         self.rows_spin.setValue(settings.row_lines)
 
         try:
@@ -2181,6 +2302,7 @@ class SettingsDialog(QDialog):
             appearance_mode=self.mode_combo.currentData() or "system",
             contrast=self.contrast_combo.currentData() or "normal",
             readable=self.readable_check.isChecked(),
+            help_mode=self.help_check.isChecked(),
             row_lines=self.rows_spin.value(),
             auto_reply=self.auto_reply_check.isChecked(),
             reply_signature=self.signature_edit.text().strip(),
@@ -2901,6 +3023,12 @@ class MainWindow(QMainWindow):
             return
         theme.apply(app, self.settings.appearance_mode, self.settings.contrast,
                     self.settings.readable)
+        helpmode.install(app, self.settings.help_mode)
+        if hasattr(self, "help_button") and \
+                self.help_button.isChecked() != self.settings.help_mode:
+            self.help_button.blockSignals(True)
+            self.help_button.setChecked(self.settings.help_mode)
+            self.help_button.blockSignals(False)
         # Reading mode wants taller rows as well as larger type; the two only
         # help together.
         if self.settings.readable and self.settings.row_lines < 3:
@@ -3505,9 +3633,8 @@ class MainWindow(QMainWindow):
             # The menu bar item is still there, so closing the window means
             # "put it away", not "stop working". Quit from the menu bar, the
             # app menu, or Cmd-Q to actually leave.
-            self._save_layout()
-            self.hide()
             event.ignore()
+            self._put_away()
             return
         if not self._quitting and not self.confirm_quit():
             event.ignore()
@@ -3516,9 +3643,33 @@ class MainWindow(QMainWindow):
         self._save_layout()
         super().closeEvent(event)
 
+    def _put_away(self) -> None:
+        """Hide the window, leaving full screen first if it is in it.
+
+        Hiding a window that owns a macOS full-screen space leaves the space
+        behind: the display stays on the empty desktop with no window and no
+        way back, which reads as the app having crashed. Leaving full screen is
+        animated, so the hide waits for it rather than racing it.
+        """
+        if self.isFullScreen():
+            self.setWindowState(
+                self.windowState() & ~Qt.WindowState.WindowFullScreen)
+            self.showNormal()
+            self._save_layout()
+            QTimer.singleShot(700, self.hide)
+            return
+        self._save_layout()
+        self.hide()
+
     def _save_layout(self) -> None:
-        """Remember the window's shape, whether it is closing or just hiding."""
-        self.settings.window_geometry = bytes(self.saveGeometry().toBase64()).decode()
+        """Remember the window's shape, whether it is closing or just hiding.
+
+        Not while it is full screen: restoring that on the next launch means
+        starting into a full-screen space, which is rarely what was meant and
+        is hard to get out of if anything then goes wrong.
+        """
+        if not self.isFullScreen():
+            self.settings.window_geometry = bytes(self.saveGeometry().toBase64()).decode()
         self.settings.splitter_state = bytes(self.splitter.saveState().toBase64()).decode()
         self.settings.table_state = bytes(
             self.table.horizontalHeader().saveState().toBase64()
@@ -3638,6 +3789,10 @@ class MainWindow(QMainWindow):
         if not self.confirm_quit():
             return
         self._quitting = True
+        if self.isFullScreen():
+            self.setWindowState(
+                self.windowState() & ~Qt.WindowState.WindowFullScreen)
+            self.showNormal()
         self.close()
         QApplication.quit()
 

@@ -67,7 +67,7 @@ for asset in ("icon.png", "icon.icns"):
 hiddenimports = ["demo_data", "providers", "rules_engine", "rulesets",
                  "scheduler", "menubar", "welcome", "flowlayout",
                  "accounts", "autoreply", "certs", "helpmode", "ondevice",
-                 "profiles", "theme"]
+                 "profiles", "theme", "macname"]
 
 # The CA bundle. Without it a frozen app has no certificates at all, because
 # the path Python was compiled with points at a framework the user does not
