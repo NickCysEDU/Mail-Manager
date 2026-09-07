@@ -200,7 +200,7 @@ class ScanWorker(_BaseWorker):
                     account_plan = replace(
                         account_plan,
                         detailed_job_folders=self.settings.profile.detailed_job_folders,
-                        topics=self.settings.profile.topics,
+                        topics=self.settings.chosen_topics,
                     )
                     if plan is None:
                         plan = account_plan
@@ -442,7 +442,7 @@ class ApplyWorker(_BaseWorker):
                 plan = replace(
                     plan,
                     detailed_job_folders=self.settings.profile.detailed_job_folders,
-                    topics=self.settings.profile.topics,
+                    topics=self.settings.chosen_topics,
                 )
                 wanted = list(plan.all_folders) + list(self.extra_folders)
                 created = engine.ensure_folder_paths(

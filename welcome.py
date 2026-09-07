@@ -12,12 +12,16 @@ from typing import Optional
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QFormLayout,
+    QGridLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QRadioButton,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -25,8 +29,10 @@ from PySide6.QtWidgets import (
     QWizardPage,
 )
 
+import profiles
 import providers
 import rulesets
+from accounts import Account
 from config import CredentialError, CredentialStore, Settings
 from models import APP_DISPLAY_NAME, FolderPlan
 
@@ -62,7 +68,7 @@ class MailboxPage(QWizardPage):
     def __init__(self, store: CredentialStore, parent=None) -> None:
         super().__init__(parent)
         self._store = store
-        self.setTitle("Your iCloud mailbox")
+        self.setTitle("Your mailbox")
         self.setSubTitle("Stored in the macOS Keychain, never in a file.")
 
         self.email = QLineEdit()
@@ -172,11 +178,70 @@ class ClassifierPage(QWizardPage):
         self._backend_changed()
 
 
+class PurposePage(QWizardPage):
+    """What the app is for, which decides everything downstream."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setTitle("What are you sorting?")
+        self.setSubTitle("This decides which folders get made. You can change it later.")
+
+        self.choice = QButtonGroup(self)
+        self.choice.setExclusive(True)
+        layout = QVBoxLayout(self)
+
+        for index, (name, label, blurb) in enumerate(profiles.choices()):
+            button = QRadioButton(label)
+            button.setProperty("profile", name)
+            self.choice.addButton(button, index)
+            note = _body(f"<p style='margin:0 0 10px 22px'>{blurb}</p>")
+            layout.addWidget(button)
+            layout.addWidget(note)
+            if name == profiles.DEFAULT_PROFILE:
+                button.setChecked(True)
+
+        # The topic list, shown only when a profile that uses topics is picked.
+        self.topics_box = QGroupBox("Which of these get a folder")
+        topics_layout = QVBoxLayout(self.topics_box)
+        topics_layout.addWidget(_body(
+            "<p>Untick anything you would rather leave in your inbox. These are "
+            "the topics the offline sorter can recognise; it cannot learn a new "
+            "one, so the list is fixed.</p>"
+        ))
+        grid = QGridLayout()
+        self.topic_checks = {}
+        for position, topic in enumerate(profiles.ALL_TOPICS):
+            check = QCheckBox(topic.label)
+            self.topic_checks[topic] = check
+            grid.addWidget(check, position // 2, position % 2)
+        topics_layout.addLayout(grid)
+        layout.addWidget(self.topics_box)
+        layout.addStretch(1)
+
+        self.choice.idToggled.connect(lambda *_: self._sync())
+        self._sync()
+
+    def profile_name(self) -> str:
+        button = self.choice.checkedButton()
+        return button.property("profile") if button else profiles.DEFAULT_PROFILE
+
+    def chosen_topics(self):
+        return tuple(topic for topic, check in self.topic_checks.items()
+                     if check.isChecked())
+
+    def _sync(self) -> None:
+        """Show the topic list only when the chosen profile actually uses it."""
+        profile = profiles.get(self.profile_name())
+        self.topics_box.setVisible(bool(profile.topics))
+        for topic, check in self.topic_checks.items():
+            check.setChecked(topic in profile.topics)
+
+
 class FoldersPage(QWizardPage):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setTitle("Folders")
-        self.setSubTitle("Created in your iCloud account on the first scan.")
+        self.setSubTitle("Created in your mailbox on the first scan.")
         self.tree = _body("")
         self.schedule = QCheckBox("Also scan in the background every 3 hours")
         self.menu_bar = QCheckBox("Show an icon in the menu bar")
@@ -189,19 +254,33 @@ class FoldersPage(QWizardPage):
             "are reused rather than duplicated.</p>"
         ))
         layout.addWidget(self.tree)
-        layout.addWidget(_body(
+        self.leftovers = _body(
             "<p>Messages that are not part of your job search stay where they are, "
             "in your inbox. Nothing outside your job search is moved unless you ask "
             "for it in Settings.</p>"
-        ))
+        )
+        layout.addWidget(self.leftovers)
         layout.addWidget(self.schedule)
         layout.addWidget(self.menu_bar)
         layout.addStretch(1)
 
     def initializePage(self) -> None:
-        plan = FolderPlan(root=Settings.load().folder_root)
-        rows = "".join(f"<li><code>{name}</code></li>" for name in plan.leaf_folders)
+        wizard = self.wizard()
+        purpose = getattr(wizard, "purpose", None)
+        profile = profiles.get(purpose.profile_name() if purpose else profiles.DEFAULT_PROFILE)
+        topics = purpose.chosen_topics() if purpose else profile.topics
+
+        stored = Settings.load()
+        plan = FolderPlan(
+            root=stored.folder_root, other_root=stored.other_folder_root,
+            detailed_job_folders=profile.detailed_job_folders, topics=topics,
+        )
+        names = list(plan.leaf_folders)
+        if topics:
+            names += [f for f in plan.other_folders(topics)[1:]]
+        rows = "".join(f"<li><code>{name}</code></li>" for name in names)
         self.tree.setText(f"<ul style='margin-left:-18px'>{rows}</ul>")
+        self.leftovers.setVisible(not profile.sorts_everything)
 
 
 class SetupWizard(QWizard):
@@ -218,9 +297,11 @@ class SetupWizard(QWizard):
 
         self.intro = IntroPage(self)
         self.mailbox = MailboxPage(store, self)
+        self.purpose = PurposePage(self)
         self.classifier = ClassifierPage(store, self)
         self.folders = FoldersPage(self)
-        for page in (self.intro, self.mailbox, self.classifier, self.folders):
+        for page in (self.intro, self.mailbox, self.purpose,
+                     self.classifier, self.folders):
             self.addPage(page)
 
     def result_settings(self) -> Settings:
@@ -228,9 +309,15 @@ class SetupWizard(QWizard):
         from dataclasses import replace
 
         provider = self.classifier.backend.currentData() or providers.DEFAULT_PROVIDER
+        profile = profiles.get(self.purpose.profile_name())
+        address = self.mailbox.email.text().strip()
         return replace(
             self._settings,
-            icloud_email=self.mailbox.email.text().strip(),
+            mailboxes=[Account.for_address(address)] if address else [],
+            icloud_email=address,
+            sort_profile=profile.name,
+            topics=[t.value for t in self.purpose.chosen_topics()],
+            non_job_routing=profile.non_job_routing.value,
             provider=provider,
             model=providers.default_model_for(provider),
             ruleset=self.classifier.field.currentData() or "general",

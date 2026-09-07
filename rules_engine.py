@@ -1000,6 +1000,256 @@ TRANSACTIONAL_TOPICS = (
 )
 
 
+#: Places the words application, interview, offer and candidate turn up
+#: meaning something else entirely. A tenancy application, a radio interview
+#: and an offer on a house are all ordinary mail, and the job tables have no
+#: way of telling on vocabulary alone.
+_OTHER_WORLD = re.compile(
+    r"\b(?:tenanc\w+|landlord|lettings?|letting agent|rent(?:al)?|deposit "
+    r"protection|estate agent|vendor|conveyanc\w+|mortgage adviser|viewing|"
+    r"property|freehold|leasehold|"
+    r"radio|podcast|broadcast|documentary|on air|our listeners|newsroom|"
+    r"journalist|reporter|"
+    r"university place|ucas|admissions|visa application|passport application|"
+    r"planning application|insurance claim|grant application|"
+    r"dentist|hygienist|surgery|clinic|consultant appointment)\b"
+)
+
+
+def other_world_context(subject: str, body: str) -> Tuple[float, str]:
+    """How strongly the message is about something other than a job search."""
+    hits = set(_OTHER_WORLD.findall(f"{subject} {body}"))
+    if not hits:
+        return 0.0, ""
+    return min(3.6, 1.8 * len(hits)), f"about {sorted(hits)[0]} rather than a job search"
+
+
+# ==========================================================================
+# Structural features
+# ==========================================================================
+# Phrase tables only recognise mail that is written the way the table expects.
+# Real transactional mail mostly is - it comes out of templates - which is why
+# a phrase-only sorter scores well on a collected inbox and then falls over on
+# anything a person actually typed.
+#
+# These look at the shape of a message instead of its wording: whether a human
+# or a machine sent it, whether there is money in it and which direction it
+# went, whether there is a code, a flight, a delivery window, a date. They are
+# deliberately about form rather than vocabulary, so paraphrasing does not
+# defeat them.
+
+#: Local parts that mean nobody is reading replies.
+_ROBOT_SENDER = re.compile(
+    r"\b(?:no[\W_]?reply|do[\W_]?not[\W_]?reply|noreply|donotreply|notifications?|"
+    r"alerts?|automated|auto[\W_]?notify|mailer|bounces?|postmaster|support|"
+    r"info|hello|team|news|updates?|billing|accounts?|care|service)\b"
+)
+#: A run of 4 to 8 digits standing on its own: a one-time code, usually.
+_BARE_CODE = re.compile(r"(?<![\w.])(\d{4,8})(?![\w.])")
+#: Money, in the three symbols this is likely to meet, or written out.
+_MONEY = re.compile(r"(?:[$£€]\s?\d[\d,]*(?:\.\d{2})?)|(?:\b\d[\d,]*\.\d{2}\s?(?:usd|gbp|eur)\b)")
+#: Money that has already gone.
+_SPENT = re.compile(
+    r"\b(?:we[\W_]?ve|we have|weve)?\s*(?:taken|charged|debited|deducted|"
+    r"refunded|credited|put\s+\S+\s+back|paid)\b")
+#: Money that has not gone yet.
+_OWED = re.compile(
+    r"\b(?:due|owing|outstanding|payable|will (?:be )?(?:taken|collected|leave)|"
+    r"leaves your account|collection is|balance of|chasing|overdue)\b")
+#: A delivery window, which almost nothing but a courier writes.
+_DELIVERY_WINDOW = re.compile(
+    r"\bbetween\s+\d{1,2}\s?(?:am|pm|:\d{2})[^.]{0,20}\band\s+\d{1,2}\s?(?:am|pm|:\d{2})")
+#: Things only parcels do.
+_PARCEL = re.compile(
+    r"\b(?:parcel|package|courier|driver|doorstep|delivery office|"
+    r"left (?:it )?with your neighbour|no answer|needs a signature|stops before yours)\b")
+#: A flight number: two letters then three or four digits.
+_FLIGHT = re.compile(r"\b[A-Za-z]{2}\d{3,4}\b")
+#: A booking or confirmation reference: mixed letters and digits, 5 to 8 long.
+_BOOKING_REF = re.compile(r"\b(?=[A-Z0-9]{5,8}\b)(?=[^\s]*\d)(?=[^\s]*[A-Z])[A-Z0-9]{5,8}\b")
+#: A clock time, which dated things have and broadcasts rarely do.
+_CLOCK = re.compile(r"\b\d{1,2}[:.]\d{2}\s?(?:am|pm)?\b|\b\d{1,2}\s?(?:am|pm)\b")
+_WEEKDAY = re.compile(
+    r"\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|tonight)\b")
+#: First and second person, which is how people write and marketing imitates.
+_PERSONAL_VOICE = re.compile(r"\b(?:i|i[\W_]?ll|i[\W_]?ve|we[\W_]?ve|my|me|us)\b")
+#: Selling, as opposed to telling.
+_SELLING = re.compile(
+    r"\b(?:off|discount|voucher|deal|sale|save|free|offer|shop|buy|order now|"
+    r"basket|cart|restock|outlet|%)\b")
+#: Editorial furniture.
+_EDITORIAL = re.compile(
+    r"\b(?:issue|edition|no\.\s?\d+|this (?:week|fortnight|month)|read (?:it|more) on|"
+    r"long read|links?|subscrib\w+|unsubscribe|in this)\b")
+
+
+#: Brands whose name in a From line is worth impersonating. Only used to check
+#: the name against the domain it actually came from.
+_IMPERSONATED = (
+    "apple", "icloud", "google", "gmail", "microsoft", "outlook", "office365",
+    "amazon", "paypal", "netflix", "meta", "facebook", "instagram", "linkedin",
+    "chase", "barclays", "hsbc", "natwest", "lloyds", "santander", "revolut",
+    "monzo", "wise", "coinbase", "binance", "dhl", "fedex", "ups", "usps",
+    "evri", "royalmail", "hmrc", "irs", "dvla",
+)
+#: Pressure plus a threat plus a link: the shape of a phishing message,
+#: whatever brand it happens to be wearing this week.
+_URGENCY = re.compile(
+    r"\b(?:within \d+ hours?|immediately|urgent(?:ly)?|right away|act now|"
+    r"as soon as possible|before it is too late|final (?:notice|warning))\b")
+_THREAT = re.compile(
+    r"\b(?:suspend\w*|clos\w+ permanently|permanently clos\w+|terminat\w+|"
+    r"delet\w+|restrict\w+|lose access|locked out|legal action)\b")
+_CLICK_THROUGH = re.compile(
+    r"\b(?:click here|verify your account|confirm you(?:r)? identity|"
+    r"update your details|log ?in below|follow this link)\b")
+
+
+def _registrable(domain: str) -> str:
+    """The part of a host a brand would actually own."""
+    parts = [p for p in domain.split(".") if p]
+    if len(parts) < 2:
+        return domain
+    # Good enough here: two labels, or three where the middle is a known
+    # second-level suffix. This never needs to be exactly right, only to
+    # notice that apple-account-verify.example is not apple.com.
+    if len(parts) >= 3 and parts[-2] in ("co", "com", "org", "gov", "ac", "net"):
+        return ".".join(parts[-3:])
+    return ".".join(parts[-2:])
+
+
+def impersonation_score(sender: str, subject: str, body: str) -> Tuple[float, str]:
+    """Whether the From line claims to be somebody the domain says it is not.
+
+    A display name is free text; the domain is not. When the name says Apple
+    and the mail came from apple-account-verify.example, that gap is the single
+    most reliable thing about the message, and it does not depend on the
+    wording at all.
+    """
+    display, _, address = sender.rpartition("<")
+    address = address.rstrip(">").strip() or sender
+    display = (display or "").strip().strip('"').lower()
+    domain = address.split("@")[-1].lower()
+    root = _registrable(domain)
+    stem = root.split(".")[0]
+
+    claimed = next((brand for brand in _IMPERSONATED if brand in display), "")
+    if claimed and claimed != stem and not stem.endswith(claimed):
+        return 3.0, f"the name says {claimed} but the mail came from {root}"
+
+    # A brand buried in a longer hyphenated domain is the other half of the
+    # same trick: apple-account-verify, paypal-secure-login.
+    if "-" in stem and any(brand in stem for brand in _IMPERSONATED):
+        return 2.6, f"a brand name inside a longer domain ({root})"
+
+    blob = f"{subject} {body}"
+    pressure = sum(bool(pattern.search(blob))
+                   for pattern in (_URGENCY, _THREAT, _CLICK_THROUGH))
+    if pressure >= 3:
+        return 2.4, "pressure, a threat and a link to follow"
+    if pressure == 2:
+        return 1.2, "pressure and a threat"
+    return 0.0, ""
+
+
+def _robot_sender(sender: str) -> bool:
+    local = sender.split("@")[0] if "@" in sender else sender
+    return bool(_ROBOT_SENDER.search(local))
+
+
+def structural_topic_scores(
+    subject: str, body: str, sender: str, list_unsubscribe: str = "",
+    links: Sequence[str] = (),
+) -> Tuple[Dict["OtherCategory", float], Dict["OtherCategory", List[str]]]:
+    """Evidence from the shape of a message rather than its phrasing."""
+    scores: Dict[OtherCategory, float] = {}
+    notes: Dict[OtherCategory, List[str]] = {}
+
+    def add(topic: "OtherCategory", weight: float, why: str) -> None:
+        scores[topic] = scores.get(topic, 0.0) + weight
+        notes.setdefault(topic, []).append(why)
+
+    blob = f"{subject} {body}"
+    bulk = bool(list_unsubscribe)
+
+    fake, why = impersonation_score(sender, subject, body)
+    if fake:
+        add(OtherCategory.SPAM, fake, why)
+    robot = _robot_sender(sender)
+    short = len(body) < 700
+
+    # -- a one-time code ------------------------------------------------
+    codes = _BARE_CODE.findall(blob)
+    if codes and short and not bulk:
+        # Codes come with a deadline and an instruction, never with a pitch.
+        expiring = re.search(r"\b(?:expires?|stops working|valid for|within)\b", blob)
+        add(OtherCategory.SECURITY, 3.0 if expiring else 1.6,
+            "a short code in a short message")
+
+    # -- account safety, without the word security ----------------------
+    if re.search(r"\b(?:password|sign(?:ed|ing)? in|signin|log(?:ged|ging)? in|"
+                 r"account was|recovery|two[\W_]?factor|device we (?:don[\W_]?t )?recognise|"
+                 r"recognize|end every other session|lock you out)\b", blob):
+        if re.search(r"\b(?:wasn[\W_]?t you|was this you|didn[\W_]?t do|"
+                     r"not you|change your password|act quickly|straight away)\b", blob):
+            add(OtherCategory.SECURITY, 2.6, "asks you to check a sign-in")
+        else:
+            add(OtherCategory.SECURITY, 1.4, "about account access")
+
+    # -- money, and which way it went -----------------------------------
+    if _MONEY.search(blob):
+        if _SPENT.search(blob):
+            add(OtherCategory.RECEIPT, 2.6, "an amount already taken")
+        if _OWED.search(blob):
+            add(OtherCategory.FINANCE, 2.6, "an amount still owed")
+        if not _SPENT.search(blob) and not _OWED.search(blob):
+            add(OtherCategory.FINANCE, 0.8, "an amount of money")
+
+    # -- parcels ---------------------------------------------------------
+    if _PARCEL.search(blob):
+        add(OtherCategory.SHIPPING, 2.4, "describes a parcel")
+    if _DELIVERY_WINDOW.search(blob):
+        add(OtherCategory.SHIPPING, 2.2, "gives a delivery window")
+
+    # -- travel ----------------------------------------------------------
+    travel_hits = 0
+    if _FLIGHT.search(f"{subject} {body}"):
+        travel_hits += 1
+    if _BOOKING_REF.search(f"{subject} {body}"):
+        travel_hits += 1
+    if re.search(r"\b(?:gate|bag drop|leaves at|departs|nights? in|"
+                 r"you arrive on|check ?in shuts|door code)\b", blob):
+        travel_hits += 1
+    if travel_hits >= 2:
+        add(OtherCategory.TRAVEL, 2.8, "a journey with a reference and a time")
+    elif travel_hits == 1:
+        add(OtherCategory.TRAVEL, 1.0, "something that reads like a journey")
+
+    # -- something happening at a time and a place -----------------------
+    if _CLOCK.search(blob) and _WEEKDAY.search(blob) and not bulk:
+        add(OtherCategory.EVENT, 1.2, "a day and a time")
+
+    # -- a person, rather than a system ----------------------------------
+    if not bulk and not robot and short and len(links) <= 1:
+        voice = len(_PERSONAL_VOICE.findall(blob))
+        if voice >= 2:
+            add(OtherCategory.PERSONAL, 2.4, "written by a person, to a person")
+        elif voice == 1:
+            add(OtherCategory.PERSONAL, 1.2, "reads as written by hand")
+
+    # -- bulk mail: selling, or telling? ---------------------------------
+    if bulk:
+        selling = len(_SELLING.findall(blob))
+        editorial = len(_EDITORIAL.findall(blob))
+        if selling > editorial:
+            add(OtherCategory.PROMOTION, 1.4 + min(1.2, 0.4 * selling), "bulk mail with a pitch")
+        elif editorial:
+            add(OtherCategory.NEWSLETTER, 1.4 + min(1.2, 0.4 * editorial), "bulk mail with an editorial shape")
+        else:
+            add(OtherCategory.PROMOTION, 0.8, "bulk mail")
+
+    return scores, notes
+
 # ==========================================================================
 # Classifier
 # ==========================================================================
@@ -1312,13 +1562,23 @@ class RuleClassifier:
         # Measured before the reply discount: a reply in an existing thread is
         # *more* clearly part of a job search, not less.
         job_evidence = job_score + max(max(raw_scores.values(), default=0.0), best_score)
+
+        # "Application", "interview" and "offer" belong to plenty of other
+        # parts of life. Where the message is plainly about one of those, that
+        # counts against the job reading rather than for it.
+        elsewhere, elsewhere_why = other_world_context(subject_n, body_n)
+        if elsewhere:
+            job_evidence = max(0.0, job_evidence - elsewhere)
+            non_job_score += elsewhere
+            non_job_matches.append(elsewhere_why)
+
         looks_job_related = job_evidence >= max(2.4, non_job_score * 0.9)
 
         if not looks_job_related:
             return self._non_job_verdict(
                 subject_n, subject_t, body_n, body_t, sender_n,
                 non_job_score, non_job_matches, job_evidence, truncated,
-                list_unsubscribe,
+                list_unsubscribe, links,
             )
 
         if best_score < MIN_SCORE:
@@ -1356,6 +1616,7 @@ class RuleClassifier:
     def _non_job_verdict(
         self, subject_n, subject_t, body_n, body_t, sender_n,
         non_job_score, non_job_matches, job_evidence, truncated, list_unsubscribe,
+        links: Sequence[str] = (),
     ) -> RuleVerdict:
         topic_scores: Dict[OtherCategory, float] = {}
         topic_matches: Dict[OtherCategory, List[str]] = {}
@@ -1367,6 +1628,15 @@ class RuleClassifier:
             topic_scores[topic] = score
             topic_matches[topic] = matched
             topic_peak[topic] = peak
+
+        # Shape, as opposed to wording. Phrase tables are blind to anything a
+        # person typed themselves; these are not.
+        shape, shape_notes = structural_topic_scores(
+            subject_n, body_n, sender_n, list_unsubscribe, links)
+        for topic, weight in shape.items():
+            topic_scores[topic] = topic_scores.get(topic, 0.0) + weight
+            topic_matches.setdefault(topic, []).extend(shape_notes.get(topic, ()))
+            topic_peak[topic] = max(topic_peak.get(topic, 0.0), weight)
 
         if list_unsubscribe:
             for topic in (OtherCategory.NEWSLETTER, OtherCategory.PROMOTION, OtherCategory.SOCIAL):

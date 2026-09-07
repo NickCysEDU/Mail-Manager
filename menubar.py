@@ -39,6 +39,11 @@ _BAR_MARGIN = 2.0
 _BAR_STROKE = 3.0
 
 
+def _menu_text(label: str) -> str:
+    """Qt eats a lone ampersand as a mnemonic; see gui.menu_text."""
+    return (label or "").replace("&", "&&")
+
+
 def menu_bar_icon() -> QIcon:
     """A monochrome template icon, so macOS tints it for light and dark bars."""
     width, height = _BAR_CANVAS
@@ -181,16 +186,16 @@ class MenuBarController(QObject):
         Named after the current choice so the menu bar answers "what is this
         about to use?" without opening anything.
         """
-        model_menu = menu.addMenu(f"Model: {self._model_label()}")
+        model_menu = menu.addMenu(_menu_text(f"Model: {self._model_label()}"))
 
         models = QActionGroup(self)
         models.setExclusive(True)
         self._model_actions = {}
         for name, label, _blurb in providers.provider_choices():
             spec = providers.provider_class(name)
-            section = model_menu.addMenu(label)
+            section = model_menu.addMenu(_menu_text(label))
             for choice in spec.models:
-                action = QAction(choice.label, self)
+                action = QAction(_menu_text(choice.label), self)
                 action.setCheckable(True)
                 action.setChecked((name, choice.value) == (self._provider, self._model))
                 action.triggered.connect(
@@ -207,7 +212,7 @@ class MenuBarController(QObject):
         fields.setExclusive(True)
         self._ruleset_actions = {}
         for name, label, blurb in rulesets.choices():
-            action = QAction(label, self)
+            action = QAction(_menu_text(label), self)
             action.setCheckable(True)
             action.setChecked(name == self._ruleset)
             action.setToolTip(blurb)

@@ -109,6 +109,7 @@ from models import (
     resolve_window,
 )
 from flowlayout import FlowLayout, Spacer
+import theme
 from menubar import MenuBarController
 from welcome import SetupWizard
 from workers import (
@@ -126,6 +127,16 @@ LEAVE_IN_PLACE = "- leave in place -"
 
 #: Accent colours. Mid-tone and paired with white text, so the same value reads
 #: correctly in both light and dark mode without a second palette.
+def menu_text(label: str) -> str:
+    """Escape a label for use in a menu.
+
+    Qt reads a single ampersand as a keyboard mnemonic and swallows it, so
+    "Software & Data" renders as "Software  Data" - which reads as a stray
+    double space rather than as a missing character.
+    """
+    return (label or "").replace("&", "&&")
+
+
 ACCENT_BLUE = "#2F6FE0"     # the primary action
 ACCENT_GREEN = "#2E9E63"    # a safe, confirmed action
 ACCENT_RED = "#C4534A"      # stop / destructive
@@ -969,6 +980,7 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(_scrollable(self._build_account_tab()), "Account")
         self.tabs.addTab(_scrollable(self._build_ai_tab()), "Analysis")
         self.tabs.addTab(_scrollable(self._build_folders_tab()), "Folders")
+        self.tabs.addTab(_scrollable(self._build_appearance_tab()), "Appearance")
 
         self.buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
@@ -1351,6 +1363,63 @@ class SettingsDialog(QDialog):
             price = ""
         self.model_note.setText(" · ".join(part for part in (note, price) if part))
 
+    def _build_appearance_tab(self) -> QWidget:
+        page = QWidget()
+        form = QFormLayout(page)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+
+        self.mode_combo = QComboBox()
+        for value, label in theme.MODES:
+            self.mode_combo.addItem(label, value)
+        form.addRow("Appearance", self.mode_combo)
+
+        self.contrast_combo = QComboBox()
+        for value, label in theme.CONTRASTS:
+            self.contrast_combo.addItem(label, value)
+        form.addRow("Contrast", self.contrast_combo)
+        contrast_note = QLabel(
+            "High contrast darkens the supporting colours until every one of "
+            "them passes against its own background. Maximum goes further and "
+            "drops colour altogether: black on white, or white on black, with "
+            "nothing depending on hue."
+        )
+        contrast_note.setWordWrap(True)
+        contrast_note.setProperty("dim", "true")
+        form.addRow("", contrast_note)
+
+        self.readable_check = QCheckBox("Tune the layout for reading")
+        form.addRow("", self.readable_check)
+        readable_note = QLabel(
+            "Larger type with a little more tracking, taller rows, heavier "
+            "column headings, a wider focus ring, and more space inside every "
+            "control. Independent of contrast - it changes the spacing rather "
+            "than the colours."
+        )
+        readable_note.setWordWrap(True)
+        readable_note.setProperty("dim", "true")
+        form.addRow("", readable_note)
+
+        self.rows_spin = QSpinBox()
+        self.rows_spin.setRange(1, 6)
+        self.rows_spin.setSuffix(" lines per row")
+        form.addRow("Row height", self.rows_spin)
+
+        # Applied as they are changed: a colour choice you cannot see until you
+        # press OK is a colour choice made blind.
+        for widget in (self.mode_combo, self.contrast_combo):
+            widget.currentIndexChanged.connect(self._preview_appearance)
+        self.readable_check.toggled.connect(self._preview_appearance)
+        return page
+
+    def _preview_appearance(self) -> None:
+        app = QApplication.instance()
+        if app is None:
+            return
+        theme.apply(app,
+                    self.mode_combo.currentData() or "system",
+                    self.contrast_combo.currentData() or "normal",
+                    self.readable_check.isChecked())
+
     def _build_folders_tab(self) -> QWidget:
         page = QWidget()
         form = QFormLayout(page)
@@ -1413,6 +1482,13 @@ class SettingsDialog(QDialog):
         self.auto_non_job_check.setChecked(settings.auto_approve_non_job)
         self.subscribe_check.setChecked(settings.subscribe_new_folders)
 
+        self.mode_combo.setCurrentIndex(
+            max(0, self.mode_combo.findData(settings.appearance_mode)))
+        self.contrast_combo.setCurrentIndex(
+            max(0, self.contrast_combo.findData(settings.contrast)))
+        self.readable_check.setChecked(settings.readable)
+        self.rows_spin.setValue(settings.row_lines)
+
         try:
             self.password_edit.setText(self._store.get_icloud_password(settings.icloud_email))
             self.status.setText(f"Keychain backend: {self._store.backend_name()}")
@@ -1455,6 +1531,10 @@ class SettingsDialog(QDialog):
             model=self._chosen_model(),
             base_url=self.base_url_edit.text().strip(),
             effort=self.effort_combo.currentText(),
+            appearance_mode=self.mode_combo.currentData() or "system",
+            contrast=self.contrast_combo.currentData() or "normal",
+            readable=self.readable_check.isChecked(),
+            row_lines=self.rows_spin.value(),
             confidence_threshold=self.threshold_spin.value(),
             concurrency=self.concurrency_spin.value(),
             batch_size=self.batch_spin.value(),
@@ -1575,6 +1655,12 @@ class MainWindow(QMainWindow):
         #: Every background thread this window has started and not yet reaped.
         self._workers: List[QThread] = []
         self.folder_plan: Optional[FolderPlan] = settings.folder_plan()
+        #: Set only by an explicit Quit, so closeEvent can tell "put this
+        #: away" apart from "stop the app".
+        self._quitting = False
+        #: What the primary button currently does, so it can be rewired
+        #: without disconnecting slots that were never attached.
+        self._scan_button_action = None
         #: Which providers have a key in the Keychain. See store_has_key.
         self._key_present: Dict[str, bool] = {}
         self._prompt_cache: Dict[str, str] = {}
@@ -1599,7 +1685,7 @@ class MainWindow(QMainWindow):
         self.menu_bar.scheduleChanged.connect(self.set_schedule)
         self.menu_bar.modelChanged.connect(self._switch_model)
         self.menu_bar.rulesetChanged.connect(self._switch_ruleset)
-        self.menu_bar.quitRequested.connect(QApplication.quit)
+        self.menu_bar.quitRequested.connect(self.quit_app)
         # The window was built before the controller existed, so hand it the
         # current choice now rather than waiting for the first change.
         self._sync_menu_bar_model()
@@ -1838,10 +1924,12 @@ class MainWindow(QMainWindow):
         row.addWidget(self.stop_button)
 
         self.scan_button = QPushButton("Scan && Analyze")
-        self.scan_button.setDefault(True)
         self.scan_button.setMinimumHeight(30)
-        self.scan_button.clicked.connect(self.start_scan)
-        _paint_button(self.scan_button, ACCENT_BLUE)
+        # Width is pinned to the wider of its two labels so the toolbar does
+        # not jump when it turns into Stop.
+        self.scan_button.setMinimumWidth(
+            self.scan_button.fontMetrics().horizontalAdvance("Scan & Analyze") + 34)
+        self._set_scan_button(False)
         row.addWidget(self.scan_button)
 
         self.apply_button = QPushButton("Apply Approved Folder Moves")
@@ -1862,9 +1950,9 @@ class MainWindow(QMainWindow):
         current = (self.settings.provider, self.settings.model)
         for name, label, _blurb in providers.provider_choices():
             spec = providers.provider_class(name)
-            section = self.model_menu.addMenu(label)
+            section = self.model_menu.addMenu(menu_text(label))
             for choice in spec.models:
-                action = QAction(choice.label, self)
+                action = QAction(menu_text(choice.label), self)
                 action.setCheckable(True)
                 action.setChecked((name, choice.value) == current)
                 rate = spec.pricing.get(choice.value)
@@ -1884,7 +1972,7 @@ class MainWindow(QMainWindow):
         self.model_menu.addSeparator()
         profile_menu = self.model_menu.addMenu("What to sort")
         for name, label, blurb in profiles.choices():
-            action = QAction(label, self)
+            action = QAction(menu_text(label), self)
             action.setCheckable(True)
             action.setChecked(name == self.settings.sort_profile)
             action.setStatusTip(blurb)
@@ -1895,7 +1983,7 @@ class MainWindow(QMainWindow):
 
         rules_menu = self.model_menu.addMenu("Local rule set (field)")
         for name, label, blurb in rulesets.choices():
-            action = QAction(label, self)
+            action = QAction(menu_text(label), self)
             action.setCheckable(True)
             action.setChecked(name == self.settings.ruleset)
             action.setStatusTip(blurb)
@@ -1910,6 +1998,34 @@ class MainWindow(QMainWindow):
         self._refresh_model_button()
 
     # -- mailbox switcher ------------------------------------------------
+    def _set_scan_button(self, busy: bool) -> None:
+        """Scan when idle, Stop when not. One button, never disabled."""
+        self.scan_button.setEnabled(True)
+        wanted = self.stop_all if busy else self.start_scan
+        if self._scan_button_action is wanted:
+            return
+        if self._scan_button_action is not None:
+            self.scan_button.clicked.disconnect(self._scan_button_action)
+        self._scan_button_action = wanted
+        if busy:
+            self.scan_button.setText("Stop")
+            self.scan_button.setDefault(False)
+            _paint_button(self.scan_button, ACCENT_RED)
+            self.scan_button.setToolTip(
+                "Stop everything now: the mailbox fetch, the model requests and "
+                "the local sorter, and close the connections they are using (⌘.)"
+            )
+            self.scan_button.clicked.connect(wanted)
+        else:
+            self.scan_button.setText("Scan && Analyze")
+            self.scan_button.setDefault(True)
+            _paint_button(self.scan_button, ACCENT_BLUE)
+            self.scan_button.setToolTip(
+                "Read the selected mailboxes over the chosen period and sort "
+                "what is found."
+            )
+            self.scan_button.clicked.connect(wanted)
+
     def _rebuild_account_menu(self) -> None:
         """Which mailbox the next scan reads: one of them, or all of them."""
         if not hasattr(self, "account_menu"):
@@ -1931,7 +2047,7 @@ class MainWindow(QMainWindow):
         self.account_menu.addSeparator()
 
         for account in mailboxes:
-            action = QAction(f"{account.label}  ({account.address})", self)
+            action = QAction(menu_text(f"{account.label}  ({account.address})"), self)
             action.setCheckable(True)
             action.setChecked(account.id == self.settings.active_account)
             action.triggered.connect(
@@ -1948,7 +2064,7 @@ class MainWindow(QMainWindow):
     def _refresh_account_button(self) -> None:
         chosen = self.settings.account_by_id(self.settings.active_account)
         name = chosen.label if chosen else "All mailboxes"
-        self.account_button.setText(f"✉︎  {name}")
+        self.account_button.setText(menu_text(f"✉︎  {name}"))
         self.account_button.setToolTip(
             "Which mailbox the next scan reads.\n"
             + (f"Currently {chosen.address}." if chosen
@@ -2031,13 +2147,28 @@ class MainWindow(QMainWindow):
         )
         warn = spec.needs_api_key and not self.store_has_key(
             self.settings.provider, probe=False)
-        self.model_button.setText(f"⚙︎  {pretty}" + ("  ⚠︎" if warn else ""))
+        self.model_button.setText(menu_text(f"⚙︎  {pretty}") + ("  ⚠︎" if warn else ""))
         self.model_button.setToolTip(
             f"{spec.label} · {self.settings.model}\n"
             + ("No API key stored for this backend - click to fix.\n" if warn else "")
             + "Click to switch backend or model (⌘M)"
         )
         self._sync_menu_bar_model()
+
+    def apply_appearance(self) -> None:
+        """Repaint everything from the current appearance settings."""
+        app = QApplication.instance()
+        if app is None:
+            return
+        theme.apply(app, self.settings.appearance_mode, self.settings.contrast,
+                    self.settings.readable)
+        # Reading mode wants taller rows as well as larger type; the two only
+        # help together.
+        if self.settings.readable and self.settings.row_lines < 3:
+            self.settings.row_lines = 3
+        self._apply_density(self.settings.row_lines)
+        self._reset_columns()
+        self.table.viewport().update()
 
     def _switch_profile(self, name: str) -> None:
         """Change what gets a folder of its own, and rebuild the folder plan."""
@@ -2362,7 +2493,20 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self, self._probe_api_keys)
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        if not self._quitting and self._hides_to_menu_bar():
+            # The menu bar item is still there, so closing the window means
+            # "put it away", not "stop working". Quit from the menu bar, the
+            # app menu, or Cmd-Q to actually leave.
+            self._save_layout()
+            self.hide()
+            event.ignore()
+            return
         self.shutdown()
+        self._save_layout()
+        super().closeEvent(event)
+
+    def _save_layout(self) -> None:
+        """Remember the window's shape, whether it is closing or just hiding."""
         self.settings.window_geometry = bytes(self.saveGeometry().toBase64()).decode()
         self.settings.splitter_state = bytes(self.splitter.saveState().toBase64()).decode()
         self.settings.table_state = bytes(
@@ -2374,17 +2518,16 @@ class MainWindow(QMainWindow):
             self.settings.save()
         except OSError as exc:
             log.warning("Could not save settings: %s", exc)
-        super().closeEvent(event)
 
     def shutdown(self) -> None:
-        self.schedule_timer.stop()
-        self.menu_bar.hide()
         """Leave no thread attached to this window.
 
         Idempotent, and safe to call from ``aboutToQuit``. Anything that will
         not stop in time is detached rather than terminated - see
         :func:`_abandon` for why killing it would be worse.
         """
+        self.schedule_timer.stop()
+        self.menu_bar.hide()
         for worker in list(self._workers):
             if worker.isRunning() and not worker.stop(3000):
                 _abandon(worker)
@@ -2473,9 +2616,24 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _reveal(self) -> None:
+        """Bring the window back, whether it was minimised, hidden or closed."""
+        self.show()
         self.showNormal()
         self.raise_()
         self.activateWindow()
+
+    def quit_app(self) -> None:
+        """Leave for good, rather than hiding to the menu bar."""
+        self._quitting = True
+        self.close()
+        QApplication.quit()
+
+    def _hides_to_menu_bar(self) -> bool:
+        return (
+            self.settings.close_to_menu_bar
+            and self.settings.menu_bar_icon
+            and self.menu_bar.visible()
+        )
 
     def _toggle_agent(self, on: bool) -> None:
         """Keep scanning after the window closes, via a launchd agent."""
@@ -2565,6 +2723,7 @@ class MainWindow(QMainWindow):
          self.settings.table_state) = preserved
         self.settings.save()
         self.folder_plan = self.settings.folder_plan()
+        self.apply_appearance()
         self._rebuild_model_menu()
         self._toggle_menu_bar(self.settings.menu_bar_icon)
         self.set_schedule(self.settings.schedule_minutes)
@@ -2576,6 +2735,7 @@ class MainWindow(QMainWindow):
         if tab:
             dialog.tabs.setCurrentIndex(tab)
         if dialog.exec() != QDialog.DialogCode.Accepted:
+            self.apply_appearance()      # undo any live preview
             return
         new_settings = dialog.collect()
         try:
@@ -2967,7 +3127,10 @@ class MainWindow(QMainWindow):
         return False
 
     def _set_busy(self, busy: bool, message: str = "") -> None:
-        self.scan_button.setEnabled(not busy)
+        # The primary button becomes the stop button while work is running:
+        # the thing you want during a scan is always in the same place, and it
+        # cannot be greyed out at the moment you most want to press it.
+        self._set_scan_button(busy)
         self.apply_button.setEnabled(not busy and self.model.summary().approved > 0)
         self.progress.setVisible(busy)
         self.stop_button.setEnabled(busy)
