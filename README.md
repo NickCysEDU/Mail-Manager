@@ -13,7 +13,7 @@
 
 ![macOS 13+](https://img.shields.io/badge/macOS-13%2B-black)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue)
-![Tests](https://img.shields.io/badge/tests-1%2C267%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-1%2C289%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
 <img src="docs/screenshot.png" width="900" alt="The approval table, with a summary, category, destination folder and confidence score for every message">
@@ -239,12 +239,18 @@ being careful with it.
 
 ## Getting around
 
-- **✉︎ picker** — which mailboxes the next scan reads. Any combination.
-- **👁 picker** — which mailboxes' messages are on screen. A separate question:
-  pull six in and read them one at a time.
+- **Scan:** — which mailboxes the next scan reads. Any combination.
+- **Show:** — which mailboxes appear in the table, with Select all and Select
+  none. A separate question from scanning: pull six in and read them one at a
+  time. The Mailbox column shows each message's full address.
 - **Columns** — turn any column off. Remembered between launches.
 - **?** — a circled question mark in the corner. Switch it on and hovering
   anything explains it; switch it off and tooltips stay out of your way.
+
+Settings can be **exported to a text file** and imported again, from Settings →
+Appearance. It is plain JSON with a comment header, so it can be read and
+edited anywhere. No passwords or keys are in it: those stay in the Keychain and
+are entered again on the other Mac.
 
 ## Reading it comfortably
 
@@ -302,7 +308,7 @@ log. [Full details in SECURITY.md](SECURITY.md).
 
 ```bash
 ./dev demo      # the app with sample mail, no setup
-./dev test      # 1,267 tests, about 60 seconds
+./dev test      # 1,289 tests, about two minutes
 ./dev eval      # sorter accuracy against the labelled fixture
 ./dev fake      # the whole pipeline in the terminal, offline
 ```

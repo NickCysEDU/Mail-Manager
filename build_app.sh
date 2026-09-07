@@ -73,12 +73,31 @@ fi
 echo "==> Using $PYTHON_BIN ($("$PYTHON_BIN" --version))"
 
 # --- 2. Virtual environment --------------------------------------------------
-if [[ ! -d .venv ]]; then
-  echo "==> Creating .venv"
-  "$PYTHON_BIN" -m venv .venv
+# One environment per interpreter architecture. Reusing whichever .venv happens
+# to exist is how a universal interpreter still produces a single-architecture
+# app: the interpreter is chosen, and then quietly ignored in favour of the
+# environment already on disk.
+PY_ARCHS="$(lipo -archs "$PYTHON_BIN" 2>/dev/null | tr ' ' '-' || echo native)"
+case "$PY_ARCHS" in
+  *arm64*x86_64*|*x86_64*arm64*) VENV=".venv-universal" ;;
+  *) VENV=".venv" ;;
+esac
+
+if [[ -d "$VENV" ]]; then
+  EXISTING="$(cd "$VENV/bin" && ./python -c 'import sys; print(sys.base_prefix)' 2>/dev/null || true)"
+  WANTED="$("$PYTHON_BIN" -c 'import sys; print(sys.base_prefix)' 2>/dev/null || true)"
+  if [[ -n "$EXISTING" && -n "$WANTED" && "$EXISTING" != "$WANTED" ]]; then
+    echo "==> $VENV was built from a different interpreter; recreating it"
+    rm -rf "$VENV"
+  fi
 fi
+if [[ ! -d "$VENV" ]]; then
+  echo "==> Creating $VENV"
+  "$PYTHON_BIN" -m venv "$VENV"
+fi
+echo "==> Using $VENV ($PY_ARCHS)"
 # shellcheck disable=SC1091
-source .venv/bin/activate
+source "$VENV/bin/activate"
 python -m pip install --upgrade pip --quiet
 echo "==> Installing dependencies"
 python -m pip install --quiet -r requirements-dev.txt
@@ -137,9 +156,18 @@ if [[ "$IDENTITY" == "-" ]]; then
 else
   echo "==> Signing as “$IDENTITY”"
 fi
-codesign --force --deep --sign "$IDENTITY" --options runtime "$APP" 2>/dev/null || \
-  codesign --force --deep --sign "$IDENTITY" "$APP" 2>/dev/null || \
+# Deliberately without --options runtime. The hardened runtime turns on
+# library validation, which requires everything the process loads to carry the
+# same Team ID. A local certificate has no Team ID at all, so the app is denied
+# its own bundled Python and dies before it starts. The hardened runtime is
+# only needed for notarisation, which needs a paid Developer ID anyway.
+codesign --force --deep --sign "$IDENTITY" "$APP" 2>/dev/null || \
   echo "    (codesign unavailable — right-click → Open on first launch)"
+
+if ! "$APP/Contents/MacOS/Mail Manager" --self-test >/dev/null 2>&1; then
+  echo "    ! The signed bundle does not start. Re-signing ad-hoc." >&2
+  codesign --force --deep --sign - "$APP" 2>/dev/null || true
+fi
 xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
 
 SIZE="$(du -sh "$APP" | cut -f1)"

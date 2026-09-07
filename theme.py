@@ -19,10 +19,14 @@ needs one often does not need the other.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, Tuple
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QFont, QPalette
+from PySide6.QtCore import QPointF, Qt
+from PySide6.QtGui import (
+    QColor, QFont, QImage, QPainter, QPainterPath, QPalette, QPen,
+)
+from PySide6.QtWidgets import QProxyStyle, QStyle
 
 MODES: Tuple[Tuple[str, str], ...] = (
     ("system", "Match macOS"),
@@ -63,7 +67,7 @@ class Palette:
 #: Normal light. The accent is the Scan & Analyze blue, which is also the
 #: icon's colour, so the app reads as one thing.
 LIGHT = Palette(
-    window="#F4F5F7", surface="#FFFFFF", surface_alt="#F7F8FA",
+    window="#F4F5F7", surface="#FFFFFF", surface_alt="#EFF2F6",
     text="#15181D", text_dim="#5A626E", border="#D2D7DE",
     accent="#2F6FE0", accent_text="#FFFFFF",
     ok="#1F7A4C", warn="#9A6412", danger="#B23B32",
@@ -71,7 +75,7 @@ LIGHT = Palette(
 )
 
 DARK = Palette(
-    window="#1B1D21", surface="#232629", surface_alt="#26292D",
+    window="#1B1D21", surface="#232629", surface_alt="#2C3034",
     text="#ECEEF1", text_dim="#A2AAB5", border="#3A3F45",
     accent="#4A86EE", accent_text="#0B1220",
     ok="#4BBE84", warn="#E0A63C", danger="#E4756B",
@@ -81,7 +85,7 @@ DARK = Palette(
 #: High contrast keeps the hues but pushes the ends apart and darkens the
 #: supporting colours until they pass against their own background.
 LIGHT_HIGH = Palette(
-    window="#FFFFFF", surface="#FFFFFF", surface_alt="#EFEFEF",
+    window="#FFFFFF", surface="#FFFFFF", surface_alt="#E4E4E4",
     text="#000000", text_dim="#2E2E2E", border="#6B6B6B",
     accent="#0B4FBF", accent_text="#FFFFFF",
     ok="#0A5C34", warn="#6E4407", danger="#8E1F17",
@@ -89,7 +93,7 @@ LIGHT_HIGH = Palette(
 )
 
 DARK_HIGH = Palette(
-    window="#000000", surface="#0A0C0F", surface_alt="#15181C",
+    window="#000000", surface="#0A0C0F", surface_alt="#1E2228",
     text="#FFFFFF", text_dim="#D6DAE0", border="#8A929C",
     accent="#7FB2FF", accent_text="#000000",
     ok="#6FE3A6", warn="#FFC963", danger="#FF9A8E",
@@ -100,7 +104,7 @@ DARK_HIGH = Palette(
 #: every pairing is black on white or white on black. It is deliberately plain
 #: rather than pretty, because that is the point of it.
 LIGHT_MAX = Palette(
-    window="#FFFFFF", surface="#FFFFFF", surface_alt="#FFFFFF",
+    window="#FFFFFF", surface="#FFFFFF", surface_alt="#E8E8E8",
     text="#000000", text_dim="#000000", border="#000000",
     accent="#000000", accent_text="#FFFFFF",
     ok="#000000", warn="#000000", danger="#000000",
@@ -108,7 +112,7 @@ LIGHT_MAX = Palette(
 )
 
 DARK_MAX = Palette(
-    window="#000000", surface="#000000", surface_alt="#000000",
+    window="#000000", surface="#000000", surface_alt="#1C1C1C",
     text="#FFFFFF", text_dim="#FFFFFF", border="#FFFFFF",
     accent="#FFFFFF", accent_text="#000000",
     ok="#FFFFFF", warn="#FFFFFF", danger="#FFFFFF",
@@ -201,6 +205,11 @@ def stylesheet(colours: Palette, readable: bool = False, base_point: float = 13.
     stepper_half = (control_height + 2) // 2
     arrow = 5 if readable else 4
     drop_width = 30 if readable else 26
+    arrow_px = 14 if readable else 12
+    up_arrow = arrow_image(colours.text, "up", arrow_px)
+    down_arrow = arrow_image(colours.text, "down", arrow_px)
+    right_arrow = arrow_image(colours.text, "right", arrow_px)
+    dim_arrow = arrow_image(colours.text_dim, "down", arrow_px)
 
     return f"""
     QWidget {{ color: {colours.text}; }}
@@ -246,38 +255,29 @@ def stylesheet(colours: Palette, readable: bool = False, base_point: float = 13.
     QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {{
         background: {colours.accent};
     }}
-    QSpinBox::up-arrow, QDoubleSpinBox::up-arrow, QDateEdit::up-arrow {{
-        image: none;
-        width: 0; height: 0;
-        border-left: {arrow}px solid transparent;
-        border-right: {arrow}px solid transparent;
-        border-bottom: {arrow}px solid {colours.text};
+    QSpinBox::up-arrow, QDoubleSpinBox::up-arrow, QDateEdit::up-arrow,
+    QTimeEdit::up-arrow {{
+        image: url("{up_arrow}");
+        width: {arrow_px}px; height: {arrow_px}px;
     }}
-    QSpinBox::down-arrow, QDoubleSpinBox::down-arrow, QDateEdit::down-arrow {{
-        image: none;
-        width: 0; height: 0;
-        border-left: {arrow}px solid transparent;
-        border-right: {arrow}px solid transparent;
-        border-top: {arrow}px solid {colours.text};
+    QSpinBox::down-arrow, QDoubleSpinBox::down-arrow, QDateEdit::down-arrow,
+    QTimeEdit::down-arrow {{
+        image: url("{down_arrow}");
+        width: {arrow_px}px; height: {arrow_px}px;
     }}
-
-    /* Room for the arrow, and room around it. */
-    QComboBox {{ padding-right: {drop_width + 8}px; }}
-    QComboBox::drop-down {{
-        subcontrol-origin: padding; subcontrol-position: center right;
-        width: {drop_width}px;
-        border-left: {border}px solid {colours.border};
-        border-top-right-radius: {radius}px;
-        border-bottom-right-radius: {radius}px;
+    QSpinBox::up-arrow:disabled, QSpinBox::down-arrow:disabled,
+    QDoubleSpinBox::up-arrow:disabled, QDoubleSpinBox::down-arrow:disabled {{
+        image: url("{dim_arrow}");
     }}
     QComboBox::down-arrow {{
-        image: none;
-        width: 0; height: 0;
-        border-left: {arrow}px solid transparent;
-        border-right: {arrow}px solid transparent;
-        border-top: {arrow}px solid {colours.text};
+        image: url("{down_arrow}");
+        width: {arrow_px}px; height: {arrow_px}px;
     }}
-    QComboBox::down-arrow:on {{ margin-top: {arrow}px; }}
+    QComboBox::down-arrow:on {{ image: url("{up_arrow}"); }}
+    QToolButton::menu-indicator {{ image: url("{down_arrow}"); }}
+    QHeaderView::down-arrow {{ image: url("{down_arrow}"); width: 12px; height: 12px; }}
+    QHeaderView::up-arrow {{ image: url("{up_arrow}"); width: 12px; height: 12px; }}
+    QMenu::right-arrow {{ image: url("{right_arrow}"); width: 12px; height: 12px; }}
     QComboBox QAbstractItemView {{
         border: {border}px solid {colours.border};
         background: {colours.surface};
@@ -379,6 +379,112 @@ def stylesheet(colours: Palette, readable: bool = False, base_point: float = 13.
     """
 
 
+class ArrowStyle(QProxyStyle):
+    """Draws the little arrows, instead of leaving them to the stylesheet.
+
+    A stylesheet can only describe an arrow as a border triangle or a bitmap.
+    The triangle renders as a filled rectangle in a spin box, and a bitmap
+    cannot follow the palette or the display's scale factor. Drawing them is
+    both smaller and better: a chevron, in the current text colour, crisp at
+    any size.
+    """
+
+    ARROWS = {
+        QStyle.PrimitiveElement.PE_IndicatorArrowDown: 180,
+        QStyle.PrimitiveElement.PE_IndicatorArrowUp: 0,
+        QStyle.PrimitiveElement.PE_IndicatorArrowLeft: 90,
+        QStyle.PrimitiveElement.PE_IndicatorArrowRight: 270,
+        QStyle.PrimitiveElement.PE_IndicatorSpinDown: 180,
+        QStyle.PrimitiveElement.PE_IndicatorSpinUp: 0,
+    }
+
+    def drawPrimitive(self, element, option, painter, widget=None):  # noqa: N802
+        angle = self.ARROWS.get(element)
+        if angle is None:
+            super().drawPrimitive(element, option, painter, widget)
+            return
+
+        rect = option.rect
+        if rect.width() <= 2 or rect.height() <= 2:
+            return
+        # A chevron rather than a filled triangle: lighter, and it matches the
+        # rest of the system's iconography.
+        side = min(rect.width(), rect.height()) * 0.42
+        centre = QPointF(rect.center()) + QPointF(0.5, 0.5)
+
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.translate(centre)
+        painter.rotate(angle)
+
+        colour = option.palette.color(QPalette.ColorRole.ButtonText)
+        if not (option.state & QStyle.StateFlag.State_Enabled):
+            colour.setAlpha(110)
+        pen = QPen(colour, max(1.3, side * 0.30))
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        half = side * 0.62
+        path = QPainterPath()
+        path.moveTo(-half, -half * 0.42)
+        path.lineTo(0.0, half * 0.46)
+        path.lineTo(half, -half * 0.42)
+        painter.drawPath(path)
+        painter.restore()
+
+
+#: Rendered chevrons, cached by colour and size. A stylesheet can only point
+#: at an image for a sub-control it has styled - it will not call back into
+#: the style - so the arrows on spin boxes and combo boxes have to exist as
+#: files. They are drawn here rather than shipped so they follow the palette.
+_ARROW_CACHE: Dict[Tuple[str, str, int], str] = {}
+
+
+def arrow_image(colour: str, direction: str = "down", size: int = 16) -> str:
+    """Path to a chevron of this colour and direction, drawn on first use."""
+    key = (colour, direction, size)
+    cached = _ARROW_CACHE.get(key)
+    if cached and Path(cached).is_file():
+        return cached
+
+    from PySide6.QtCore import QStandardPaths
+
+    scale = 2                                  # crisp on a Retina display
+    pixels = size * scale
+    image = QImage(pixels, pixels, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(Qt.GlobalColor.transparent)
+
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    painter.translate(pixels / 2.0, pixels / 2.0)
+    painter.rotate({"down": 180, "up": 0, "left": 90, "right": 270}.get(direction, 180))
+
+    pen = QPen(QColor(colour), max(1.4, pixels * 0.115))
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+
+    reach = pixels * 0.27
+    path = QPainterPath()
+    path.moveTo(-reach, reach * 0.45)
+    path.lineTo(0.0, -reach * 0.5)
+    path.lineTo(reach, reach * 0.45)
+    painter.drawPath(path)
+    painter.end()
+
+    cache_root = QStandardPaths.writableLocation(
+        QStandardPaths.StandardLocation.CacheLocation) or "/tmp"
+    folder = Path(cache_root) / "arrows"
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / f"{direction}-{colour.lstrip('#')}-{size}.png"
+    image.save(str(target), "PNG")
+    _ARROW_CACHE[key] = str(target)
+    return str(target)
+
+
 def base_font(app, readable: bool) -> QFont:
     """Type large enough to read without leaning in."""
     font = QFont(app.font())
@@ -396,6 +502,8 @@ def apply(app, mode: str = "system", contrast: str = "normal",
           readable: bool = False) -> Palette:
     """Paint the whole application. Returns the palette that was used."""
     colours = resolve(app, mode, contrast)
+    if not isinstance(app.style(), ArrowStyle):
+        app.setStyle(ArrowStyle(app.style()))
     app.setPalette(build_palette(colours))
     app.setFont(base_font(app, readable))
     app.setStyleSheet(stylesheet(colours, readable))

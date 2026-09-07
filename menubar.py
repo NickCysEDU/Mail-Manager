@@ -115,7 +115,9 @@ class MenuBarController(QObject):
         if self.tray is None:
             self.tray = QSystemTrayIcon(menu_bar_icon(), self)
             self.tray.setToolTip(APP_DISPLAY_NAME)
-            self.tray.activated.connect(self._activated)
+            # Deliberately not connected to activated: the click already opens
+            # the menu, and opening the window as well is the opposite of what
+            # a menu bar item is for. "Open Mail Manager" is in the menu.
             self._menu = QMenu()
             self.tray.setContextMenu(self._menu)
         self.rebuild(schedule_minutes)
@@ -257,5 +259,10 @@ class MenuBarController(QObject):
             self.tray.showMessage(title, message, menu_bar_icon(), 5000)
 
     def _activated(self, reason) -> None:
-        if reason == QSystemTrayIcon.ActivationReason.Trigger:
-            self.openRequested.emit()
+        """Kept for completeness; nothing is wired to it deliberately.
+
+        A left click already drops the menu down. Emitting openRequested here
+        as well meant every click hauled the whole window to the front, which
+        defeats the point of having a menu bar item at all.
+        """
+        return
