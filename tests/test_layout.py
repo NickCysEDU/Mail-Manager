@@ -123,7 +123,7 @@ class TestWindowAtEverySize:
         window.resize(*size)
         qapp.processEvents()
         for button in (window.scan_button, window.apply_button,
-                       window.stop_button, window.model_button):
+                       window.model_button):
             geometry = button.geometry()
             parent = button.parentWidget()
             assert geometry.right() <= parent.width() + 1, (

@@ -188,11 +188,19 @@ def build_palette(colours: Palette) -> QPalette:
 
 def stylesheet(colours: Palette, readable: bool = False, base_point: float = 13.0) -> str:
     """The parts a palette cannot express: spacing, borders, focus rings."""
-    pad = "9px 14px" if readable else "6px 11px"
+    pad = "10px 18px" if readable else "8px 15px"
     radius = 7
-    row_pad = "7px" if readable else "3px"
+    row_pad = "8px" if readable else "6px"
     border = 2 if colours.dark or readable else 1
     focus = 3 if readable else 2
+    # Steppers and drop-downs sized to be hit rather than aimed at. Apple's own
+    # guidance puts the smallest comfortable target at 28 points; Qt's defaults
+    # for these are closer to twelve.
+    control_height = 30 if readable else 26
+    stepper = 26 if readable else 22
+    stepper_half = (control_height + 2) // 2
+    arrow = 5 if readable else 4
+    drop_width = 30 if readable else 26
 
     return f"""
     QWidget {{ color: {colours.text}; }}
@@ -210,7 +218,78 @@ def stylesheet(colours: Palette, readable: bool = False, base_point: float = 13.
         selection-background-color: {colours.selection};
         selection-color: {colours.selection_text};
     }}
-    QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QDateEdit {{ padding: {row_pad} 8px; }}
+    QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QDateEdit {{
+        padding: {row_pad} 10px;
+        min-height: {control_height}px;
+    }}
+
+    /* Steppers. Qt's default arrows are about six pixels tall, which is a
+       hard thing to hit and a harder thing to see. */
+    QSpinBox::up-button, QDoubleSpinBox::up-button,
+    QDateEdit::up-button, QTimeEdit::up-button {{
+        subcontrol-origin: border; subcontrol-position: top right;
+        width: {stepper}px; height: {stepper_half}px;
+        border-left: {border}px solid {colours.border};
+        border-bottom: {border}px solid {colours.border};
+        border-top-right-radius: {radius}px;
+        background: {colours.window};
+    }}
+    QSpinBox::down-button, QDoubleSpinBox::down-button,
+    QDateEdit::down-button, QTimeEdit::down-button {{
+        subcontrol-origin: border; subcontrol-position: bottom right;
+        width: {stepper}px; height: {stepper_half}px;
+        border-left: {border}px solid {colours.border};
+        border-bottom-right-radius: {radius}px;
+        background: {colours.window};
+    }}
+    QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+    QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {{
+        background: {colours.accent};
+    }}
+    QSpinBox::up-arrow, QDoubleSpinBox::up-arrow, QDateEdit::up-arrow {{
+        image: none;
+        width: 0; height: 0;
+        border-left: {arrow}px solid transparent;
+        border-right: {arrow}px solid transparent;
+        border-bottom: {arrow}px solid {colours.text};
+    }}
+    QSpinBox::down-arrow, QDoubleSpinBox::down-arrow, QDateEdit::down-arrow {{
+        image: none;
+        width: 0; height: 0;
+        border-left: {arrow}px solid transparent;
+        border-right: {arrow}px solid transparent;
+        border-top: {arrow}px solid {colours.text};
+    }}
+
+    /* Room for the arrow, and room around it. */
+    QComboBox {{ padding-right: {drop_width + 8}px; }}
+    QComboBox::drop-down {{
+        subcontrol-origin: padding; subcontrol-position: center right;
+        width: {drop_width}px;
+        border-left: {border}px solid {colours.border};
+        border-top-right-radius: {radius}px;
+        border-bottom-right-radius: {radius}px;
+    }}
+    QComboBox::down-arrow {{
+        image: none;
+        width: 0; height: 0;
+        border-left: {arrow}px solid transparent;
+        border-right: {arrow}px solid transparent;
+        border-top: {arrow}px solid {colours.text};
+    }}
+    QComboBox::down-arrow:on {{ margin-top: {arrow}px; }}
+    QComboBox QAbstractItemView {{
+        border: {border}px solid {colours.border};
+        background: {colours.surface};
+        padding: 4px;
+    }}
+
+    /* The same for a tool button that opens a menu, so the caret is not
+       jammed against the label. */
+    QToolButton::menu-indicator {{
+        subcontrol-origin: padding; subcontrol-position: center right;
+        width: {drop_width}px;
+    }}
 
     QAbstractItemView {{
         alternate-background-color: {colours.surface_alt};

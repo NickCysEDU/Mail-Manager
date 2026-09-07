@@ -1,0 +1,118 @@
+"""A help mode that puts tooltips back where they belong.
+
+Qt shows a tooltip after a fixed delay whether or not anybody wanted one, and
+on a dense window that is mostly noise. This makes it deliberate: a circled
+question mark in the corner, filled when it is on, and while it is on every
+control explains itself after a short hover.
+
+The toggle also lengthens the delay and the time on screen, because the point
+of turning it on is that you are reading rather than working.
+"""
+
+from __future__ import annotations
+
+from typing import Optional
+
+from PySide6.QtCore import QEvent, QObject, QPoint, Qt
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PySide6.QtWidgets import QToolButton, QToolTip, QWidget
+
+#: How long a hover has to last before an explanation appears, in milliseconds.
+HOVER_DELAY = 600
+#: How long it stays there. Long enough to finish a sentence twice.
+VISIBLE_FOR = 20000
+
+
+class HelpButton(QToolButton):
+    """A question mark in a circle: outlined when off, filled when on."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setAutoRaise(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedSize(26, 26)
+        self.setText("")
+        self._sync_text()
+        self.toggled.connect(lambda _on: self._sync_text())
+
+    def _sync_text(self) -> None:
+        on = self.isChecked()
+        self.setToolTip(
+            "Help is on. Hover anything for a moment and it will explain "
+            "itself. Click to turn it off."
+            if on else
+            "Turn on help. Hovering anything then explains what it does."
+        )
+        self.setAccessibleName("Help" + (" (on)" if on else ""))
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        colour = self.palette().color(
+            self.palette().ColorRole.Highlight if self.isChecked()
+            else self.palette().ColorRole.WindowText
+        )
+        box = self.rect().adjusted(3, 3, -3, -3)
+
+        if self.isChecked():
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(colour)
+            painter.drawEllipse(box)
+            ink = self.palette().color(self.palette().ColorRole.HighlightedText)
+        else:
+            pen = QPen(colour, 1.6)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(box)
+            ink = colour
+
+        font = self.font()
+        font.setPointSizeF(max(9.0, font.pointSizeF()))
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(ink)
+        painter.drawText(box, int(Qt.AlignmentFlag.AlignCenter), "?")
+        painter.end()
+
+
+class HelpFilter(QObject):
+    """While help is on, show a widget's tooltip after a deliberate hover."""
+
+    def __init__(self, parent: Optional[QObject] = None) -> None:
+        super().__init__(parent)
+        self.enabled = False
+
+    def set_enabled(self, on: bool) -> None:
+        self.enabled = bool(on)
+        if not self.enabled:
+            QToolTip.hideText()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
+        if not self.enabled or event.type() != QEvent.Type.ToolTip:
+            return False
+        widget = watched if isinstance(watched, QWidget) else None
+        if widget is None:
+            return False
+        text = widget.toolTip()
+        if not text:
+            # Nothing of its own to say; the parent might.
+            parent = widget.parentWidget()
+            text = parent.toolTip() if parent is not None else ""
+        if not text:
+            return False
+        QToolTip.showText(event.globalPos(), text, widget,
+                          widget.rect(), VISIBLE_FOR)
+        return True
+
+
+def install(app, on: bool) -> HelpFilter:
+    """Attach the filter to an application and set the hover delay."""
+    existing = getattr(app, "_help_filter", None)
+    if existing is None:
+        existing = HelpFilter(app)
+        app.installEventFilter(existing)
+        app._help_filter = existing
+    existing.set_enabled(on)
+    return existing

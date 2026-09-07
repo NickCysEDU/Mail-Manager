@@ -8,12 +8,13 @@ import logging
 import os
 import subprocess
 import sys
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import (
+    QUrl,
     QAbstractTableModel,
     QThread,
     QByteArray,
@@ -91,7 +92,7 @@ from config import (
     Settings,
     log_dir,
 )
-from imap_engine import MoveReport
+from imap_engine import MovePlan, MoveReport
 from models import (
     APP_DISPLAY_NAME,
     APP_VERSION,
@@ -109,10 +110,16 @@ from models import (
     resolve_window,
 )
 from flowlayout import FlowLayout, Spacer
+import accounts
+import autoreply
+import helpmode
+import ondevice
 import theme
+from accounts import Account
 from menubar import MenuBarController
 from welcome import SetupWizard
 from workers import (
+    ReplyWorker,
     ApplyWorker,
     ConnectionTestWorker,
     ScanOutcome,
@@ -449,6 +456,10 @@ class TriageFilterProxy(QSortFilterProxyModel):
         self._category: Optional[str] = None
         self._hide_non_job = False
         self._only_selected = False
+        #: Empty means every mailbox. Filtering the view is separate from
+        #: choosing what to scan: you can pull six mailboxes in and then read
+        #: them one at a time.
+        self._accounts: set = set()
 
     def set_text_filter(self, text: str) -> None:
         self._text = (text or "").strip().lower()
@@ -460,6 +471,10 @@ class TriageFilterProxy(QSortFilterProxyModel):
 
     def set_hide_non_job(self, hide: bool) -> None:
         self._hide_non_job = bool(hide)
+        self.invalidate()
+
+    def set_account_filter(self, account_ids) -> None:
+        self._accounts = set(account_ids or ())
         self.invalidate()
 
     def set_only_selected(self, only: bool) -> None:
@@ -474,6 +489,8 @@ class TriageFilterProxy(QSortFilterProxyModel):
         if item is None:
             return False
         if self._hide_non_job and not item.classification.is_job_related:
+            return False
+        if self._accounts and item.email.account_id not in self._accounts:
             return False
         if self._only_selected and not item.approved:
             return False
@@ -974,12 +991,18 @@ class SettingsDialog(QDialog):
         self._worker: Optional[ConnectionTestWorker] = None
         self._loading_models = False
         self._provider_seen = ""
+        #: Working copies. Nothing is written until OK.
+        self._accounts: List[Account] = []
+        self._account_index = 0
+        self._account_passwords: Dict[str, str] = {}
+        self._removed_accounts: List[Account] = []
 
         self.tabs = QTabWidget()
         # Each tab scrolls, so no amount of text can be cut off at any size.
-        self.tabs.addTab(_scrollable(self._build_account_tab()), "Account")
+        self.tabs.addTab(_scrollable(self._build_account_tab()), "Mailboxes")
         self.tabs.addTab(_scrollable(self._build_ai_tab()), "Analysis")
         self.tabs.addTab(_scrollable(self._build_folders_tab()), "Folders")
+        self.tabs.addTab(_scrollable(self._build_reply_tab()), "Auto Reply")
         self.tabs.addTab(_scrollable(self._build_appearance_tab()), "Appearance")
 
         self.buttons = QDialogButtonBox(
@@ -1000,16 +1023,57 @@ class SettingsDialog(QDialog):
 
     # -- tabs ------------------------------------------------------------
     def _build_account_tab(self) -> QWidget:
+        """Every mailbox, not just the first one.
+
+        The app began with one iCloud account described by a handful of flat
+        fields. This is a list instead: pick a provider, type an address, paste
+        an app password. Everything below the address is filled in from the
+        provider and only matters if it is wrong.
+        """
         page = QWidget()
-        form = QFormLayout(page)
+        outer = QVBoxLayout(page)
+
+        # -- which mailbox is being edited --------------------------------
+        picker_row = QHBoxLayout()
+        self.account_list = QComboBox()
+        self.account_list.setMinimumWidth(260)
+        self.account_list.currentIndexChanged.connect(self._account_selected)
+        picker_row.addWidget(QLabel("Mailbox"))
+        picker_row.addWidget(self.account_list, 1)
+
+        self.add_account_button = QToolButton()
+        self.add_account_button.setText("Add")
+        self.add_account_button.setToolTip("Add another mailbox")
+        self.add_account_button.clicked.connect(self._add_account)
+        picker_row.addWidget(self.add_account_button)
+
+        self.remove_account_button = QToolButton()
+        self.remove_account_button.setText("Remove")
+        self.remove_account_button.setToolTip(
+            "Forget this mailbox. Nothing in it is touched, and its password "
+            "is removed from the Keychain."
+        )
+        self.remove_account_button.clicked.connect(self._remove_account)
+        picker_row.addWidget(self.remove_account_button)
+        outer.addLayout(picker_row)
+        outer.addWidget(_separator())
+
+        form = QFormLayout()
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
+        self.preset_combo = QComboBox()
+        for name, label in accounts.choices():
+            self.preset_combo.addItem(label, name)
+        self.preset_combo.currentIndexChanged.connect(self._preset_changed)
+        form.addRow("Provider", self.preset_combo)
+
         self.email_edit = QLineEdit()
-        self.email_edit.setPlaceholderText("you@icloud.com")
+        self.email_edit.setPlaceholderText("you@example.com")
+        self.email_edit.editingFinished.connect(self._address_entered)
+        form.addRow("Email address", self.email_edit)
 
         self.password_edit = QLineEdit()
         self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.password_edit.setPlaceholderText("app-specific password (xxxx-xxxx-xxxx-xxxx)")
         reveal = QToolButton()
         reveal.setText("Show")
         reveal.setCheckable(True)
@@ -1018,58 +1082,208 @@ class SettingsDialog(QDialog):
                 QLineEdit.EchoMode.Normal if on else QLineEdit.EchoMode.Password
             )
         )
+        self.get_password_button = QToolButton()
+        self.get_password_button.setText("Get one…")
+        self.get_password_button.clicked.connect(self._open_password_page)
         password_row = QHBoxLayout()
         password_row.addWidget(self.password_edit, 1)
         password_row.addWidget(reveal)
+        password_row.addWidget(self.get_password_button)
+        self.password_label = QLabel("App password")
+        form.addRow(self.password_label, password_row)
 
+        self.provider_note = QLabel()
+        self.provider_note.setWordWrap(True)
+        self.provider_note.setOpenExternalLinks(True)
+        self.provider_note.setProperty("dim", "true")
+        form.addRow("", self.provider_note)
+
+        self.account_label_edit = QLineEdit()
+        self.account_label_edit.setPlaceholderText("shown in the table and menus")
+        form.addRow("Name", self.account_label_edit)
+
+        self.account_enabled = QCheckBox("Include this mailbox in scans")
+        self.account_enabled.setChecked(True)
+        form.addRow("", self.account_enabled)
+
+        form.addRow(_separator())
         self.host_edit = QLineEdit()
         self.port_spin = QSpinBox()
         self.port_spin.setRange(1, 65535)
         self.mailbox_edit = QLineEdit()
-
         self.connections_spin = QSpinBox()
         self.connections_spin.setRange(1, 8)
-        self.connections_spin.setToolTip(
-            "Parallel IMAP connections used while downloading. iCloud spends about "
-            "the same server time per message whatever its size, and that cost "
-            "parallelises: four connections fetch roughly 2.6× faster than one."
-        )
         self.fetch_kb_spin = QSpinBox()
         self.fetch_kb_spin.setRange(8, 4096)
-        self.fetch_kb_spin.setSingleStep(16)
         self.fetch_kb_spin.setSuffix(" KB")
-        self.fetch_kb_spin.setToolTip(
-            "How much of each message to download. Attachments sit after the text "
-            "in every real MIME layout, so a partial fetch keeps what is read and "
-            "skips the payload. Raise it if long messages look cut off."
-        )
 
-        self.test_imap_button = QPushButton("Test iCloud connection")
+        self.test_imap_button = QPushButton("Test connection")
         self.test_imap_button.clicked.connect(lambda: self._run_test("imap"))
         test_row = QHBoxLayout()
         test_row.addWidget(self.test_imap_button)
         test_row.addStretch(1)
 
-        form.addRow("iCloud email", self.email_edit)
-        form.addRow("App-specific password", password_row)
-        form.addRow(_separator())
         form.addRow("IMAP host", self.host_edit)
         form.addRow("IMAP port", self.port_spin)
         form.addRow("Mailbox to scan", self.mailbox_edit)
         form.addRow("Parallel connections", self.connections_spin)
         form.addRow("Download per message", self.fetch_kb_spin)
         form.addRow(test_row)
+        outer.addLayout(form)
 
         note = QLabel(
-            "Secrets are stored in the macOS Keychain (service “iCloud Job Triage”), "
-            "never in a file. Generate an app-specific password at "
-            "<a href='https://account.apple.com'>account.apple.com</a>, then Sign-In and Security; "
-            "iCloud rejects your normal Apple ID password over IMAP."
+            "Passwords are stored in the macOS Keychain, never in a file. Every "
+            "provider here wants an app password rather than the one you sign "
+            "in with, which is a good thing: it can be revoked on its own "
+            "without changing anything else."
         )
         note.setWordWrap(True)
-        note.setOpenExternalLinks(True)
-        form.addRow(note)
+        note.setProperty("dim", "true")
+        outer.addWidget(note)
+        outer.addStretch(1)
         return page
+
+    # -- the mailbox list -------------------------------------------------
+    def _load_accounts(self, settings: Settings) -> None:
+        """Take a working copy of the mailbox list, editable until OK."""
+        self._accounts: List[Account] = [replace(a) for a in settings.accounts]
+        if not self._accounts:
+            self._accounts = [replace(settings.primary_account)]
+        self._account_index = 0
+        self._refresh_account_list()
+
+    def _refresh_account_list(self) -> None:
+        self.account_list.blockSignals(True)
+        self.account_list.clear()
+        for account in self._accounts:
+            self.account_list.addItem(
+                account.describe() if account.address else "(new mailbox)")
+        self.account_list.setCurrentIndex(
+            min(self._account_index, len(self._accounts) - 1))
+        self.account_list.blockSignals(False)
+        self.remove_account_button.setEnabled(len(self._accounts) > 1)
+        self._show_account(self._account_index)
+
+    def _show_account(self, index: int) -> None:
+        if not (0 <= index < len(self._accounts)):
+            return
+        account = self._accounts[index]
+        self._account_index = index
+        for widget in (self.preset_combo, self.email_edit, self.host_edit,
+                       self.port_spin, self.mailbox_edit, self.connections_spin,
+                       self.account_label_edit, self.account_enabled):
+            widget.blockSignals(True)
+        self.preset_combo.setCurrentIndex(
+            max(0, self.preset_combo.findData(account.preset)))
+        self.email_edit.setText(account.address)
+        self.host_edit.setText(account.host)
+        self.port_spin.setValue(account.port)
+        self.mailbox_edit.setText(account.source_mailbox)
+        self.connections_spin.setValue(account.connections)
+        self.account_label_edit.setText(account.label)
+        self.account_enabled.setChecked(account.enabled)
+        for widget in (self.preset_combo, self.email_edit, self.host_edit,
+                       self.port_spin, self.mailbox_edit, self.connections_spin,
+                       self.account_label_edit, self.account_enabled):
+            widget.blockSignals(False)
+        try:
+            self.password_edit.setText(
+                self._store.get_mailbox_password(account.address))
+        except CredentialError:
+            self.password_edit.clear()
+        self._describe_preset(account.preset)
+
+    def _capture_account(self) -> None:
+        """Fold the form back into the mailbox it belongs to."""
+        if not (0 <= self._account_index < len(self._accounts)):
+            return
+        account = self._accounts[self._account_index]
+        account.preset = self.preset_combo.currentData() or "custom"
+        account.address = self.email_edit.text().strip()
+        account.host = self.host_edit.text().strip()
+        account.port = self.port_spin.value()
+        account.source_mailbox = self.mailbox_edit.text().strip() or "INBOX"
+        account.connections = self.connections_spin.value()
+        account.label = self.account_label_edit.text().strip()
+        account.enabled = self.account_enabled.isChecked()
+        self._account_passwords[account.address] = self.password_edit.text()
+
+    def _account_selected(self, index: int) -> None:
+        self._capture_account()
+        self._show_account(index)
+
+    def _add_account(self) -> None:
+        self._capture_account()
+        self._accounts.append(Account())
+        self._account_index = len(self._accounts) - 1
+        self._refresh_account_list()
+        self.preset_combo.setFocus()
+
+    def _remove_account(self) -> None:
+        if len(self._accounts) <= 1:
+            return
+        going = self._accounts[self._account_index]
+        if going.address and QMessageBox.question(
+            self, "Remove mailbox",
+            f"Stop scanning {going.address}?\n\nNothing in the mailbox is "
+            "touched. Its password is removed from the Keychain.",
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        self._removed_accounts.append(going)
+        del self._accounts[self._account_index]
+        self._account_index = max(0, self._account_index - 1)
+        self._refresh_account_list()
+
+    def _preset_changed(self) -> None:
+        name = self.preset_combo.currentData() or "custom"
+        spec = accounts.host_for(name)
+        if spec.host:
+            self.host_edit.setText(spec.host)
+            self.port_spin.setValue(spec.port)
+        self._describe_preset(name)
+        # Picking a provider before typing an address should not leave the
+        # provider's name behind as the mailbox's name.
+        placeholder = {label for _n, label in accounts.choices()}
+        if self.account_label_edit.text().strip() in placeholder:
+            address = self.email_edit.text().strip()
+            self.account_label_edit.setText(address.split("@")[0] if address else "")
+
+    def _address_entered(self) -> None:
+        """Fill in the server from the domain, unless it is already set."""
+        address = self.email_edit.text().strip()
+        if not address:
+            return
+        guessed = accounts.host_for_address(address)
+        current = self.preset_combo.currentData() or "custom"
+        if current == "custom" and not guessed.is_custom:
+            self.preset_combo.setCurrentIndex(
+                max(0, self.preset_combo.findData(guessed.name)))
+        # A name the user has not chosen is either blank or whatever the
+        # provider was called before an address was typed; both get replaced.
+        current_label = self.account_label_edit.text().strip()
+        placeholder = {label for _name, label in accounts.choices()}
+        if not current_label or current_label in placeholder:
+            self.account_label_edit.setText(address.split("@")[0])
+
+    def _describe_preset(self, name: str) -> None:
+        spec = accounts.host_for(name)
+        self.password_label.setText(spec.secret_label)
+        self.get_password_button.setVisible(bool(spec.help_url))
+        self.get_password_button.setToolTip(
+            f"Open {spec.help_url}" if spec.help_url else "")
+        self.password_edit.setPlaceholderText(spec.secret_label.lower())
+        parts = []
+        if spec.note:
+            parts.append(_html(spec.note))
+        if spec.help_url:
+            parts.append(f"<a href='{spec.help_url}'>{_html(spec.help_url)}</a>")
+        self.provider_note.setText("<br>".join(parts))
+        self.provider_note.setVisible(bool(parts))
+
+    def _open_password_page(self) -> None:
+        spec = accounts.host_for(self.preset_combo.currentData() or "custom")
+        if spec.help_url:
+            QDesktopServices.openUrl(QUrl(spec.help_url))
 
     def _build_ai_tab(self) -> QWidget:
         page = QWidget()
@@ -1083,7 +1297,17 @@ class SettingsDialog(QDialog):
 
         self.provider_blurb = QLabel()
         self.provider_blurb.setWordWrap(True)
-        self.provider_blurb.setStyleSheet("opacity:0.8")
+        self.provider_blurb.setProperty("dim", "true")
+
+        # Shown only for the on-device backend, and only when it needs setting
+        # up. The equivalent of "get one" beside an API key field.
+        self.ollama_note = QLabel()
+        self.ollama_note.setWordWrap(True)
+        self.ollama_note.setOpenExternalLinks(True)
+        self.ollama_note.setVisible(False)
+        self.ollama_button = QPushButton("Install Ollama")
+        self.ollama_button.setVisible(False)
+        self.ollama_button.clicked.connect(self._do_ollama_step)
 
         self.model_combo = QComboBox()
         self.model_combo.setEditable(True)
@@ -1184,6 +1408,11 @@ class SettingsDialog(QDialog):
 
         form.addRow("Model backend", self.provider_combo)
         form.addRow("", self.provider_blurb)
+        form.addRow("", self.ollama_note)
+        ollama_row = QHBoxLayout()
+        ollama_row.addWidget(self.ollama_button)
+        ollama_row.addStretch(1)
+        form.addRow("", ollama_row)
         form.addRow("Model", self.model_combo)
         form.addRow("", self.model_note)
         form.addRow(self.key_label, self.key_row_widget)
@@ -1207,6 +1436,103 @@ class SettingsDialog(QDialog):
         note.setWordWrap(True)
         form.addRow(note)
         return page
+
+    # -- the on-device backend needs software, not a key -------------------
+    def _refresh_ollama_panel(self, spec) -> None:
+        """Say what is missing for the on-device backend, and offer to fix it."""
+        if not hasattr(self, "ollama_note"):
+            return
+        if not getattr(spec, "on_device", False):
+            self.ollama_note.setVisible(False)
+            self.ollama_button.setVisible(False)
+            return
+
+        state = ondevice.status(self.base_url_edit.text().strip() or ondevice.DEFAULT_ENDPOINT)
+        self._ollama_state = state
+        self.ollama_note.setVisible(True)
+        step = state.next_step()
+
+        if not step:
+            self.ollama_note.setText(
+                f"{_html(state.describe())} Installed models: "
+                f"{_html(', '.join(state.models[:6]))}"
+            )
+            self.ollama_button.setVisible(False)
+            return
+
+        if step == "install":
+            command = ondevice.install_command()
+            if command:
+                self.ollama_note.setText(
+                    "Ollama is not installed. It runs a model on this Mac, so "
+                    "nothing leaves it and there is nothing to pay for. "
+                    "Homebrew is available, so this can install it for you."
+                )
+                self.ollama_button.setText("Install Ollama")
+            else:
+                self.ollama_note.setText(
+                    "Ollama is not installed. It runs a model on this Mac, so "
+                    "nothing leaves it and there is nothing to pay for. "
+                    f"Download it from <a href='{ondevice.DOWNLOAD_URL}'>"
+                    f"{ondevice.DOWNLOAD_URL}</a>, then come back here."
+                )
+                self.ollama_button.setText("Open the download page")
+        elif step == "start":
+            self.ollama_note.setText(
+                "Ollama is installed but its server is not answering on "
+                f"{_html(self.base_url_edit.text().strip() or ondevice.DEFAULT_ENDPOINT)}."
+            )
+            self.ollama_button.setText("Start Ollama")
+        else:
+            model = self._chosen_model() or "llama3.2:3b"
+            self.ollama_note.setText(
+                f"Ollama is running but has no models. {_html(model)} needs to be "
+                "downloaded once, which is a couple of gigabytes."
+            )
+            self.ollama_button.setText(f"Download {model}")
+        self.ollama_button.setVisible(True)
+
+    def _do_ollama_step(self) -> None:
+        """Run whichever step the panel is currently offering."""
+        state = getattr(self, "_ollama_state", None) or ondevice.status()
+        step = state.next_step()
+        if step == "install" and not ondevice.install_command():
+            QDesktopServices.openUrl(QUrl(ondevice.DOWNLOAD_URL))
+            return
+
+        command = {
+            "install": ondevice.install_command,
+            "start": ondevice.start_command,
+        }.get(step, lambda: ondevice.pull_command(self._chosen_model() or "llama3.2:3b"))()
+        if not command:
+            self.status.setText("Nothing to run for that step.")
+            return
+
+        if step == "start":
+            # serve does not return, so it is launched rather than waited on.
+            try:
+                subprocess.Popen(command, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+            except OSError as exc:
+                self.status.setText(f"Could not start Ollama: {exc}")
+                return
+            self.status.setText("Starting Ollama… give it a few seconds, then test.")
+            QTimer.singleShot(4000, lambda: self._refresh_ollama_panel(
+                providers.provider_class(self.provider_combo.currentData() or "ollama")))
+            return
+
+        self.ollama_button.setEnabled(False)
+        self.status.setText(f"Running: {' '.join(command)} — this can take a while.")
+        QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
+        try:
+            ok, output = ondevice.run(command)
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.ollama_button.setEnabled(True)
+        tail = output.strip().splitlines()[-1] if output.strip() else ""
+        self.status.setText(("Done. " if ok else "That did not work: ") + tail[:160])
+        self._refresh_ollama_panel(
+            providers.provider_class(self.provider_combo.currentData() or "ollama"))
 
     def _provider_changed(self) -> None:
         """Repopulate the model list and show only the fields this backend uses."""
@@ -1249,6 +1575,8 @@ class SettingsDialog(QDialog):
                 self.api_key_edit.clear()
         else:
             self.api_key_edit.clear()
+
+        self._refresh_ollama_panel(spec)
 
         self.base_url_label.setVisible(bool(spec.supports_base_url))
         self.base_url_edit.setVisible(bool(spec.supports_base_url))
@@ -1363,6 +1691,197 @@ class SettingsDialog(QDialog):
             price = ""
         self.model_note.setText(" · ".join(part for part in (note, price) if part))
 
+    def _build_reply_tab(self) -> QWidget:
+        """Rules that draft a reply. Nothing here ever sends anything."""
+        page = QWidget()
+        outer = QVBoxLayout(page)
+
+        headline = QLabel(
+            "<b>Replies are drafted, never sent.</b> A matching message gets a "
+            "reply written into your Drafts mailbox, threaded correctly, for "
+            "you to read and send yourself. Nothing leaves your account without "
+            "you pressing send in your mail app."
+        )
+        headline.setWordWrap(True)
+        outer.addWidget(headline)
+
+        self.auto_reply_check = QCheckBox("Draft replies after a scan")
+        outer.addWidget(self.auto_reply_check)
+
+        signature_row = QHBoxLayout()
+        self.signature_edit = QLineEdit()
+        self.signature_edit.setPlaceholderText("the name to sign off with")
+        signature_row.addWidget(QLabel("Sign as"))
+        signature_row.addWidget(self.signature_edit, 1)
+        outer.addLayout(signature_row)
+        outer.addWidget(_separator())
+
+        picker_row = QHBoxLayout()
+        self.rule_list = QComboBox()
+        self.rule_list.setMinimumWidth(280)
+        self.rule_list.currentIndexChanged.connect(self._rule_selected)
+        picker_row.addWidget(QLabel("Rule"))
+        picker_row.addWidget(self.rule_list, 1)
+        add_rule = QToolButton(); add_rule.setText("Add")
+        add_rule.clicked.connect(self._add_rule)
+        picker_row.addWidget(add_rule)
+        self.remove_rule_button = QToolButton(); self.remove_rule_button.setText("Remove")
+        self.remove_rule_button.clicked.connect(self._remove_rule)
+        picker_row.addWidget(self.remove_rule_button)
+        outer.addLayout(picker_row)
+
+        form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+
+        self.rule_enabled = QCheckBox("Use this rule")
+        form.addRow("", self.rule_enabled)
+        self.rule_name_edit = QLineEdit()
+        form.addRow("Name", self.rule_name_edit)
+
+        self.rule_action = QComboBox()
+        for value, label in autoreply.ACTIONS:
+            self.rule_action.addItem(label, value)
+        self.rule_action.currentIndexChanged.connect(self._rule_action_changed)
+        form.addRow("When it matches", self.rule_action)
+
+        self.rule_category = QComboBox()
+        self.rule_category.addItem("Any job category", "")
+        for category in Category:
+            if category is not Category.UNCLASSIFIED_OTHER:
+                self.rule_category.addItem(category.label, category.value)
+        form.addRow("Job category", self.rule_category)
+
+        self.rule_topic = QComboBox()
+        self.rule_topic.addItem("Any topic", "")
+        for topic in profiles.ALL_TOPICS:
+            self.rule_topic.addItem(topic.label, topic.value)
+        form.addRow("Everyday topic", self.rule_topic)
+
+        self.rule_sender = QLineEdit()
+        self.rule_sender.setPlaceholderText("only from addresses containing this")
+        form.addRow("Sender contains", self.rule_sender)
+
+        self.rule_contains = QLineEdit()
+        self.rule_contains.setPlaceholderText("only if the message contains this")
+        form.addRow("Message contains", self.rule_contains)
+
+        self.rule_confidence = QDoubleSpinBox()
+        self.rule_confidence.setRange(0.50, 1.00)
+        self.rule_confidence.setSingleStep(0.01)
+        self.rule_confidence.setDecimals(2)
+        form.addRow("Only above confidence", self.rule_confidence)
+
+        self.rule_skip_bulk = QCheckBox("Never reply to bulk mail")
+        self.rule_skip_bulk.setToolTip(
+            "Anything carrying an unsubscribe header. Leave this on: replying "
+            "to a mailing list is at best useless and at worst embarrassing."
+        )
+        form.addRow("", self.rule_skip_bulk)
+
+        self.rule_template = QPlainTextEdit()
+        self.rule_template.setPlaceholderText(
+            "Hello {first_name},\n\n…\n\nBest wishes,\n{me}"
+        )
+        self.rule_template.setMinimumHeight(120)
+        form.addRow("Template", self.rule_template)
+        template_note = QLabel(
+            "{first_name}, {sender}, {subject} and {me} are filled in. Anything "
+            "in [square brackets] is left for you to complete and is listed at "
+            "the bottom of the draft."
+        )
+        template_note.setWordWrap(True)
+        template_note.setProperty("dim", "true")
+        form.addRow("", template_note)
+
+        self.rule_guidance = QPlainTextEdit()
+        self.rule_guidance.setPlaceholderText(
+            "What the reply needs to do, in your words. Only used when the "
+            "model writes it."
+        )
+        self.rule_guidance.setMinimumHeight(80)
+        form.addRow("Guidance", self.rule_guidance)
+        outer.addLayout(form)
+        outer.addStretch(1)
+        return page
+
+    # -- reply rules ------------------------------------------------------
+    def _load_rules(self, settings: Settings) -> None:
+        self._rules = list(settings.rules)
+        self._rule_index = 0
+        self.auto_reply_check.setChecked(settings.auto_reply)
+        self.signature_edit.setText(settings.reply_signature)
+        self._refresh_rule_list()
+
+    def _refresh_rule_list(self) -> None:
+        self.rule_list.blockSignals(True)
+        self.rule_list.clear()
+        for rule in self._rules:
+            self.rule_list.addItem(("✓ " if rule.enabled else "○ ") + rule.name)
+        self.rule_list.setCurrentIndex(min(self._rule_index, len(self._rules) - 1))
+        self.rule_list.blockSignals(False)
+        self.remove_rule_button.setEnabled(len(self._rules) > 1)
+        self._show_rule(self._rule_index)
+
+    def _show_rule(self, index: int) -> None:
+        if not (0 <= index < len(self._rules)):
+            return
+        rule = self._rules[index]
+        self._rule_index = index
+        self.rule_enabled.setChecked(rule.enabled)
+        self.rule_name_edit.setText(rule.name)
+        self.rule_action.setCurrentIndex(max(0, self.rule_action.findData(rule.action)))
+        self.rule_category.setCurrentIndex(
+            max(0, self.rule_category.findData(rule.categories[0] if rule.categories else "")))
+        self.rule_topic.setCurrentIndex(
+            max(0, self.rule_topic.findData(rule.topics[0] if rule.topics else "")))
+        self.rule_sender.setText(rule.sender_matches)
+        self.rule_contains.setText(rule.contains)
+        self.rule_confidence.setValue(rule.min_confidence)
+        self.rule_skip_bulk.setChecked(rule.skip_bulk)
+        self.rule_template.setPlainText(rule.template)
+        self.rule_guidance.setPlainText(rule.guidance)
+        self._rule_action_changed()
+
+    def _capture_rule(self) -> None:
+        if not (0 <= self._rule_index < len(self._rules)):
+            return
+        rule = self._rules[self._rule_index]
+        rule.enabled = self.rule_enabled.isChecked()
+        rule.name = self.rule_name_edit.text().strip() or "New rule"
+        rule.action = self.rule_action.currentData() or "draft"
+        category = self.rule_category.currentData()
+        rule.categories = [category] if category else []
+        topic = self.rule_topic.currentData()
+        rule.topics = [topic] if topic else []
+        rule.sender_matches = self.rule_sender.text().strip()
+        rule.contains = self.rule_contains.text().strip()
+        rule.min_confidence = self.rule_confidence.value()
+        rule.skip_bulk = self.rule_skip_bulk.isChecked()
+        rule.template = self.rule_template.toPlainText()
+        rule.guidance = self.rule_guidance.toPlainText()
+
+    def _rule_selected(self, index: int) -> None:
+        self._capture_rule()
+        self._show_rule(index)
+
+    def _add_rule(self) -> None:
+        self._capture_rule()
+        self._rules.append(autoreply.Rule())
+        self._rule_index = len(self._rules) - 1
+        self._refresh_rule_list()
+
+    def _remove_rule(self) -> None:
+        if len(self._rules) <= 1:
+            return
+        del self._rules[self._rule_index]
+        self._rule_index = max(0, self._rule_index - 1)
+        self._refresh_rule_list()
+
+    def _rule_action_changed(self) -> None:
+        uses_model = self.rule_action.currentData() == "draft_ai"
+        self.rule_guidance.setEnabled(uses_model)
+        self.rule_template.setEnabled(self.rule_action.currentData() != "none")
+
     def _build_appearance_tab(self) -> QWidget:
         page = QWidget()
         form = QFormLayout(page)
@@ -1456,11 +1975,8 @@ class SettingsDialog(QDialog):
     # -- values ----------------------------------------------------------
     def _load_values(self) -> None:
         settings = self._settings
-        self.email_edit.setText(settings.icloud_email)
-        self.host_edit.setText(settings.imap_host)
-        self.port_spin.setValue(settings.imap_port)
-        self.mailbox_edit.setText(settings.source_mailbox)
-        self.connections_spin.setValue(settings.imap_connections)
+        self._load_accounts(settings)
+        self._load_rules(settings)
         self.fetch_kb_spin.setValue(max(8, settings.fetch_bytes // 1024))
 
         provider_index = self.provider_combo.findData(settings.provider)
@@ -1520,12 +2036,12 @@ class SettingsDialog(QDialog):
 
     def collect(self) -> Settings:
         data = asdict(self._settings)
+        self._capture_account()
+        self._capture_rule()
+        kept = [a for a in self._accounts if a.address]
         data.update(
-            icloud_email=self.email_edit.text().strip(),
-            imap_host=self.host_edit.text().strip(),
-            imap_port=self.port_spin.value(),
-            source_mailbox=self.mailbox_edit.text().strip() or "INBOX",
-            imap_connections=self.connections_spin.value(),
+            mailboxes=kept,
+            icloud_email=kept[0].address if kept else "",
             fetch_bytes=self.fetch_kb_spin.value() * 1024,
             provider=self.provider_combo.currentData() or providers.DEFAULT_PROVIDER,
             model=self._chosen_model(),
@@ -1535,6 +2051,9 @@ class SettingsDialog(QDialog):
             contrast=self.contrast_combo.currentData() or "normal",
             readable=self.readable_check.isChecked(),
             row_lines=self.rows_spin.value(),
+            auto_reply=self.auto_reply_check.isChecked(),
+            reply_signature=self.signature_edit.text().strip(),
+            reply_rules=[r.to_dict() for r in self._rules],
             confidence_threshold=self.threshold_spin.value(),
             concurrency=self.concurrency_spin.value(),
             batch_size=self.batch_spin.value(),
@@ -1550,9 +2069,31 @@ class SettingsDialog(QDialog):
         return Settings(**data).normalized()
 
     def persist_credentials(self, settings: Settings) -> None:
-        self._store.set_icloud_password(settings.icloud_email, self.password_edit.text())
+        self._capture_account()
+        problems = []
+        for address, secret in self._account_passwords.items():
+            if not address:
+                continue
+            try:
+                self._store.set_mailbox_password(address, secret)
+            except CredentialError as exc:
+                problems.append(f"{address}: {exc}")
+        # A mailbox that was removed should not leave its password behind.
+        for account in self._removed_accounts:
+            if account.address and not any(
+                    a.address == account.address for a in self._accounts):
+                try:
+                    self._store.set_mailbox_password(account.address, "")
+                except CredentialError:
+                    pass
+        self._removed_accounts = []
         if settings.needs_api_key:
-            self._store.set_provider_key(settings.provider, self.api_key_edit.text())
+            try:
+                self._store.set_provider_key(settings.provider, self.api_key_edit.text())
+            except CredentialError as exc:
+                problems.append(str(exc))
+        if problems:
+            raise CredentialError("; ".join(problems))
 
     # -- tests -----------------------------------------------------------
     def _run_test(self, mode: str) -> None:
@@ -1560,7 +2101,7 @@ class SettingsDialog(QDialog):
             return
         settings = self.collect()
         if mode == "imap" and not settings.icloud_email:
-            self.status.setText("Enter your iCloud email address first.")
+            self.status.setText("Enter the mailbox email address first.")
             return
         self.test_imap_button.setEnabled(False)
         self.test_model_button.setEnabled(False)
@@ -1652,6 +2193,10 @@ class MainWindow(QMainWindow):
         self.dry_run = bool(dry_run)
         self.scan_worker: Optional[ScanWorker] = None
         self.apply_worker: Optional[ApplyWorker] = None
+        self.reply_worker = None
+        self.undo_worker = None
+        #: The last batch of moves, so they can be reversed.
+        self._last_apply: List[MovePlan] = []
         #: Every background thread this window has started and not yet reaped.
         self._workers: List[QThread] = []
         self.folder_plan: Optional[FolderPlan] = settings.folder_plan()
@@ -1661,6 +2206,8 @@ class MainWindow(QMainWindow):
         #: What the primary button currently does, so it can be rewired
         #: without disconnecting slots that were never attached.
         self._scan_button_action = None
+        #: Mailboxes whose messages are shown. Empty means all of them.
+        self._view_accounts: List[str] = []
         #: Which providers have a key in the Keychain. See store_has_key.
         self._key_present: Dict[str, bool] = {}
         self._prompt_cache: Dict[str, str] = {}
@@ -1689,6 +2236,7 @@ class MainWindow(QMainWindow):
         # The window was built before the controller existed, so hand it the
         # current choice now rather than waiting for the first change.
         self._sync_menu_bar_model()
+        helpmode.install(QApplication.instance(), self.settings.help_mode)
 
         self.schedule_timer = QTimer(self)
         self.schedule_timer.setSingleShot(False)
@@ -1757,6 +2305,9 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(TriageTableModel.COL_ACCOUNT, QHeaderView.ResizeMode.Fixed)
         header.setTextElideMode(Qt.TextElideMode.ElideRight)
         self._reset_columns()
+        self._restore_hidden_columns()
+        self._rebuild_columns_menu()
+        self._rebuild_view_menu()
 
         # A blank grid on first launch tells the user nothing; this does.
         self.empty_label = QLabel(EMPTY_STATE)
@@ -1818,11 +2369,23 @@ class MainWindow(QMainWindow):
         self._sync_account_column()
 
     def _sync_account_column(self) -> None:
-        """The mailbox column earns its space only when there is a choice."""
+        """The mailbox column earns its space only when there is a choice.
+
+        A column the user hid stays hidden either way; this only decides the
+        one they have not expressed an opinion about.
+        """
         if not hasattr(self, "table"):
             return
-        self.table.setColumnHidden(
-            TriageTableModel.COL_ACCOUNT, not self.settings.multi_account)
+        column = TriageTableModel.COL_ACCOUNT
+        if column in self.settings.hidden_columns:
+            self.table.setColumnHidden(column, True)
+            return
+        self.table.setColumnHidden(column, not self.settings.multi_account)
+
+    def _restore_hidden_columns(self) -> None:
+        for column in self.settings.hidden_columns:
+            if 1 <= column < self.model.columnCount():
+                self.table.setColumnHidden(column, True)
 
     def _apply_density(self, lines: int) -> None:
         """Switch between one-line rows and wrapped multi-line rows."""
@@ -1912,16 +2475,6 @@ class MainWindow(QMainWindow):
         self.account_menu = QMenu(self)
         self.account_button.setMenu(self.account_menu)
         row.addWidget(self.account_button)
-
-        self.stop_button = QPushButton("Stop All")
-        self.stop_button.setMinimumHeight(30)
-        self.stop_button.setEnabled(False)
-        _paint_button(self.stop_button, ACCENT_RED)
-        self.stop_button.setToolTip(
-            "Stop every running task and close its network connections (⌘.)"
-        )
-        self.stop_button.clicked.connect(self.stop_all)
-        row.addWidget(self.stop_button)
 
         self.scan_button = QPushButton("Scan && Analyze")
         self.scan_button.setMinimumHeight(30)
@@ -2017,7 +2570,9 @@ class MainWindow(QMainWindow):
             )
             self.scan_button.clicked.connect(wanted)
         else:
-            self.scan_button.setText("Scan && Analyze")
+            # Demo mode renames it, and that name should survive the morph.
+            self.scan_button.setText(
+                "Reload Sample Data" if self.demo else "Scan && Analyze")
             self.scan_button.setDefault(True)
             _paint_button(self.scan_button, ACCENT_BLUE)
             self.scan_button.setToolTip(
@@ -2219,6 +2774,7 @@ class MainWindow(QMainWindow):
             item.folders = self.folder_plan
             item.non_job_routing = self.settings.routing
         self.model.set_items(items)
+        self._rebuild_view_menu()
         self._update_status()
 
     def _switch_ruleset(self, name: str) -> None:
@@ -2313,6 +2869,24 @@ class MainWindow(QMainWindow):
         row.addWidget(self.show_combo)
         self._show_filter_changed()
 
+        # Reading one mailbox at a time is a different question from scanning
+        # one at a time, so it gets its own control rather than reusing the
+        # scan picker.
+        self.view_button = QToolButton()
+        self.view_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.view_menu = QMenu(self)
+        self.view_button.setMenu(self.view_menu)
+        row.addWidget(self.view_button)
+
+        self.columns_button = QToolButton()
+        self.columns_button.setText("Columns")
+        self.columns_button.setToolTip("Show or hide columns in the table")
+        self.columns_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.columns_menu = QMenu(self)
+        self.columns_button.setMenu(self.columns_menu)
+        row.addWidget(self.columns_button)
+        # The table does not exist yet; both menus are filled in once it does.
+
         self.select_high_button = QPushButton("Tick high confidence")
         self.select_high_button.setToolTip(
             "Tick every message the analysis was confident about (⌘⇧A)"
@@ -2326,7 +2900,139 @@ class MainWindow(QMainWindow):
         self.deselect_button.clicked.connect(lambda: self.model.set_all_approved(False))
         row.addWidget(self.deselect_button)
 
+        row.addWidget(Spacer(8))
+        self.help_button = helpmode.HelpButton()
+        self.help_button.setChecked(self.settings.help_mode)
+        self.help_button.toggled.connect(self._toggle_help)
+        row.addWidget(self.help_button)
+
         return frame
+
+    def _toggle_help(self, on: bool) -> None:
+        """Turn the explanations on or off, and remember which."""
+        self.settings.help_mode = bool(on)
+        helpmode.install(QApplication.instance(), on)
+        QApplication.instance().setStyleSheet(
+            QApplication.instance().styleSheet())     # repaint the button
+        self._append_log(
+            "Help is on. Hover anything for a moment and it will explain itself."
+            if on else "Help is off."
+        )
+        try:
+            self.settings.save()
+        except OSError as exc:
+            log.warning("Could not save settings: %s", exc)
+
+    # -- reading one mailbox at a time -----------------------------------
+    def _rebuild_view_menu(self) -> None:
+        """Which mailboxes' messages are on screen, whatever was scanned."""
+        if not hasattr(self, "view_menu") or not hasattr(self, "proxy"):
+            return
+        self.view_menu.clear()
+        present = self._accounts_in_view()
+        self.view_button.setVisible(len(present) > 1)
+        if len(present) <= 1:
+            self.proxy.set_account_filter(())
+            return
+
+        every = QAction("All mailboxes", self)
+        every.setCheckable(True)
+        every.setChecked(not self._view_accounts)
+        every.triggered.connect(lambda: self._set_view_accounts([]))
+        self.view_menu.addAction(every)
+        self.view_menu.addSeparator()
+
+        for account_id, label, count in present:
+            action = QAction(menu_text(f"{label}  ({count})"), self)
+            action.setCheckable(True)
+            action.setChecked(not self._view_accounts or account_id in self._view_accounts)
+            action.toggled.connect(
+                lambda checked, a=account_id: self._toggle_view_account(a, checked))
+            self.view_menu.addAction(action)
+        self._refresh_view_button()
+
+    def _accounts_in_view(self):
+        """(id, label, count) for every mailbox with a message on screen."""
+        counts: Dict[str, int] = {}
+        labels: Dict[str, str] = {}
+        for item in self.model.items:
+            key = item.email.account_id or ""
+            counts[key] = counts.get(key, 0) + 1
+            labels.setdefault(key, item.email.account_label or "This mailbox")
+        return [(key, labels[key], counts[key]) for key in sorted(counts, key=labels.get)]
+
+    def _toggle_view_account(self, account_id: str, checked: bool) -> None:
+        present = [a for a, _label, _n in self._accounts_in_view()]
+        chosen = list(self._view_accounts) or list(present)
+        if checked and account_id not in chosen:
+            chosen.append(account_id)
+        elif not checked and account_id in chosen:
+            chosen.remove(account_id)
+        if len(chosen) >= len(present):
+            chosen = []
+        self._set_view_accounts(chosen)
+
+    def _set_view_accounts(self, account_ids) -> None:
+        self._view_accounts = list(account_ids)
+        self.proxy.set_account_filter(self._view_accounts)
+        self._rebuild_view_menu()
+        self._update_status()
+
+    def _refresh_view_button(self) -> None:
+        present = self._accounts_in_view()
+        if not self._view_accounts:
+            name = "All mailboxes"
+        elif len(self._view_accounts) == 1:
+            name = next((label for key, label, _n in present
+                         if key == self._view_accounts[0]), "One mailbox")
+        else:
+            name = f"{len(self._view_accounts)} mailboxes"
+        self.view_button.setText(menu_text(f"👁  {name}"))
+        self.view_button.setToolTip(
+            "Which mailboxes' messages are shown. Separate from which ones get "
+            "scanned - you can pull several in and read them one at a time."
+        )
+
+    # -- which columns are on screen --------------------------------------
+    def _rebuild_columns_menu(self) -> None:
+        if not hasattr(self, "columns_menu") or not hasattr(self, "table"):
+            return
+        self.columns_menu.clear()
+        for column in range(1, self.model.columnCount()):
+            header = self.model.HEADERS[column]
+            action = QAction(menu_text(header), self)
+            action.setCheckable(True)
+            action.setChecked(not self.table.isColumnHidden(column))
+            action.toggled.connect(
+                lambda checked, c=column: self._set_column_visible(c, checked))
+            self.columns_menu.addAction(action)
+        self.columns_menu.addSeparator()
+        reset = QAction("Show all columns", self)
+        reset.triggered.connect(self._show_all_columns)
+        self.columns_menu.addAction(reset)
+
+    def _set_column_visible(self, column: int, visible: bool) -> None:
+        """Record an explicit choice, rather than reading back the table.
+
+        The mailbox column hides itself when there is only one mailbox. Reading
+        the table's state back would file that away as something the user asked
+        for, and they would never see it again once they added a second one.
+        """
+        self.table.setColumnHidden(column, not visible)
+        if visible and self.table.columnWidth(column) <= 0:
+            self.table.setColumnWidth(column, self.COLUMN_WIDTHS.get(column, 140))
+        hidden = set(self.settings.hidden_columns)
+        hidden.discard(column) if visible else hidden.add(column)
+        self.settings.hidden_columns = sorted(hidden)
+
+    def _show_all_columns(self) -> None:
+        self.settings.hidden_columns = []
+        for column in range(1, self.model.columnCount()):
+            self.table.setColumnHidden(column, False)
+            if self.table.columnWidth(column) <= 0:
+                self.table.setColumnWidth(column, self.COLUMN_WIDTHS.get(column, 140))
+        self._sync_account_column()
+        self._rebuild_columns_menu()
 
     @Slot()
     def _show_filter_changed(self) -> None:
@@ -2348,6 +3054,25 @@ class MainWindow(QMainWindow):
         apply_action.setShortcut(QKeySequence("Ctrl+Return"))
         apply_action.triggered.connect(self.apply_moves)
         file_menu.addAction(apply_action)
+
+        self.undo_action = QAction("Undo Last Filing", self)
+        self.undo_action.setShortcut(QKeySequence("Ctrl+Z"))
+        self.undo_action.setEnabled(False)
+        self.undo_action.setToolTip(
+            "Move the messages from the last Apply back to the mailbox they "
+            "came from."
+        )
+        self.undo_action.triggered.connect(self.undo_last_apply)
+        file_menu.addAction(self.undo_action)
+
+        reply_action = QAction("Draft &Replies…", self)
+        reply_action.setShortcut(QKeySequence("Ctrl+R"))
+        reply_action.setToolTip(
+            "Write replies for whatever the auto-reply rules match, into your "
+            "Drafts mailbox. Nothing is sent."
+        )
+        reply_action.triggered.connect(self.draft_replies)
+        file_menu.addAction(reply_action)
 
         self.stop_action = QAction("Stop &All Tasks", self)
         self.stop_action.setShortcut(QKeySequence("Ctrl+."))
@@ -2514,13 +3239,54 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self, self._first_run_check)
             QTimer.singleShot(0, self, self._probe_api_keys)
 
+    def _unfinished_work(self) -> str:
+        """Results that would be lost by quitting, phrased for a person.
+
+        Deliberately only about a scan that has been approved and not applied.
+        A task that is still running is stopped cleanly on the way out and
+        costs nothing to start again, so it is not worth a question.
+        """
+        if self.demo or self.dry_run:
+            return ""
+        pending = sum(
+            1 for item in self.model.items
+            if item.approved and not item.moved
+            and item.disposition is Disposition.MOVE
+        )
+        if not pending:
+            return ""
+        return (f"{pending} message{'s' if pending != 1 else ''} ticked and "
+                "ready to file")
+
+    def confirm_quit(self) -> bool:
+        """Ask before throwing away a scan that has not been applied."""
+        outstanding = self._unfinished_work()
+        if not outstanding:
+            return True
+        answer = QMessageBox.question(
+            self, "Quit Mail Manager?",
+            f"You have {outstanding}.\n\n"
+            "Nothing has been moved in your mailbox yet. Quitting now loses "
+            "the scan, and you would have to run it again.",
+            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Discard,
+            QMessageBox.StandardButton.Cancel,
+        )
+        return answer == QMessageBox.StandardButton.Discard
+
     def closeEvent(self, event) -> None:  # noqa: N802
+        if self._quitting and not self.confirm_quit():
+            self._quitting = False
+            event.ignore()
+            return
         if not self._quitting and self._hides_to_menu_bar():
             # The menu bar item is still there, so closing the window means
             # "put it away", not "stop working". Quit from the menu bar, the
             # app menu, or Cmd-Q to actually leave.
             self._save_layout()
             self.hide()
+            event.ignore()
+            return
+        if not self._quitting and not self.confirm_quit():
             event.ignore()
             return
         self.shutdown()
@@ -2646,6 +3412,8 @@ class MainWindow(QMainWindow):
 
     def quit_app(self) -> None:
         """Leave for good, rather than hiding to the menu bar."""
+        if not self.confirm_quit():
+            return
         self._quitting = True
         self.close()
         QApplication.quit()
@@ -2928,6 +3696,8 @@ class MainWindow(QMainWindow):
         if outcome.folder_plan is not None:
             self.folder_plan = outcome.folder_plan
         self.model.set_items(outcome.items)
+        self._view_accounts = []
+        self._rebuild_view_menu()
         self._refresh_category_filter()
         self._refresh_folder_choices()
         self.usage_label.setText(outcome.usage_text)
@@ -2951,6 +3721,107 @@ class MainWindow(QMainWindow):
 
     # -- applying --------------------------------------------------------
     @Slot()
+    @Slot()
+    def undo_last_apply(self) -> None:
+        """Move the last batch back where it came from."""
+        if self._busy() or not self._last_apply:
+            return
+        count = len(self._last_apply)
+        if QMessageBox.question(
+            self, "Undo filing",
+            f"Move {count} message{'s' if count != 1 else ''} back to the "
+            "mailbox they came from?",
+            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
+            QMessageBox.StandardButton.Yes,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            passwords = self._mailbox_passwords()
+        except CredentialError as exc:
+            QMessageBox.critical(self, "Keychain", str(exc))
+            return
+
+        self._set_busy(True, "Putting messages back…")
+        self.undo_worker = ApplyWorker(
+            settings=self.settings, mailbox_password=passwords,
+            plans=self._last_apply, extra_folders=(), parent=self,
+        )
+        self._register(self.undo_worker)
+        self.undo_worker.progress.connect(self._on_progress)
+        self.undo_worker.log_message.connect(self._append_log)
+        self.undo_worker.failed.connect(self._on_failed)
+        self.undo_worker.finished_ok.connect(self._on_undo_done)
+        self.undo_worker.start()
+
+    @Slot(object)
+    def _on_undo_done(self, report: MoveReport) -> None:
+        self._set_busy(False)
+        self._last_apply = []
+        if hasattr(self, "undo_action"):
+            self.undo_action.setEnabled(False)
+            self.undo_action.setText("Undo Last Filing")
+        message = f"Put {report.moved_count} message(s) back."
+        if report.failed:
+            message += f" {report.failed_count} could not be moved back."
+        self._append_log(message)
+        QMessageBox.information(self, "Undo filing", message)
+        self._update_status(message)
+
+    @Slot()
+    def draft_replies(self) -> None:
+        """Write replies for whatever the rules match, into Drafts."""
+        if self._busy():
+            return
+        if not self.settings.replies_armed:
+            QMessageBox.information(
+                self, "Auto reply is off",
+                "No reply rules are switched on.\n\nSettings → Auto Reply has "
+                "three ready-made rules; tick the ones you want and turn on "
+                "\u201cDraft replies after a scan\u201d.",
+            )
+            self.open_settings(tab=3)
+            return
+        items = [i for i in self.model.items if not i.classification.error]
+        if not items:
+            QMessageBox.information(self, "Nothing to reply to",
+                                    "Run a scan first.")
+            return
+        try:
+            passwords = self._mailbox_passwords()
+            api_key = self.store.get_provider_key(self.settings.provider)
+        except CredentialError as exc:
+            QMessageBox.critical(self, "Keychain", str(exc))
+            return
+
+        self._set_busy(True, "Drafting replies…")
+        self.reply_worker = ReplyWorker(
+            settings=self.settings, mailbox_password=passwords,
+            api_key=api_key, items=items, parent=self,
+        )
+        self._register(self.reply_worker)
+        self.reply_worker.progress.connect(self._on_progress)
+        self.reply_worker.log_message.connect(self._append_log)
+        self.reply_worker.failed.connect(self._on_failed)
+        self.reply_worker.finished_ok.connect(self._on_replies_drafted)
+        self.reply_worker.start()
+
+    @Slot(object)
+    def _on_replies_drafted(self, drafts) -> None:
+        self._set_busy(False)
+        written = [d for d in drafts if d.ok]
+        failed = [d for d in drafts if not d.ok]
+        if not drafts:
+            self._set_status("No message matched a reply rule.")
+            return
+        lines = [f"{len(written)} draft{'s' if len(written) != 1 else ''} saved to "
+                 "your Drafts mailbox. Nothing has been sent."]
+        if failed:
+            lines.append("")
+            lines.append(f"{len(failed)} could not be written:")
+            lines.extend(f"  · {d.subject}: {d.error}" for d in failed[:5])
+        QMessageBox.information(self, "Replies drafted", "\n".join(lines))
+        self._set_status(lines[0])
+
     def apply_moves(self) -> None:
         if self._busy():
             return
@@ -3032,6 +3903,30 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def _on_apply_done(self, report: MoveReport) -> None:
+        # Remember where everything came from, so it can be put back. The app
+        # moves real mail; being able to undo that is what makes it safe to
+        # try rather than something to be careful with.
+        self._last_apply = []
+        for item in self.model.items:
+            filed_to = report.moved.get(item.email.uid)
+            if not filed_to:
+                continue
+            account = self.settings.account_by_id(item.email.account_id)
+            home = account.source_mailbox if account else self.settings.source_mailbox
+            self._last_apply.append(MovePlan(
+                uid=item.email.uid,
+                target_folder=home,
+                subject=item.email.subject_display,
+                account_id=item.email.account_id,
+                source_folder=filed_to,
+            ))
+        if hasattr(self, "undo_action"):
+            self.undo_action.setEnabled(bool(self._last_apply))
+            self.undo_action.setText(
+                f"Undo Filing of {len(self._last_apply)} Message"
+                f"{'s' if len(self._last_apply) != 1 else ''}"
+                if self._last_apply else "Undo Last Filing"
+            )
         self.model.apply_report(report)
         self._refresh_folder_choices()
         message = f"Filed {report.moved_count} message(s)."
@@ -3099,7 +3994,6 @@ class MainWindow(QMainWindow):
         # the wait is exactly what "Stop" is supposed to disprove.
         for worker in running:
             worker.cancel()
-        self.stop_button.setEnabled(False)
         self.stop_action.setEnabled(False)
         self._freeze_progress("Stopping…")
         self._set_status(f"Stopping {len(running)} task(s)…")
@@ -3155,7 +4049,6 @@ class MainWindow(QMainWindow):
         self._set_scan_button(busy)
         self.apply_button.setEnabled(not busy and self.model.summary().approved > 0)
         self.progress.setVisible(busy)
-        self.stop_button.setEnabled(busy)
         self.stop_action.setEnabled(busy)
         for button in self.window_buttons.values():
             button.setEnabled(not busy)
@@ -3284,7 +4177,8 @@ class MainWindow(QMainWindow):
             if summary.approved
             else "Apply Approved Folder Moves"
         )
-        self.stop_button.setEnabled(running)
+        if hasattr(self, "scan_button"):
+            self._set_scan_button(running)
         if hasattr(self, "stop_action"):
             self.stop_action.setEnabled(running)
         if message is not None:

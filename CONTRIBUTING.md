@@ -69,3 +69,26 @@ Two things are worth knowing before changing it:
 The GitHub repository card is `docs/assets/social-preview.png`. GitHub has no
 file convention for it, so it has to be uploaded by hand once, under
 **Settings -> General -> Social preview**.
+
+## Tests that are meant to fail
+
+Three suites exist to be hostile rather than reassuring, and they are the ones
+worth reading before changing the sorter or the settings layer.
+
+`tests/test_abuse.py` feeds the app things a user or a server can actually
+produce: ports that are not numbers, settings files that are JSON arrays,
+mailbox names of `..`, subjects made of zero-width characters, 200 KB bodies,
+prompt injection in the body. It has found real defects - a mailbox called `..`
+used to reach `CREATE`, which matters on the many IMAP servers that still store
+one mailbox per directory. Every case that found something stays as a guard.
+
+`tests/test_sorter_safety.py` pins the property the design rests on - nothing
+confidently filed into the wrong folder - and deliberately does not pin
+accuracy. An accuracy assertion turns every fixture into something to fit to.
+
+`tools/adversarial.py` scores two written sets. The first guided the structural
+work and now flatters it; the second was written afterwards and is scored once.
+**Do not add a signal because a message in the held-out set failed.** If you do,
+it stops measuring anything and the next person needs a third set. One of the
+safety tests fails if the held-out set ever starts scoring like the dev set,
+which is what fitting to it looks like from the outside.
