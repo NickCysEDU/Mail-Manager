@@ -449,3 +449,38 @@ class TestKeychainCannotHangForever:
                 return "secret"
 
         assert CredentialStore(backend=Quick()).get("anything") == "secret"
+
+
+# ==========================================================================
+# The build script's signing step
+# ==========================================================================
+class TestSigningCannotShipAnAppThatWillNotStart:
+    """A signed bundle that cannot load its own Python is worse than unsigned."""
+
+    def _build_script(self) -> str:
+        from pathlib import Path
+        return (Path(__file__).resolve().parents[1] / "build_app.sh").read_text()
+
+    def test_the_hardened_runtime_is_not_requested(self):
+        """It turns on library validation, which needs a Team ID.
+
+        A local certificate has none, so the app is refused its own bundled
+        framework and dies before main() with a message about Team IDs. The
+        hardened runtime is only useful alongside notarisation, which needs a
+        paid Developer ID anyway.
+        """
+        commands = [line for line in self._build_script().splitlines()
+                    if "codesign" in line and not line.lstrip().startswith("#")]
+        assert commands, "the build script does not sign anything"
+        assert not any("--options runtime" in line for line in commands)
+
+    def test_the_signed_bundle_is_started_before_it_ships(self):
+        assert "--self-test" in self._build_script()
+        assert "Re-signing ad-hoc" in self._build_script()
+
+    def test_the_environment_matches_the_interpreter(self):
+        """Reusing whichever .venv exists is how a universal interpreter
+        still produces a single-architecture app."""
+        script = self._build_script()
+        assert ".venv-universal" in script
+        assert "recreating it" in script

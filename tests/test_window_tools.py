@@ -205,3 +205,156 @@ class TestMailboxSetup:
             assert len(dialog.collect().accounts) == 1
         finally:
             dialog.deleteLater()
+
+
+class TestTheMailboxColumnIsActuallyVisible:
+    """Every one of these was a real bug: the column existed and could not be seen."""
+
+    def test_a_saved_header_cannot_hide_it_forever(self, qapp, tmp_path, monkeypatch):
+        """The state saved when there was one mailbox said to hide the column."""
+        from PySide6.QtCore import QByteArray
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        single = Settings(icloud_email="you@icloud.example").normalized()
+        first = MainWindow(single, InMemoryCredentialStore())
+        first.show()
+        assert first.table.isColumnHidden(TriageTableModel.COL_ACCOUNT)
+        saved = bytes(
+            first.table.horizontalHeader().saveState().toBase64()).decode()
+        first.close()
+
+        # Now a second mailbox arrives, carrying that saved header with it.
+        pair = Settings(icloud_email="you@icloud.example", table_state=saved)
+        pair.mailboxes = [
+            Account(address="you@icloud.example", host="imap.mail.me.com"),
+            Account(address="work@elsewhere.example", host="imap.work.example"),
+        ]
+        second = MainWindow(pair.normalized(), InMemoryCredentialStore())
+        second.show()
+        try:
+            assert not second.table.isColumnHidden(TriageTableModel.COL_ACCOUNT)
+            assert second.table.columnWidth(TriageTableModel.COL_ACCOUNT) > 0
+        finally:
+            second.close()
+
+    def test_it_sits_near_the_front_rather_than_off_the_edge(self, two_mailbox_window):
+        """It is the last column in the model, which is off-screen on a wide table."""
+        header = two_mailbox_window.table.horizontalHeader()
+        assert header.visualIndex(TriageTableModel.COL_ACCOUNT) == 1
+
+    def test_the_address_is_what_identifies_a_mailbox(self):
+        from models import EmailMessage
+        assert EmailMessage(uid="1", account_label="nick",
+                            account_address="sam@icloud.com").mailbox_display \
+            == "sam@icloud.com"
+        # A name that says something the address does not is worth keeping,
+        # but the domain still has to be there.
+        assert "@gmail.com" in EmailMessage(
+            uid="1", account_label="Work",
+            account_address="sam@gmail.com").mailbox_display
+
+
+class TestMenusDoNotLoop:
+    def test_ticking_a_mailbox_does_not_rebuild_forever(self, two_mailbox_window):
+        """setChecked emits toggled, and toggled rebuilds the menu.
+
+        Connecting before ticking made opening the menu an infinite loop, which
+        looked from outside like the app freezing.
+        """
+        subject = two_mailbox_window
+        subject._load_demo_data()
+        subject._rebuild_view_menu()
+        linked = subject._linked_mailboxes()
+        assert linked
+        subject._set_view_accounts([linked[0][0]])
+        assert subject._view_accounts == [linked[0][0]]
+
+    def test_none_is_different_from_all(self, two_mailbox_window):
+        """Unticking the last mailbox has to mean an empty table, not a full one."""
+        subject = two_mailbox_window
+        subject._load_demo_data()
+        subject._set_view_accounts([], empty=True)
+        assert subject.proxy.rowCount() == 0
+        subject._set_view_accounts([a for a, _l, _n in subject._linked_mailboxes()])
+        assert subject.proxy.rowCount() == subject.model.rowCount()
+
+
+class TestAppearanceIsActuallyApplied:
+    def test_row_height_follows_the_setting(self, window, monkeypatch):
+        """It was collected and saved, and then never applied to anything."""
+        from PySide6.QtWidgets import QDialog
+        import gui as gui_module
+
+        window._load_demo_data()
+        before = window.table.verticalHeader().defaultSectionSize()
+        dialog = SettingsDialog(window.settings, InMemoryCredentialStore(), window)
+        dialog.rows_spin.setValue(6)
+        monkeypatch.setattr(SettingsDialog, "exec",
+                            lambda self: QDialog.DialogCode.Accepted)
+        monkeypatch.setattr(gui_module, "SettingsDialog", lambda *a, **k: dialog)
+        window.open_settings()
+        after = window.table.verticalHeader().defaultSectionSize()
+        assert after > before
+        assert window.table.rowHeight(0) == after, "rows already on screen too"
+
+
+class TestSettingsTransfer:
+    def test_a_round_trip_keeps_everything_that_matters(self):
+        settings = Settings(icloud_email="me@icloud.com", row_lines=5,
+                            contrast="high", sort_profile="everyday")
+        settings.mailboxes = [Account.for_address("me@icloud.com"),
+                              Account.for_address("me@gmail.com")]
+        settings = settings.normalized()
+        back = Settings.import_text(settings.export_text())
+        assert [a.address for a in back.accounts] == \
+            [a.address for a in settings.accounts]
+        assert back.row_lines == 5 and back.contrast == "high"
+        assert back.sort_profile == "everyday"
+
+    def test_no_secret_can_be_in_an_export(self):
+        settings = Settings(icloud_email="me@icloud.com").normalized()
+        exported = settings.export_text()
+        # The object has no secret fields at all; this guards that staying true.
+        for field in ("password", "api_key", "secret", "token"):
+            assert f'"{field}"' not in exported
+
+    def test_the_window_layout_is_not_exported(self):
+        settings = Settings(icloud_email="me@icloud.com",
+                            window_geometry="AAA", table_state="BBB").normalized()
+        exported = settings.export_text()
+        assert "AAA" not in exported and "BBB" not in exported
+
+    @pytest.mark.parametrize("text, expected", [
+        ("", "empty"),
+        ("# only a comment\n", "empty"),
+        ("not json at all", "not a settings file"),
+        ("[1, 2, 3]", "not a set of settings"),
+        ('{"unrelated": true}', "none of the settings"),
+    ])
+    def test_a_bad_file_says_what_is_wrong_with_it(self, text, expected):
+        with pytest.raises(ValueError, match=expected):
+            Settings.import_text(text)
+
+    def test_comments_are_ignored_rather_than_choked_on(self):
+        settings = Settings(icloud_email="me@icloud.com").normalized()
+        text = settings.export_text()
+        assert text.lstrip().startswith("#")
+        assert Settings.import_text(text).icloud_email == "me@icloud.com"
+
+
+class TestHintTextIsNeverClipped:
+    @pytest.mark.parametrize("width", [900, 600, 420, 300, 220, 160])
+    def test_the_filter_hint_shrinks_to_fit(self, qapp, width):
+        from gui import AdaptiveLineEdit
+        field = AdaptiveLineEdit(
+            "Filter by sender, subject, summary or reasoning…",
+            "Filter by sender, subject or summary…",
+            "Filter messages…", "Filter…")
+        field.show()
+        field.resize(width, 28)
+        room = width - 34
+        assert field.fontMetrics().horizontalAdvance(field.placeholderText()) <= room
+
+    def test_the_full_wording_is_always_reachable(self, qapp):
+        from gui import AdaptiveLineEdit
+        field = AdaptiveLineEdit("The long one", "Short")
+        assert field.toolTip() == "The long one"

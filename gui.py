@@ -41,6 +41,7 @@ from PySide6.QtGui import (
     QPalette,
 )
 from PySide6.QtWidgets import (
+    QFileDialog,
     QAbstractItemView,
     QStackedWidget,
     QApplication,
@@ -50,7 +51,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
-    QFileDialog,
     QFormLayout,
     QFrame,
     QGroupBox,
@@ -167,6 +167,39 @@ EMPTY_STATE = (
 # ==========================================================================
 # Table model
 # ==========================================================================
+class AdaptiveLineEdit(QLineEdit):
+    """A line edit whose hint text shrinks to fit the width it is given.
+
+    No layout can make a long sentence fit a narrow field, and eliding it into
+    "Filter by sender, subj…" tells the reader less than a short phrase would.
+    So several phrasings are supplied and the longest one that actually fits is
+    shown. The full version is always the tooltip.
+    """
+
+    def __init__(self, *hints: str, parent=None) -> None:
+        super().__init__(parent)
+        self._hints = [h for h in hints if h] or [""]
+        self.setToolTip(self._hints[0])
+        self._choose()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._choose()
+
+    def _choose(self) -> None:
+        metrics = self.fontMetrics()
+        # Room for the frame, the padding either side and the clear button.
+        room = self.width() - 34 - (24 if self.isClearButtonEnabled() else 0)
+        for hint in self._hints:
+            if room <= 0 or metrics.horizontalAdvance(hint) <= room:
+                if self.placeholderText() != hint:
+                    self.setPlaceholderText(hint)
+                return
+        shortest = self._hints[-1]
+        if self.placeholderText() != shortest:
+            self.setPlaceholderText(shortest)
+
+
 class TriageTableModel(QAbstractTableModel):
     """Approval table backed by a list of :class:`~models.TriageItem`."""
 
@@ -277,7 +310,7 @@ class TriageTableModel(QAbstractTableModel):
 
         if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
             if column == self.COL_ACCOUNT:
-                return item.email.account_label
+                return item.email.mailbox_display
             if column == self.COL_SENDER:
                 return item.email.sender_short
             if column == self.COL_SUBJECT:
@@ -1235,17 +1268,38 @@ class SettingsDialog(QDialog):
         self._refresh_account_list()
 
     def _preset_changed(self) -> None:
+        """Follow the provider, the way the model page follows the backend.
+
+        Changing the provider on a mailbox that already holds somebody else's
+        address is not a change of server, it is a different mailbox. Keeping
+        the old address there is how an iCloud address ends up pointed at
+        Gmail's server, which then quietly scans nothing.
+        """
         name = self.preset_combo.currentData() or "custom"
         spec = accounts.host_for(name)
         if spec.host:
             self.host_edit.setText(spec.host)
             self.port_spin.setValue(spec.port)
+
+        address = self.email_edit.text().strip()
+        belongs_to = accounts.host_for_address(address) if address else None
+        if address and belongs_to is not None and not belongs_to.is_custom \
+                and belongs_to.name != name:
+            self.email_edit.clear()
+            self.password_edit.clear()
+            self.account_label_edit.clear()
+            self.status.setText(
+                f"{_html(address)} is {belongs_to.label}, so it has been cleared. "
+                f"Enter the {spec.label} address for this mailbox."
+            )
+            address = ""
+
+        self.email_edit.setPlaceholderText(
+            f"you@{spec.domains[0]}" if spec.domains else "you@example.com")
         self._describe_preset(name)
-        # Picking a provider before typing an address should not leave the
-        # provider's name behind as the mailbox's name.
+
         placeholder = {label for _n, label in accounts.choices()}
         if self.account_label_edit.text().strip() in placeholder:
-            address = self.email_edit.text().strip()
             self.account_label_edit.setText(address.split("@")[0] if address else "")
 
     def _address_entered(self) -> None:
@@ -1921,7 +1975,35 @@ class SettingsDialog(QDialog):
         self.rows_spin = QSpinBox()
         self.rows_spin.setRange(1, 6)
         self.rows_spin.setSuffix(" lines per row")
+        self.rows_spin.setToolTip(
+            "How many lines of a summary or subject to show before it is cut "
+            "off. Taller rows show more and fit fewer."
+        )
         form.addRow("Row height", self.rows_spin)
+
+        form.addRow(_separator())
+        transfer = QHBoxLayout()
+        export_button = QPushButton("Export settings…")
+        export_button.setToolTip(
+            "Write every setting to a text file you can read, keep, or move to "
+            "another Mac. No passwords or keys are in it."
+        )
+        export_button.clicked.connect(self._export_settings)
+        import_button = QPushButton("Import settings…")
+        import_button.setToolTip("Read a settings file exported from this app")
+        import_button.clicked.connect(self._import_settings)
+        transfer.addWidget(export_button)
+        transfer.addWidget(import_button)
+        transfer.addStretch(1)
+        form.addRow("Settings file", transfer)
+        transfer_note = QLabel(
+            "Plain JSON with a comment header. Passwords and API keys are not "
+            "in it - they stay in the macOS Keychain and are entered again on "
+            "the other Mac."
+        )
+        transfer_note.setWordWrap(True)
+        transfer_note.setProperty("dim", "true")
+        form.addRow("", transfer_note)
 
         # Applied as they are changed: a colour choice you cannot see until you
         # press OK is a colour choice made blind.
@@ -1929,6 +2011,55 @@ class SettingsDialog(QDialog):
             widget.currentIndexChanged.connect(self._preview_appearance)
         self.readable_check.toggled.connect(self._preview_appearance)
         return page
+
+    def _export_settings(self) -> None:
+        """Write the current settings, including anything not yet saved."""
+        default = str(Path.home() / "Downloads" / "Mail Manager settings.txt")
+        path, _chosen = QFileDialog.getSaveFileName(
+            self, "Export settings", default, "Text files (*.txt *.json);;All files (*)")
+        if not path:
+            return
+        try:
+            Path(path).write_text(self.collect().export_text(), encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            QMessageBox.warning(self, "Export failed", f"Could not write that file:\n{exc}")
+            return
+        self.status.setText(f"Exported to {Path(path).name}")
+
+    def _import_settings(self) -> None:
+        """Read a settings file and load it into the open dialog.
+
+        Loaded into the form rather than applied straight away, so it can be
+        looked at, adjusted and cancelled like any other change.
+        """
+        path, _chosen = QFileDialog.getOpenFileName(
+            self, "Import settings", str(Path.home() / "Downloads"),
+            "Text files (*.txt *.json);;All files (*)")
+        if not path:
+            return
+        try:
+            text = Path(path).read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            QMessageBox.warning(self, "Import failed", f"Could not read that file:\n{exc}")
+            return
+        try:
+            incoming = Settings.import_text(text)
+        except ValueError as exc:
+            QMessageBox.warning(self, "That file cannot be used", str(exc))
+            return
+
+        # The window's own layout belongs to this Mac, not to the file.
+        for field in Settings.PRIVATE_FIELDS:
+            setattr(incoming, field, getattr(self._settings, field))
+        self._settings = incoming
+        self._load_values()
+        self._preview_appearance()
+        count = len(incoming.accounts)
+        self.status.setText(
+            f"Loaded {Path(path).name}: {count} mailbox"
+            f"{'es' if count != 1 else ''}. Passwords still need entering. "
+            "Press OK to keep it."
+        )
 
     def _preview_appearance(self) -> None:
         app = QApplication.instance()
@@ -2206,8 +2337,11 @@ class MainWindow(QMainWindow):
         #: What the primary button currently does, so it can be rewired
         #: without disconnecting slots that were never attached.
         self._scan_button_action = None
-        #: Mailboxes whose messages are shown. Empty means all of them.
+        #: Mailboxes whose messages are shown, and whether "all" is in force.
+        #: The two are kept apart so that unticking the last mailbox means an
+        #: empty table rather than silently meaning every mailbox.
         self._view_accounts: List[str] = []
+        self._view_all = True
         #: Which providers have a key in the Keychain. See store_has_key.
         self._key_present: Dict[str, bool] = {}
         self._prompt_cache: Dict[str, str] = {}
@@ -2360,7 +2494,7 @@ class MainWindow(QMainWindow):
         # The reasoning is shown in full in the preview pane, so the summary -
         # which is the column people actually read across - gets the stretch.
         TriageTableModel.COL_REASONING: 210,
-        TriageTableModel.COL_ACCOUNT: 120,
+        TriageTableModel.COL_ACCOUNT: 190,
     }
 
     def _reset_columns(self) -> None:
@@ -2380,7 +2514,29 @@ class MainWindow(QMainWindow):
         if column in self.settings.hidden_columns:
             self.table.setColumnHidden(column, True)
             return
-        self.table.setColumnHidden(column, not self.settings.multi_account)
+        multi = self.settings.multi_account
+        self.table.setColumnHidden(column, not multi)
+        # It is the last column in the model, which puts it off the right edge
+        # of a table this wide - a column you have to go looking for does not
+        # answer "where did this come from?". Moved to the front visually; the
+        # model's own indices are untouched, so nothing else has to care.
+        header = self.table.horizontalHeader()
+        wanted = 1 if multi else header.count() - 1
+        current = header.visualIndex(column)
+        if current != -1 and current != wanted:
+            header.moveSection(current, wanted)
+        if multi:
+            # Wide enough for the longest address on screen. A column that
+            # elides to "firstname.lastname@ic…" has dropped the one part that says
+            # which mailbox it is.
+            metrics = QFontMetrics(self.table.font())
+            longest = max(
+                (metrics.horizontalAdvance(i.email.mailbox_display)
+                 for i in self.model.items if i.email.mailbox_display),
+                default=0,
+            )
+            self.table.setColumnWidth(
+                column, min(300, max(self.COLUMN_WIDTHS[column], longest + 24)))
 
     def _restore_hidden_columns(self) -> None:
         for column in self.settings.hidden_columns:
@@ -2392,9 +2548,13 @@ class MainWindow(QMainWindow):
         lines = max(1, min(6, int(lines)))
         self.settings.row_lines = lines
         metrics = QFontMetrics(self.table.font())
-        self.table.verticalHeader().setDefaultSectionSize(
-            metrics.lineSpacing() * lines + 12
-        )
+        height = metrics.lineSpacing() * lines + 12
+        header = self.table.verticalHeader()
+        header.setDefaultSectionSize(height)
+        # Rows that already exist keep whatever height they were given, so the
+        # change would otherwise only show up on the next scan.
+        for row in range(self.model.rowCount()):
+            header.resizeSection(row, height)
         for column in (TriageTableModel.COL_SENDER, TriageTableModel.COL_SUBJECT,
                        TriageTableModel.COL_SUMMARY, TriageTableModel.COL_REASONING,
                        TriageTableModel.COL_FOLDER):
@@ -2640,7 +2800,9 @@ class MainWindow(QMainWindow):
             name = chosen[0].label
         else:
             name = f"{len(chosen)} mailboxes"
-        self.account_button.setText(menu_text(f"✉︎  {name}"))
+        # Named for what it does, since the viewer has a picker of its own and
+        # two controls both reading "All mailboxes" is worse than none.
+        self.account_button.setText(menu_text(f"Scan: {name}"))
         self.account_button.setToolTip(
             "Which mailboxes the next scan reads.\n"
             + ", ".join(a.address for a in chosen)
@@ -2844,8 +3006,12 @@ class MainWindow(QMainWindow):
         frame = QFrame()
         row = FlowLayout(frame, margin=0, spacing=6, vertical_spacing=6)
 
-        self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("Filter by sender, subject, summary or reasoning…")
+        self.search_edit = AdaptiveLineEdit(
+            "Filter by sender, subject, summary or reasoning…",
+            "Filter by sender, subject or summary…",
+            "Filter messages…",
+            "Filter…",
+        )
         self.search_edit.setClearButtonEnabled(True)
         self.search_edit.textChanged.connect(self.proxy.set_text_filter)
         self.search_edit.setMinimumWidth(220)
@@ -2925,72 +3091,120 @@ class MainWindow(QMainWindow):
 
     # -- reading one mailbox at a time -----------------------------------
     def _rebuild_view_menu(self) -> None:
-        """Which mailboxes' messages are on screen, whatever was scanned."""
+        """Every linked mailbox, each one tickable, plus all and none.
+
+        Shown whenever the app knows about a mailbox, even a single one: a
+        control that appears and disappears depending on how many accounts you
+        have is harder to find than one that is always in the same place.
+        """
         if not hasattr(self, "view_menu") or not hasattr(self, "proxy"):
             return
         self.view_menu.clear()
-        present = self._accounts_in_view()
-        self.view_button.setVisible(len(present) > 1)
-        if len(present) <= 1:
+        linked = self._linked_mailboxes()
+        self.view_button.setVisible(bool(linked))
+        if not linked:
             self.proxy.set_account_filter(())
             return
 
-        every = QAction("All mailboxes", self)
-        every.setCheckable(True)
-        every.setChecked(not self._view_accounts)
-        every.triggered.connect(lambda: self._set_view_accounts([]))
-        self.view_menu.addAction(every)
+        select_all = QAction("Select all", self)
+        select_all.setToolTip("Show messages from every mailbox")
+        select_all.triggered.connect(
+            lambda: self._set_view_accounts([a for a, _l, _n in linked]))
+        self.view_menu.addAction(select_all)
+
+        select_none = QAction("Select none", self)
+        select_none.setToolTip("Hide every mailbox, leaving the table empty")
+        select_none.triggered.connect(lambda: self._set_view_accounts([], empty=True))
+        self.view_menu.addAction(select_none)
         self.view_menu.addSeparator()
 
-        for account_id, label, count in present:
-            action = QAction(menu_text(f"{label}  ({count})"), self)
+        showing = self._showing_accounts()
+        self._account_actions = {}
+        for account_id, label, count in linked:
+            action = QAction(menu_text(f"{label}   ({count})" if count else label), self)
             action.setCheckable(True)
-            action.setChecked(not self._view_accounts or account_id in self._view_accounts)
+            # Ticked before the signal is attached. setChecked emits toggled,
+            # and toggled rebuilds this menu, so connecting first turns
+            # rebuilding the menu into rebuilding it forever.
+            action.setChecked(account_id in showing)
             action.toggled.connect(
                 lambda checked, a=account_id: self._toggle_view_account(a, checked))
             self.view_menu.addAction(action)
+            self._account_actions[account_id] = action
         self._refresh_view_button()
 
-    def _accounts_in_view(self):
-        """(id, label, count) for every mailbox with a message on screen."""
+    def _linked_mailboxes(self):
+        """(id, label, messages on screen) for every mailbox the app knows.
+
+        Every configured account is listed whether or not this scan found
+        anything in it, so the menu describes the app's accounts rather than
+        the last scan's results. A mailbox that turned up messages the settings
+        no longer mention is listed too, so nothing is unreachable.
+        """
         counts: Dict[str, int] = {}
-        labels: Dict[str, str] = {}
         for item in self.model.items:
             key = item.email.account_id or ""
             counts[key] = counts.get(key, 0) + 1
-            labels.setdefault(key, item.email.account_label or "This mailbox")
-        return [(key, labels[key], counts[key]) for key in sorted(counts, key=labels.get)]
+
+        listed = []
+        seen = set()
+        for account in self.settings.accounts:
+            listed.append((account.id, account.describe(), counts.get(account.id, 0)))
+            seen.add(account.id)
+        for item in self.model.items:
+            key = item.email.account_id or ""
+            if key not in seen:
+                seen.add(key)
+                listed.append((key, item.email.account_label or "This mailbox",
+                               counts.get(key, 0)))
+        return listed
+
+    def _showing_accounts(self) -> set:
+        """Which mailbox ids are currently visible."""
+        if self._view_all:
+            return {a for a, _l, _n in self._linked_mailboxes()}
+        return set(self._view_accounts)
 
     def _toggle_view_account(self, account_id: str, checked: bool) -> None:
-        present = [a for a, _label, _n in self._accounts_in_view()]
-        chosen = list(self._view_accounts) or list(present)
-        if checked and account_id not in chosen:
-            chosen.append(account_id)
-        elif not checked and account_id in chosen:
-            chosen.remove(account_id)
-        if len(chosen) >= len(present):
-            chosen = []
-        self._set_view_accounts(chosen)
+        chosen = set(self._showing_accounts())
+        chosen.add(account_id) if checked else chosen.discard(account_id)
+        every = {a for a, _l, _n in self._linked_mailboxes()}
+        self._set_view_accounts(sorted(chosen), empty=not chosen and every)
 
-    def _set_view_accounts(self, account_ids) -> None:
-        self._view_accounts = list(account_ids)
-        self.proxy.set_account_filter(self._view_accounts)
+    def _set_view_accounts(self, account_ids, empty: bool = False) -> None:
+        """Show these mailboxes. `empty` distinguishes none from all."""
+        chosen = list(account_ids)
+        every = [a for a, _l, _n in self._linked_mailboxes()]
+        self._view_all = bool(not empty and (not chosen or set(chosen) >= set(every)))
+        self._view_accounts = [] if self._view_all else chosen
+        # An empty filter means "everything" to the proxy, so a deliberate
+        # none is expressed as a filter nothing can match.
+        if self._view_all:
+            self.proxy.set_account_filter(())
+        elif not self._view_accounts:
+            self.proxy.set_account_filter(("\u0000none",))
+        else:
+            self.proxy.set_account_filter(self._view_accounts)
         self._rebuild_view_menu()
         self._update_status()
 
     def _refresh_view_button(self) -> None:
-        present = self._accounts_in_view()
-        if not self._view_accounts:
-            name = "All mailboxes"
-        elif len(self._view_accounts) == 1:
-            name = next((label for key, label, _n in present
-                         if key == self._view_accounts[0]), "One mailbox")
+        linked = self._linked_mailboxes()
+        showing = self._showing_accounts()
+        if self._view_all:
+            name = "All mailboxes" if len(linked) > 1 else "Mailbox"
+        elif not showing:
+            name = "No mailboxes"
+        elif len(showing) == 1:
+            only = next((l for a, l, _n in linked if a in showing), "One mailbox")
+            name = only.split(" · ")[-1] if " · " in only else only
         else:
-            name = f"{len(self._view_accounts)} mailboxes"
-        self.view_button.setText(menu_text(f"👁  {name}"))
+            name = f"{len(showing)} of {len(linked)} mailboxes"
+        self.view_button.setText(menu_text(f"Show: {name}"))
         self.view_button.setToolTip(
-            "Which mailboxes' messages are shown. Separate from which ones get "
-            "scanned - you can pull several in and read them one at a time."
+            "Which mailboxes' messages are shown in the table. Separate from "
+            "which ones get scanned - you can pull several in and read them "
+            "one at a time."
         )
 
     # -- which columns are on screen --------------------------------------
@@ -3225,6 +3439,15 @@ class MainWindow(QMainWindow):
             self.table.horizontalHeader().restoreState(
                 QByteArray.fromBase64(self.settings.table_state.encode())
             )
+        # A saved header remembers the world as it was. Adding a second mailbox
+        # would otherwise leave the Mailbox column hidden for good, because the
+        # state saved when there was only one said to hide it.
+        self._restore_hidden_columns()
+        self._sync_account_column()
+        for column in range(self.model.columnCount()):
+            if not self.table.isColumnHidden(column) and self.table.columnWidth(column) <= 0:
+                self.table.setColumnWidth(
+                    column, self.COLUMN_WIDTHS.get(column, 140))
 
     def showEvent(self, event) -> None:  # noqa: N802
         """Run the first-run prompt the first time the window actually appears.
@@ -3548,11 +3771,18 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Settings", f"Could not save settings: {exc}")
 
         self.folder_plan = self.settings.folder_plan()
+        # Appearance was previewed while the dialog was open but never applied
+        # when it was accepted, so anything without a preview - the row height
+        # in particular - was collected, saved, and then ignored.
+        self.apply_appearance()
         self.table.setItemDelegateForColumn(
             TriageTableModel.COL_CONFIDENCE,
             ConfidenceDelegate(self.settings.confidence_threshold, self.table),
         )
         self._rebuild_model_menu()
+        self._rebuild_account_menu()
+        self._rebuild_view_menu()
+        self._sync_account_column()
         self._append_log("Settings saved.")
         self._update_status()
 
@@ -3697,6 +3927,8 @@ class MainWindow(QMainWindow):
             self.folder_plan = outcome.folder_plan
         self.model.set_items(outcome.items)
         self._view_accounts = []
+        self._view_all = True
+        self._sync_account_column()
         self._rebuild_view_menu()
         self._refresh_category_filter()
         self._refresh_folder_choices()

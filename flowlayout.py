@@ -94,14 +94,38 @@ class FlowLayout(QLayout):
                 placed.setGeometry(QRect(QPoint(placed_x[placed], top + offset), hint))
 
         placed_x: dict = {}
+
+        def close_row(items, top: int, height: int, used: int) -> None:
+            """Hand a row's leftover width to whatever asked to grow.
+
+            Without this a field is always exactly its size hint, which for a
+            line edit is about seventeen characters whatever the window is
+            doing - so its placeholder is clipped on a 2000 pixel display.
+            """
+            if not items:
+                return
+            greedy = [pair for pair in items
+                      if pair[0].expandingDirections() & Qt.Orientation.Horizontal]
+            if greedy:
+                spare = area.width() - used
+                if spare > 0:
+                    share = spare // len(greedy)
+                    shift = 0
+                    for pair in items:
+                        placed_x[pair[0]] += shift
+                        if pair in greedy:
+                            pair[1].setWidth(pair[1].width() + share)
+                            shift += share
+            flush(items, top, height)
+
         for item in self._items:
             widget = item.widget()
             if widget is not None and widget.isHidden():
                 continue
-            hint = item.sizeHint()
+            hint = QSize(item.sizeHint())
             next_x = x + hint.width() + self._hspacing
             if next_x - self._hspacing > area.right() and row:
-                flush(row, y, row_height)
+                close_row(row, y, row_height, x - area.x() - self._hspacing)
                 row = []
                 x = area.x()
                 y = y + row_height + self._vspacing
@@ -112,7 +136,7 @@ class FlowLayout(QLayout):
             x = next_x
             row_height = max(row_height, hint.height())
 
-        flush(row, y, row_height)
+        close_row(row, y, row_height, x - area.x() - self._hspacing)
         return y + row_height - rect.y() + margins.bottom()
 
 

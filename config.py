@@ -471,6 +471,62 @@ class Settings:
             log.warning("Settings file contained unusable values; falling back to defaults.")
             return cls()
 
+    # -- sharing a configuration -----------------------------------------
+    #: Never leaves the machine in an export: window geometry is meaningless
+    #: elsewhere, and the mailbox list is exported without its passwords,
+    #: which stay in the Keychain where they belong.
+    PRIVATE_FIELDS = ("window_geometry", "splitter_state", "table_state")
+
+    def export_text(self) -> str:
+        """A readable copy of the settings, safe to send to somebody else.
+
+        JSON with a comment header rather than an opaque blob, so it can be
+        read and edited in any text editor and diffed like anything else.
+        No secret is ever in here: passwords and API keys live in the Keychain
+        and are not part of this object at all.
+        """
+        payload = {k: v for k, v in self.normalized().to_dict().items()
+                   if k not in self.PRIVATE_FIELDS}
+        # Mailboxes keep their addresses and servers, which is the useful part,
+        # and never had passwords in them to begin with.
+        header = (
+            f"# {APP_NAME} settings\n"
+            f"# Exported {datetime.now().astimezone():%Y-%m-%d %H:%M %Z}\n"
+            "#\n"
+            "# No passwords or API keys are in this file. Those live in the\n"
+            "# macOS Keychain, and have to be entered again on another Mac.\n"
+            "# Import it from Settings, or drop it in place of settings.json.\n"
+        )
+        return header + json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n"
+
+    @classmethod
+    def import_text(cls, text: str) -> "Settings":
+        """Read what export_text wrote. Raises ValueError with a reason."""
+        stripped = "\n".join(
+            line for line in (text or "").splitlines() if not line.lstrip().startswith("#")
+        ).strip()
+        if not stripped:
+            raise ValueError("That file is empty, or contains only comments.")
+        try:
+            raw = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"That is not a settings file this app wrote: {exc.msg} "
+                f"(line {exc.lineno})."
+            ) from exc
+        if not isinstance(raw, Mapping):
+            raise ValueError(
+                "That file holds a "
+                f"{type(raw).__name__}, not a set of settings."
+            )
+        known = {f.name for f in fields(cls)}
+        if not known & set(raw):
+            raise ValueError(
+                "That file has none of the settings this app uses, so it is "
+                "probably from a different program."
+            )
+        return cls.from_dict(raw)
+
     # -- disk ------------------------------------------------------------
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "Settings":

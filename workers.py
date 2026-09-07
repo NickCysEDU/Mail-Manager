@@ -308,6 +308,7 @@ class ScanWorker(_BaseWorker):
                     for message in scan.messages:
                         message.account_id = account.id
                         message.account_label = account.label
+                        message.account_address = account.address
                     messages.extend(scan.messages)
                     fetched_before += len(scan.messages)
                     expected_total = fetched_before

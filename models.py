@@ -415,6 +415,7 @@ class EmailMessage:
     #: there is nothing to disambiguate.
     account_id: str = ""
     account_label: str = ""
+    account_address: str = ""
     subject: str = ""
     sender_name: str = ""
     sender_email: str = ""
@@ -450,6 +451,25 @@ class EmailMessage:
         if self.date is None:
             return None
         return self.date.astimezone()
+
+    @property
+    def mailbox_display(self) -> str:
+        """What the Mailbox column shows.
+
+        The domain is the part that tells one account from another at a
+        glance, so it is always there; the name is only worth the width when
+        it says something the address does not.
+        """
+        address = (self.account_address or "").strip()
+        label = (self.account_label or "").strip()
+        if not address:
+            return label
+        local, _, domain = address.partition("@")
+        if not domain:
+            return address
+        if not label or label.lower() == local.lower():
+            return address
+        return f"{label} · @{domain}"
 
     def date_display(self, fmt: str = "%Y-%m-%d %H:%M") -> str:
         local = self.local_date()
