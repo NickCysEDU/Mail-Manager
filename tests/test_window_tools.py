@@ -8,6 +8,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+import accounts as accounts_module  # noqa: E402
 import autoreply  # noqa: E402
 import helpmode  # noqa: E402
 from accounts import Account  # noqa: E402
@@ -358,3 +359,142 @@ class TestHintTextIsNeverClipped:
         from gui import AdaptiveLineEdit
         field = AdaptiveLineEdit("The long one", "Short")
         assert field.toolTip() == "The long one"
+
+
+class TestTheAccountEditorCannotCorruptAMailbox:
+    """Each of these describes damage the previous editor actually did."""
+
+    @pytest.fixture
+    def dialog(self, qapp, tmp_path, monkeypatch):
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        store = InMemoryCredentialStore()
+        store.set_mailbox_password("me@icloud.com", "icloud-app-password")
+        settings = Settings(icloud_email="me@icloud.com").normalized()
+        window = MainWindow(settings, store)
+        subject = SettingsDialog(settings, store, window)
+        yield subject, store
+        window.close()
+
+    def test_changing_provider_cannot_leave_a_mismatched_address(self, dialog):
+        """An iCloud address on Gmail's server connects to nothing, silently."""
+        subject, _store = dialog
+        subject.preset_combo.setCurrentIndex(subject.preset_combo.findData("gmail"))
+        collected = subject.collect()
+        for account in collected.accounts:
+            if account.address:
+                guessed = accounts_module.host_for_address(account.address)
+                if not guessed.is_custom:
+                    assert account.host == guessed.host, \
+                        f"{account.address} pointed at {account.host}"
+
+    def test_a_password_cannot_be_saved_against_another_mailbox(self, dialog):
+        """This is what destroyed a real iCloud app-specific password.
+
+        The address on screen was iCloud's while the provider said Gmail, so a
+        Gmail password was written to the iCloud Keychain entry and the
+        original was gone.
+        """
+        subject, store = dialog
+        subject.preset_combo.setCurrentIndex(subject.preset_combo.findData("gmail"))
+        # Whatever is typed now belongs to the Gmail mailbox being set up.
+        subject.email_edit.setText("me@gmail.com")
+        subject._address_entered()
+        subject.password_edit.setText("gmail-app-password")
+        collected = subject.collect()
+        subject.persist_credentials(collected)
+        assert store.get_mailbox_password("me@gmail.com") == "gmail-app-password"
+        assert store.get_mailbox_password("me@icloud.com") != "gmail-app-password"
+
+    def test_a_new_mailbox_survives_being_saved(self, dialog):
+        subject, store = dialog
+        subject._add_account()
+        subject.preset_combo.setCurrentIndex(subject.preset_combo.findData("gmail"))
+        subject.email_edit.setText("work@gmail.com")
+        subject._address_entered()
+        subject.password_edit.setText("another-app-password")
+        collected = subject.collect()
+        subject.persist_credentials(collected)
+        assert [a.address for a in collected.accounts] == \
+            ["me@icloud.com", "work@gmail.com"]
+        assert store.get_mailbox_password("work@gmail.com") == "another-app-password"
+
+    def test_an_abandoned_blank_mailbox_is_dropped(self, dialog):
+        subject, _store = dialog
+        subject._add_account()
+        assert len(subject.collect().accounts) == 1
+
+    def test_the_list_says_what_each_mailbox_still_needs(self, dialog):
+        subject, _store = dialog
+        subject._add_account()
+        assert "no address" in subject.account_list.item(1).text()
+        subject.email_edit.setText("new@fastmail.com")
+        subject._address_entered()
+        assert "no password" in subject.account_list.item(1).text()
+        subject.password_edit.setText("x")
+        assert "ready" in subject.account_list.item(1).text()
+
+    def test_unticking_a_mailbox_keeps_it_but_stops_scanning_it(self, dialog):
+        from PySide6.QtCore import Qt as _Qt
+        subject, _store = dialog
+        subject.account_list.item(0).setCheckState(_Qt.CheckState.Unchecked)
+        collected = subject.collect()
+        assert len(collected.accounts) == 1
+        assert collected.accounts[0].enabled is False
+        assert collected.enabled_accounts == []
+
+
+class TestFullScreenClose:
+    def test_leaving_full_screen_before_hiding(self, qapp, tmp_path, monkeypatch):
+        """Hiding a window that owns a full-screen space leaves a black desktop."""
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        window = MainWindow(
+            Settings(icloud_email="you@icloud.example", menu_bar_icon=True).normalized(),
+            InMemoryCredentialStore())
+        window.show()
+        window.showFullScreen()
+        try:
+            assert window.isFullScreen()
+            window._put_away()
+            assert not window.isFullScreen()
+        finally:
+            window._quitting = True
+            window.close()
+
+    def test_a_full_screen_shape_is_not_saved_for_next_time(self, qapp, tmp_path,
+                                                            monkeypatch):
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        window = MainWindow(Settings(icloud_email="you@icloud.example").normalized(),
+                            InMemoryCredentialStore())
+        window.show()
+        window.resize(1100, 700)
+        window._save_layout()
+        normal = window.settings.window_geometry
+        window.showFullScreen()
+        window._save_layout()
+        try:
+            assert window.settings.window_geometry == normal
+        finally:
+            window._quitting = True
+            window.close()
+
+
+class TestHelpToggleIsInBothPlaces:
+    def test_settings_and_the_corner_agree(self, qapp, tmp_path, monkeypatch):
+        from PySide6.QtWidgets import QDialog
+        import gui as gui_module
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        window = MainWindow(Settings(icloud_email="you@icloud.example").normalized(),
+                            InMemoryCredentialStore())
+        window.show()
+        dialog = SettingsDialog(window.settings, InMemoryCredentialStore(), window)
+        dialog.help_check.setChecked(True)
+        monkeypatch.setattr(SettingsDialog, "exec",
+                            lambda self: QDialog.DialogCode.Accepted)
+        monkeypatch.setattr(gui_module, "SettingsDialog", lambda *a, **k: dialog)
+        try:
+            window.open_settings()
+            assert window.settings.help_mode is True
+            assert window.help_button.isChecked() is True
+        finally:
+            window._quitting = True
+            window.close()

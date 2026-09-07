@@ -355,6 +355,12 @@ def main(argv: Optional[list] = None) -> int:
     from PySide6.QtWidgets import QApplication
 
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeMenuBar, False)
+    # Before QApplication: Qt reads the bundle name when it builds the menu
+    # bar, so setting it afterwards is too late.
+    if not getattr(sys, "frozen", False):
+        import macname
+        macname.set_application_name(APP_DISPLAY_NAME)
+
     app = QApplication(sys.argv[:1])
     app.setApplicationName(APP_NAME)
     app.setApplicationDisplayName(APP_DISPLAY_NAME)
