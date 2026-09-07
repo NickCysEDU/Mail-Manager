@@ -71,27 +71,48 @@ class FlowLayout(QLayout):
 
     # -- the actual algorithm --------------------------------------------
     def _layout(self, rect: QRect, apply: bool) -> int:
+        """Pack items into rows, then centre each row on its own middle.
+
+        Two passes rather than one. A row's height is not known until the last
+        item has joined it, and placing items as they arrive pins every one of
+        them to the top of the row - which leaves a short label like "to", or
+        the window's date range, floating above the buttons beside it instead
+        of sitting on the same line.
+        """
         margins = self.contentsMargins()
-        area = rect.adjusted(margins.left(), margins.top(), -margins.right(), -margins.bottom())
+        area = rect.adjusted(margins.left(), margins.top(),
+                             -margins.right(), -margins.bottom())
         x, y = area.x(), area.y()
+        row: list = []
         row_height = 0
 
+        def flush(items, top: int, height: int) -> None:
+            if not apply:
+                return
+            for placed, hint in items:
+                offset = (height - hint.height()) // 2
+                placed.setGeometry(QRect(QPoint(placed_x[placed], top + offset), hint))
+
+        placed_x: dict = {}
         for item in self._items:
             widget = item.widget()
             if widget is not None and widget.isHidden():
                 continue
             hint = item.sizeHint()
             next_x = x + hint.width() + self._hspacing
-            if next_x - self._hspacing > area.right() and row_height > 0:
+            if next_x - self._hspacing > area.right() and row:
+                flush(row, y, row_height)
+                row = []
                 x = area.x()
                 y = y + row_height + self._vspacing
                 next_x = x + hint.width() + self._hspacing
                 row_height = 0
-            if apply:
-                item.setGeometry(QRect(QPoint(x, y), hint))
+            placed_x[item] = x
+            row.append((item, hint))
             x = next_x
             row_height = max(row_height, hint.height())
 
+        flush(row, y, row_height)
         return y + row_height - rect.y() + margins.bottom()
 
 

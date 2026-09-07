@@ -194,12 +194,24 @@ class Settings:
     table_state: str = ""
     show_log_panel: bool = False
     row_lines: int = 3
+    #: Columns the user has hidden, by index. The tick box is column 0 and is
+    #: never hideable, so it is never in here.
+    hidden_columns: List[int] = field(default_factory=list)
 
     # Appearance. Three separate axes: which way round the colours go, how far
     # apart the ends are, and whether the layout is tuned for reading.
     appearance_mode: str = "system"      # system | light | dark
     contrast: str = "normal"             # normal | high | maximum
     readable: bool = False
+    #: Hovering anything explains it. Off by default; a tooltip nobody asked
+    #: for is noise, and this makes asking explicit.
+    help_mode: bool = False
+
+    # Auto reply. Nothing is ever sent; drafts are saved for review.
+    auto_reply: bool = False
+    reply_rules: List[dict] = field(default_factory=list)
+    #: The name signed at the bottom of a drafted reply.
+    reply_signature: str = ""
 
     # Unattended scanning
     schedule_minutes: int = 0            # 0 means off
@@ -267,6 +279,17 @@ class Settings:
             data["non_job_routing"] = NonJobRouting.FILE.value
         data["max_messages"] = _clamp_int(data["max_messages"], 1, 5000, 400)
         data["row_lines"] = _clamp_int(data["row_lines"], 1, 6, 3)
+        import autoreply as _autoreply
+        raw_rules = data.get("reply_rules") or []
+        data["reply_rules"] = [
+            (r if isinstance(r, dict) else _autoreply.Rule.from_dict(r).to_dict())
+            for r in raw_rules if isinstance(r, (dict, Mapping))
+        ]
+        data["reply_signature"] = str(data.get("reply_signature", "")).strip()
+        data["hidden_columns"] = sorted({
+            int(c) for c in (data.get("hidden_columns") or [])
+            if isinstance(c, (int, float)) and 1 <= int(c) <= 32
+        })
         import theme as _theme
         if data["appearance_mode"] not in dict(_theme.MODES):
             data["appearance_mode"] = "system"
@@ -281,7 +304,7 @@ class Settings:
         for key in ("auto_approve_non_job", "subscribe_new_folders", "show_log_panel",
                     "hide_non_job", "fallback_to_rules", "auto_file_background",
                     "background_agent", "menu_bar_icon", "close_to_menu_bar",
-                    "start_in_menu_bar", "readable"):
+                    "start_in_menu_bar", "readable", "help_mode", "auto_reply"):
             data[key] = bool(data[key])
         settled = Settings(**data)
         settled._sync_mailboxes()
@@ -393,6 +416,23 @@ class Settings:
     @property
     def profile(self) -> "profiles.Profile":
         return profiles.get(self.sort_profile)
+
+    @property
+    def rules(self) -> list:
+        """The reply rules as objects, defaulting to the shipped set."""
+        import autoreply
+        if not self.reply_rules:
+            return autoreply.default_rules()
+        return [autoreply.Rule.from_dict(r) for r in self.reply_rules]
+
+    def set_rules(self, rules) -> None:
+        self.reply_rules = [r.to_dict() for r in rules]
+
+    @property
+    def replies_armed(self) -> bool:
+        """Whether anything would actually be drafted."""
+        return self.auto_reply and any(
+            r.enabled and r.action != "none" for r in self.rules)
 
     @property
     def chosen_topics(self) -> tuple:

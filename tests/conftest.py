@@ -468,3 +468,11 @@ def classification_factory():
 @pytest.fixture
 def item_factory():
     return make_item
+
+
+@pytest.fixture(scope="session")
+def qapp():
+    """One QApplication for the whole session, for tests that build widgets."""
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+    return QApplication.instance() or QApplication([])

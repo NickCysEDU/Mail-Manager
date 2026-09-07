@@ -13,7 +13,7 @@
 
 ![macOS 13+](https://img.shields.io/badge/macOS-13%2B-black)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue)
-![Tests](https://img.shields.io/badge/tests-1%2C115%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-1%2C259%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
 <img src="docs/screenshot.png" width="900" alt="The approval table, with a summary, category, destination folder and confidence score for every message">
@@ -207,6 +207,40 @@ the sorter it will use, the schedule, and the result of the last background run,
 without opening the window. The **Model** entry is named after whatever is
 currently selected, and switching there is the same as switching in the window.
 
+## Replying
+
+**Settings → Auto Reply.** Three ready-made rules, all switched off:
+acknowledging an interview invitation, answering a request for documents or
+times, and declining a recruiter politely. You can add your own, matched on
+category, topic, sender, a phrase, and a confidence floor.
+
+**Nothing is ever sent.** A matching message gets a reply written into your
+Drafts mailbox, threaded correctly with `In-Reply-To` and `References`, and you
+press send yourself in Mail. An app that answers a stranger's post on your
+behalf, with a model, without you reading it first, is not a feature anybody
+asks for twice.
+
+A rule can fill a template (`{first_name}`, `{sender}`, `{subject}`, `{me}`) or
+hand the message to the model with your own guidance. The model is told not to
+invent a fact and not to commit you to anything; where it needs something it
+does not have, it leaves `[a note in brackets]` and the draft lists those at the
+bottom. Bulk mail is never replied to, and that is on by default.
+
+## Undo
+
+⌘Z after an Apply moves everything back where it came from. The app moves real
+mail, and knowing you can put it back is the difference between trying it and
+being careful with it.
+
+## Getting around
+
+- **✉︎ picker** — which mailboxes the next scan reads. Any combination.
+- **👁 picker** — which mailboxes' messages are on screen. A separate question:
+  pull six in and read them one at a time.
+- **Columns** — turn any column off. Remembered between launches.
+- **?** — a circled question mark in the corner. Switch it on and hovering
+  anything explains it; switch it off and tooltips stay out of your way.
+
 ## Reading it comfortably
 
 **Settings → Appearance** has three separate controls, because they solve
@@ -263,7 +297,7 @@ log. [Full details in SECURITY.md](SECURITY.md).
 
 ```bash
 ./dev demo      # the app with sample mail, no setup
-./dev test      # 1,115 tests, about 38 seconds
+./dev test      # 1,259 tests, about 90 seconds
 ./dev eval      # sorter accuracy against the labelled fixture
 ./dev fake      # the whole pipeline in the terminal, offline
 ```

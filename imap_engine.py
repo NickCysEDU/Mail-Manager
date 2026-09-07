@@ -414,6 +414,10 @@ class MovePlan:
     subject: str = ""
     #: Which mailbox the message is in. Empty on a single-account setup.
     account_id: str = ""
+    #: Which folder it is in right now. Empty means the account's configured
+    #: source mailbox, which is the ordinary case; undo sets it, because by
+    #: then each message is sitting in whichever folder it was filed into.
+    source_folder: str = ""
 
 
 @dataclass
@@ -963,6 +967,43 @@ class IMAPEngine:
                 len(messages), len(uids), mailbox,
             )
         return messages
+
+    #: Where each provider keeps drafts. Checked in order against what the
+    #: server actually lists, because the name is not standard.
+    DRAFT_CANDIDATES = ("Drafts", "INBOX.Drafts", "[Gmail]/Drafts",
+                        "[Google Mail]/Drafts", "Draft")
+
+    def drafts_mailbox(self) -> Optional[str]:
+        """The account's Drafts mailbox, found rather than guessed.
+
+        Preference is given to whichever folder the server flags \\Drafts,
+        since that is the one the mail client will show.
+        """
+        try:
+            listed = self.list_folders()
+        except IMAPError:
+            return None
+        for info in listed:
+            if any("drafts" in flag.lower() for flag in info.flags):
+                return info.name
+        names = {info.name.lower(): info.name for info in listed}
+        for candidate in self.DRAFT_CANDIDATES:
+            if candidate.lower() in names:
+                return names[candidate.lower()]
+        return None
+
+    def save_draft(self, raw: bytes, mailbox: Optional[str] = None) -> str:
+        """Append a message to Drafts. Returns the mailbox it went to."""
+        target = mailbox or self.drafts_mailbox()
+        if not target:
+            raise IMAPError(
+                "This account has no Drafts mailbox, so there is nowhere to put "
+                "the reply. Create one called Drafts and try again."
+            )
+        conn = self._require_conn()
+        self._cmd("Saving a draft", conn.append, quote_mailbox(target),
+                  "(\\Draft)", None, raw)
+        return target
 
     def _clone(self) -> "IMAPEngine":
         """A second connection to the same account, for parallel fetching."""

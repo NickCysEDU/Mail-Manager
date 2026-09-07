@@ -90,11 +90,52 @@ class _BaseWorker(QThread):
         log.info(message)
         self.log_message.emit(message)
 
+    #: Failures that are worth explaining rather than just reporting, keyed by
+    #: something that appears in the message. The app knows what to do about
+    #: each of these, and saying so is the difference between an error the user
+    #: can act on and one they can only screenshot.
+    ADVICE = (
+        ("AUTHENTICATIONFAILED", "The server rejected the password. Most providers "
+         "need an app password rather than the one you sign in with; Settings → "
+         "Mailboxes has a link to generate one."),
+        ("rejected those credentials", "Check the address, and that the password is "
+         "an app password rather than your ordinary one."),
+        ("Name or service not known", "That host name did not resolve. Check the "
+         "IMAP host in Settings → Mailboxes."),
+        ("nodename nor servname", "That host name did not resolve. Check the IMAP "
+         "host in Settings → Mailboxes."),
+        ("Connection refused", "Nothing is listening on that host and port. If this "
+         "is Proton, its Bridge app has to be running."),
+        ("timed out", "The server did not answer in time. This is usually the "
+         "network rather than the app; try again, and lower Parallel connections "
+         "in Settings → Mailboxes if it keeps happening."),
+        ("certificate", "The TLS certificate did not verify. The app will not "
+         "connect without a valid one, which is deliberate."),
+        ("no Drafts mailbox", "Create a folder called Drafts in this account, then "
+         "run the reply again."),
+        ("API key", "Settings → Analysis holds the key, and has a link to the page "
+         "that issues one."),
+        ("quota", "The provider is rate limiting or out of credit. The offline "
+         "sorter needs no key and no quota, and is one click away in the ⚙︎ menu."),
+        ("Ollama", "Settings → Analysis can install and start Ollama for you when "
+         "On this Mac is selected."),
+    )
+
+    def _advice_for(self, detail: str) -> str:
+        lowered = detail.lower()
+        for marker, advice in self.ADVICE:
+            if marker.lower() in lowered:
+                return advice
+        return ""
+
     def _report_exception(self, title: str, exc: BaseException) -> None:
         log.error("%s: %s", title, exc, exc_info=True)
         detail = str(exc) or type(exc).__name__
         if not isinstance(exc, (IMAPError, LLMError, ValueError)):
             detail = f"{type(exc).__name__}: {detail}\n\n{traceback.format_exc(limit=4)}"
+        advice = self._advice_for(detail)
+        if advice:
+            detail = f"{detail}\n\n{advice}"
         self.failed.emit(title, detail)
 
 
@@ -437,15 +478,24 @@ class ApplyWorker(_BaseWorker):
         return {targets[0].id: self.mailbox_password} if targets else {}
 
     def _grouped(self) -> List[tuple]:
-        """Moves bundled by mailbox, since each one is a separate server."""
-        by_account: Dict[str, List[MovePlan]] = {}
-        for plan in self.plans:
-            by_account.setdefault(plan.account_id, []).append(plan)
+        """Moves bundled by mailbox and by the folder they start in.
+
+        Two levels because each mailbox is a separate server, and because a
+        move can only name one source folder at a time. Filing starts from the
+        inbox for everything; undoing starts from wherever each message was
+        filed to.
+        """
         default = self.settings.primary_account
-        return [
-            (self.settings.account_by_id(account_id) or default, plans)
-            for account_id, plans in by_account.items()
-        ]
+        buckets: Dict[tuple, List[MovePlan]] = {}
+        for plan in self.plans:
+            account = self.settings.account_by_id(plan.account_id) or default
+            source = plan.source_folder or account.source_mailbox
+            buckets.setdefault((account.id, source), []).append(plan)
+        out = []
+        for (account_id, source), plans in buckets.items():
+            account = self.settings.account_by_id(account_id) or default
+            out.append((account, source, plans))
+        return out
 
     def run(self) -> None:
         passwords = self._passwords()
@@ -454,7 +504,7 @@ class ApplyWorker(_BaseWorker):
         done_so_far = 0
         total = len(self.plans) or 1
 
-        for account, plans in groups:
+        for account, source, plans in groups:
             engine = IMAPEngine(host=account.host, port=account.port)
             try:
                 self._emit_progress(done_so_far, total, f"Connecting to {account.label}…")
@@ -489,7 +539,7 @@ class ApplyWorker(_BaseWorker):
 
                 report = engine.move_messages(
                     plans,
-                    mailbox=account.source_mailbox,
+                    mailbox=source,
                     progress=apply_report,
                     cancel=self.cancel_event,
                 )
@@ -515,6 +565,121 @@ class ApplyWorker(_BaseWorker):
 
         self._log(f"Apply finished: {combined.describe()}")
         self.finished_ok.emit(combined)
+
+
+class ReplyWorker(_BaseWorker):
+    """Draft replies for messages the rules matched, and save them to Drafts.
+
+    Kept apart from the scan on purpose. Drafting talks to the model again and
+    writes to the mailbox, and neither of those should happen as a side effect
+    of looking at what arrived.
+    """
+
+    finished_ok = Signal(object)
+    task_name = "reply drafting"
+
+    def __init__(self, settings: Settings, mailbox_password, api_key: str,
+                 items: Sequence[TriageItem], parent=None) -> None:
+        super().__init__(parent)
+        self.settings = settings
+        self.mailbox_password = mailbox_password
+        self.api_key = api_key
+        self.items = list(items)
+        self._classifier: Optional[LLMEngine] = None
+
+    def cancel(self) -> None:
+        super().cancel()
+        if self._classifier is not None:
+            self._classifier.close()
+
+    def _passwords(self) -> Dict[str, str]:
+        if isinstance(self.mailbox_password, dict):
+            return dict(self.mailbox_password)
+        targets = self.settings.scan_accounts
+        return {targets[0].id: self.mailbox_password} if targets else {}
+
+    def run(self) -> None:
+        import autoreply
+
+        rules = [r for r in self.settings.rules if r.enabled and r.action != "none"]
+        drafts: List[autoreply.Draft] = []
+        if not rules:
+            self._log("No reply rules are switched on.")
+            self.finished_ok.emit(drafts)
+            return
+
+        wants_model = any(r.action == "draft_ai" for r in rules)
+        if wants_model:
+            self._classifier = LLMEngine(
+                provider=self.settings.provider, api_key=self.api_key,
+                model=self.settings.model, base_url=self.settings.base_url,
+                effort=self.settings.effort,
+                max_body_chars=self.settings.max_body_chars,
+                fallback_to_rules=False, ruleset=self.settings.ruleset,
+            )
+
+        matched = []
+        for item in self.items:
+            rule, _why = autoreply.choose_rule(rules, item.email, item.classification)
+            if rule is not None:
+                matched.append((item, rule))
+        if not matched:
+            self._log("No message matched a reply rule.")
+            self.finished_ok.emit(drafts)
+            return
+
+        signature = self.settings.reply_signature
+        total = len(matched)
+        for index, (item, rule) in enumerate(matched, start=1):
+            if self.cancel_event.is_set():
+                break
+            self._emit_progress(index - 1, total,
+                                f"Drafting {index} of {total}: {item.email.subject_display[:40]}")
+            drafts.append(autoreply.draft_for(
+                rule, item.email, item.classification, signature,
+                self._classifier if rule.action == "draft_ai" else None,
+            ))
+
+        usable = [d for d in drafts if d.ok]
+        saved = 0
+        by_account: Dict[str, List] = {}
+        for draft in usable:
+            by_account.setdefault(draft.account_id, []).append(draft)
+
+        passwords = self._passwords()
+        for account_id, group in by_account.items():
+            account = self.settings.account_by_id(account_id) or self.settings.primary_account
+            engine = IMAPEngine(host=account.host, port=account.port)
+            try:
+                engine.connect(account.address, passwords.get(account.id, ""))
+                target = engine.drafts_mailbox()
+                for draft in group:
+                    raw = autoreply.build_mime(
+                        draft, account.address, account.label)
+                    try:
+                        engine.save_draft(raw, target)
+                        saved += 1
+                    except IMAPError as exc:
+                        draft.error = str(exc)
+            except Exception as exc:  # noqa: BLE001
+                for draft in group:
+                    draft.error = draft.error or str(exc)
+                self._log(f"{account.label}: could not save drafts - {exc}")
+            finally:
+                try:
+                    engine.logout()
+                except Exception:  # pragma: no cover
+                    pass
+
+        failed = [d for d in drafts if not d.ok]
+        self._emit_progress(total, total, "Drafting finished.")
+        self._log(
+            f"Drafted {len(usable)} repl{'y' if len(usable) == 1 else 'ies'}, "
+            f"saved {saved} to Drafts"
+            + (f", {len(failed)} could not be written" if failed else "")
+            + ". Nothing has been sent."
+        )
+        self.finished_ok.emit(drafts)
 
 
 class ConnectionTestWorker(_BaseWorker):

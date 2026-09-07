@@ -219,7 +219,7 @@ class TestWindowStopAll:
             assert window.running_workers() == []      # detached from the window
             assert worker in _ABANDONED                # but kept alive, not destroyed
             assert worker.isRunning() is True          # and never force-killed
-            assert window.stop_button.isEnabled() is False
+            assert window.scan_button.text() in ("Scan && Analyze", "Reload Sample Data")
         finally:
             worker.release.set()
             worker.wait(5000)
@@ -231,14 +231,14 @@ class TestWindowStopAll:
         window.stop_all()
         assert window.stop_all() == 0
 
-    def test_the_stop_button_tracks_whether_anything_is_running(self, window):
-        assert window.stop_button.isEnabled() is False
+    def test_the_primary_button_becomes_stop_while_anything_runs(self, window):
+        assert window.scan_button.text() in ("Scan && Analyze", "Reload Sample Data")
         window._register(start_and_wait(BlockingWorker(window)))
         window._update_status()
-        assert window.stop_button.isEnabled() is True
+        assert window.scan_button.text() == "Stop"
         assert window.stop_action.isEnabled() is True
         window.stop_all()
-        assert window.stop_button.isEnabled() is False
+        assert window.scan_button.text() in ("Scan && Analyze", "Reload Sample Data")
         assert window.stop_action.isEnabled() is False
 
     def test_the_stop_menu_action_has_a_shortcut(self, window):

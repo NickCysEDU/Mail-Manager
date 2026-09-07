@@ -460,7 +460,7 @@ class TestMainWindow:
         assert window.model.rowCount() == 0
         assert window.apply_button.isEnabled() is False
         assert window.apply_button.text() == "Apply Approved Folder Moves"
-        assert window.stop_button.isEnabled() is False
+        assert window.scan_button.text() in ("Scan && Analyze", "Reload Sample Data")
         assert window.table_stack.currentIndex() == 0   # the empty-state page
 
     def test_apply_button_reflects_the_selection(self, window):

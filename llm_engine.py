@@ -743,6 +743,32 @@ class LLMEngine:
         raise LLMError(f"Request failed after {MAX_ATTEMPTS} attempts: {last_error}")
 
     # -- classification --------------------------------------------------
+    def draft_reply(self, message: EmailMessage, classification, rule,
+                    me: str = "") -> Dict[str, Any]:
+        """Write a reply body for one message. Returns the raw payload."""
+        import autoreply
+
+        self._abort_if_stopped()
+        body = (message.body_text or "")[: self.max_body_chars]
+        prompt = (
+            f"From: {message.sender_short} <{message.sender_email}>\n"
+            f"Subject: {message.subject_display}\n"
+            f"Category: {classification.category_label}\n"
+            f"Replying as: {me or 'the mailbox owner'}\n"
+        )
+        if rule.guidance:
+            prompt += f"\nWhat this reply needs to do:\n{rule.guidance}\n"
+        if rule.template:
+            prompt += f"\nA rough shape to follow:\n{rule.template}\n"
+        prompt += f"\n--- the message ---\n{body}\n"
+
+        completion = self.provider.complete(
+            autoreply.SYSTEM_PROMPT, prompt, autoreply.DRAFT_SCHEMA, message
+        )
+        self.usage.add(completion.usage)
+        payload = completion.payload if isinstance(completion.payload, dict) else {}
+        return payload
+
     def classify(self, message: EmailMessage, cancel: Optional[threading.Event] = None) -> Classification:
         """Classify one email. Raises only on auth failure or cancellation."""
         prompt = self.build_prompt(message)

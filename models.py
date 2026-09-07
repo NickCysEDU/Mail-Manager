@@ -249,10 +249,18 @@ class NonJobRouting(Enum):
 
 
 def sanitize_folder_component(name: str) -> str:
-    """Strip characters that are illegal or ambiguous in an IMAP mailbox name."""
+    """Strip characters that are illegal or ambiguous in an IMAP mailbox name.
+
+    Also refuses the two names that mean "here" and "the level above". Plenty
+    of IMAP servers still store each mailbox as a directory, so a mailbox
+    called ".." is somewhere between confusing and a way out of the mail root,
+    and no legitimate folder is called that.
+    """
     cleaned = re.sub(r'[\x00-\x1f\x7f"\\/]+', " ", str(name))
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned
+    if set(cleaned) <= {"."} and cleaned:
+        return ""
+    return cleaned.lstrip(".").strip() or ""
 
 
 @dataclass(frozen=True)
