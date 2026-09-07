@@ -597,15 +597,57 @@ class CredentialStore:
             return "unavailable"
 
     # -- generic ---------------------------------------------------------
+    #: How long to wait for the Keychain before deciding it is not going to
+    #: answer. Only the headless paths use this; a window can afford to wait
+    #: because the person is there to click the button.
+    read_timeout: Optional[float] = None
+
     def get(self, account: str) -> str:
         if not account:
             return ""
         try:
+            if self.read_timeout:
+                return self._get_with_timeout(account, self.read_timeout)
             return self._keyring().get_password(self.service, account) or ""
         except CredentialError:
             raise
         except Exception as exc:
             raise CredentialError(f"Could not read '{account}' from the Keychain: {exc}") from exc
+
+    def _get_with_timeout(self, account: str, timeout: float) -> str:
+        """Read the Keychain, giving up rather than waiting forever.
+
+        macOS asks permission the first time a particular build of an app
+        touches an entry, and identifies the app by its code signature. A
+        rebuilt or re-signed copy is a different app as far as the Keychain is
+        concerned, so it asks again. With a window on screen that is a dialog;
+        run from a launchd agent with nobody watching it is a process that
+        never returns, which is how a nightly scan silently stops happening.
+        """
+        outcome: Dict[str, Any] = {}
+
+        def read() -> None:
+            try:
+                outcome["value"] = self._keyring().get_password(self.service, account) or ""
+            except BaseException as exc:  # noqa: BLE001 - handed back below
+                outcome["error"] = exc
+
+        import threading
+        worker = threading.Thread(target=read, daemon=True, name="keychain-read")
+        worker.start()
+        worker.join(timeout)
+        if worker.is_alive():
+            raise CredentialError(
+                f"The Keychain did not answer within {timeout:.0f} seconds for "
+                f"'{account}'. This usually means macOS is waiting for someone "
+                "to allow access, which cannot happen with no window on screen. "
+                "Open Mail Manager once and let it read the password, ticking "
+                "Always Allow, then unattended scans will work again."
+            )
+        if "error" in outcome:
+            raise CredentialError(
+                f"Could not read '{account}' from the Keychain: {outcome['error']}")
+        return outcome.get("value", "")
 
     def set(self, account: str, secret: str) -> None:
         if not account:

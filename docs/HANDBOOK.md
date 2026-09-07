@@ -904,3 +904,88 @@ network timeout expires.
 "dist/Mail Manager.app/Contents/MacOS/Mail Manager" --self-test
 ```
 runs inside the bundle and reports which dependency failed to resolve.
+
+## Building for both architectures
+
+The shipped app is **universal2**: one bundle containing both an arm64 and an
+x86_64 slice, so it runs natively on Apple silicon and on Intel without Rosetta
+on either.
+
+That needs an interpreter that contains both. A Mac ships one architecture of
+Python per install, and Homebrew builds for whichever architecture Homebrew
+itself is - on an Apple silicon Mac with Intel Homebrew at `/usr/local`, which
+is a common state after a migration, everything built from it is Intel, and the
+resulting app makes macOS offer to "update to an Apple silicon version".
+
+```bash
+./tools/fetch_universal_python.sh   # unpacks python.org's universal2 build
+./build_app.sh                      # finds it, and says what it produced
+```
+
+`fetch_universal_python.sh` unpacks the official installer into `.toolchain`
+rather than installing it, so it needs no admin rights and deleting that
+directory undoes all of it. The framework records the path it expects to live
+at, so every Mach-O inside it is rewritten to point at the new location and
+re-signed; without that step nothing loads, starting with `ssl`.
+
+Two of the dependencies - `jiter` and `pydantic_core`, both pulled in by the
+Anthropic SDK - publish one wheel per architecture rather than a universal one.
+`tools/make_universal_deps.py` downloads the missing half of each **at the
+version already installed** and joins them with `lipo`. The version matters:
+pydantic checks that its compiled core is exactly the version it expects, so a
+mismatched slice passes every test on the build machine and fails on everybody
+else's. `build_app.sh` runs this automatically when the interpreter is
+universal.
+
+To build for one architecture on purpose:
+
+```bash
+MAILMANAGER_TARGET_ARCH=arm64  ./build_app.sh
+MAILMANAGER_TARGET_ARCH=x86_64 ./build_app.sh
+```
+
+### Certificates
+
+A frozen app has no Python framework to fall back on, and the CA bundle path
+compiled into the interpreter points at one. `certs.py` checks at startup and,
+if that path is not there, uses the `certifi` bundle shipped inside the app.
+`--self-test` reports which one is in use and then makes a real TLS handshake,
+because a path existing is not proof that verification works.
+
+### Keychain and code signing
+
+macOS identifies an app to the Keychain by its code signature. An **ad-hoc**
+signature (`codesign -s -`) has no identity of its own - the system tells
+builds apart by hashing their contents - so every rebuild is a different app,
+and the permission you granted the last one does not carry over. Rebuild a few
+times and the password prompt comes back every time.
+
+A certificate fixes it, because the requirement is then written against the
+certificate rather than the contents:
+
+```
+# ad-hoc:      identifier "…" and cdhash H"…"      ← changes every build
+# certificate: identifier "…" and certificate leaf = H"…"   ← stays put
+```
+
+```bash
+./tools/make_signing_identity.sh     # once
+./build_app.sh                       # finds and uses it from then on
+```
+
+That creates one self-signed code-signing certificate in your login keychain.
+It grants no trust to anything - its only job is to give builds a stable
+identity - and `--remove` deletes it. It does **not** make the app pass
+Gatekeeper: that needs a paid Developer ID and notarisation, and a first launch
+still wants right-click then Open, exactly as with ad-hoc signing.
+
+The first time `codesign` uses the new key, macOS asks permission. Press
+**Always Allow**, not Allow: "Allow" grants a single use, and a deep signature
+walks every nested binary in the bundle, so it will ask over a hundred times.
+
+Whichever way it is signed, the Keychain asks once per identity. Press
+**Always Allow** there too.
+
+Unattended runs cannot answer any of these dialogs, so the headless paths read
+the Keychain with a timeout and fail with an explanation rather than waiting
+for a click that will never come.

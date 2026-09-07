@@ -29,3 +29,7 @@ secrets*
 
 # macOS
 .DS_Store
+
+# Universal2 build toolchain, fetched by tools/fetch_universal_python.sh
+.toolchain/
+.venv-universal/

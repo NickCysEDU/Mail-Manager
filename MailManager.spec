@@ -9,6 +9,8 @@ The result is dist/"iCloud Job Triage.app" — a self-contained bundle with its
 own Python and Qt. No terminal, no virtualenv, and no daily redeploy.
 """
 
+import os
+import subprocess
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_submodules
@@ -16,6 +18,41 @@ from PyInstaller.utils.hooks import collect_submodules
 APP_NAME = "Mail Manager"
 BUNDLE_ID = "com.mailmanager.icloudjobtriage"
 VERSION = "1.0.0"
+
+def _target_arch() -> str:
+    """What to build for: a single architecture, or both.
+
+    Universal is only possible if every compiled module carries both slices.
+    Asking PyInstaller for it when one does not produces a confusing failure
+    deep in the build, so this checks first and says so plainly.
+    """
+    wanted = os.environ.get("MAILMANAGER_TARGET_ARCH", "universal2").strip()
+    if wanted in ("arm64", "x86_64"):
+        return wanted
+    if wanted in ("", "native", "none"):
+        return None
+
+    import site
+    thin = []
+    for directory in site.getsitepackages():
+        base = Path(directory)
+        if not base.is_dir():
+            continue
+        for module in base.rglob("*.so"):
+            result = subprocess.run(["lipo", "-archs", str(module)],
+                                    capture_output=True, text=True)
+            if result.returncode == 0 and len(result.stdout.split()) == 1:
+                thin.append(module.name)
+    if thin:
+        print(f"  ! {len(thin)} module(s) carry one architecture "
+              f"({', '.join(sorted(set(thin))[:3])}…).")
+        print("    Run: python tools/make_universal_deps.py")
+        print("    Building for this machine only.")
+        return None
+    return "universal2"
+
+
+TARGET_ARCH = _target_arch()
 
 ROOT = Path(SPECPATH).resolve()
 
@@ -28,7 +65,18 @@ for asset in ("icon.png", "icon.icns"):
 # Imported lazily inside the window, so static analysis misses it; `--demo`
 # must work in the shipped bundle too.
 hiddenimports = ["demo_data", "providers", "rules_engine", "rulesets",
-                 "scheduler", "menubar", "welcome", "flowlayout"]
+                 "scheduler", "menubar", "welcome", "flowlayout",
+                 "accounts", "autoreply", "certs", "helpmode", "ondevice",
+                 "profiles", "theme"]
+
+# The CA bundle. Without it a frozen app has no certificates at all, because
+# the path Python was compiled with points at a framework the user does not
+# have.
+try:
+    import certifi
+    datas.append((certifi.where(), "certifi"))
+except ImportError:      # pragma: no cover - flagged by the self test instead
+    print("  ! certifi is not installed; the app will not be able to verify TLS.")
 
 # keyring resolves its backends dynamically, so PyInstaller cannot see them.
 hiddenimports += [
@@ -90,7 +138,10 @@ exe = EXE(
     console=False,          # no terminal window, ever
     disable_windowed_traceback=False,
     argv_emulation=False,
-    target_arch=None,       # matches the building interpreter
+    # universal2 when the interpreter and every extension module can supply
+    # both slices, which tools/make_universal_deps.py arranges. Override with
+    # MAILMANAGER_TARGET_ARCH=arm64 or x86_64 to build one on its own.
+    target_arch=TARGET_ARCH,
     codesign_identity=None,
     entitlements_file=None,
     icon=str(ROOT / "assets" / "icon.icns") if (ROOT / "assets" / "icon.icns").exists() else None,

@@ -13,7 +13,7 @@
 
 ![macOS 13+](https://img.shields.io/badge/macOS-13%2B-black)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue)
-![Tests](https://img.shields.io/badge/tests-1%2C259%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-1%2C267%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
 <img src="docs/screenshot.png" width="900" alt="The approval table, with a summary, category, destination folder and confidence score for every message">
@@ -40,6 +40,11 @@ shows you a list. You tick the ones you want filed. It files them.
   so nothing is marked as read.
 
 ## Install
+
+The download is a **universal** app: one file that runs natively on Apple
+silicon and on Intel, with no Rosetta and no choosing between two downloads.
+
+
 
 **[Download the latest `.dmg`](https://github.com/NickCysEDU/Mail-Manager/releases/latest)**,
 open it, and drag Mail Manager onto Applications.
@@ -297,7 +302,7 @@ log. [Full details in SECURITY.md](SECURITY.md).
 
 ```bash
 ./dev demo      # the app with sample mail, no setup
-./dev test      # 1,259 tests, about 90 seconds
+./dev test      # 1,267 tests, about 60 seconds
 ./dev eval      # sorter accuracy against the labelled fixture
 ./dev fake      # the whole pipeline in the terminal, offline
 ```

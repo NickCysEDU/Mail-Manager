@@ -23,6 +23,17 @@ if [[ "${1:-}" != "--skip-build" ]]; then
 fi
 [[ -d "$APP" ]] || die "$APP not found. Run ./build_app.sh first."
 
+# Report what is being packaged, since an app built for one architecture looks
+# identical to one built for both until somebody on the other kind opens it.
+ARCHS="$(lipo -archs "$APP/Contents/MacOS/$APP_NAME" 2>/dev/null || echo unknown)"
+SIGNED_BY="$(codesign -dvv "$APP" 2>&1 | sed -n 's/^Authority=//p' | head -1)"
+say "Packaging $ARCHS${SIGNED_BY:+, signed by $SIGNED_BY}"
+case "$ARCHS" in
+  *arm64*x86_64*|*x86_64*arm64*) ;;
+  *) say "  This is a single-architecture build. For both:" 
+     say "    ./tools/fetch_universal_python.sh && ./build_app.sh" ;;
+esac
+
 BACKGROUND="assets/dmg-background.tiff"
 [[ -f "$BACKGROUND" ]] || BACKGROUND="assets/dmg-background.png"
 

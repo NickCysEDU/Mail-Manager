@@ -371,3 +371,81 @@ class TestQuittingDoesNotLoseWork:
             assert "ticked" in window._unfinished_work()
         finally:
             window.close()
+
+
+# ==========================================================================
+# TLS, which everything else depends on
+# ==========================================================================
+class TestCertificateBundle:
+    def test_a_bundle_is_always_found(self):
+        import certs
+        assert certs.ensure() is not None, "TLS cannot verify without one"
+
+    def test_the_description_says_where_it_came_from(self):
+        import certs
+        described = certs.describe()
+        assert "compiled in" in described or "shipped with the app" in described
+
+    def test_it_never_disables_verification(self):
+        """A tempting shortcut that would make every check meaningless."""
+        import inspect
+        import certs
+        source = inspect.getsource(certs)
+        assert "CERT_NONE" not in source
+        assert "check_hostname = False" not in source
+
+    def test_calling_it_twice_is_harmless(self):
+        import certs
+        assert certs.ensure() == certs.ensure()
+
+
+class TestKeychainCannotHangForever:
+    def test_a_slow_keychain_gives_up_with_advice(self):
+        """A launchd agent with nobody watching must not wait for a dialog."""
+        import time
+        from config import CredentialError, CredentialStore
+
+        class Sleepy:
+            def get_password(self, service, account):
+                time.sleep(5)
+                return "never gets here"
+
+        store = CredentialStore(backend=Sleepy())
+        store.read_timeout = 0.2
+        with pytest.raises(CredentialError) as caught:
+            store.get("anything")
+        message = str(caught.value)
+        assert "did not answer" in message
+        assert "Always Allow" in message, "the error has to say how to fix it"
+
+    def test_a_prompt_reply_still_comes_back(self):
+        from config import CredentialStore
+
+        class Quick:
+            def get_password(self, service, account):
+                return "secret"
+
+        store = CredentialStore(backend=Quick())
+        store.read_timeout = 5.0
+        assert store.get("anything") == "secret"
+
+    def test_an_error_inside_the_thread_is_reported_not_swallowed(self):
+        from config import CredentialError, CredentialStore
+
+        class Broken:
+            def get_password(self, service, account):
+                raise RuntimeError("keychain is on fire")
+
+        store = CredentialStore(backend=Broken())
+        store.read_timeout = 5.0
+        with pytest.raises(CredentialError, match="on fire"):
+            store.get("anything")
+
+    def test_without_a_timeout_nothing_changes(self):
+        from config import CredentialStore
+
+        class Quick:
+            def get_password(self, service, account):
+                return "secret"
+
+        assert CredentialStore(backend=Quick()).get("anything") == "secret"
