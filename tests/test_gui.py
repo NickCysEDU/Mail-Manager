@@ -432,7 +432,7 @@ class TestMainWindow:
             assert "All mailboxes" in labels
             # Picking one narrows the next scan to it.
             chosen = subject.settings.accounts[1]
-            subject._select_account(chosen.id)
+            subject._select_accounts([chosen.id])
             assert [a.id for a in subject.settings.scan_accounts] == [chosen.id]
         finally:
             subject.close()

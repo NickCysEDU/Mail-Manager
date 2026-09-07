@@ -178,6 +178,10 @@ class ScanWorker(_BaseWorker):
         messages: List[EmailMessage] = []
         plan = None
         warnings_seen: List[str] = []
+        # Progress runs across every mailbox rather than restarting at each
+        # one, so the bar means the same thing whether one is selected or six.
+        fetched_before = 0
+        expected_total = 0
 
         try:
             for index, account in enumerate(targets, start=1):
@@ -223,16 +227,28 @@ class ScanWorker(_BaseWorker):
                             "moves will use a full EXPUNGE of the source mailbox."
                         )
 
-                    self._emit_progress(0, 100, f"Searching {account.label}…")
+                    self._emit_progress(fetched_before, max(fetched_before * 2, 1),
+                                        f"Searching {account.label}…")
                     fetch_started = time.monotonic()
+                    offset = fetched_before
+                    remaining = len(targets) - index
 
                     def fetch_report(done: int, total: int, text: str) -> None:
-                        self._emit_progress(done, total, text)
+                        # Mailboxes still to come are unknown until they are
+                        # opened, so they are assumed to hold about as much as
+                        # this one. The bar creeps rather than jumping back.
+                        # Fetching is the first half of the scan and sorting the
+                        # second, so this reports against twice the message
+                        # count and stops at the midpoint.
+                        overall = offset + total + int(remaining * total * 0.9)
+                        seen = offset + done
+                        self._emit_progress(seen, max(overall * 2, seen * 2, 1), text)
                         elapsed = max(1e-6, time.monotonic() - fetch_started)
                         self._emit_metrics(
-                            phase="fetch", done=done, total=total, elapsed=elapsed,
-                            rate=done / elapsed,
-                            eta=(total - done) / (done / elapsed) if done else 0.0,
+                            phase="fetch", done=seen, total=max(overall, seen, 1),
+                            elapsed=elapsed,
+                            rate=seen / elapsed,
+                            eta=(overall - seen) / (seen / elapsed) if seen else 0.0,
                         )
 
                     scan = engine.fetch_window(
@@ -252,6 +268,8 @@ class ScanWorker(_BaseWorker):
                         message.account_id = account.id
                         message.account_label = account.label
                     messages.extend(scan.messages)
+                    fetched_before += len(scan.messages)
+                    expected_total = fetched_before
                     self._log(
                         f"{account.label}: fetched {len(scan.messages)} message(s) from "
                         f"{account.source_mailbox} ({len(scan.candidate_uids)} matched "
@@ -301,7 +319,7 @@ class ScanWorker(_BaseWorker):
             if self.cancel_event.is_set():
                 raise ClassificationCancelled("Cancelled.")
             self._emit_progress(
-                0, len(messages),
+                len(messages), len(messages) * 2,
                 f"Analyzing with {self.settings.provider_label}…",
             )
             started = time.monotonic()
@@ -321,8 +339,13 @@ class ScanWorker(_BaseWorker):
                     else:
                         tally["review"] += 1
 
+            fetched = len(messages)
+
             def report(done: int, total: int, text: str) -> None:
-                self._emit_progress(done, total, text)
+                # Continuing the fetch phase's scale rather than starting a new
+                # one: a bar that fills, empties and fills again reads as the
+                # scan having restarted.
+                self._emit_progress(fetched + done, fetched + max(total, done), text)
                 elapsed = max(1e-6, time.monotonic() - started)
                 rate = done / elapsed
                 self._emit_metrics(
