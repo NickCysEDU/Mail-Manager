@@ -24,6 +24,17 @@ is_supported() {
   [[ -x "$1" ]] && "$1" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)'     >/dev/null 2>&1
 }
 
+# A universal2 interpreter, if one has been fetched, so the app runs natively
+# on both Apple silicon and Intel rather than through Rosetta on one of them.
+if [[ -z "$PYTHON_BIN" ]]; then
+  for candidate in .toolchain/Python.framework/Versions/3.1[1-9]/bin/python3.1[1-9]; do
+    if is_supported "$candidate" && [[ "$(lipo -archs "$candidate" 2>/dev/null)" == *arm64* && "$(lipo -archs "$candidate" 2>/dev/null)" == *x86_64* ]]; then
+      PYTHON_BIN="$PWD/$candidate"
+      break
+    fi
+  done
+fi
+
 if [[ -z "$PYTHON_BIN" ]]; then
   # An existing .venv already knows which interpreter works here.
   if is_supported ".venv/bin/python"; then
@@ -72,6 +83,14 @@ python -m pip install --upgrade pip --quiet
 echo "==> Installing dependencies"
 python -m pip install --quiet -r requirements-dev.txt
 
+# A couple of the Rust extensions publish one wheel per architecture, so a
+# universal build needs the other half of each fetching and joining on.
+if [[ "$(lipo -archs "$PYTHON_BIN" 2>/dev/null)" == *arm64*x86_64* ]] || \
+   [[ "$(lipo -archs "$PYTHON_BIN" 2>/dev/null)" == *x86_64*arm64* ]]; then
+  echo "==> Making the compiled dependencies universal"
+  python tools/make_universal_deps.py || true
+fi
+
 # --- 3. Icon -----------------------------------------------------------------
 if [[ ! -f assets/icon.icns ]]; then
   echo "==> Generating the app icon"
@@ -96,16 +115,46 @@ if [[ ! -d "$APP" ]]; then
 fi
 
 # --- 6. Ad-hoc signature -----------------------------------------------------
-# Unsigned bundles are quarantined by Gatekeeper on first launch. An ad-hoc
-# signature is enough for a local build; replace "-" with your Developer ID
-# to distribute it.
-echo "==> Signing (ad-hoc)"
-codesign --force --deep --sign - "$APP" 2>/dev/null || \
+# An ad-hoc signature has no identity of its own: macOS tells builds apart by
+# their contents, so every rebuild looks like a different app and the Keychain
+# asks permission again. A local certificate fixes that. Neither is trusted by
+# Gatekeeper - that needs a paid Developer ID - so a first launch still wants
+# right-click then Open either way.
+SIGN_NAME="${MAILMANAGER_SIGN_NAME:-Mail Manager Local Signing}"
+if [[ -n "${MAILMANAGER_SIGN_IDENTITY:-}" ]]; then
+  IDENTITY="$MAILMANAGER_SIGN_IDENTITY"
+elif security find-identity -v -p codesigning 2>/dev/null | grep -qF "$SIGN_NAME"; then
+  IDENTITY="$SIGN_NAME"
+else
+  IDENTITY="-"
+fi
+
+if [[ "$IDENTITY" == "-" ]]; then
+  echo "==> Signing (ad-hoc)"
+  echo "    Every rebuild will look like a new app to the Keychain, so it will"
+  echo "    ask permission again. To stop that:"
+  echo "      ./tools/make_signing_identity.sh"
+else
+  echo "==> Signing as “$IDENTITY”"
+fi
+codesign --force --deep --sign "$IDENTITY" --options runtime "$APP" 2>/dev/null || \
+  codesign --force --deep --sign "$IDENTITY" "$APP" 2>/dev/null || \
   echo "    (codesign unavailable — right-click → Open on first launch)"
 xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
 
 SIZE="$(du -sh "$APP" | cut -f1)"
+ARCHS="$(lipo -archs "$APP/Contents/MacOS/Mail Manager" 2>/dev/null || echo unknown)"
 echo
-echo "==> Done. $APP ($SIZE)"
+echo "==> Done. $APP ($SIZE, $ARCHS)"
+case "$ARCHS" in
+  *arm64*x86_64*|*x86_64*arm64*)
+    echo "    Universal: runs natively on Apple silicon and on Intel." ;;
+  *arm64*)
+    echo "    Apple silicon only. For a universal build:" 
+    echo "      ./tools/fetch_universal_python.sh && ./build_app.sh" ;;
+  *x86_64*)
+    echo "    Intel only — Apple silicon will run it under Rosetta. For both:"
+    echo "      ./tools/fetch_universal_python.sh && ./build_app.sh" ;;
+esac
 echo "    open \"$APP\"                       # run it"
 echo "    cp -R \"$APP\" /Applications/        # install it"

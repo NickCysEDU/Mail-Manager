@@ -238,6 +238,7 @@ def run_once(settings=None, store=None, apply_moves: Optional[bool] = None) -> R
     engine = IMAPEngine(host=settings.imap_host, port=settings.imap_port)
     classifier = None
     try:
+        store.read_timeout = store.read_timeout or 20.0
         password = store.get_icloud_password(settings.icloud_email)
         if not settings.icloud_email or not password:
             record.error = "No iCloud credentials are stored."

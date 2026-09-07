@@ -184,6 +184,21 @@ def self_test() -> int:
     check("log directory", lambda: config.log_dir())
     check("app icon", lambda: _bundled_path("assets/icon.png") or "not bundled")
 
+    import certs
+    check("certificate bundle", certs.describe)
+
+    def _tls_probe() -> str:
+        """A real handshake, because a path that exists is not proof."""
+        import socket
+        import ssl as _ssl
+        host = "imap.mail.me.com"
+        context = _ssl.create_default_context()
+        with socket.create_connection((host, 993), timeout=8) as raw:
+            with context.wrap_socket(raw, server_hostname=host) as secure:
+                return f"{secure.version()} to {host}"
+
+    check("TLS handshake", _tls_probe)
+
     print("\n  " + ("All checks passed." if ok else "Some checks FAILED."))
     return 0 if ok else 1
 
@@ -354,6 +369,10 @@ def main(argv: Optional[list] = None) -> int:
     icon_path = _bundled_path("assets/icon.png")
     if icon_path is not None:
         app.setWindowIcon(QIcon(str(icon_path)))
+
+    # Before anything can open a connection: every one of them is TLS.
+    import certs
+    certs.ensure()
 
     install_exception_hook(app)
 
