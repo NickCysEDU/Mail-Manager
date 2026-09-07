@@ -151,8 +151,8 @@ class Settings:
     #: the first one and are kept in step with it, because the app shipped
     #: with a single mailbox and plenty of code still reads it that way.
     mailboxes: List[Account] = field(default_factory=list)
-    #: Which mailbox the window is showing. Empty means all of them.
-    active_account: str = ""
+    #: Which mailboxes the next scan reads. Empty means all of them.
+    active_accounts: List[str] = field(default_factory=list)
 
     icloud_email: str = ""
     imap_host: str = DEFAULT_IMAP_HOST
@@ -230,7 +230,10 @@ class Settings:
             for m in (data.get("mailboxes") or [])
             if isinstance(m, (Account, Mapping))
         ]
-        data["active_account"] = str(data.get("active_account", "")).strip()
+        chosen = data.get("active_accounts") or data.get("active_account") or []
+        if isinstance(chosen, str):                 # an older single-mailbox choice
+            chosen = [chosen] if chosen.strip() else []
+        data["active_accounts"] = [str(a).strip() for a in chosen if str(a).strip()]
         if not profiles.exists(str(data.get("sort_profile", ""))):
             data["sort_profile"] = profiles.DEFAULT_PROFILE
         known = {t.value for t in profiles.ALL_TOPICS}
@@ -339,8 +342,7 @@ class Settings:
         accounts_mod.assign_colors(self.mailboxes)
         accounts_mod.unique_labels(self.mailboxes)
         known = {a.id for a in self.mailboxes}
-        if self.active_account not in known:
-            self.active_account = ""
+        self.active_accounts = [a for a in self.active_accounts if a in known]
 
     @property
     def accounts(self) -> List[Account]:
@@ -355,7 +357,7 @@ class Settings:
     def scan_accounts(self) -> List[Account]:
         """The mailboxes the next scan will read: the selected one, or all."""
         chosen = [a for a in self.enabled_accounts
-                  if not self.active_account or a.id == self.active_account]
+                  if not self.active_accounts or a.id in self.active_accounts]
         return chosen or self.enabled_accounts or [self.primary_account]
 
     @property
@@ -375,6 +377,10 @@ class Settings:
             source_mailbox=self.source_mailbox,
             connections=self.imap_connections,
         )
+
+    @property
+    def scans_every_mailbox(self) -> bool:
+        return not self.active_accounts
 
     def account_by_id(self, account_id: str) -> Optional[Account]:
         return next((a for a in self.mailboxes if a.id == account_id), None)

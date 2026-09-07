@@ -13,7 +13,7 @@
 
 ![macOS 13+](https://img.shields.io/badge/macOS-13%2B-black)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue)
-![Tests](https://img.shields.io/badge/tests-1%2C109%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-1%2C115%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
 <img src="docs/screenshot.png" width="900" alt="The approval table, with a summary, category, destination folder and confidence score for every message">
@@ -207,6 +207,52 @@ the sorter it will use, the schedule, and the result of the last background run,
 without opening the window. The **Model** entry is named after whatever is
 currently selected, and switching there is the same as switching in the window.
 
+## Reading it comfortably
+
+**Settings → Appearance** has three separate controls, because they solve
+different problems and not everyone needs both:
+
+- **Appearance** follows macOS, or pins light or dark.
+- **Contrast** has a normal level, a high one that darkens every supporting
+  colour until it passes against its own background, and a maximum that drops
+  colour altogether - black on white or white on black, with nothing depending
+  on hue.
+- **Tune the layout for reading** changes spacing rather than colour: larger
+  type with a little more tracking, taller rows, heavier column headings, a
+  wider focus ring, and more room inside every control.
+
+Changes apply as you make them rather than when you press OK.
+
+## How good the offline sorter actually is
+
+Two numbers, and the gap between them is worth understanding before trusting
+it with a mailbox.
+
+Against **real collected mail** - 102 labelled messages from a live inbox - it
+gets 98.0% right on job versus not-job, 83.3% on the exact category, and 98.1%
+of what it files goes to the right folder. That is the number that describes
+ordinary use, because ordinary transactional mail comes out of templates and
+templates are what a rules engine is good at.
+
+Against **mail written by hand to be awkward** - a held-out set that
+deliberately avoids every phrase the engine knows - it gets 16.7%. That is not
+a bug being hidden; it is what a phrase-and-structure matcher does with prose
+it has never seen.
+
+What holds in both cases is the part that matters: it filed **nothing** wrongly
+in either adversarial set, because anything it cannot read clearly is held for
+review instead of guessed at. Getting a message wrong and showing it to you
+costs you a moment. Getting it wrong and filing it costs you the message.
+
+```bash
+./dev eval                  # against real collected mail
+python tools/adversarial.py # against the two hand-written sets
+```
+
+If you want the harder cases sorted rather than queued, that is what the model
+backends are for. Point it at Gemini or Claude and the same messages get read
+properly.
+
 ## Privacy
 
 With the default sorter, no message text leaves your Mac. Credentials live in
@@ -217,7 +263,7 @@ log. [Full details in SECURITY.md](SECURITY.md).
 
 ```bash
 ./dev demo      # the app with sample mail, no setup
-./dev test      # 1,109 tests, about 35 seconds
+./dev test      # 1,115 tests, about 38 seconds
 ./dev eval      # sorter accuracy against the labelled fixture
 ./dev fake      # the whole pipeline in the terminal, offline
 ```

@@ -2027,7 +2027,7 @@ class MainWindow(QMainWindow):
             self.scan_button.clicked.connect(wanted)
 
     def _rebuild_account_menu(self) -> None:
-        """Which mailbox the next scan reads: one of them, or all of them."""
+        """Which mailboxes the next scan reads: any of them, or all of them."""
         if not hasattr(self, "account_menu"):
             return
         self.account_menu.clear()
@@ -2036,24 +2036,27 @@ class MainWindow(QMainWindow):
         if len(mailboxes) <= 1:
             return
 
-        group = QActionGroup(self)
-        group.setExclusive(True)
         every = QAction("All mailboxes", self)
         every.setCheckable(True)
-        every.setChecked(not self.settings.active_account)
-        every.triggered.connect(lambda: self._select_account(""))
-        group.addAction(every)
+        every.setChecked(self.settings.scans_every_mailbox)
+        every.triggered.connect(lambda: self._select_accounts([]))
         self.account_menu.addAction(every)
         self.account_menu.addSeparator()
 
+        # Tick as many as you like. Unticking the last one means all of them,
+        # because scanning nothing is never what somebody meant.
+        self._account_actions = {}
         for account in mailboxes:
             action = QAction(menu_text(f"{account.label}  ({account.address})"), self)
             action.setCheckable(True)
-            action.setChecked(account.id == self.settings.active_account)
-            action.triggered.connect(
-                lambda checked=False, a=account.id: self._select_account(a))
-            group.addAction(action)
+            action.setChecked(
+                self.settings.scans_every_mailbox
+                or account.id in self.settings.active_accounts
+            )
+            action.toggled.connect(
+                lambda checked, a=account.id: self._toggle_account(a, checked))
             self.account_menu.addAction(action)
+            self._account_actions[account.id] = action
 
         self.account_menu.addSeparator()
         manage = QAction("Mailboxes…", self)
@@ -2061,28 +2064,47 @@ class MainWindow(QMainWindow):
         self.account_menu.addAction(manage)
         self._refresh_account_button()
 
+    def _toggle_account(self, account_id: str, checked: bool) -> None:
+        chosen = list(self.settings.active_accounts)
+        if not chosen:
+            # "All" was in force, so start from every mailbox and take one out.
+            chosen = [a.id for a in self.settings.enabled_accounts]
+        if checked and account_id not in chosen:
+            chosen.append(account_id)
+        elif not checked and account_id in chosen:
+            chosen.remove(account_id)
+        if len(chosen) >= len(self.settings.enabled_accounts):
+            chosen = []
+        self._select_accounts(chosen)
+
     def _refresh_account_button(self) -> None:
-        chosen = self.settings.account_by_id(self.settings.active_account)
-        name = chosen.label if chosen else "All mailboxes"
+        chosen = self.settings.scan_accounts
+        if self.settings.scans_every_mailbox:
+            name = "All mailboxes"
+        elif len(chosen) == 1:
+            name = chosen[0].label
+        else:
+            name = f"{len(chosen)} mailboxes"
         self.account_button.setText(menu_text(f"✉︎  {name}"))
         self.account_button.setToolTip(
-            "Which mailbox the next scan reads.\n"
-            + (f"Currently {chosen.address}." if chosen
-               else f"Currently all {len(self.settings.enabled_accounts)} of them.")
+            "Which mailboxes the next scan reads.\n"
+            + ", ".join(a.address for a in chosen)
         )
 
-    def _select_account(self, account_id: str) -> None:
-        self.settings.active_account = account_id
+    def _select_accounts(self, account_ids) -> None:
+        self.settings.active_accounts = list(account_ids)
+        self.settings = self.settings.normalized()
         try:
             self.settings.save()
         except OSError as exc:
             log.warning("Could not save settings: %s", exc)
-        chosen = self.settings.account_by_id(account_id)
+        chosen = self.settings.scan_accounts
         self._append_log(
-            f"Next scan will read {chosen.label}." if chosen
-            else "Next scan will read every mailbox."
+            "Next scan will read every mailbox."
+            if self.settings.scans_every_mailbox
+            else "Next scan will read " + ", ".join(a.label for a in chosen) + "."
         )
-        self._refresh_account_button()
+        self._rebuild_account_menu()
         self._sync_account_column()
 
     def store_has_key(self, provider: str, probe: bool = True) -> bool:

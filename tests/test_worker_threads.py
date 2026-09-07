@@ -227,6 +227,23 @@ class TestScanWorker:
         assert "Connecting" in text
         assert "Analyz" in text
 
+    def test_progress_only_moves_forwards(self, qapp, wired):
+        """Across several mailboxes the bar has to keep meaning one thing.
+
+        Reporting each mailbox as its own nought-to-N makes the bar jump back
+        to the start partway through, which reads as the scan restarting.
+        """
+        wired(folders=["INBOX"], messages=dict(MESSAGES))
+        worker = scan_worker()
+        recorder = Recorder(worker)
+        worker.run()
+        fractions = [
+            done / total for done, total, _ in recorder.progress if total
+        ]
+        assert fractions == sorted(fractions), (
+            "progress went backwards: " + ", ".join(f"{f:.2f}" for f in fractions)
+        )
+
 
 class TestApplyWorker:
     def apply_worker(self, plans, extra=(), **overrides):

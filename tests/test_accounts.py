@@ -99,11 +99,11 @@ class TestChoosingWhichMailboxToScan:
         assert two.multi_account is True
 
     def test_one_can_be_singled_out(self, two):
-        two.active_account = two.accounts[1].id
+        two.active_accounts = [two.accounts[1].id]
         assert [a.address for a in two.normalized().scan_accounts] == ["me@gmail.com"]
 
     def test_a_stale_selection_falls_back_to_all(self, two):
-        two.active_account = "no-such-mailbox"
+        two.active_accounts = ["no-such-mailbox"]
         assert len(two.normalized().scan_accounts) == 2
 
     def test_a_disabled_mailbox_is_skipped(self, two):
