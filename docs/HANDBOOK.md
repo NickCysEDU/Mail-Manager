@@ -1032,3 +1032,23 @@ are removed, and nothing else is touched. And sign-in prefers `AUTHENTICATE
 PLAIN`, which sends the same values base64 encoded, where no character means
 anything to the parser; every provider in the list advertises it, and `LOGIN`
 remains the fallback for anything that does not.
+
+
+## Needs Review, and what it is not
+
+**Needs Review is a folder inside the job-search tree.** It means: this is part
+of your job search and the sorter cannot tell which part of it. A person looks,
+and files it.
+
+It used to collect anything the sorter was unsure about, job mail or not, which
+is why a promotion it was only 88% sure about ended up in a job-search folder.
+Whether something is job mail is now decided before how confident the reading
+is, so:
+
+| | confident | not confident |
+| --- | --- | --- |
+| **job mail** | filed under `Job Search/` | `Job Search/Needs Review` |
+| **everything else** | filed by topic, if you asked for that | left in your inbox |
+
+Uncertain post that is not part of your job search stays where it is. There is
+nothing to review about it, and moving it would be worse than leaving it.

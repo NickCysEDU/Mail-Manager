@@ -13,7 +13,7 @@
 
 ![macOS 13+](https://img.shields.io/badge/macOS-13%2B-black)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue)
-![Tests](https://img.shields.io/badge/tests-1%2C316%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-1%2C334%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
 <img src="docs/screenshot.png" width="900" alt="The approval table, with a summary, category, destination folder and confidence score for every message">
@@ -290,9 +290,21 @@ review instead of guessed at. Getting a message wrong and showing it to you
 costs you a moment. Getting it wrong and filing it costs you the message.
 
 ```bash
-./dev eval                  # against real collected mail
-python tools/adversarial.py # against the two hand-written sets
+./dev eval                       # against real collected mail
+python tools/adversarial.py      # against the two hand-written sets
+python tools/corpus.py --fetch   # six thousand real messages, once
+python tools/corpus.py           # then run against them
 ```
+
+The third is the SpamAssassin public corpus: six thousand real messages from
+2002-2005, ham and spam labelled. Its vocabulary is twenty years old, so the
+recall figure is a floor rather than a description of a modern inbox. What does
+carry over is everything structural, and it earned its place by finding two
+real defects: a message beginning with seventy underscores took **43 seconds**
+to classify, and work-from-home spam was being read as an interview next step.
+
+The number worth watching there is not how much spam reaches Junk. It is how
+much ordinary post does: **0.1%**, and none of it filed as job mail.
 
 If you want the harder cases sorted rather than queued, that is what the model
 backends are for. Point it at Gemini or Claude and the same messages get read
@@ -308,7 +320,7 @@ log. [Full details in SECURITY.md](SECURITY.md).
 
 ```bash
 ./dev demo      # the app with sample mail, no setup
-./dev test      # 1,316 tests, about two minutes
+./dev test      # 1,334 tests, about two and a half minutes
 ./dev eval      # sorter accuracy against the labelled fixture
 ./dev fake      # the whole pipeline in the terminal, offline
 ```

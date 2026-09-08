@@ -190,17 +190,30 @@ def build_palette(colours: Palette) -> QPalette:
     return palette
 
 
+def _lift(colour: str, factor: float) -> str:
+    """A lighter or darker shade of one colour, for hover and pressed."""
+    source = QColor(colour)
+    hue, sat, light, alpha = source.getHsl()
+    return QColor.fromHsl(
+        hue, sat, max(0, min(255, int(light * factor))), alpha).name()
+
+
 def stylesheet(colours: Palette, readable: bool = False, base_point: float = 13.0) -> str:
     """The parts a palette cannot express: spacing, borders, focus rings."""
-    pad = "10px 18px" if readable else "8px 15px"
+    # One vertical padding for every control. Height is content plus padding
+    # plus border, so controls only line up if all three agree - a minimum
+    # height on its own leaves each widget type at whatever its own padding
+    # makes it.
+    vpad = 9 if readable else 7
+    pad = f"{vpad}px {18 if readable else 15}px"
     radius = 7
-    row_pad = "8px" if readable else "6px"
+    row_pad = f"{vpad}px"
     border = 2 if colours.dark or readable else 1
     focus = 3 if readable else 2
     # Steppers and drop-downs sized to be hit rather than aimed at. Apple's own
     # guidance puts the smallest comfortable target at 28 points; Qt's defaults
     # for these are closer to twelve.
-    control_height = 30 if readable else 26
+    control_height = 24 if readable else 20
     stepper = 22 if readable else 18
     # Two of these plus their margins have to fit inside the field. Sized from
     # the field's own height rather than guessed, or the top one is clipped
@@ -233,7 +246,6 @@ def stylesheet(colours: Palette, readable: bool = False, base_point: float = 13.
     }}
     QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QDateEdit {{
         padding: {row_pad} 10px;
-        min-height: {control_height}px;
     }}
 
     /* Steppers: no boxes, no dividing lines. Two chevrons in the field's own
@@ -296,7 +308,12 @@ def stylesheet(colours: Palette, readable: bool = False, base_point: float = 13.
        jammed against the label. */
     QToolButton::menu-indicator {{
         subcontrol-origin: padding; subcontrol-position: center right;
-        width: {drop_width}px;
+        width: {drop_width}px; height: {arrow_px}px;
+    }}
+    /* Room for the caret on the right, and the same vertical padding as
+       everything else so the button is the same height as its neighbours. */
+    QToolButton[popupMode="0"], QToolButton[popupMode="2"] {{
+        padding-right: {drop_width + 6}px;
     }}
 
     QAbstractItemView {{
@@ -319,12 +336,56 @@ def stylesheet(colours: Palette, readable: bool = False, base_point: float = 13.
         font-weight: {700 if readable else 600};
     }}
 
+    /* One height and one radius for everything a person clicks, so a row of
+       mixed controls lines up instead of stepping. */
+    QPushButton, QToolButton, QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox,
+    QDateEdit, QTimeEdit {{
+        min-height: {control_height}px;
+    }}
+    /* The help button is a round icon and is deliberately not this size. */
+    QToolButton#helpButton {{ min-height: 0; max-height: none; padding: 0; }}
     QPushButton, QToolButton {{
         background: {colours.surface};
         color: {colours.text};
         border: {border}px solid {colours.border};
         border-radius: {radius}px;
         padding: {pad};
+    }}
+    /* A tool button reserves room for its menu caret above and below the
+       label as well as beside it, so the same padding makes it taller than
+       everything else in the row. */
+    QToolButton {{ padding-top: {vpad - 1}px; padding-bottom: {vpad - 1}px; }}
+    /* Roles. Filled means it acts on your mailbox; outlined means it changes
+       what you are looking at; plain means everything else. */
+    QPushButton[role="primary"] {{
+        background: {colours.accent}; color: {colours.accent_text};
+        border-color: {colours.accent}; font-weight: 600;
+    }}
+    QPushButton[role="primary"]:hover:!disabled {{ background: {_lift(colours.accent, 1.12)}; }}
+    QPushButton[role="primary"]:pressed {{ background: {_lift(colours.accent, 0.88)}; }}
+    QPushButton[role="confirm"] {{
+        background: {colours.ok}; color: #FFFFFF;
+        border-color: {colours.ok}; font-weight: 600;
+    }}
+    QPushButton[role="confirm"]:hover:!disabled {{ background: {_lift(colours.ok, 1.12)}; }}
+    QPushButton[role="confirm"]:pressed {{ background: {_lift(colours.ok, 0.88)}; }}
+    QPushButton[role="danger"] {{
+        background: {colours.danger}; color: #FFFFFF;
+        border-color: {colours.danger}; font-weight: 600;
+    }}
+    QPushButton[role="danger"]:hover:!disabled {{ background: {_lift(colours.danger, 1.12)}; }}
+    QPushButton[role="danger"]:pressed {{ background: {_lift(colours.danger, 0.88)}; }}
+    QPushButton[role="destructive"] {{
+        color: {colours.danger}; border-color: {colours.danger};
+        background: transparent;
+    }}
+    QPushButton[role="destructive"]:hover:!disabled {{
+        background: {colours.danger}; color: #FFFFFF;
+    }}
+    QPushButton[role="primary"]:disabled, QPushButton[role="confirm"]:disabled,
+    QPushButton[role="danger"]:disabled {{
+        background: {colours.border}; border-color: {colours.border};
+        color: {colours.text_dim};
     }}
     QPushButton:hover, QToolButton:hover {{ border-color: {colours.accent}; }}
     QPushButton:disabled, QToolButton:disabled {{ color: {colours.text_dim}; }}

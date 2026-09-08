@@ -443,8 +443,14 @@ class TestRouting:
         assert self.item(**kwargs).approved is False
         assert self.item(auto_approve_non_job=True, **kwargs).approved is True
 
-    def test_uncertain_non_job_mail_still_goes_to_review(self):
-        """Not sure it *isn't* job mail => a human looks at it."""
+    def test_uncertain_non_job_mail_is_left_where_it_is(self):
+        """Needs Review is a job-search folder, and says so on the tin.
+
+        A promotion the sorter is only 60% sure about is not "job mail I
+        cannot place", it is not job mail at all. Sending it to Needs Review
+        put ordinary post inside the job-search tree and was the single most
+        confusing thing about the folder layout.
+        """
         item = self.item(
             classification={
                 "is_job_related": False,
@@ -454,8 +460,47 @@ class TestRouting:
             },
             non_job_routing=NonJobRouting.LEAVE,
         )
+        assert item.disposition is Disposition.LEAVE
+        assert item.folder_short == "INBOX"
+
+    def test_uncertain_non_job_mail_is_not_filed_by_topic_either(self):
+        """Filing by topic needs the topic to be right, which it is not here."""
+        item = self.item(
+            classification={
+                "is_job_related": False,
+                "category": Category.UNCLASSIFIED_OTHER,
+                "other_category": OtherCategory.PROMOTION,
+                "confidence_score": 0.60,
+            },
+            non_job_routing=NonJobRouting.FILE,
+        )
+        assert item.disposition is Disposition.LEAVE
+
+    def test_uncertain_job_mail_does_go_to_review(self):
+        """Which is what the folder is actually for."""
+        item = self.item(
+            classification={
+                "is_job_related": True,
+                "category": Category.INTERVIEW,
+                "confidence_score": 0.60,
+            },
+        )
         assert item.disposition is Disposition.REVIEW
         assert item.target_folder == "Job Search/Needs Review"
+
+    def test_asking_for_non_job_mail_to_be_reviewed_still_works(self):
+        """The one case where non-job mail belongs in a review folder is when
+        the user has asked for exactly that."""
+        item = self.item(
+            classification={
+                "is_job_related": False,
+                "category": Category.UNCLASSIFIED_OTHER,
+                "other_category": OtherCategory.PROMOTION,
+                "confidence_score": 0.99,
+            },
+            non_job_routing=NonJobRouting.REVIEW,
+        )
+        assert item.disposition is Disposition.REVIEW
 
     # -- overrides --------------------------------------------------------
     def test_manual_override_wins_and_selects_the_row(self):

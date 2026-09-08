@@ -542,3 +542,95 @@ class TestPastedCredentials:
         import inspect
         from imap_engine import IMAPEngine
         assert "AUTHENTICATIONFAILED" in inspect.getsource(IMAPEngine._authenticate)
+
+
+# ==========================================================================
+# Shapes of message that made the sorter stop responding
+# ==========================================================================
+class TestNoMessageCanHangTheSorter:
+    """Found by running six thousand real messages through it.
+
+    One began with seventy underscores and took forty-three seconds. The gapped
+    matcher lets separator characters fall between the words of a phrase, and a
+    long run of them can be divided between those gaps in exponentially many
+    ways. The guard is in normalize(), which collapses the run before any
+    pattern sees it.
+    """
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def rules(cls):
+        return RuleClassifier()
+
+    @pytest.mark.parametrize("filler", [
+        "_" * 80, "-" * 80, "=" * 80, "*" * 80, "." * 120, "~" * 80,
+        "_-" * 60, " _ " * 60, "—" * 60,
+    ])
+    def test_a_line_of_separators_classifies_immediately(self, rules, filler):
+        import time
+        started = time.monotonic()
+        rules.classify(subject="Let me know what you think",
+                       body=f"{filler}\n{filler}\n\nLOWEST RATES IN 40 YEARS\n{filler}",
+                       sender="someone@example.com")
+        assert time.monotonic() - started < 1.0
+
+    def test_a_very_long_message_is_bounded(self, rules):
+        import time
+        started = time.monotonic()
+        rules.classify(subject="Re: thread", body="quoted reply. " * 40000,
+                       sender="a@b.example")
+        assert time.monotonic() - started < 2.0
+
+    def test_the_normalizer_leaves_no_long_separator_run(self):
+        from rules_engine import normalize
+        import re
+        for filler in ("_" * 90, "-" * 90, "=+=+" * 30, "—" * 40):
+            assert not re.search(r"[^a-z0-9]{3,}", normalize(f"hello {filler} world"))
+
+
+class TestUnsolicitedMailIsNotJobMail:
+    """Work-from-home spam was being read as an interview next step.
+
+    "Fill out the form below" is what a hiring process says and what a scam
+    says. Counting families of solicitation language separates them without
+    needing to know which scam is current.
+    """
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def rules(cls):
+        return RuleClassifier()
+
+    def test_a_work_from_home_pitch_is_not_a_next_step(self, rules):
+        verdict = rules.classify(
+            subject="FORTUNE 500 COMPANY HIRING, AT HOME REPS!",
+            body="Earn $500 a week from home. No experience necessary. "
+                 "Fill out the form below and act now, limited time. "
+                 "To be removed from this list click here.",
+            sender="opportunity@example.com")
+        assert verdict.is_job_related is False
+
+    def test_a_real_next_step_is_untouched(self, rules):
+        verdict = rules.classify(
+            subject="Next steps for your application",
+            body="Thanks for your time on Tuesday. Could you fill out the form "
+                 "below with your availability for a second conversation with "
+                 "the engineering panel?",
+            sender="Talent <careers@company.example>")
+        assert verdict.is_job_related is True
+
+    def test_one_family_alone_is_not_enough(self, rules):
+        """Ordinary mail says one of these things all the time."""
+        from rules_engine import solicitation_score
+        score, reasons = solicitation_score(
+            "act now", "The sale ends tonight, act now.", "Act now")
+        assert len(reasons) <= 2
+
+    def test_several_families_together_are(self):
+        from rules_engine import solicitation_score
+        score, reasons = solicitation_score(
+            "congratulations you have been selected",
+            "Earn $2000 a week. No obligation, risk free. Act now, limited "
+            "time. To be removed from this list, click here to unsubscribe.",
+            "CONGRATULATIONS YOU HAVE BEEN SELECTED!!")
+        assert score >= 2.6 and len(reasons) >= 3

@@ -55,6 +55,12 @@ QUALIFY_SCORE_UNSOLICITED = 3.5
 #: Multiplier applied when a phrase matched only with words inserted into it.
 GAPPED_PENALTY = 0.75
 
+#: How much of a message the rules look at. What a message is gets settled in
+#: its opening; past this it is quoted threads, footers and legal boilerplate.
+#: Five hundred signals against a hundred and sixty thousand characters costs
+#: seconds and changes nothing.
+MAX_SCANNED_CHARS = 20000
+
 #: How much to discount transactional topics on mail that carries an
 #: unsubscribe header. The lighter figure applies when the sender vouches for
 #: the topic - a courier, an airline, a bank writing from its own domain. The
@@ -94,6 +100,20 @@ _TRANSLITERATE = {
 
 _ZERO_WIDTH = re.compile("[​-‏ - ⁠-⁤﻿­᠎]")
 _PUNCT_RUN = re.compile(r"[^\w\s]{3,}")
+#: Any run of three or more characters that are not letters or digits: a rule
+#: of underscores, a row of dashes, a line of equals signs.
+#:
+#: This is the reason phrase matching cannot be made to hang. The gapped
+#: matcher allows separator characters between the words of a phrase, and a
+#: long run of them can be divided between those gaps in exponentially many
+#: ways - a real message beginning with seventy underscores took forty-three
+#: seconds to classify. Collapsing the run removes the ambiguity at the source
+#: and costs nothing: no phrase this app looks for contains one.
+#: Six, not three. Three catches ordinary punctuation between words - an em
+#: dash with a quote either side is four characters - and flattening that
+#: loses meaning for no benefit. What has to go is decoration, and decoration
+#: is never four characters long.
+_GAP_RUN = re.compile(r"[^a-z0-9]{6,}")
 _SPACED_OUT = re.compile(r"(?:(?<=\s)|^)(?:[a-z]\s){3,}[a-z](?=\s|$)")
 
 
@@ -143,6 +163,7 @@ def normalize(text: str) -> str:
     # "for-\nward" -> "forward"
     result = re.sub(r"-\s*\n\s*", "", result)
     result = _PUNCT_RUN.sub(" ", result)
+    result = _GAP_RUN.sub(" ", result)
     result = _SPACED_OUT.sub(lambda m: m.group(0).replace(" ", ""), result)
     return re.sub(r"\s+", " ", result).strip()
 
@@ -153,7 +174,14 @@ def tighten(text: str) -> str:
 
 
 def _loose(phrase: str) -> str:
-    """A regex matching ``phrase`` with any punctuation or spacing between words."""
+    """A regex matching ``phrase`` with any punctuation or spacing between words.
+
+    The joiner is an atomic group. Without it, a phrase of several words tried
+    against a long run of separator characters gives the engine an exponential
+    number of ways to divide that run between the gaps, and it tries them all.
+    Nothing is lost by refusing to reconsider: the gap either fits or it does
+    not.
+    """
     words = [re.escape(word) for word in phrase.split()]
     return r"\b" + r"[\W_]{0,4}".join(words)
 
@@ -170,6 +198,10 @@ def _gapped(phrase: str, max_inserted: int = 2) -> Optional[str]:
     words = [re.escape(word) for word in phrase.split()]
     if len(words) < 3:
         return None
+    # A repetition inside a repetition, which is the shape that backtracks
+    # catastrophically. What keeps it safe is normalize(), which leaves no run
+    # of separator characters long enough to divide up in many ways; the guard
+    # is upstream rather than here, because bounding it here costs accuracy.
     gap = r"(?:[\W_]+\w+){0,%d}[\W_]+" % max_inserted
     return r"\b" + gap.join(words) + r"\b"
 
@@ -418,7 +450,7 @@ NEXT_STEPS_SIGNALS: Tuple[Signal, ...] = (
     Signal("work authorization", 2.2),
     Signal("visa status", 2.0),
     Signal("upload your", 2.0),
-    Signal("fill out the form", 2.4),
+    Signal("fill out the form", 1.8),
     Signal("complete your profile", 2.2),
     Signal("submit your application", 2.0),
     Signal("finish your application", 2.4),
@@ -752,12 +784,12 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("low balance", 2.8), Signal("insufficient funds", 3.0),
         Signal("deposit posted", 2.8), Signal("direct deposit", 2.8),
         Signal("withdrawal", 2.4), Signal("your card ending in", 3.0),
-        Signal("card ending in", 2.8), Signal("credit score", 2.6),
-        Signal("annual percentage rate", 2.4), Signal("loan payment", 2.8),
-        Signal("student loan", 2.6), Signal("mortgage", 2.4),
-        Signal("escrow", 2.4), Signal("tax return", 2.6),
+        Signal("card ending in", 2.8), Signal("credit score", 1.4),
+        Signal("annual percentage rate", 1.2), Signal("loan payment", 2.0),
+        Signal("student loan", 1.6), Signal("mortgage", 1.0),
+        Signal("escrow", 1.8), Signal("tax return", 2.6),
         Signal("tax document", 2.8), Signal("premium is due", 2.6),
-        Signal("insurance policy", 2.4), Signal("policy renewal", 2.6),
+        Signal("insurance policy", 1.4), Signal("policy renewal", 2.6),
         Signal("e statement", 2.8), Signal("paperless statement", 2.8),
         Signal("chase.com", 2.6, field="sender", label="a bank's own domain"),
         Signal("bankofamerica.com", 2.6, field="sender", label="a bank's own domain"),
@@ -941,6 +973,24 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("beneficiary", 2.4), Signal("barrister", 2.6),
         Signal("lottery", 2.8), Signal("bitcoin", 2.4),
         Signal("risk free", 2.0), Signal("no obligation", 1.8),
+        # Categories of junk that have outlived every change of wording around
+        # them. Kept to what is unambiguous: none of these turns up in mail
+        # somebody actually wanted.
+        Signal("debt consolidation", 3.0), Signal("consolidate your debt", 3.0),
+        Signal("credit repair", 2.8), Signal("repair your credit", 3.0),
+        Signal("refinance your", 2.6), Signal("mortgage rates", 2.2),
+        Signal("lowest rates", 2.4), Signal("pre approved", 2.4),
+        Signal("university diploma", 3.0), Signal("no exams", 2.6),
+        Signal("weight loss", 2.4), Signal("lose weight", 2.4),
+        Signal("male enhancement", 3.0), Signal("prescription drugs online", 3.0),
+        Signal("online pharmacy", 3.0), Signal("no prescription", 2.8),
+        Signal("replica watches", 3.0), Signal("rolex", 2.4),
+        Signal("adult content", 2.8), Signal("hot singles", 3.0),
+        Signal("increase your sales", 2.6), Signal("bulk email", 3.0),
+        Signal("millions of email addresses", 3.0), Signal("targeted leads", 2.8),
+        Signal("toner cartridges", 2.8), Signal("extended warranty", 2.4),
+        Signal("casino", 2.4), Signal("free quote", 2.0),
+        Signal("satellite tv", 2.6), Signal("cable descrambler", 3.0),
     ),
     OtherCategory.WORK: (
         Signal("payslip", 3.0), Signal("payroll", 2.8),
@@ -1014,6 +1064,65 @@ _OTHER_WORLD = re.compile(
     r"planning application|insurance claim|grant application|"
     r"dentist|hygienist|surgery|clinic|consultant appointment)\b"
 )
+
+
+#: Families of unsolicited-commercial-mail language. Any one of these turns up
+#: in ordinary mail; two or three together almost never do. Counting families
+#: rather than phrases is what keeps this from being a list of the spam that
+#: happened to be in one corpus - the wording moves, the shape does not.
+_SOLICITATION = (
+    ("a claim about money you could make", re.compile(
+        r"\b(?:earn (?:up to )?\$?\d|\$\d[\d,]*(?:\.\d+)? (?:a|per) "
+        r"(?:day|week|month|hour|year)|make money|extra income|second income|"
+        r"financial freedom|be your own boss|work from home and earn|"
+        r"earn money|potential income)\b")),
+    ("pressure to act at once", re.compile(
+        r"\b(?:act now|order now|call now|apply now|don'?t delay|"
+        r"limited time|today only|offer expires|while supplies last|"
+        r"urgent(?:ly)? (?:reply|respond)|immediate attention)\b")),
+    ("a promise that it costs nothing", re.compile(
+        r"\b(?:no obligation|risk[\W_]?free|100%\s*free|absolutely free|"
+        r"free of charge|no cost to you|no experience (?:is )?(?:necessary|"
+        r"required)|no credit check|money back guarantee)\b")),
+    ("an opt-out footer written into the body", re.compile(
+        r"\b(?:to be removed from (?:this|our) (?:list|mailing)|"
+        r"click (?:here )?to (?:be )?(?:removed|unsubscribe)|"
+        r"remove me from (?:this|your) list|"
+        r"if you (?:wish|would like) to be removed|"
+        r"this is not spam|you are receiving this because you (?:signed|opted))\b")),
+    ("a guarantee no honest sender makes", re.compile(
+        r"\b(?:guaranteed (?:results|income|approval|acceptance)|"
+        r"lowest (?:rates?|prices?) (?:in|on|anywhere)|"
+        r"best (?:rates?|prices?) (?:guaranteed|anywhere)|"
+        r"you have been (?:specially )?selected|"
+        r"congratulations,? you)\b")),
+)
+#: Shouting, which is a shape rather than a vocabulary.
+_SHOUTED = re.compile(r"\b[A-Z]{4,}\b")
+
+
+def solicitation_score(subject: str, body: str, raw_subject: str = "") -> Tuple[float, List[str]]:
+    """How strongly this reads as unsolicited commercial mail.
+
+    Scored by how many different families of solicitation language appear, not
+    by how many phrases match, so a message repeating one phrase does not out-
+    score one doing three separate things.
+    """
+    blob = f"{subject} {body}"
+    reasons = []
+    for describes, pattern in _SOLICITATION:
+        if pattern.search(blob):
+            reasons.append(describes)
+    score = {0: 0.0, 1: 1.0, 2: 2.6}.get(len(reasons), 3.6)
+
+    shouted = _SHOUTED.findall(raw_subject or "")
+    if len(shouted) >= 3:
+        score += 0.8
+        reasons.append("a subject line in capitals")
+    if (raw_subject or "").count("!") >= 2:
+        score += 0.5
+        reasons.append("a subject line of exclamation marks")
+    return score, reasons
 
 
 def other_world_context(subject: str, body: str) -> Tuple[float, str]:
@@ -1169,12 +1278,29 @@ def structural_topic_scores(
         scores[topic] = scores.get(topic, 0.0) + weight
         notes.setdefault(topic, []).append(why)
 
+
     blob = f"{subject} {body}"
     bulk = bool(list_unsubscribe)
 
     fake, why = impersonation_score(sender, subject, body)
     if fake:
         add(OtherCategory.SPAM, fake, why)
+
+    selling, selling_why = solicitation_score(subject, body, subject)
+    if selling >= 2.6:
+        # Three or more separate solicitation moves, or two with shouting, is
+        # junk rather than a shop you have heard of.
+        add(OtherCategory.SPAM, min(3.4, selling), selling_why[0])
+        # A bank telling you your statement is ready and a stranger offering
+        # you a mortgage use the same words. What separates them is that one
+        # reports something that happened and the other is selling.
+        for topic in (OtherCategory.FINANCE, OtherCategory.RECEIPT,
+                      OtherCategory.SHIPPING, OtherCategory.TRAVEL):
+            if topic in scores:
+                scores[topic] *= 0.45
+                notes.setdefault(topic, []).append("but it is soliciting, not reporting")
+    elif selling >= 1.0:
+        add(OtherCategory.PROMOTION, selling, selling_why[0])
     robot = _robot_sender(sender)
     short = len(body) < 700
 
@@ -1443,6 +1569,8 @@ class RuleClassifier:
         list_unsubscribe: str = "",
         truncated: bool = False,
     ) -> RuleVerdict:
+        subject = (subject or "")[:2000]
+        body = (body or "")[:MAX_SCANNED_CHARS]
         subject_n, subject_t = normalize(subject), tighten(subject)
         body_n, body_t = normalize(body), tighten(body)
         sender_n = normalize(sender)
@@ -1566,6 +1694,16 @@ class RuleClassifier:
         # "Application", "interview" and "offer" belong to plenty of other
         # parts of life. Where the message is plainly about one of those, that
         # counts against the job reading rather than for it.
+        selling, selling_why = solicitation_score(subject_n, body_n, subject)
+        if selling >= 2.6:
+            # Unsolicited commercial mail borrows the vocabulary of everything
+            # else, job mail included: "fill out the form below" reads as a
+            # next step until you notice what it is asking you to fill in.
+            job_evidence = max(0.0, job_evidence - selling)
+            non_job_score += selling
+            non_job_matches.append(
+                "reads as unsolicited commercial mail (" + ", ".join(selling_why[:2]) + ")")
+
         elsewhere, elsewhere_why = other_world_context(subject_n, body_n)
         if elsewhere:
             job_evidence = max(0.0, job_evidence - elsewhere)
