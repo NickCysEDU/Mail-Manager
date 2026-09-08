@@ -128,6 +128,10 @@ class _TextExtractor(HTMLParser):
         self._drop_depth = 0
         self._hidden_tag: Optional[str] = None
         self._hidden_depth = 0
+        #: (tag, is_zero) for every element that set a font size, innermost
+        #: last. Email HTML is not reliably balanced, so this is pruned by
+        #: name on the way out rather than trusted to nest.
+        self._font_stack: List[Tuple[str, bool]] = []
         self._list_stack: List[str] = []
         self.links: List[str] = []
         self._seen_links: Set[str] = set()
@@ -135,7 +139,10 @@ class _TextExtractor(HTMLParser):
     # -- helpers ---------------------------------------------------------
     @property
     def _suppressed(self) -> bool:
-        return self._drop_tag is not None or self._hidden_tag is not None
+        if self._drop_tag is not None or self._hidden_tag is not None:
+            return True
+        # The nearest ancestor that said anything about size decides.
+        return bool(self._font_stack) and self._font_stack[-1][1]
 
     def _emit(self, text: str) -> None:
         if text:
@@ -165,9 +172,34 @@ class _TextExtractor(HTMLParser):
         # Classic preheader trick: a zero-size, zero-opacity block.
         if "max-height:0" in style and "overflow:hidden" in style:
             return True
-        if re.search(r"font-size:0(px|pt|em)?(;|$)", style):
+        if "opacity:0" in style and "height:0" in style:
+            return True
+        # font-size:0 on its own is a layout idiom, not a hiding one. Every
+        # responsive email builder puts it on the container that holds the
+        # columns, to kill the whitespace between inline-block elements, and
+        # the children set their own size back. Treating it as hidden threw
+        # away the entire body of every Workday message - seven of a hundred
+        # and fifty-six in one real mailbox, none of which had a display:none
+        # anywhere in them. It only means hidden alongside a second cue.
+        if _ZERO_FONT.search(style) and _ALSO_HIDDEN.search(style):
             return True
         return False
+
+    @staticmethod
+    def _font_size(attrs: Sequence[Tuple[str, Optional[str]]]) -> Optional[bool]:
+        """Whether this element sets a font size, and whether it is zero.
+
+        None means it says nothing and inherits. A zero size hides the text
+        the element holds *itself*; a real size on a descendant brings that
+        descendant back, which is exactly what a responsive layout does - the
+        container zeroes the size to close up the gaps between its columns and
+        every column sets its own size again.
+        """
+        mapping = {name.lower(): (value or "") for name, value in attrs}
+        style = mapping.get("style", "").lower().replace(" ", "")
+        if not style or "font-size:" not in style:
+            return None
+        return bool(_ZERO_FONT.search(style))
 
     # -- HTMLParser hooks ------------------------------------------------
     def handle_starttag(self, tag: str, attrs) -> None:  # noqa: D102
@@ -188,6 +220,10 @@ class _TextExtractor(HTMLParser):
         if tag not in _VOID_TAGS and self._is_hidden(attrs):
             self._hidden_tag, self._hidden_depth = tag, 1
             return
+        if tag not in _VOID_TAGS:
+            sets_zero = self._font_size(attrs)
+            if sets_zero is not None:
+                self._font_stack.append((tag, sets_zero))
 
         if tag == "a":
             for name, value in attrs:
@@ -233,6 +269,10 @@ class _TextExtractor(HTMLParser):
                 if self._hidden_depth <= 0:
                     self._hidden_tag = None
             return
+        for index in range(len(self._font_stack) - 1, -1, -1):
+            if self._font_stack[index][0] == tag:
+                del self._font_stack[index:]
+                break
         if tag in ("ul", "ol"):
             if self._list_stack:
                 self._list_stack.pop()
@@ -341,6 +381,23 @@ def notable_links(links: Iterable[str], domains: Sequence[str] = NOTABLE_DOMAINS
                 result.append(link)
                 break
     return tuple(result)
+
+
+#: A zero font size. On its own this is a layout idiom, not a hiding one:
+#: every responsive email builder puts it on the container that holds the
+#: columns, to kill the whitespace between inline-block elements, and the
+#: children set their own size back. Treating it as hidden threw away the
+#: whole body of every Workday message - seven of a hundred and fifty-six in
+#: one real mailbox, none of which contained a display:none anywhere.
+_ZERO_FONT = re.compile(r"font-size:0(?:px|pt|em|rem)?(?:;|$)")
+
+#: What a preheader actually does as well as shrinking the text. Matched
+#: separately so that a background colour cannot be read as a text colour -
+#: "background-color:#ffffff" contains "color:#fff", which is how the first
+#: attempt at this fix still hid the body.
+_ALSO_HIDDEN = re.compile(
+    r"(?:^|;)(?:max-height:0|opacity:0|mso-hide:all|height:0(?:px)?)(?:;|$)"
+)
 
 
 def html_to_text(html: str) -> ExtractedText:

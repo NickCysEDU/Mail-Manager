@@ -227,6 +227,20 @@ Both are checked against what the meeting is *for*. A booking link proves a
 meeting and never that it is about a job, so a dentist's reminder, a
 parent-teacher conference and a sales demo stay where they are.
 
+## Acknowledgements
+
+"We got your application, we'll be in touch" is the commonest mail in a job
+search and the one you least need to read. Every tracking system words it
+differently, so the sorter counts what the message *does* — says it arrived,
+promises to read it, promises to be in touch if it fits — rather than matching
+phrases. Two of those is enough.
+
+A rejection does the same three things and then delivers a decision, so a
+decision always wins. And "if your experience aligns, we will reach out to
+discuss next steps" is a promise, not a task: it ends nearly every
+acknowledgement, and reading it as an action item is how the dullest mail in
+the inbox became a to-do list.
+
 ## Rules
 
 **Settings → Auto Reply.** A rule is a list of conditions and a list of things
