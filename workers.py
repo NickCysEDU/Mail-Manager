@@ -13,7 +13,7 @@ import threading
 import traceback
 from dataclasses import dataclass, field, replace
 from datetime import datetime
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import QThread, Signal
 
@@ -568,16 +568,64 @@ class ApplyWorker(_BaseWorker):
         self.finished_ok.emit(combined)
 
 
-class ReplyWorker(_BaseWorker):
-    """Draft replies for messages the rules matched, and save them to Drafts.
+@dataclass
+class ReplyRun:
+    """What one pass of the reply rules did.
 
-    Kept apart from the scan on purpose. Drafting talks to the model again and
-    writes to the mailbox, and neither of those should happen as a side effect
-    of looking at what arrived.
+    Kept as a record rather than a list of drafts because a rule can now file,
+    tick and flag as well as draft, and the window needs to know about all of
+    it to show what changed.
+    """
+
+    outcomes: List[Tuple[TriageItem, object]] = field(default_factory=list)
+    saved: int = 0
+    marked_read: int = 0
+    flagged: int = 0
+
+    def add(self, item: TriageItem, outcome) -> None:
+        self.outcomes.append((item, outcome))
+
+    @property
+    def drafts(self) -> List:
+        return [o.draft for _i, o in self.outcomes if o.draft is not None]
+
+    @property
+    def matched(self) -> int:
+        return len(self.outcomes)
+
+    def describe(self) -> str:
+        drafts = self.drafts
+        failed = [d for d in drafts if not d.ok]
+        parts = [f"{self.matched} message{'' if self.matched == 1 else 's'} "
+                 f"matched a reply rule"]
+        if drafts:
+            written = len(drafts) - len(failed)
+            parts.append(f"drafted {written} repl{'y' if written == 1 else 'ies'}"
+                         f", saved {self.saved} to Drafts")
+        if self.marked_read:
+            parts.append(f"marked {self.marked_read} as read")
+        if self.flagged:
+            parts.append(f"flagged {self.flagged}")
+        filed = sum(1 for _i, o in self.outcomes if o.file_into)
+        if filed:
+            parts.append(f"pointed {filed} at a different folder")
+        if failed:
+            parts.append(f"{len(failed)} could not be written")
+        return ", ".join(parts) + ". Nothing has been sent."
+
+
+class ReplyWorker(_BaseWorker):
+    """Run the reply rules over the scanned messages and carry out what they say.
+
+    Kept apart from the scan on purpose. A rule can talk to the model again and
+    write to the mailbox, and neither of those should happen as a side effect of
+    looking at what arrived.
+
+    Nothing is ever sent. A reply lands in Drafts, and a person presses send.
     """
 
     finished_ok = Signal(object)
-    task_name = "reply drafting"
+    task_name = "reply rules"
 
     def __init__(self, settings: Settings, mailbox_password, api_key: str,
                  items: Sequence[TriageItem], parent=None) -> None:
@@ -602,15 +650,14 @@ class ReplyWorker(_BaseWorker):
     def run(self) -> None:
         import autoreply
 
-        rules = [r for r in self.settings.rules if r.enabled and r.action != "none"]
-        drafts: List[autoreply.Draft] = []
+        rules = [r for r in self.settings.rules if r.enabled and r.actions]
+        result = ReplyRun()
         if not rules:
             self._log("No reply rules are switched on.")
-            self.finished_ok.emit(drafts)
+            self.finished_ok.emit(result)
             return
 
-        wants_model = any(r.action == "draft_ai" for r in rules)
-        if wants_model:
+        if any(r.uses_the_model for r in rules):
             self._classifier = LLMEngine(
                 provider=self.settings.provider, api_key=self.api_key,
                 model=self.settings.model, base_url=self.settings.base_url,
@@ -619,68 +666,107 @@ class ReplyWorker(_BaseWorker):
                 fallback_to_rules=False, ruleset=self.settings.ruleset,
             )
 
-        matched = []
-        for item in self.items:
-            rule, _why = autoreply.choose_rule(rules, item.email, item.classification)
-            if rule is not None:
-                matched.append((item, rule))
-        if not matched:
-            self._log("No message matched a reply rule.")
-            self.finished_ok.emit(drafts)
-            return
-
         signature = self.settings.reply_signature
-        total = len(matched)
-        for index, (item, rule) in enumerate(matched, start=1):
+        total = len(self.items)
+        for index, item in enumerate(self.items, start=1):
             if self.cancel_event.is_set():
                 break
-            self._emit_progress(index - 1, total,
-                                f"Drafting {index} of {total}: {item.email.subject_display[:40]}")
-            drafts.append(autoreply.draft_for(
-                rule, item.email, item.classification, signature,
-                self._classifier if rule.action == "draft_ai" else None,
-            ))
+            self._emit_progress(
+                index - 1, total,
+                f"Checking {index} of {total}: {item.email.subject_display[:40]}")
+            try:
+                outcome = autoreply.apply_rules(
+                    rules, item.email, item.classification, signature,
+                    self._classifier)
+            except Exception as exc:  # noqa: BLE001 - one bad rule, not a crash
+                self._log(f"A rule failed on “{item.email.subject_display[:40]}”: {exc}")
+                continue
+            if outcome is not None:
+                result.add(item, outcome)
 
-        usable = [d for d in drafts if d.ok]
-        saved = 0
-        by_account: Dict[str, List] = {}
-        for draft in usable:
-            by_account.setdefault(draft.account_id, []).append(draft)
+        self._emit_progress(total, total, "Carrying out what the rules said.")
+        if not result.outcomes:
+            self._log("No message matched a reply rule.")
+            self.finished_ok.emit(result)
+            return
+
+        self._touch_mailboxes(result)
+
+        self._emit_progress(total, total, "Reply rules finished.")
+        self._log(result.describe())
+        self.finished_ok.emit(result)
+
+    # -- the part that talks to the mailbox --------------------------------
+    def _touch_mailboxes(self, result: "ReplyRun") -> None:
+        """Save drafts and set flags, one connection per account."""
+        by_account: Dict[str, List[Tuple[TriageItem, object]]] = {}
+        for item, outcome in result.outcomes:
+            if outcome.changes_the_mailbox:
+                by_account.setdefault(item.email.account_id, []).append((item, outcome))
+        if not by_account:
+            return
 
         passwords = self._passwords()
         for account_id, group in by_account.items():
-            account = self.settings.account_by_id(account_id) or self.settings.primary_account
+            if self.cancel_event.is_set():
+                break
+            account = (self.settings.account_by_id(account_id)
+                       or self.settings.primary_account)
             engine = IMAPEngine(host=account.host, port=account.port)
             try:
                 engine.connect(account.address, passwords.get(account.id, ""))
-                target = engine.drafts_mailbox()
-                for draft in group:
-                    raw = autoreply.build_mime(
-                        draft, account.address, account.label)
-                    try:
-                        engine.save_draft(raw, target)
-                        saved += 1
-                    except IMAPError as exc:
-                        draft.error = str(exc)
+                self._save_drafts(engine, account, group, result)
+                self._set_flags(engine, group, result)
             except Exception as exc:  # noqa: BLE001
-                for draft in group:
-                    draft.error = draft.error or str(exc)
-                self._log(f"{account.label}: could not save drafts - {exc}")
+                for _item, outcome in group:
+                    if outcome.draft is not None:
+                        outcome.draft.error = outcome.draft.error or str(exc)
+                self._log(f"{account.label}: could not carry out the rules - {exc}")
             finally:
                 try:
                     engine.logout()
                 except Exception:  # pragma: no cover
                     pass
 
-        failed = [d for d in drafts if not d.ok]
-        self._emit_progress(total, total, "Drafting finished.")
-        self._log(
-            f"Drafted {len(usable)} repl{'y' if len(usable) == 1 else 'ies'}, "
-            f"saved {saved} to Drafts"
-            + (f", {len(failed)} could not be written" if failed else "")
-            + ". Nothing has been sent."
-        )
-        self.finished_ok.emit(drafts)
+    def _save_drafts(self, engine, account, group, result: "ReplyRun") -> None:
+        import autoreply
+
+        wanted = [o for _i, o in group if o.draft is not None and o.draft.ok]
+        if not wanted:
+            return
+        target = engine.drafts_mailbox()
+        for outcome in wanted:
+            if self.cancel_event.is_set():
+                return
+            raw = autoreply.build_mime(outcome.draft, account.address, account.label)
+            try:
+                engine.save_draft(raw, target)
+                result.saved += 1
+            except IMAPError as exc:
+                outcome.draft.error = str(exc)
+
+    def _set_flags(self, engine, group, result: "ReplyRun") -> None:
+        """One STORE per flag per source folder, rather than one per message."""
+        wanted: Dict[Tuple[str, str], List[str]] = {}
+        for item, outcome in group:
+            folder = item.email.source_folder or "INBOX"
+            if outcome.mark_read:
+                wanted.setdefault((folder, "seen"), []).append(item.email.uid)
+            if outcome.flag:
+                wanted.setdefault((folder, "flagged"), []).append(item.email.uid)
+        for (folder, flag), uids in wanted.items():
+            if self.cancel_event.is_set():
+                return
+            try:
+                touched = engine.set_flags(uids, [flag], add=True, mailbox=folder)
+            except IMAPError as exc:
+                self._log(f"Could not set {flag} on {len(uids)} message"
+                          f"{'' if len(uids) == 1 else 's'}: {exc}")
+                continue
+            if flag == "seen":
+                result.marked_read += touched
+            else:
+                result.flagged += touched
 
 
 class ConnectionTestWorker(_BaseWorker):

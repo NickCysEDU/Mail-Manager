@@ -347,10 +347,13 @@ class FolderPlan:
 class TimeWindow(Enum):
     """Quick-preset scan windows offered in the action bar."""
 
-    LAST_24_HOURS = ("Past 24 Hours", 1)
-    LAST_3_DAYS = ("Past 3 Days", 3)
-    LAST_7_DAYS = ("Past 7 Days", 7)
-    CUSTOM = ("Custom Range", None)
+    # "Past" is implied by the range spelled out beside these, and four
+    # buttons carrying a redundant word cost about a hundred and fifty pixels
+    # of a toolbar that has to fit a great deal else.
+    LAST_24_HOURS = ("24 hours", 1)
+    LAST_3_DAYS = ("3 days", 3)
+    LAST_7_DAYS = ("7 days", 7)
+    CUSTOM = ("Custom", None)
 
     def __init__(self, label: str, days: Optional[int]) -> None:
         self._label = label

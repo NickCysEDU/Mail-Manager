@@ -7,8 +7,10 @@ the right headers to thread correctly, and a person presses send. An app that
 answers a stranger's mail on your behalf, using a model, without you reading it
 first, is not a feature anybody asked for twice.
 
-And a rule has to match on something specific. The default rules cover the
-cases where the correct reply is nearly mechanical - acknowledging an interview
+And a rule has to match on something specific. A rule is a list of conditions
+and a list of things to do, so anybody can build one that fits their own mail
+rather than picking from a fixed menu. The rules that ship cover the cases
+where the correct reply is nearly mechanical - acknowledging an interview
 invitation, answering a request for availability - and every one of them is off
 until it is switched on.
 """
@@ -24,129 +26,807 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from models import Category, EmailMessage, OtherCategory
 
-#: What a rule can do when it matches.
-ACTIONS: Tuple[Tuple[str, str], ...] = (
-    ("draft", "Save a draft reply for me to review"),
-    ("draft_ai", "Write a draft with the model, for me to review"),
-    ("none", "Do nothing (off)"),
+MAX_DRAFT_WORDS = 180
+
+#: How much of a message a condition reads. A rule runs over every scanned
+#: message, and somebody's own regular expression is allowed to be careless.
+MAX_MATCH_CHARS = 20000
+
+
+# ==========================================================================
+# Conditions and actions
+# ==========================================================================
+#: What a condition can look at. Each is (name, label, kind), where kind says
+#: what sort of value the field expects and so which editor the settings page
+#: shows for it.
+FIELDS: Tuple[Tuple[str, str, str], ...] = (
+    ("category", "Job category", "category"),
+    ("topic", "Everyday topic", "topic"),
+    ("sender", "Sender", "text"),
+    ("sender_domain", "Sender's domain", "text"),
+    ("subject", "Subject", "text"),
+    ("body", "Message text", "text"),
+    ("anywhere", "Subject or message", "text"),
+    ("confidence", "Confidence", "number"),
+    ("mailbox", "Mailbox", "mailbox"),
+    ("age_days", "Age in days", "number"),
+    ("is_bulk", "Bulk mail", "flag"),
+    ("has_attachment", "Has an attachment", "flag"),
+    ("is_reply", "Is a reply", "flag"),
+)
+_FIELD_KIND = {name: kind for name, _label, kind in FIELDS}
+
+#: Which operators make sense for which kind of field.
+OPERATORS: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
+    ("is", "is", ("category", "topic", "mailbox")),
+    ("is_not", "is not", ("category", "topic", "mailbox")),
+    ("contains", "contains", ("text",)),
+    ("not_contains", "does not contain", ("text",)),
+    ("starts_with", "starts with", ("text",)),
+    ("ends_with", "ends with", ("text",)),
+    ("equals", "is exactly", ("text",)),
+    ("not_equals", "is not exactly", ("text",)),
+    ("matches", "matches the pattern", ("text",)),
+    ("at_least", "is at least", ("number",)),
+    ("at_most", "is at most", ("number",)),
+    ("is_true", "yes", ("flag",)),
+    ("is_false", "no", ("flag",)),
 )
 
-MAX_DRAFT_WORDS = 180
+
+#: An unbounded repeat: one that can try an unlimited number of lengths.
+_UNBOUNDED = ("*", "+")
+
+
+def _atoms(pattern: str) -> List[Tuple[str, str]]:
+    """Split a pattern into (atom, quantifier) pairs, groups kept whole.
+
+    Not a parser - it only needs to be right about where the repeats are and
+    what they repeat, which is all the risk check asks of it.
+    """
+    found: List[Tuple[str, str]] = []
+    index = 0
+    while index < len(pattern):
+        char = pattern[index]
+        if char == "\\":
+            atom, index = pattern[index:index + 2], index + 2
+        elif char == "[":
+            close = index + 1
+            if close < len(pattern) and pattern[close] == "]":
+                close += 1
+            while close < len(pattern) and pattern[close] != "]":
+                close += 2 if pattern[close] == "\\" else 1
+            atom, index = pattern[index:close + 1], close + 1
+        elif char == "(":
+            depth, close = 1, index + 1
+            while close < len(pattern) and depth:
+                if pattern[close] == "\\":
+                    close += 1
+                elif pattern[close] == "(":
+                    depth += 1
+                elif pattern[close] == ")":
+                    depth -= 1
+                close += 1
+            atom, index = pattern[index:close], close
+        else:
+            atom, index = char, index + 1
+
+        quantifier = ""
+        if index < len(pattern):
+            if pattern[index] in "*+?":
+                quantifier, index = pattern[index], index + 1
+            elif pattern[index] == "{":
+                close = pattern.find("}", index)
+                if close != -1:
+                    quantifier, index = pattern[index:close + 1], close + 1
+        if quantifier and index < len(pattern) and pattern[index] in "?+":
+            quantifier += pattern[index]     # lazy or possessive
+            index += 1
+        found.append((atom, quantifier))
+    return found
+
+
+def _is_unbounded(quantifier: str) -> bool:
+    if not quantifier:
+        return False
+    if quantifier[0] in _UNBOUNDED:
+        return True
+    return quantifier.startswith("{") and quantifier.rstrip("}?+").endswith(",")
+
+
+#: Representative characters, used to ask whether two branches of an
+#: alternation can match the same thing.
+_PROBES = "axzAZ09 _-.@/\\\n\t!#%&*+=?~é'\""
+
+
+def _branches(group: str) -> List[str]:
+    """The top-level alternatives inside a group, ignoring nested ones."""
+    inner = group[1:-1] if group.startswith("(") and group.endswith(")") else group
+    for prefix in ("?:", "?i:", "?=", "?!", "?<=", "?<!", "?P<"):
+        if inner.startswith(prefix):
+            inner = inner.split(">", 1)[1] if prefix == "?P<" else inner[len(prefix):]
+            break
+    parts, depth, current = [], 0, []
+    index = 0
+    while index < len(inner):
+        char = inner[index]
+        if char == "\\":
+            current.append(inner[index:index + 2]); index += 2; continue
+        if char == "[":
+            close = inner.find("]", index + 2)
+            close = len(inner) - 1 if close == -1 else close
+            current.append(inner[index:close + 1]); index = close + 1; continue
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif char == "|" and depth == 0:
+            parts.append("".join(current)); current = []; index += 1; continue
+        current.append(char); index += 1
+    parts.append("".join(current))
+    return parts
+
+
+def _branches_overlap(group: str) -> bool:
+    """Whether two alternatives can begin with the same character.
+
+    ``(a|a)*`` and ``(\\d|\\w)+`` are exponential for the same reason ``(a+)+``
+    is: at every position the matcher has more than one way to make progress,
+    and has to try all of them before it can give up. Asking each branch's
+    first atom about a handful of representative characters answers that
+    without writing a regular-expression engine.
+    """
+    parts = [p for p in _branches(group) if p]
+    if len(parts) < 2:
+        return False
+    firsts = []
+    for part in parts[:8]:
+        first = (_atoms(part) or [("", "")])[0][0]
+        if not first:
+            return True                     # an empty branch always overlaps
+        firsts.append(first)
+    # Two branches that begin with the same thing overlap by definition, and
+    # saying so does not depend on a probe character happening to be listed.
+    if len(set(firsts)) < len(firsts):
+        return True
+    reach = []
+    for first in firsts:
+        try:
+            probe = re.compile(first)
+        except re.error:
+            return True                     # cannot tell, so assume it can
+        reach.append({c for c in _PROBES if probe.match(c)})
+    return any(reach[i] & reach[j]
+               for i in range(len(reach)) for j in range(i + 1, len(reach)))
+
+
+#: Answers, keyed by the pattern. Checking is linear in the length of the
+#: pattern, and a rule is checked against every message in a scan.
+_RISK: Dict[str, str] = {}
+
+
+def pattern_risk(pattern: str) -> str:
+    """Why this pattern could take an unreasonable amount of time, in words.
+
+    Python's regular expressions backtrack, and two shapes make that
+    catastrophic: a repeat inside a repeat, and two repeats of the same thing
+    side by side. Neither is rare in a pattern somebody wrote quickly -
+    ``.*.*x`` is what happens when you paste twice - and neither can be
+    interrupted, because the matcher holds the interpreter for its whole run.
+    So they are refused before they run rather than cancelled during it.
+    """
+    if not pattern:
+        return ""
+    if pattern in _RISK:
+        return _RISK[pattern]
+    if len(_RISK) > 200:
+        _RISK.clear()
+    _RISK[pattern] = found = _pattern_risk(pattern)
+    return found
+
+
+def _pattern_risk(pattern: str) -> str:
+    try:
+        atoms = _atoms(pattern)
+    except Exception:  # noqa: BLE001 - a bad pattern is caught by compile
+        return ""
+    previous_atom, previous_repeat = "", False
+    for atom, quantifier in atoms:
+        unbounded = _is_unbounded(quantifier)
+        # A group that repeats without limit, holding something that already
+        # repeats without limit: (a+)+, (a*)* and friends.
+        if unbounded and atom.startswith("("):
+            inner = atom[1:-1] if atom.endswith(")") else atom[1:]
+            if any(_is_unbounded(q) for _a, q in _atoms(inner)):
+                return (f"“{atom}{quantifier}” repeats something that already "
+                        "repeats, which can take longer than the age of the "
+                        "universe on the wrong message")
+            if _branches_overlap(atom):
+                return (f"“{atom}{quantifier}” repeats a choice whose options "
+                        "can match the same text, which is the same trap by "
+                        "another name")
+        # The same thing repeated twice in a row: .*.*
+        if unbounded and previous_repeat and atom == previous_atom:
+            return (f"“{previous_atom}{quantifier}” appears twice in a row, "
+                    "which multiplies the work rather than adding to it")
+        previous_atom, previous_repeat = atom, unbounded
+    return ""
+
+
+#: Compiled patterns, keyed by what was typed. A rule is checked against every
+#: message in a scan, and re's own cache is small and shared with everything.
+_COMPILED: Dict[str, Any] = {}
+
+
+def _prepare(pattern: str) -> str:
+    """Take off the leading and trailing “.*”, which a search does not need.
+
+    ``.*urgent.*`` is a reasonable thing to type and a quadratic thing to run:
+    the matcher takes every starting position in turn, runs to the end of the
+    message and walks back looking for the word. Under ``search`` those two
+    repeats say nothing the search was not already doing, and without them the
+    same pattern is linear. Two seconds a message becomes half a millisecond.
+    """
+    trimmed = pattern
+    while (trimmed.startswith(".*") and not trimmed.startswith(".*?")):
+        trimmed = trimmed[2:]
+    while (trimmed.endswith(".*") and not trimmed.endswith("\\.*")):
+        trimmed = trimmed[:-2]
+    if trimmed.endswith(".*$"):
+        trimmed = trimmed[:-3]
+    return trimmed or pattern
+
+
+def compiled(pattern: str):
+    """The compiled form of a pattern, prepared and remembered. None if bad."""
+    if pattern in _COMPILED:
+        return _COMPILED[pattern]
+    try:
+        made = re.compile(_prepare(pattern), re.IGNORECASE)
+    except re.error:
+        made = None
+    if len(_COMPILED) > 200:
+        _COMPILED.clear()
+    _COMPILED[pattern] = made
+    return made
+
+
+def _uncapitalise(text: str) -> str:
+    """Lower the first letter only, so “Sorted Mail/Work” survives."""
+    return f"{text[:1].lower()}{text[1:]}" if text else text
+
+
+def operators_for(field: str) -> Tuple[Tuple[str, str], ...]:
+    """The operators offered for a field, in the order they are listed."""
+    kind = _FIELD_KIND.get(field, "text")
+    return tuple((name, label) for name, label, kinds in OPERATORS if kind in kinds)
+
+
+def field_kind(field: str) -> str:
+    return _FIELD_KIND.get(field, "text")
 
 
 @dataclass
-class Rule:
-    """One "when this arrives, draft that" rule."""
+class Condition:
+    """One test against a message."""
 
-    name: str = "New rule"
-    enabled: bool = False
-    #: Job categories this applies to, by name. Empty means any.
-    categories: List[str] = field(default_factory=list)
-    #: Everyday topics this applies to, by name. Empty means any.
-    topics: List[str] = field(default_factory=list)
-    #: A phrase that must appear in the subject or body. Optional.
-    contains: str = ""
-    #: Only from senders whose address matches this. Optional, substring.
-    sender_matches: str = ""
-    #: Never reply to bulk mail. On by default, and it is why this is safe.
-    skip_bulk: bool = True
-    #: Below this the message is not confidently understood, so it is left.
-    min_confidence: float = 0.90
-    action: str = "draft"
-    #: Used verbatim by "draft", and as guidance by "draft_ai".
-    template: str = ""
-    #: Extra instruction for the model, when the action is draft_ai.
-    guidance: str = ""
+    field: str = "anywhere"
+    operator: str = "contains"
+    value: str = ""
+
+    #: Where an operator goes when the field it was written for does not
+    #: offer it - "is" on a subject means "is exactly", not "whichever
+    #: operator happened to come first".
+    SYNONYMS = {"is": "equals", "is_not": "not_equals",
+                "equals": "is", "not_equals": "is_not",
+                "at_least": "contains", "at_most": "contains",
+                "is_true": "contains", "is_false": "not_contains"}
 
     def __post_init__(self) -> None:
-        self.name = (self.name or "").strip() or "New rule"
-        self.action = self.action if self.action in dict(ACTIONS) else "draft"
-        try:
-            self.min_confidence = min(1.0, max(0.0, float(self.min_confidence)))
-        except (TypeError, ValueError):
-            self.min_confidence = 0.90
-        self.categories = [str(c) for c in (self.categories or [])]
-        self.topics = [str(t) for t in (self.topics or [])]
+        if self.field not in _FIELD_KIND:
+            self.field = "anywhere"
+        offered = [name for name, _label in operators_for(self.field)]
+        if self.operator not in offered:
+            fallback = self.SYNONYMS.get(self.operator, "")
+            self.operator = (fallback if fallback in offered
+                             else (offered[0] if offered else "contains"))
+        self.value = "" if self.value is None else str(self.value)
+
+    def describe(self) -> str:
+        label = next((l for n, l, _k in FIELDS if n == self.field), self.field)
+        operator = next((l for n, l in operators_for(self.field)
+                         if n == self.operator), self.operator)
+        if field_kind(self.field) == "flag":
+            return f"{label}: {operator}"
+        return f"{label} {operator} “{self.value}”"
+
+    # -- evaluation ------------------------------------------------------
+    def _subject_of(self, message, classification, context) -> Any:
+        if self.field == "category":
+            return classification.category.value if classification.is_job_related else ""
+        if self.field == "topic":
+            return ("" if classification.is_job_related
+                    else classification.other_category.value)
+        if self.field == "sender":
+            return f"{message.sender_name} {message.sender_email}"
+        if self.field == "sender_domain":
+            return (message.sender_email or "").rpartition("@")[2]
+        if self.field == "subject":
+            return message.subject or ""
+        if self.field == "body":
+            return message.body_text or ""
+        if self.field == "anywhere":
+            return f"{message.subject or ''}\n{message.body_text or ''}"
+        if self.field == "confidence":
+            return classification.confidence_score
+        if self.field == "mailbox":
+            return " ".join(part for part in (message.account_id,
+                                              message.account_address,
+                                              message.account_label) if part)
+        if self.field == "age_days":
+            when = message.local_date()
+            if when is None:
+                return 0.0
+            now = (context or {}).get("now") or datetime.now(timezone.utc)
+            return max(0.0, (now.astimezone(when.tzinfo) - when).total_seconds() / 86400)
+        if self.field == "is_bulk":
+            return bool((message.list_unsubscribe or "").strip())
+        if self.field == "has_attachment":
+            return bool(message.attachments)
+        if self.field == "is_reply":
+            return (message.subject or "").strip()[:3].lower() == "re:"
+        return ""
+
+    def matches(self, message, classification, context=None) -> bool:
+        """Whether this condition holds. Never raises on a bad value."""
+        subject = self._subject_of(message, classification, context)
+        operator = self.operator
+
+        if operator in ("is_true", "is_false"):
+            return bool(subject) is (operator == "is_true")
+
+        if operator in ("at_least", "at_most"):
+            try:
+                threshold = float(self.value)
+                actual = float(subject)
+            except (TypeError, ValueError):
+                return False
+            return actual >= threshold if operator == "at_least" else actual <= threshold
+
+        haystack = str(subject).lower()[:MAX_MATCH_CHARS]
+        needle = str(self.value).strip().lower()
+        if operator in ("is", "is_not"):
+            parts = haystack.split() if self.field == "mailbox" else [haystack]
+            hit = needle in parts or haystack == needle
+            return hit if operator == "is" else not hit
+        if not needle:
+            # An empty text test would match everything, which is never what
+            # somebody typing a rule meant to say.
+            return False
+        if operator == "contains":
+            return needle in haystack
+        if operator == "not_contains":
+            return needle not in haystack
+        if operator == "starts_with":
+            return haystack.startswith(needle)
+        if operator == "ends_with":
+            return haystack.endswith(needle)
+        if operator == "equals":
+            return haystack.strip() == needle
+        if operator == "not_equals":
+            return haystack.strip() != needle
+        if operator == "matches":
+            if pattern_risk(self.value):
+                return False        # refused, not run: see pattern_risk
+            pattern = compiled(self.value)
+            if pattern is None:
+                return False
+            return pattern.search(str(subject)[:MAX_MATCH_CHARS]) is not None
+        return False
+
+    def problem(self) -> str:
+        """What is wrong with this condition, in words. Empty when it is fine."""
+        if field_kind(self.field) == "flag":
+            return ""
+        if not str(self.value).strip():
+            return f"{self.describe()} has nothing to compare against"
+        if self.operator in ("at_least", "at_most"):
+            try:
+                float(self.value)
+            except (TypeError, ValueError):
+                return f"“{self.value}” is not a number"
+        if self.operator == "matches":
+            try:
+                re.compile(self.value)
+            except re.error as exc:
+                return f"that pattern will not compile: {exc}"
+            risk = pattern_risk(self.value)
+            if risk:
+                return f"that pattern is unsafe to run: {risk}"
+        return ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, raw: Mapping[str, Any]) -> "Rule":
+    def from_dict(cls, raw: Mapping[str, Any]) -> "Condition":
         known = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in (raw or {}).items() if k in known})
 
-    # -- matching --------------------------------------------------------
-    def matches(self, message: EmailMessage, classification) -> Tuple[bool, str]:
+
+#: What a rule can do. Ordered as they would be applied.
+ACTION_KINDS: Tuple[Tuple[str, str, str], ...] = (
+    ("draft", "Draft a reply from a template", "template"),
+    ("draft_ai", "Draft a reply with the model", "guidance"),
+    ("file_into", "File it into a folder", "folder"),
+    ("tick", "Tick it, ready to file", "none"),
+    ("untick", "Leave it unticked", "none"),
+    ("mark_read", "Mark it as read", "none"),
+    ("flag", "Flag it", "none"),
+    ("leave", "Leave it where it is", "none"),
+    ("stop", "Stop, and skip any later rules", "none"),
+)
+_ACTION_INPUT = {name: kind for name, _label, kind in ACTION_KINDS}
+
+
+def action_input(kind: str) -> str:
+    """What a given action needs typing into it, if anything."""
+    return _ACTION_INPUT.get(kind, "none")
+
+
+@dataclass
+class Action:
+    """One thing a rule does when it matches."""
+
+    kind: str = "draft"
+    value: str = ""
+
+    def __post_init__(self) -> None:
+        # An action nobody has ever heard of is dropped by the rule rather
+        # than guessed at. Guessing "draft" would have a mangled config write
+        # mail; dropping it does nothing, which is the right way to be wrong.
+        if self.kind not in _ACTION_INPUT:
+            self.kind = ""
+        self.value = "" if self.value is None else str(self.value)
+
+    def describe(self) -> str:
+        label = next((l for n, l, _k in ACTION_KINDS if n == self.kind), self.kind)
+        if action_input(self.kind) == "folder" and self.value:
+            return f"{label}: {self.value}"
+        return label
+
+    def problem(self) -> str:
+        """What this action still needs, in words. Empty when it is fine."""
+        needs = action_input(self.kind)
+        if needs == "none" or str(self.value).strip():
+            return ""
+        return {
+            "template": "the template to draft from is empty",
+            "guidance": "the model has not been told what the reply should do",
+            "folder": "no folder was chosen to file into",
+        }.get(needs, "it is missing a value")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any]) -> "Action":
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in (raw or {}).items() if k in known})
+
+@dataclass
+class Rule:
+    """When these conditions hold, do these things.
+
+    Conditions and actions are lists, so a rule is whatever somebody needs it
+    to be rather than one of a fixed set. The older shape - a category, a
+    phrase, a confidence floor and one action - is still read, and converted
+    on the way in, so an existing configuration keeps working.
+    """
+
+    name: str = "New rule"
+    enabled: bool = False
+    #: "all" means every condition has to hold; "any" means one is enough.
+    match: str = "all"
+    conditions: List[Condition] = field(default_factory=list)
+    actions: List[Action] = field(default_factory=list)
+    #: Never act on bulk mail. On by default, and the reason this is safe.
+    skip_bulk: bool = True
+    #: Stop looking at later rules once this one has matched.
+    stop_after: bool = False
+
+    def __post_init__(self) -> None:
+        self.name = (self.name or "").strip() or "New rule"
+        self.match = "any" if str(self.match).lower() == "any" else "all"
+        self.conditions = [
+            c if isinstance(c, Condition) else Condition.from_dict(c)
+            for c in (self.conditions or []) if isinstance(c, (Condition, Mapping))
+        ]
+        self.actions = [
+            action for action in (
+                a if isinstance(a, Action) else Action.from_dict(a)
+                for a in (self.actions or []) if isinstance(a, (Action, Mapping))
+            ) if action.kind
+        ]
+
+    # -- what it is -------------------------------------------------------
+    @property
+    def drafts_a_reply(self) -> bool:
+        return any(a.kind in ("draft", "draft_ai") for a in self.actions)
+
+    @property
+    def uses_the_model(self) -> bool:
+        return any(a.kind == "draft_ai" for a in self.actions)
+
+    def action(self, kind: str) -> Optional[Action]:
+        return next((a for a in self.actions if a.kind == kind), None)
+
+    def describe(self) -> str:
+        """One line saying what this rule does, for the list."""
+        if not self.conditions:
+            return "every message"
+        joiner = " and " if self.match == "all" else " or "
+        conditions = joiner.join(c.describe() for c in self.conditions[:3])
+        if len(self.conditions) > 3:
+            conditions += f", and {len(self.conditions) - 3} more"
+        doing = ", ".join(_uncapitalise(a.describe())
+                          for a in self.actions[:2]) or "nothing"
+        return f"{conditions} → {doing}"
+
+    # -- matching ---------------------------------------------------------
+    def matches(self, message, classification, context=None) -> Tuple[bool, str]:
         """Whether this rule applies, and why not when it does not."""
-        if not self.enabled or self.action == "none":
+        if not self.enabled:
             return False, "the rule is off"
+        if not self.actions:
+            return False, "the rule does not do anything yet"
         if self.skip_bulk and (message.list_unsubscribe or "").strip():
             return False, "it is bulk mail"
-        if classification.confidence_score < self.min_confidence:
-            return False, (f"confidence {classification.confidence_score:.2f} is "
-                           f"below the rule's {self.min_confidence:.2f}")
-        if self.categories:
-            name = classification.category.value if classification.is_job_related else ""
-            if name not in self.categories:
-                return False, "the category does not match"
-        if self.topics:
-            name = "" if classification.is_job_related else classification.other_category.value
-            if name not in self.topics:
-                return False, "the topic does not match"
-        if self.sender_matches:
-            haystack = f"{message.sender_email} {message.sender_name}".lower()
-            if self.sender_matches.strip().lower() not in haystack:
-                return False, "the sender does not match"
-        if self.contains:
-            haystack = f"{message.subject} {message.body_text}".lower()
-            if self.contains.strip().lower() not in haystack:
-                return False, "the phrase was not found"
-        return True, ""
+        if not self.conditions:
+            return False, "the rule has no conditions, so it would match everything"
+
+        results = [c.matches(message, classification, context) for c in self.conditions]
+        if self.match == "any":
+            if any(results):
+                return True, ""
+            return False, "none of its conditions matched"
+        if all(results):
+            return True, ""
+        missed = next((c for c, ok in zip(self.conditions, results) if not ok), None)
+        if missed is None:
+            return False, "it did not match"
+        # The reason is read mid-sentence, after "rule name: ", so it starts
+        # in lower case like the rest of them.
+        said = missed.describe()
+        return False, f"{said[0].lower()}{said[1:]} did not hold"
+
+    def problems(self) -> List[str]:
+        """Everything wrong with this rule, in words, worst first.
+
+        The settings page shows these next to the rule rather than refusing to
+        save it, because a half-written rule is a normal state to leave a
+        rule in. A rule with problems is simply never switched on.
+        """
+        found: List[str] = []
+        if not self.conditions:
+            found.append("It has no conditions, so it would match every message.")
+        if not self.actions:
+            found.append("It does not do anything yet.")
+        for condition in self.conditions:
+            trouble = condition.problem()
+            if trouble:
+                found.append(trouble[0].upper() + trouble[1:] + ".")
+        for action in self.actions:
+            trouble = action.problem()
+            if trouble:
+                found.append(trouble[0].upper() + trouble[1:] + ".")
+        kinds = [a.kind for a in self.actions]
+        if "tick" in kinds and "untick" in kinds:
+            found.append("It both ticks and unticks the message; the last one wins.")
+        if "leave" in kinds and "file_into" in kinds:
+            found.append("It both files the message and leaves it alone; "
+                         "leaving it alone wins.")
+        if sum(1 for k in kinds if k in ("draft", "draft_ai")) > 1:
+            found.append("It drafts more than one reply; only the first is written.")
+        return found
+
+    @property
+    def ready(self) -> bool:
+        return not self.problems()
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "enabled": self.enabled,
+            "match": self.match,
+            "conditions": [c.to_dict() for c in self.conditions],
+            "actions": [a.to_dict() for a in self.actions],
+            "skip_bulk": self.skip_bulk,
+            "stop_after": self.stop_after,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any]) -> "Rule":
+        raw = dict(raw or {})
+        if "conditions" not in raw and "actions" not in raw:
+            return cls._from_old_shape(raw)
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in raw.items() if k in known})
+
+    @classmethod
+    def _from_old_shape(cls, raw: Mapping[str, Any]) -> "Rule":
+        """Read a rule written before conditions and actions were lists."""
+        conditions: List[Condition] = []
+        for value in raw.get("categories") or []:
+            conditions.append(Condition("category", "is", str(value)))
+        for value in raw.get("topics") or []:
+            conditions.append(Condition("topic", "is", str(value)))
+        if raw.get("sender_matches"):
+            conditions.append(Condition("sender", "contains", str(raw["sender_matches"])))
+        if raw.get("contains"):
+            conditions.append(Condition("anywhere", "contains", str(raw["contains"])))
+        floor = raw.get("min_confidence")
+        if floor not in (None, ""):
+            conditions.append(Condition("confidence", "at_least", str(floor)))
+
+        kind = str(raw.get("action") or "draft")
+        actions: List[Action] = []
+        if kind == "draft_ai":
+            actions.append(Action("draft_ai", str(raw.get("guidance") or "")))
+        elif kind != "none":
+            actions.append(Action("draft", str(raw.get("template") or "")))
+        return cls(
+            name=str(raw.get("name") or "New rule"),
+            enabled=bool(raw.get("enabled")) and kind != "none",
+            match="all",
+            conditions=conditions,
+            actions=actions,
+            skip_bulk=bool(raw.get("skip_bulk", True)),
+        )
 
 
-#: Shipped switched off. Each one is a case where the right reply is nearly
+#: Shipped switched off. Each is a case where the right response is nearly
 #: mechanical, which is the only kind worth automating.
 def default_rules() -> List[Rule]:
     return [
         Rule(
             name="Acknowledge an interview invitation",
-            categories=[Category.INTERVIEW.value],
-            action="draft",
-            min_confidence=0.92,
-            template=(
-                "Hello {first_name},\n\n"
-                "Thank you for the invitation. I would be glad to meet.\n\n"
-                "I am free on the times you suggested, and happy to work around "
-                "whatever suits the panel.\n\n"
-                "Best wishes,\n{me}"
-            ),
+            conditions=[Condition("category", "is", Category.INTERVIEW.value),
+                        Condition("confidence", "at_least", "0.92")],
+            actions=[Action("draft",
+                            "Hello {first_name},\n\n"
+                            "Thank you for the invitation. I would be glad to meet.\n\n"
+                            "I am free on the times you suggested, and happy to work "
+                            "around whatever suits the panel.\n\n"
+                            "Best wishes,\n{me}")],
         ),
         Rule(
             name="Reply to a request for documents or availability",
-            categories=[Category.NEXT_STEPS.value],
-            action="draft_ai",
-            min_confidence=0.92,
-            guidance=(
-                "Answer what was actually asked for. If the message asks for "
-                "documents, say which are attached. If it asks for times, offer "
-                "three across two working days. Do not invent facts about the "
-                "sender, the role, or the writer's history."
-            ),
+            conditions=[Condition("category", "is", Category.NEXT_STEPS.value),
+                        Condition("confidence", "at_least", "0.92")],
+            actions=[Action("draft_ai",
+                            "Answer what was actually asked for. If the message asks "
+                            "for documents, say which are attached. If it asks for "
+                            "times, offer three across two working days. Do not invent "
+                            "facts about the sender, the role, or the writer.")],
         ),
         Rule(
             name="Thank a recruiter and decline politely",
-            categories=[Category.UNSOLICITED.value],
-            action="draft",
-            min_confidence=0.94,
-            template=(
-                "Hello {first_name},\n\n"
-                "Thank you for getting in touch. I am not looking to move at "
-                "the moment, but I am glad to stay in contact for the future.\n\n"
-                "Best wishes,\n{me}"
-            ),
+            conditions=[Condition("category", "is", Category.UNSOLICITED.value),
+                        Condition("confidence", "at_least", "0.94")],
+            actions=[Action("draft",
+                            "Hello {first_name},\n\n"
+                            "Thank you for getting in touch. I am not looking to move "
+                            "at the moment, but I am glad to stay in contact.\n\n"
+                            "Best wishes,\n{me}")],
+        ),
+        Rule(
+            name="File security notices without asking",
+            conditions=[Condition("topic", "is", OtherCategory.SECURITY.value),
+                        Condition("confidence", "at_least", "0.95")],
+            actions=[Action("file_into", "Sorted Mail/Security"), Action("tick")],
+            skip_bulk=False,
+        ),
+        Rule(
+            name="Leave anything from a colleague alone",
+            match="any",
+            conditions=[Condition("sender_domain", "ends_with", "example.com")],
+            actions=[Action("leave"), Action("stop")],
+            skip_bulk=False,
         ),
     ]
+
+
+@dataclass
+class Outcome:
+    """What the rules decided about one message."""
+
+    rule_names: List[str] = field(default_factory=list)
+    draft: Optional["Draft"] = None
+    file_into: str = ""
+    tick: Optional[bool] = None
+    mark_read: bool = False
+    flag: bool = False
+    leave: bool = False
+
+    @property
+    def rule_name(self) -> str:
+        return ", ".join(self.rule_names)
+
+    @property
+    def changes_the_mailbox(self) -> bool:
+        """Whether acting on this needs the account opening."""
+        return bool(self.draft) or self.mark_read or self.flag
+
+    @property
+    def does_anything(self) -> bool:
+        return bool(self.draft or self.file_into or self.tick is not None
+                    or self.mark_read or self.flag or self.leave)
+
+    def describe(self) -> str:
+        parts = []
+        if self.draft is not None:
+            parts.append("draft a reply")
+        if self.leave:
+            parts.append("leave it where it is")
+        elif self.file_into:
+            parts.append(f"file into {self.file_into}")
+        if self.tick is True:
+            parts.append("tick it")
+        elif self.tick is False:
+            parts.append("untick it")
+        if self.mark_read:
+            parts.append("mark it read")
+        if self.flag:
+            parts.append("flag it")
+        return ", ".join(parts) or "nothing"
+
+
+def apply_rules(rules: Sequence[Rule], message, classification, me: str = "",
+                engine=None, context=None) -> Optional[Outcome]:
+    """Run every rule in order and collect what they decided.
+
+    Rules are read top to bottom and a later one can add to what an earlier one
+    decided, until a rule says to stop. That ordering is the only thing anybody
+    has to hold in their head, and it is the same rule every mail client has
+    used for thirty years.
+
+    Returns None when no rule wanted anything, so a caller can tell "no rule
+    applied" from "a rule applied and asked for nothing".
+    """
+    outcome = Outcome()
+    for rule in rules:
+        ok, _why = rule.matches(message, classification, context)
+        if not ok:
+            continue
+        outcome.rule_names.append(rule.name)
+        stop = rule.stop_after
+        for action in rule.actions:
+            kind = action.kind
+            if kind in ("draft", "draft_ai"):
+                if outcome.draft is None:
+                    outcome.draft = draft_for(
+                        rule, message, classification, me,
+                        engine if kind == "draft_ai" else None, action)
+            elif kind == "file_into":
+                outcome.file_into = action.value.strip()
+                outcome.leave = False
+            elif kind == "tick":
+                outcome.tick = True
+            elif kind == "untick":
+                outcome.tick = False
+            elif kind == "mark_read":
+                outcome.mark_read = True
+            elif kind == "flag":
+                outcome.flag = True
+            elif kind == "leave":
+                outcome.leave = True
+                outcome.file_into = ""
+            elif kind == "stop":
+                stop = True
+        if stop:
+            break
+    return outcome if outcome.does_anything else None
 
 
 SYSTEM_PROMPT = """\
@@ -265,20 +945,31 @@ def build_mime(draft: Draft, from_address: str, from_name: str = "",
 
 def choose_rule(rules: Sequence[Rule], message: EmailMessage,
                 classification) -> Tuple[Optional[Rule], str]:
-    """The first rule that applies, and the reason none did when none do."""
+    """The first rule that drafts a reply, and why none did when none do.
+
+    Kept for the one caller that only wants a draft. Anything that needs the
+    whole picture - filing, ticking, flagging - wants apply_rules instead.
+    """
     reasons = []
     for rule in rules:
         ok, why = rule.matches(message, classification)
+        if ok and not rule.drafts_a_reply:
+            if rule.stop_after:
+                return None, ""
+            continue
         if ok:
             return rule, ""
-        if rule.enabled and rule.action != "none":
+        if rule.enabled and rule.actions:
             reasons.append(f"{rule.name}: {why}")
     return None, "; ".join(reasons[:3])
 
 
 def draft_for(rule: Rule, message: EmailMessage, classification,
-              me: str = "", engine=None) -> Draft:
+              me: str = "", engine=None, action: Optional[Action] = None) -> Draft:
     """Write the reply this rule calls for. Never raises."""
+    if action is None:
+        action = (rule.action("draft_ai") if rule.uses_the_model
+                  else rule.action("draft")) or Action("draft")
     draft = Draft(
         message_uid=message.uid,
         account_id=message.account_id,
@@ -291,8 +982,8 @@ def draft_for(rule: Rule, message: EmailMessage, classification,
         draft.error = "No address to reply to."
         return draft
 
-    if rule.action == "draft" or engine is None:
-        draft.body = render_template(rule.template, message, me).strip()
+    if action.kind == "draft" or engine is None:
+        draft.body = render_template(action.value, message, me).strip()
         draft.generated_by = "template"
         if not draft.body:
             draft.error = "The rule has no template to fill in."
@@ -301,7 +992,7 @@ def draft_for(rule: Rule, message: EmailMessage, classification,
         return draft
 
     try:
-        payload = engine.draft_reply(message, classification, rule, me)
+        payload = engine.draft_reply(message, classification, rule, me, action.value)
     except Exception as exc:  # noqa: BLE001 - reported, never raised
         draft.error = f"The model could not draft a reply: {exc}"
         return draft

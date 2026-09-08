@@ -169,6 +169,11 @@ class FakeIMAP:
         self.search_results: Optional[List[str]] = None
         self.fail_copy_to: Optional[str] = None
         self.fail_store = False
+        #: Flags set through STORE, per uid, so a test can check them.
+        self.flags: Dict[str, set] = {}
+        #: (mailbox, flags, raw) for every APPEND.
+        self.appended: List[Tuple[str, str, bytes]] = []
+        self.fail_append = False
 
     # -- helpers ---------------------------------------------------------
     @staticmethod
@@ -302,10 +307,29 @@ class FakeIMAP:
     def _uid_store(self, uid_set, mode, flags):
         if self.fail_store:
             return ("NO", [b"STORE failed"])
-        if "+FLAGS" in str(mode) and "Deleted" in str(flags):
-            for uid in str(uid_set).split(","):
+        adding = "+FLAGS" in str(mode)
+        wanted = {f for f in str(flags).strip("()").split() if f}
+        for uid in str(uid_set).split(","):
+            if adding and "Deleted" in str(flags):
                 self.deleted.add(uid)
+            held = self.flags.setdefault(uid, set())
+            if adding:
+                held |= wanted
+            else:
+                held -= wanted
         return ("OK", [b"STORE completed"])
+
+    def append(self, mailbox, flags, date_time, message):
+        self._record("APPEND", (mailbox,))
+        name = self._unquote(mailbox)
+        if name != mailbox and not str(mailbox).startswith('"'):
+            raise AssertionError("APPEND mailbox must be quoted")
+        if self.fail_append:
+            return ("NO", [b"APPEND failed"])
+        if name not in self.folders:
+            return ("NO", [b"TRYCREATE no such mailbox"])
+        self.appended.append((name, str(flags), message))
+        return ("OK", [b"APPEND completed"])
 
     def _uid_expunge(self, uid_set):
         for uid in str(uid_set).split(","):

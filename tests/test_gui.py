@@ -459,7 +459,7 @@ class TestMainWindow:
     def test_constructs_and_starts_empty(self, window):
         assert window.model.rowCount() == 0
         assert window.apply_button.isEnabled() is False
-        assert window.apply_button.text() == "Apply Approved Folder Moves"
+        assert window.apply_button.text() == "Apply Moves"
         assert window.scan_button.text() in ("Scan && Analyze", "Reload Sample Data")
         assert window.table_stack.currentIndex() == 0   # the empty-state page
 
@@ -467,12 +467,14 @@ class TestMainWindow:
         window.model.set_items([make_item("1"), make_item("2")])
         window._update_status()
         assert window.apply_button.isEnabled() is True
-        assert window.apply_button.text() == "Apply 2 Approved Folder Moves"
+        assert window.apply_button.text() == "Apply 2 Moves"
 
     def test_singular_button_label(self, window):
         window.model.set_items([make_item("1")])
         window._update_status()
-        assert "1 Approved Folder Move" in window.apply_button.text()
+        assert window.apply_button.text() == "Apply 1 Move"
+        # The full wording moved to the tooltip so the toolbar fits one row.
+        assert "1 ticked message" in window.apply_button.toolTip()
 
     def test_category_filter_is_rebuilt_from_results(self, window):
         window.model.set_items([

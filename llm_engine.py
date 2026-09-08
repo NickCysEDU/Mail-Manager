@@ -744,7 +744,7 @@ class LLMEngine:
 
     # -- classification --------------------------------------------------
     def draft_reply(self, message: EmailMessage, classification, rule,
-                    me: str = "") -> Dict[str, Any]:
+                    me: str = "", guidance: str = "") -> Dict[str, Any]:
         """Write a reply body for one message. Returns the raw payload."""
         import autoreply
 
@@ -756,10 +756,8 @@ class LLMEngine:
             f"Category: {classification.category_label}\n"
             f"Replying as: {me or 'the mailbox owner'}\n"
         )
-        if rule.guidance:
-            prompt += f"\nWhat this reply needs to do:\n{rule.guidance}\n"
-        if rule.template:
-            prompt += f"\nA rough shape to follow:\n{rule.template}\n"
+        if guidance:
+            prompt += f"\nWhat this reply needs to do:\n{guidance}\n"
         prompt += f"\n--- the message ---\n{body}\n"
 
         completion = self.provider.complete(

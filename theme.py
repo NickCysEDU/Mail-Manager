@@ -34,6 +34,58 @@ MODES: Tuple[Tuple[str, str], ...] = (
     ("dark", "Always dark"),
 )
 
+#: How much room the window gives things. One axis, about space only - type
+#: size and weight are the separate reading toggle, so the two compose: dense
+#: spacing with larger type is a reasonable thing to want.
+DENSITIES: Tuple[Tuple[str, str, str], ...] = (
+    ("comfortable", "Comfortable",
+     "The default. Room to read, and to hit things without aiming."),
+    ("compact", "Compact",
+     "Tighter padding and shorter rows. Roughly a third more messages on "
+     "screen, and every control still a comfortable size to click."),
+    ("dense", "Very compact",
+     "As much as will fit. Single-line rows, minimal padding, and the preview "
+     "pane starts closed. Best on a large display, or when you already know "
+     "what you are looking for."),
+)
+
+
+@dataclass(frozen=True)
+class Density:
+    """The measurements one density choice implies."""
+
+    name: str
+    #: Padding above and below the text inside a control.
+    control_pad: int
+    #: Space between the window edge and its contents, and between rows.
+    margin: int
+    spacing: int
+    #: Lines of wrapped text in a table row.
+    row_lines: int
+    #: Padding inside a table cell.
+    cell_pad: int
+    #: How much of the window the message preview takes, before it is dragged.
+    preview_share: float
+    #: Whether the preview starts open at all.
+    preview_open: bool = True
+
+
+_DENSITIES: Dict[str, Density] = {
+    "comfortable": Density("comfortable", control_pad=7, margin=10, spacing=8,
+                           row_lines=3, cell_pad=6, preview_share=0.32),
+    "compact": Density("compact", control_pad=4, margin=6, spacing=5,
+                       row_lines=2, cell_pad=3, preview_share=0.26),
+    "dense": Density("dense", control_pad=2, margin=3, spacing=3,
+                     row_lines=1, cell_pad=1, preview_share=0.22,
+                     preview_open=False),
+}
+
+
+def density(name: str) -> Density:
+    """The measurements for a density, falling back to the default."""
+    return _DENSITIES.get((name or "").strip().lower(), _DENSITIES["comfortable"])
+
+
 CONTRASTS: Tuple[Tuple[str, str], ...] = (
     ("normal", "Normal"),
     ("high", "High contrast"),
@@ -198,16 +250,19 @@ def _lift(colour: str, factor: float) -> str:
         hue, sat, max(0, min(255, int(light * factor))), alpha).name()
 
 
-def stylesheet(colours: Palette, readable: bool = False, base_point: float = 13.0) -> str:
+def stylesheet(colours: Palette, readable: bool = False,
+               base_point: float = 13.0, spacing: str = "comfortable") -> str:
     """The parts a palette cannot express: spacing, borders, focus rings."""
+    room = density(spacing)
     # One vertical padding for every control. Height is content plus padding
     # plus border, so controls only line up if all three agree - a minimum
     # height on its own leaves each widget type at whatever its own padding
     # makes it.
-    vpad = 9 if readable else 7
+    vpad = room.control_pad + (2 if readable else 0)
     pad = f"{vpad}px {18 if readable else 15}px"
     radius = 7
     row_pad = f"{vpad}px"
+    cell_pad = room.cell_pad + (2 if readable else 0)
     border = 2 if colours.dark or readable else 1
     focus = 3 if readable else 2
     # Steppers and drop-downs sized to be hit rather than aimed at. Apple's own
@@ -234,6 +289,8 @@ def stylesheet(colours: Palette, readable: bool = False, base_point: float = 13.
 
     QLabel {{ color: {colours.text}; }}
     QLabel[dim="true"] {{ color: {colours.text_dim}; }}
+    QLabel[tone="warn"] {{ color: {colours.warn}; }}
+    QLabel[tone="ok"] {{ color: {colours.ok}; }}
 
     QAbstractItemView, QTextEdit, QPlainTextEdit, QLineEdit, QSpinBox,
     QDoubleSpinBox, QComboBox, QDateEdit {{
@@ -321,7 +378,7 @@ def stylesheet(colours: Palette, readable: bool = False, base_point: float = 13.
         gridline-color: {colours.border};
         outline: none;
     }}
-    QAbstractItemView::item {{ padding: {row_pad} 6px; }}
+    QAbstractItemView::item {{ padding: {cell_pad}px 6px; }}
     QAbstractItemView::item:selected {{
         background: {colours.selection}; color: {colours.selection_text};
     }}
@@ -332,7 +389,7 @@ def stylesheet(colours: Palette, readable: bool = False, base_point: float = 13.
         border: 0;
         border-right: 1px solid {colours.border};
         border-bottom: {border}px solid {colours.border};
-        padding: {row_pad} 8px;
+        padding: {cell_pad + 2}px 8px;
         font-weight: {700 if readable else 600};
     }}
 
@@ -344,6 +401,22 @@ def stylesheet(colours: Palette, readable: bool = False, base_point: float = 13.
     }}
     /* The help button is a round icon and is deliberately not this size. */
     QToolButton#helpButton {{ min-height: 0; max-height: none; padding: 0; }}
+    /* Nor are the small square buttons that add and remove a line: the
+       standard padding would push the one character they hold outside them. */
+    QToolButton[compact="true"] {{
+        min-height: 0; min-width: 0; padding: 0; margin: 0;
+        border: {border}px solid transparent;
+        background: transparent;
+        font-size: {base_point + 2}pt;
+    }}
+    QToolButton[compact="true"]:hover {{
+        background: {colours.surface_alt};
+        border-color: {colours.border};
+    }}
+    QToolButton[compact="true"]:pressed {{ background: {colours.selection};
+                                           color: {colours.selection_text}; }}
+    QToolButton[compact="true"]:disabled {{ color: {colours.text_dim};
+                                            background: transparent; }}
     QPushButton, QToolButton {{
         background: {colours.surface};
         color: {colours.text};
@@ -592,12 +665,12 @@ def base_font(app, readable: bool) -> QFont:
 
 
 def apply(app, mode: str = "system", contrast: str = "normal",
-          readable: bool = False) -> Palette:
+          readable: bool = False, spacing: str = "comfortable") -> Palette:
     """Paint the whole application. Returns the palette that was used."""
     colours = resolve(app, mode, contrast)
     if not isinstance(app.style(), ArrowStyle):
         app.setStyle(ArrowStyle(app.style()))
     app.setPalette(build_palette(colours))
     app.setFont(base_font(app, readable))
-    app.setStyleSheet(stylesheet(colours, readable))
+    app.setStyleSheet(stylesheet(colours, readable, spacing=spacing))
     return colours

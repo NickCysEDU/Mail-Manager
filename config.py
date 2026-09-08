@@ -203,6 +203,12 @@ class Settings:
     appearance_mode: str = "system"      # system | light | dark
     contrast: str = "normal"             # normal | high | maximum
     readable: bool = False
+    #: How much room the main window gives things. Separate from readable,
+    #: which is about type rather than space, so the two compose.
+    density: str = "comfortable"
+    #: False once the row height has been set by hand. Until then it follows
+    #: the spacing, which is what choosing "compact" is asking for.
+    row_lines_auto: bool = True
     #: Hovering anything explains it. Off by default; a tooltip nobody asked
     #: for is noise, and this makes asking explicit.
     help_mode: bool = False
@@ -281,8 +287,11 @@ class Settings:
         data["row_lines"] = _clamp_int(data["row_lines"], 1, 6, 3)
         import autoreply as _autoreply
         raw_rules = data.get("reply_rules") or []
+        # Read every rule and write it back out, so a file written before
+        # rules had condition and action lists is upgraded once, here, rather
+        # than being converted again on every read.
         data["reply_rules"] = [
-            (r if isinstance(r, dict) else _autoreply.Rule.from_dict(r).to_dict())
+            _autoreply.Rule.from_dict(r).to_dict()
             for r in raw_rules if isinstance(r, (dict, Mapping))
         ]
         data["reply_signature"] = str(data.get("reply_signature", "")).strip()
@@ -295,6 +304,8 @@ class Settings:
             data["appearance_mode"] = "system"
         if data["contrast"] not in dict(_theme.CONTRASTS):
             data["contrast"] = "normal"
+        if data["density"] not in {n for n, _l, _b in _theme.DENSITIES}:
+            data["density"] = "comfortable"
         data["schedule_minutes"] = _clamp_int(data["schedule_minutes"], 0, 10080, 0)
         data["background_window_minutes"] = _clamp_int(
             data["background_window_minutes"], 15, 20160, 180
@@ -304,7 +315,8 @@ class Settings:
         for key in ("auto_approve_non_job", "subscribe_new_folders", "show_log_panel",
                     "hide_non_job", "fallback_to_rules", "auto_file_background",
                     "background_agent", "menu_bar_icon", "close_to_menu_bar",
-                    "start_in_menu_bar", "readable", "help_mode", "auto_reply"):
+                    "start_in_menu_bar", "readable", "help_mode", "auto_reply",
+                    "row_lines_auto"):
             data[key] = bool(data[key])
         settled = Settings(**data)
         settled._sync_mailboxes()
@@ -414,6 +426,14 @@ class Settings:
 
     # -- profile ---------------------------------------------------------
     @property
+    def effective_row_lines(self) -> int:
+        """Lines per table row: the spacing's, unless one was chosen."""
+        if not self.row_lines_auto:
+            return self.row_lines
+        import theme
+        return theme.density(self.density).row_lines
+
+    @property
     def profile(self) -> "profiles.Profile":
         return profiles.get(self.sort_profile)
 
@@ -430,9 +450,9 @@ class Settings:
 
     @property
     def replies_armed(self) -> bool:
-        """Whether anything would actually be drafted."""
+        """Whether any rule would actually do something."""
         return self.auto_reply and any(
-            r.enabled and r.action != "none" for r in self.rules)
+            r.enabled and r.ready for r in self.rules)
 
     @property
     def chosen_topics(self) -> tuple:

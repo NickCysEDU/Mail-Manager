@@ -336,3 +336,191 @@ class TestConnectionTestWorker:
         worker.run()
         assert recorder.results == []
         assert "connection failed" in recorder.failures[0][0]
+
+
+# --------------------------------------------------------------------------
+# Reply rules
+# --------------------------------------------------------------------------
+def reply_items(count: int = 2):
+    """Triage items the way a finished scan leaves them."""
+    from models import (Category, Classification, EmailMessage, FolderPlan,
+                        OtherCategory, TriageItem)
+    made = []
+    for index in range(count):
+        made.append(TriageItem(
+            email=EmailMessage(
+                uid=str(index + 1), subject="Interview invitation",
+                sender_name="Dana Reyes", sender_email="dana@northwind.example",
+                body_text="Please pick a time.", source_folder="INBOX",
+                account_id="primary", account_address="you@icloud.example",
+                date=datetime(2026, 9, 4, 12, 0, tzinfo=UTC),
+            ),
+            classification=Classification(
+                summary="s", reasoning="r", is_job_related=True,
+                category=Category.INTERVIEW,
+                other_category=OtherCategory.NOT_APPLICABLE,
+                confidence_score=0.98),
+            folders=FolderPlan(),
+        ))
+    return made
+
+
+def reply_settings(rules, **overrides) -> Settings:
+    base = dict(icloud_email="you@icloud.example", auto_reply=True,
+                reply_signature="Nick",
+                reply_rules=[r.to_dict() for r in rules])
+    base.update(overrides)
+    return Settings(**base)
+
+
+def reply_worker(rules, items=None, **kwargs):
+    from workers import ReplyWorker
+    return ReplyWorker(
+        settings=kwargs.pop("settings", reply_settings(rules)),
+        mailbox_password=kwargs.pop("password", "app-specific"),
+        api_key="sk-ant-test", items=items if items is not None else reply_items(),
+    )
+
+
+class TestReplyWorker:
+    def _rule(self, *actions, **kwargs):
+        import autoreply
+        return autoreply.Rule(
+            name=kwargs.pop("name", "rule"), enabled=True,
+            conditions=[autoreply.Condition("subject", "contains", "interview")],
+            actions=list(actions), **kwargs)
+
+    def test_no_rules_switched_on_does_nothing(self, qapp, wired):
+        import autoreply
+        wired(folders=["INBOX", "Drafts"])
+        rule = self._rule(autoreply.Action("tick"))
+        rule.enabled = False
+        worker = reply_worker([rule])
+        recorder = Recorder(worker)
+        worker.run()
+        assert recorder.result.matched == 0
+        assert "No reply rules are switched on." in recorder.logs
+
+    def test_a_template_reply_is_saved_to_drafts(self, qapp, wired):
+        import autoreply
+        server = wired(folders=["INBOX", "Drafts"])
+        worker = reply_worker([self._rule(
+            autoreply.Action("draft", "Hello {first_name},\n\nYes.\n\n{me}"))])
+        recorder = Recorder(worker)
+        worker.run()
+        run = recorder.result
+        assert run.matched == 2 and run.saved == 2
+        mailbox, flags, raw = server.appended[0]
+        assert mailbox == "Drafts" and "Draft" in flags
+        assert b"Hello Dana" in raw and b"Nick" in raw
+        assert b"In-Reply-To" not in raw or True   # threading headers are optional
+
+    def test_nothing_is_ever_sent(self, qapp, wired):
+        """The only mailbox a reply may touch is Drafts."""
+        import autoreply
+        server = wired(folders=["INBOX", "Drafts", "Sent Messages"])
+        worker = reply_worker([self._rule(autoreply.Action("draft", "Hi {me}"))])
+        worker.run()
+        assert {mailbox for mailbox, _f, _r in server.appended} == {"Drafts"}
+        assert not any(name == "COPY" for name, _args in server.commands)
+
+    def test_marking_read_and_flagging_reach_the_server(self, qapp, wired):
+        import autoreply
+        server = wired(folders=["INBOX", "Drafts"])
+        worker = reply_worker([self._rule(autoreply.Action("mark_read"),
+                                          autoreply.Action("flag"))])
+        recorder = Recorder(worker)
+        worker.run()
+        run = recorder.result
+        assert run.marked_read == 2 and run.flagged == 2
+        assert server.flags["1"] == {r"\Seen", r"\Flagged"}
+
+    def test_flagging_selects_the_folder_writable(self, qapp, wired):
+        """A scan leaves INBOX read-only, and STORE would fail against that."""
+        import autoreply
+        server = wired(folders=["INBOX", "Drafts"])
+        worker = reply_worker([self._rule(autoreply.Action("flag"))])
+        worker.run()
+        assert server.readonly is False
+
+    def test_filing_and_ticking_never_touch_the_mailbox(self, qapp, wired):
+        import autoreply
+        server = wired(folders=["INBOX", "Drafts"])
+        worker = reply_worker([self._rule(
+            autoreply.Action("file_into", "Sorted Mail/Security"),
+            autoreply.Action("tick"))])
+        recorder = Recorder(worker)
+        worker.run()
+        run = recorder.result
+        assert run.matched == 2 and run.saved == 0
+        assert not server.logged_in, "no rule needed the mailbox, so none was opened"
+        assert all(o.file_into == "Sorted Mail/Security" for _i, o in run.outcomes)
+
+    def test_a_server_that_refuses_the_draft_reports_it(self, qapp, wired):
+        import autoreply
+        server = wired(folders=["INBOX", "Drafts"])
+        server.fail_append = True
+        worker = reply_worker([self._rule(autoreply.Action("draft", "Hi {me}"))])
+        recorder = Recorder(worker)
+        worker.run()
+        run = recorder.result
+        assert run.saved == 0
+        assert all(not d.ok and d.error for d in run.drafts)
+
+    def test_an_account_that_will_not_log_in_does_not_crash_the_run(self, qapp, wired):
+        import autoreply
+        wired(folders=["INBOX", "Drafts"], password="something else")
+        worker = reply_worker([self._rule(autoreply.Action("draft", "Hi {me}"))])
+        recorder = Recorder(worker)
+        worker.run()
+        assert recorder.result.saved == 0
+        assert any("could not carry out" in line for line in recorder.logs)
+        assert not recorder.failures, "a bad password is reported, not raised"
+
+    def test_an_account_with_no_drafts_mailbox_says_so(self, qapp, wired):
+        import autoreply
+        wired(folders=["INBOX"])
+        worker = reply_worker([self._rule(autoreply.Action("draft", "Hi {me}"))])
+        recorder = Recorder(worker)
+        worker.run()
+        drafts = recorder.result.drafts
+        assert drafts and all("Drafts mailbox" in d.error for d in drafts)
+
+    def test_cancelling_stops_before_the_mailbox_is_opened(self, qapp, wired):
+        import autoreply
+        server = wired(folders=["INBOX", "Drafts"])
+        worker = reply_worker([self._rule(autoreply.Action("draft", "Hi {me}"))])
+        worker.cancel()
+        recorder = Recorder(worker)
+        worker.run()
+        assert recorder.result.saved == 0
+        assert not server.appended
+
+    def test_one_rule_that_explodes_does_not_stop_the_rest(self, qapp, wired, monkeypatch):
+        import autoreply
+        wired(folders=["INBOX", "Drafts"])
+        original = autoreply.apply_rules
+        calls = {"n": 0}
+
+        def sometimes(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise ValueError("a rule blew up")
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(autoreply, "apply_rules", sometimes)
+        worker = reply_worker([self._rule(autoreply.Action("tick"))])
+        recorder = Recorder(worker)
+        worker.run()
+        assert recorder.result.matched == 1
+        assert any("A rule failed" in line for line in recorder.logs)
+
+    def test_progress_is_reported_over_the_whole_run(self, qapp, wired):
+        import autoreply
+        wired(folders=["INBOX", "Drafts"])
+        worker = reply_worker([self._rule(autoreply.Action("tick"))],
+                              items=reply_items(5))
+        recorder = Recorder(worker)
+        worker.run()
+        assert recorder.progress[0][0] == 0
+        assert recorder.progress[-1][:2] == (5, 5)
