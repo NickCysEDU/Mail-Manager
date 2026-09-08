@@ -41,6 +41,7 @@ from PySide6.QtGui import (
     QPalette,
 )
 from PySide6.QtWidgets import (
+    QSlider,
     QListWidgetItem,
     QListWidget,
     QFileDialog,
@@ -94,7 +95,7 @@ from config import (
     Settings,
     log_dir,
 )
-from imap_engine import MovePlan, MoveReport
+from imap_engine import MovePlan, MoveReport, clean_secret
 from models import (
     APP_DISPLAY_NAME,
     APP_VERSION,
@@ -1318,7 +1319,9 @@ class SettingsDialog(QDialog):
         account.connections = self.connections_spin.value()
         account.label = self.account_label_edit.text().strip()
         if address:
-            self._account_passwords[address] = self.password_edit.text()
+            # Cleaned on the way in as well as on the way out, so what is shown,
+            # what is stored and what is sent are all the same thing.
+            self._account_passwords[address] = clean_secret(self.password_edit.text())
         self._refresh_list_row(self._account_index)
 
     def _refresh_list_row(self, index: int) -> None:
@@ -1521,13 +1524,34 @@ class SettingsDialog(QDialog):
         self.effort_combo.addItems(list(EFFORT_LEVELS))
         self.effort_label = QLabel("Reasoning effort")
 
-        self.threshold_spin = QDoubleSpinBox()
-        self.threshold_spin.setRange(0.50, 1.00)
-        self.threshold_spin.setSingleStep(0.01)
-        self.threshold_spin.setDecimals(2)
-        self.threshold_spin.setToolTip(
-            "Messages below this confidence are routed to Needs Review and are never pre-checked."
+        # A probability on a two-decimal spinner reads as a number to be
+        # nudged. It is really "how sure before this files itself", which is a
+        # position on a range, so it is one - with the figure spelled out and
+        # what it means underneath.
+        self.threshold_slider = QSlider(Qt.Orientation.Horizontal)
+        self.threshold_slider.setRange(50, 100)
+        self.threshold_slider.setSingleStep(1)
+        self.threshold_slider.setPageStep(5)
+        self.threshold_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.threshold_slider.setTickInterval(10)
+        self.threshold_slider.setMinimumWidth(200)
+        self.threshold_slider.setToolTip(
+            "Messages the sorter is less sure about than this are held for you "
+            "to look at, and are never pre-ticked."
         )
+        self.threshold_value = QLabel()
+        self.threshold_value.setMinimumWidth(52)
+        self.threshold_value.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.threshold_row = QWidget()
+        threshold_layout = QHBoxLayout(self.threshold_row)
+        threshold_layout.setContentsMargins(0, 0, 0, 0)
+        threshold_layout.addWidget(self.threshold_slider, 1)
+        threshold_layout.addWidget(self.threshold_value)
+        self.threshold_note = QLabel()
+        self.threshold_note.setWordWrap(True)
+        self.threshold_note.setProperty("dim", "true")
+        self.threshold_slider.valueChanged.connect(self._threshold_changed)
 
         self.concurrency_spin = QSpinBox()
         self.concurrency_spin.setRange(1, 16)
@@ -1578,7 +1602,8 @@ class SettingsDialog(QDialog):
         form.addRow("", model_test_widget)
         form.addRow(_separator())
         form.addRow(self.effort_label, self.effort_combo)
-        form.addRow("Auto-file confidence", self.threshold_spin)
+        form.addRow("File it without asking", self.threshold_row)
+        form.addRow("", self.threshold_note)
         form.addRow("Emails per request", self.batch_spin)
         form.addRow("Parallel requests", self.concurrency_spin)
         form.addRow("Max characters per email", self.body_chars_spin)
@@ -2181,6 +2206,24 @@ class SettingsDialog(QDialog):
             "Press OK to keep it."
         )
 
+    def _threshold_changed(self) -> None:
+        """Say what the number means, since a percentage on its own does not."""
+        percent = self.threshold_slider.value()
+        self.threshold_value.setText(f"{percent}%")
+        if percent >= 97:
+            describes = ("Only the clearest cases file themselves. Almost "
+                         "everything waits for you.")
+        elif percent >= 92:
+            describes = ("The recommended setting. Confident readings file "
+                         "themselves; anything arguable waits for you.")
+        elif percent >= 80:
+            describes = ("More gets filed without asking, and more of it will "
+                         "be wrong. Worth pairing with a model backend.")
+        else:
+            describes = ("Almost everything files itself, including readings "
+                         "the sorter is barely sure of. Rarely what you want.")
+        self.threshold_note.setText(describes)
+
     def _preview_appearance(self) -> None:
         app = QApplication.instance()
         if app is None:
@@ -2235,7 +2278,8 @@ class SettingsDialog(QDialog):
         self.base_url_edit.setText(settings.base_url)
         self._provider_changed()
         self.effort_combo.setCurrentText(settings.effort)
-        self.threshold_spin.setValue(settings.confidence_threshold)
+        self.threshold_slider.setValue(int(round(settings.confidence_threshold * 100)))
+        self._threshold_changed()
         self.concurrency_spin.setValue(settings.concurrency)
         self.batch_spin.setValue(settings.batch_size)
         self.body_chars_spin.setValue(settings.max_body_chars)
@@ -2307,7 +2351,7 @@ class SettingsDialog(QDialog):
             auto_reply=self.auto_reply_check.isChecked(),
             reply_signature=self.signature_edit.text().strip(),
             reply_rules=[r.to_dict() for r in self._rules],
-            confidence_threshold=self.threshold_spin.value(),
+            confidence_threshold=self.threshold_slider.value() / 100.0,
             concurrency=self.concurrency_spin.value(),
             batch_size=self.batch_spin.value(),
             max_body_chars=self.body_chars_spin.value(),

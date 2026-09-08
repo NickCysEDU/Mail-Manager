@@ -142,6 +142,38 @@ def decode_mutf7(text: str) -> str:
     return "".join(out)
 
 
+#: Curly quotes and the like, which arrive when a password is copied out of a
+#: web page or a note rather than typed.
+_SMART_QUOTES = {
+    "\u2018": "'", "\u2019": "'", "\u201a": "'", "\u201b": "'",
+    "\u201c": '"', "\u201d": '"', "\u201e": '"', "\u201f": '"',
+    "\u2032": "'", "\u2033": '"', "\u00a0": " ",
+}
+
+
+def clean_secret(secret: str) -> str:
+    """Tidy a pasted password without changing what it actually is.
+
+    Pasting is how most app passwords arrive, and a paste brings things with
+    it: a trailing newline, a wrapping pair of quotes from a note, curly
+    quotes from a web page, a non-breaking space. A newline is the damaging
+    one - imaplib puts the password inside a quoted string, and a line ending
+    inside that string ends the command early, so the server sees a quote that
+    never closes and answers "unmatch quote", which reads as a wrong password.
+    """
+    text = str(secret or "")
+    for wrong, right in _SMART_QUOTES.items():
+        text = text.replace(wrong, right)
+    # Anything that would end or corrupt the command line.
+    text = "".join(ch for ch in text if ch >= " " and ch != "\x7f")
+    text = text.strip()
+    # A password copied with its surrounding quotes.
+    for quote in ('"', "'"):
+        if len(text) >= 2 and text.startswith(quote) and text.endswith(quote):
+            text = text[1:-1].strip()
+    return text
+
+
 def quote_mailbox(name: str) -> str:
     """Quote + mUTF-7 encode a mailbox name for use as a command argument."""
     encoded = encode_mutf7(name)
@@ -491,12 +523,19 @@ class IMAPEngine:
     # -- lifecycle -------------------------------------------------------
     def connect(self, email_address: str, password: str) -> None:
         """Open a TLS connection and authenticate."""
-        if not (email_address or "").strip():
+        email_address = clean_secret(email_address)
+        password = clean_secret(password)
+        if not email_address:
             raise IMAPAuthError("Enter the mailbox email address.")
         if not password:
             raise IMAPAuthError(
                 "Enter the app password for this mailbox. Ordinary account passwords "
                 "are rejected by IMAP when two-factor authentication is enabled."
+            )
+        if " " in email_address:
+            raise IMAPAuthError(
+                f"“{email_address}” has a space in it, which is not a valid "
+                "email address. Check for a stray character."
             )
 
         try:
@@ -515,7 +554,7 @@ class IMAPEngine:
             raise IMAPConnectionError(f"Server refused the connection: {exc}") from exc
 
         try:
-            self.conn.login(email_address.strip(), password)
+            self._authenticate(email_address, password)
         except imaplib.IMAP4.error as exc:
             detail = _error_text(exc)
             self._safe_shutdown()
@@ -534,6 +573,32 @@ class IMAPEngine:
         self.delimiter = self._detect_delimiter()
         log.info("Connected to %s (capabilities: %d, delimiter %r)",
                  self.host, len(self.capabilities), self.delimiter)
+
+    def _authenticate(self, email_address: str, password: str) -> None:
+        """Sign in, preferring SASL PLAIN over the LOGIN command.
+
+        LOGIN puts both values into a command line and quotes only the
+        password, so anything unusual in either has to survive being parsed as
+        IMAP syntax. AUTHENTICATE PLAIN sends them base64 encoded, where no
+        character means anything, and every provider this app knows about
+        advertises it. LOGIN remains the fallback for anything that does not.
+        """
+        conn = self._require_conn()
+        capabilities = {c.upper() for c in getattr(conn, "capabilities", ())}
+        if "AUTH=PLAIN" in capabilities and hasattr(conn, "authenticate"):
+            try:
+                conn.authenticate(
+                    "PLAIN",
+                    lambda _challenge: f"\0{email_address}\0{password}".encode("utf-8"),
+                )
+                return
+            except imaplib.IMAP4.error as exc:
+                # A refusal is a refusal; only fall back when the mechanism
+                # itself was the problem.
+                if "AUTHENTICATIONFAILED" in _error_text(exc).upper():
+                    raise
+                log.debug("SASL PLAIN did not work (%s); trying LOGIN.", exc)
+        conn.login(email_address, password)
 
     def _read_capabilities(self) -> Tuple[str, ...]:
         """Read the server's capabilities *after* authenticating.

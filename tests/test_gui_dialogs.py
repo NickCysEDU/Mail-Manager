@@ -218,7 +218,7 @@ class TestSettingsDialog:
         subject.email_edit.setText("other@icloud.com")
         subject.mailbox_edit.setText("Archive")
         subject.effort_combo.setCurrentText("high")
-        subject.threshold_spin.setValue(0.90)
+        subject.threshold_slider.setValue(90)
         subject.concurrency_spin.setValue(8)
         subject.root_edit.setText("Hunt")
         subject.routing_combo.setCurrentIndex(
@@ -452,7 +452,7 @@ class TestMainWindowFlows:
     def test_settings_are_saved_and_reapplied(self, window, monkeypatch):
         def fake_exec(self):
             self.root_edit.setText("Hunt")
-            self.threshold_spin.setValue(0.80)
+            self.threshold_slider.setValue(80)
             return QDialog.DialogCode.Accepted
 
         monkeypatch.setattr(SettingsDialog, "exec", fake_exec)

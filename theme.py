@@ -201,8 +201,12 @@ def stylesheet(colours: Palette, readable: bool = False, base_point: float = 13.
     # guidance puts the smallest comfortable target at 28 points; Qt's defaults
     # for these are closer to twelve.
     control_height = 30 if readable else 26
-    stepper = 26 if readable else 22
-    stepper_half = (control_height + 2) // 2
+    stepper = 22 if readable else 18
+    # Two of these plus their margins have to fit inside the field. Sized from
+    # the field's own height rather than guessed, or the top one is clipped
+    # away and the control ends up with a single arrow.
+    stepper_half = max(8, (control_height - 6) // 2)
+    scroll = 14 if readable else 12
     arrow = 5 if readable else 4
     drop_width = 30 if readable else 26
     arrow_px = 14 if readable else 12
@@ -232,28 +236,32 @@ def stylesheet(colours: Palette, readable: bool = False, base_point: float = 13.
         min-height: {control_height}px;
     }}
 
-    /* Steppers. Qt's default arrows are about six pixels tall, which is a
-       hard thing to hit and a harder thing to see. */
+    /* Steppers: no boxes, no dividing lines. Two chevrons in the field's own
+       margin, which is quiet until it is wanted. Qt's defaults are about six
+       pixels tall, which is hard to hit and harder to see. */
     QSpinBox::up-button, QDoubleSpinBox::up-button,
     QDateEdit::up-button, QTimeEdit::up-button {{
-        subcontrol-origin: border; subcontrol-position: top right;
+        subcontrol-origin: padding; subcontrol-position: top right;
         width: {stepper}px; height: {stepper_half}px;
-        border-left: {border}px solid {colours.border};
-        border-bottom: {border}px solid {colours.border};
-        border-top-right-radius: {radius}px;
-        background: {colours.window};
+        margin: 2px 3px 0 0;
+        border: none; border-radius: 4px;
+        background: transparent;
     }}
     QSpinBox::down-button, QDoubleSpinBox::down-button,
     QDateEdit::down-button, QTimeEdit::down-button {{
-        subcontrol-origin: border; subcontrol-position: bottom right;
+        subcontrol-origin: padding; subcontrol-position: bottom right;
         width: {stepper}px; height: {stepper_half}px;
-        border-left: {border}px solid {colours.border};
-        border-bottom-right-radius: {radius}px;
-        background: {colours.window};
+        margin: 0 3px 2px 0;
+        border: none; border-radius: 4px;
+        background: transparent;
     }}
     QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
-    QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {{
-        background: {colours.accent};
+    QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover,
+    QDateEdit::up-button:hover, QDateEdit::down-button:hover {{
+        background: {colours.surface_alt};
+    }}
+    QSpinBox, QDoubleSpinBox, QDateEdit, QTimeEdit {{
+        padding-right: {stepper + 8}px;
     }}
     QSpinBox::up-arrow, QDoubleSpinBox::up-arrow, QDateEdit::up-arrow,
     QTimeEdit::up-arrow {{
@@ -374,8 +382,32 @@ def stylesheet(colours: Palette, readable: bool = False, base_point: float = 13.
         border: {border}px solid {colours.border}; padding: 6px;
     }}
     QSplitter::handle {{ background: {colours.border}; }}
-    QScrollBar:vertical, QScrollBar:horizontal {{ background: {colours.window}; }}
-    QScrollBar::handle {{ background: {colours.border}; border-radius: 5px; }}
+
+    /* Scroll bars without stepper buttons, the way macOS draws them. Styling
+       the handle but leaving the buttons to the default style put the handle
+       on top of them, and left their arrows pointing whichever way the base
+       style happened to choose. */
+    QScrollBar:vertical {{
+        background: transparent; width: {scroll}px; margin: 0;
+        border: none;
+    }}
+    QScrollBar:horizontal {{
+        background: transparent; height: {scroll}px; margin: 0;
+        border: none;
+    }}
+    QScrollBar::handle:vertical {{
+        background: {colours.border}; border-radius: {scroll // 2 - 2}px;
+        min-height: 32px; margin: 2px;
+    }}
+    QScrollBar::handle:horizontal {{
+        background: {colours.border}; border-radius: {scroll // 2 - 2}px;
+        min-width: 32px; margin: 2px;
+    }}
+    QScrollBar::handle:hover {{ background: {colours.text_dim}; }}
+    QScrollBar::add-line, QScrollBar::sub-line {{
+        height: 0; width: 0; border: none; background: none;
+    }}
+    QScrollBar::add-page, QScrollBar::sub-page {{ background: none; }}
     """
 
 
