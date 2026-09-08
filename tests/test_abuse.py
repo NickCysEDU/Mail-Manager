@@ -484,3 +484,61 @@ class TestSigningCannotShipAnAppThatWillNotStart:
         script = self._build_script()
         assert ".venv-universal" in script
         assert "recreating it" in script
+
+
+# ==========================================================================
+# Credentials as they actually arrive: pasted
+# ==========================================================================
+class TestPastedCredentials:
+    """A password is almost always pasted, and a paste brings things with it."""
+
+    @pytest.mark.parametrize("pasted, expected", [
+        ("abcd efgh ijkl mnop\n", "abcd efgh ijkl mnop"),
+        ("abcd efgh ijkl mnop\r\n", "abcd efgh ijkl mnop"),
+        ("  padded-password  ", "padded-password"),
+        ('"quoted-password"', "quoted-password"),
+        ("'quoted-password'", "quoted-password"),
+        ("smart’quote", "smart'quote"),
+        ("non breaking", "non breaking"),
+        ("with\ttab", "withtab"),
+        ("", ""),
+        ("   ", ""),
+    ])
+    def test_a_paste_is_tidied_without_being_changed(self, pasted, expected):
+        from imap_engine import clean_secret
+        assert clean_secret(pasted) == expected
+
+    def test_a_newline_is_the_one_that_broke_login(self):
+        """imaplib puts the password in a quoted string. A line ending inside
+        that string ends the command early, and the server answers
+        "unmatch quote" - which reads to the user as a wrong password."""
+        from imap_engine import clean_secret
+        assert "\n" not in clean_secret("password\n")
+        assert "\r" not in clean_secret("pass\rword")
+
+    def test_an_ordinary_password_is_left_exactly_alone(self):
+        from imap_engine import clean_secret
+        for untouched in ("abcd-efgh-ijkl-mnop", "hunter2", "a b c d",
+                          "sym!@#$%^&*()_+bols", "café-münchen"):
+            assert clean_secret(untouched) == untouched
+
+    def test_an_address_with_a_space_is_refused_with_a_reason(self):
+        from imap_engine import IMAPAuthError, IMAPEngine
+        engine = IMAPEngine(host="imap.example.com")
+        with pytest.raises(IMAPAuthError, match="space"):
+            engine.connect("not an address", "password")
+
+    def test_sasl_plain_is_preferred_over_the_login_command(self):
+        """LOGIN has to survive IMAP quoting; PLAIN is base64 and cannot break."""
+        import inspect
+        from imap_engine import IMAPEngine
+        source = inspect.getsource(IMAPEngine._authenticate)
+        assert "AUTH=PLAIN" in source
+        assert "authenticate" in source
+        assert "conn.login" in source, "LOGIN must remain the fallback"
+
+    def test_a_refusal_is_not_retried_as_login(self):
+        """Falling back after a genuine rejection would just ask twice."""
+        import inspect
+        from imap_engine import IMAPEngine
+        assert "AUTHENTICATIONFAILED" in inspect.getsource(IMAPEngine._authenticate)

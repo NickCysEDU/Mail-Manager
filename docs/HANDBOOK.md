@@ -1016,3 +1016,19 @@ provider said another could save its password against the wrong address,
 overwriting the one already there. Generate a fresh app password for the
 mailbox that stopped working - the Get one… button beside the field opens the
 right page - and enter it again.
+
+
+### Sign-in errors that are not wrong passwords
+
+`LOGIN command error: BAD [b'unmatch quote']` means the password reached the
+server with a line ending in it. IMAP's LOGIN command carries the password
+inside a quoted string, so a newline ends the command early and the server sees
+a quote that never closes. It is almost always a paste: copying an app password
+from a web page brings the line break with it.
+
+Two things now prevent it. Credentials are cleaned before use - line endings,
+tab characters, a wrapping pair of quotes, curly quotes and non-breaking spaces
+are removed, and nothing else is touched. And sign-in prefers `AUTHENTICATE
+PLAIN`, which sends the same values base64 encoded, where no character means
+anything to the parser; every provider in the list advertises it, and `LOGIN`
+remains the fallback for anything that does not.
