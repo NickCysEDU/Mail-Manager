@@ -179,7 +179,8 @@ def self_test() -> int:
     check("PySide6", lambda: __import__("PySide6").__version__)
     check("Qt platform plugins", _qt_plugin_check)
     check("anthropic SDK", lambda: __import__("anthropic").__version__)
-    check("keyring backend", lambda: config.CredentialStore().backend_name())
+    check("keyring backend",
+          lambda: config.CredentialStore(read_timeout=5.0).backend_name())
     check("settings directory", lambda: config.app_support_dir())
     check("log directory", lambda: config.log_dir())
     check("app icon", lambda: _bundled_path("assets/icon.png") or "not bundled")
@@ -270,7 +271,10 @@ def show_config() -> int:
     from config import CredentialStore, Settings
 
     settings = Settings.load()
-    store = CredentialStore()
+    # Nobody is watching a terminal command to click Allow, and the Keychain
+    # asks again for every re-signed build. Give up after a few seconds and
+    # report what happened rather than hanging with no output.
+    store = CredentialStore(read_timeout=5.0)
     print(f"{APP_DISPLAY_NAME} {APP_VERSION} - configuration\n")
     for field, value in sorted(settings.to_dict().items()):
         if field in ("window_geometry", "splitter_state", "table_state"):

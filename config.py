@@ -639,9 +639,12 @@ class CredentialStore:
     machines (and CI images) with no Keychain available.
     """
 
-    def __init__(self, service: str = KEYCHAIN_SERVICE, backend: Any = None) -> None:
+    def __init__(self, service: str = KEYCHAIN_SERVICE, backend: Any = None,
+                 read_timeout: Optional[float] = None) -> None:
         self.service = service
         self._backend = backend
+        if read_timeout is not None:
+            self.read_timeout = read_timeout
 
     # -- backend ---------------------------------------------------------
     def _keyring(self) -> Any:
@@ -782,13 +785,26 @@ class CredentialStore:
         return ANTHROPIC_ACCOUNT if name in ("", "anthropic") else f"apikey:{name}"
 
     def get_provider_key(self, provider: str) -> str:
-        stored = self.get(self.provider_account(provider))
+        """The key for a backend: the Keychain first, then the environment.
+
+        A Keychain that will not answer must not stop the environment being
+        read. Somebody with ANTHROPIC_API_KEY exported has told us the key
+        already, and refusing to look because a permission prompt went
+        unanswered would be a strange way to repay that.
+        """
+        trouble: Optional[CredentialError] = None
+        try:
+            stored = self.get(self.provider_account(provider))
+        except CredentialError as exc:
+            stored, trouble = "", exc
         if stored:
             return stored
         for variable in PROVIDER_ENV_KEYS.get((provider or "").strip().lower(), ()):
             value = os.environ.get(variable, "").strip()
             if value:
                 return value
+        if trouble is not None:
+            raise trouble
         return ""
 
     def set_provider_key(self, provider: str, key: str) -> None:

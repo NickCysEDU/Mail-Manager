@@ -1237,6 +1237,7 @@ class ConditionRow(_RuleRow):
                                        QSizePolicy.Policy.Fixed)
         self.field_combo.currentIndexChanged.connect(self._field_changed)
         self.row.addWidget(self.field_combo, 3)
+        self._explain_field()
 
         self.operator_combo = QComboBox()
         self.operator_combo.setMinimumWidth(88)
@@ -1269,9 +1270,15 @@ class ConditionRow(_RuleRow):
         self.operator_combo.blockSignals(False)
         self._quiet = was_quiet
 
+    def _explain_field(self) -> None:
+        """Say what this field looks at, for the help switch to show."""
+        field = self.field_combo.currentData() or "anywhere"
+        self.field_combo.setToolTip(autoreply.FIELD_HELP.get(field, ""))
+
     def _field_changed(self) -> None:
         self._fill_operators()
         self._build_value(self._value_kind(), "")
+        self._explain_field()
         self._touched()
 
     def _operator_changed(self) -> None:
@@ -1301,6 +1308,7 @@ class ActionRow(_RuleRow):
                                       QSizePolicy.Policy.Fixed)
         self.kind_combo.currentIndexChanged.connect(self._kind_changed)
         self.row.addWidget(self.kind_combo, 3)
+        self._explain_kind()
 
         self.row.addWidget(self._delete_button())
         self._build_value(self._value_kind(), action.value)
@@ -1310,8 +1318,13 @@ class ActionRow(_RuleRow):
         needs = autoreply.action_input(self.kind_combo.currentData() or "draft")
         return "folder_pick" if needs == "folder" else needs
 
+    def _explain_kind(self) -> None:
+        kind = self.kind_combo.currentData() or "draft"
+        self.kind_combo.setToolTip(autoreply.ACTION_HELP.get(kind, ""))
+
     def _kind_changed(self) -> None:
         self._build_value(self._value_kind(), "")
+        self._explain_kind()
         self._touched()
 
     def value(self):
@@ -4938,6 +4951,12 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Scan notes", "\n\n".join(outcome.warnings))
         self._update_status()
 
+        # “Run these rules after a scan” means exactly that. Queued rather than
+        # called, so this handler finishes and the table is on screen before
+        # the rules start touching it.
+        if outcome.items and self.settings.replies_armed:
+            QTimer.singleShot(0, lambda: self.draft_replies(prompted=False))
+
     # -- applying --------------------------------------------------------
     @Slot()
     @Slot()
@@ -4987,8 +5006,13 @@ class MainWindow(QMainWindow):
         self._update_status(message)
 
     @Slot()
-    def draft_replies(self) -> None:
-        """Run the reply rules over what was scanned."""
+    def draft_replies(self, prompted: bool = True) -> None:
+        """Run the reply rules over what was scanned.
+
+        ``prompted`` is False when a scan started this off rather than a
+        person, and it keeps the result in the status line instead of a box.
+        """
+        self._replies_prompted = prompted
         if self._busy():
             return
         if not self.settings.replies_armed:
@@ -5033,6 +5057,7 @@ class MainWindow(QMainWindow):
             self._set_status("No message matched a reply rule.")
             return
 
+
         filed, ticked = self._apply_outcomes(run)
         drafts = run.drafts
         written = [d for d in drafts if d.ok]
@@ -5056,7 +5081,10 @@ class MainWindow(QMainWindow):
             lines.append("")
             lines.append(f"{len(failed)} could not be written:")
             lines.extend(f"  · {d.subject}: {d.error}" for d in failed[:5])
-        QMessageBox.information(self, "Reply rules", "\n".join(lines))
+        if getattr(self, "_replies_prompted", True):
+            QMessageBox.information(self, "Reply rules", "\n".join(lines))
+        else:
+            self._append_log(" ".join(line for line in lines if line))
         self._set_status(lines[0] + (f" {lines[1]}" if len(lines) > 1 else ""))
 
     def _apply_outcomes(self, run) -> Tuple[int, int]:
