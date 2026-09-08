@@ -1070,6 +1070,37 @@ class IMAPEngine:
                   "(\\Draft)", None, raw)
         return target
 
+    #: Flags a rule is allowed to set. Anything else is somebody's typo, or a
+    #: flag the server would reject and take the whole command down with it.
+    SETTABLE_FLAGS = {"seen": r"\Seen", "flagged": r"\Flagged",
+                      "answered": r"\Answered"}
+
+    def set_flags(self, uids: Sequence[str], flags: Sequence[str],
+                  add: bool = True, mailbox: str = "INBOX") -> int:
+        """Add or remove flags on messages. Returns how many were touched.
+
+        The mailbox is selected writable first, which SELECT will not do while
+        a scan holds it read-only, so this always re-selects.
+        """
+        wanted = [self.SETTABLE_FLAGS[f] for f in flags
+                  if f in self.SETTABLE_FLAGS]
+        uids = [str(u).strip() for u in uids if str(u).strip().isdigit()]
+        if not wanted or not uids:
+            return 0
+        conn = self._require_conn()
+        self.select(mailbox, readonly=False)
+        mode = "+FLAGS.SILENT" if add else "-FLAGS.SILENT"
+        touched = 0
+        for batch in _chunks(uids, COMMAND_BATCH):
+            self._cmd(
+                f"Setting flags on {len(batch)} message"
+                f"{'' if len(batch) == 1 else 's'}",
+                conn.uid, "STORE", ",".join(batch), mode,
+                "(" + " ".join(wanted) + ")",
+            )
+            touched += len(batch)
+        return touched
+
     def _clone(self) -> "IMAPEngine":
         """A second connection to the same account, for parallel fetching."""
         if not self._credentials:

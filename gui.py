@@ -16,6 +16,8 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from PySide6.QtCore import (
     QUrl,
     QAbstractTableModel,
+    QEvent,
+    QRect,
     QThread,
     QByteArray,
     QDate,
@@ -32,6 +34,7 @@ from PySide6.QtGui import (
     QAction,
     QActionGroup,
     QColor,
+    QDoubleValidator,
     QFontMetrics,
     QDesktopServices,
     QFont,
@@ -1014,10 +1017,313 @@ def _reasoning_html(item: TriageItem) -> str:
 # ==========================================================================
 # Settings dialog
 # ==========================================================================
+class WrappingList(QListWidget):
+    """A list whose items wrap onto as many lines as their text needs.
+
+    QListWidget will wrap, but it decides how many lines an item needs from a
+    width measured before the scroll bar is accounted for, so an entry that is
+    a few points too long is elided while its neighbours wrap. Measuring each
+    item here and saying how tall it is removes the guess.
+    """
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWordWrap(True)
+        self.setTextElideMode(Qt.TextElideMode.ElideNone)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self.measure()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self.measure()
+
+    def changeEvent(self, event) -> None:  # noqa: N802
+        """A theme or a readability setting changes the font under us."""
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange,
+                            QEvent.Type.ApplicationFontChange):
+            self.measure()
+
+    def measure(self) -> None:
+        """Give every item the height its wrapped text actually needs.
+
+        The width the delegate lays text out in is asked for rather than
+        guessed at: the checkbox, the margins and the frame all take their cut
+        first, and guessing that cut is how an entry ends up a line short.
+        """
+        if not self.count():
+            return
+        style = self.style()
+        metrics = self.fontMetrics()
+        width = self.viewport().width()
+        for index in range(self.count()):
+            item = self.item(index)
+            option = QStyleOptionViewItem()
+            self.initViewItemOption(option)
+            option.rect = QRect(0, 0, width, metrics.height())
+            option.features |= QStyleOptionViewItem.ViewItemFeature.HasCheckIndicator
+            text_rect = style.subElementRect(
+                QStyle.SubElement.SE_ItemViewItemText, option, self)
+            room = max(40, text_rect.width() - 4)
+            # The same call says how much height the style keeps for itself,
+            # which is the part a hand-written guess always gets wrong.
+            chrome = max(4, option.rect.height() - text_rect.height())
+            bounds = metrics.boundingRect(
+                QRect(0, 0, room, 0),
+                int(Qt.TextFlag.TextWordWrap) | int(Qt.AlignmentFlag.AlignLeft),
+                item.text())
+            item.setSizeHint(QSize(
+                width, max(metrics.height(), bounds.height()) + chrome + 2))
+
+
+def _compact_button(text: str, tip: str, slot) -> QToolButton:
+    """A small square button for adding and removing lines.
+
+    The theme gives every button generous padding, which is right for the ones
+    people press and wrong for a column of five that only need to hold one
+    character. These are sized to the character instead.
+    """
+    button = QToolButton()
+    button.setText(text)
+    button.setToolTip(tip)
+    button.setAutoRaise(True)
+    button.setProperty("compact", "true")
+    button.setFixedSize(26, 26)
+    button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+    button.clicked.connect(slot)
+    return button
+
+
+class _RuleRow(QWidget):
+    """One line of a rule: some combo boxes, a value, and a way to delete it.
+
+    Conditions and actions are close enough to share the plumbing. What
+    differs is which combo boxes there are and what a value looks like, and
+    both subclasses answer that in `_value_kind`.
+    """
+
+    changed = Signal()
+    removed = Signal(object)
+
+    def __init__(self, mailboxes=None, folders=None, parent=None) -> None:
+        super().__init__(parent)
+        self._mailboxes = list(mailboxes or [])
+        self._folders = list(folders or [])
+        self._value_widget: Optional[QWidget] = None
+        self._quiet = False
+
+        # A tall editor - a template, some guidance - goes underneath rather
+        # than in the line, or the combo boxes beside it float in the middle
+        # of a hundred points of nothing.
+        self.stack = QVBoxLayout(self)
+        self.stack.setContentsMargins(0, 0, 0, 0)
+        self.stack.setSpacing(4)
+        self.row = QHBoxLayout()
+        self.row.setContentsMargins(0, 0, 0, 0)
+        self.row.setSpacing(6)
+        self.stack.addLayout(self.row)
+
+    # -- the value editor, which changes shape with the field --------------
+    #: Value editors too tall to sit in the line with the combo boxes.
+    TALL = ("template", "guidance")
+
+    def _build_value(self, kind: str, value: str) -> None:
+        """Swap in the editor this kind of value deserves."""
+        if self._value_widget is not None:
+            self._value_widget.setParent(None)
+            self._value_widget.deleteLater()
+            self._value_widget = None
+        widget = self._make_value_widget(kind, value)
+        self._value_widget = widget
+        if widget is None:
+            return
+        if kind in self.TALL:
+            self.stack.addWidget(widget)
+        else:
+            self.row.insertWidget(self.row.count() - 1, widget, 3)
+
+    def _make_value_widget(self, kind: str, value: str) -> Optional[QWidget]:
+        if kind == "none":
+            spacer = QLabel("")
+            spacer.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                 QSizePolicy.Policy.Preferred)
+            return spacer
+        if kind in ("category", "topic", "mailbox", "folder_pick"):
+            combo = QComboBox()
+            combo.setEditable(kind == "folder_pick")
+            combo.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                QSizePolicy.Policy.Fixed)
+            combo.setMinimumWidth(84)
+            for item_value, label in self._choices(kind):
+                combo.addItem(label, item_value)
+            found = combo.findData(value)
+            if found >= 0:
+                combo.setCurrentIndex(found)
+            elif combo.isEditable():
+                combo.setEditText(value)
+            combo.currentIndexChanged.connect(self._touched)
+            if combo.isEditable():
+                combo.editTextChanged.connect(self._touched)
+            return combo
+        if kind in ("template", "guidance"):
+            box = QPlainTextEdit()
+            box.setPlainText(value)
+            box.setMinimumHeight(84)
+            box.setMaximumHeight(150)
+            box.setPlaceholderText(
+                "Hello {first_name},\n\n…\n\nBest wishes,\n{me}"
+                if kind == "template" else
+                "What the reply has to do, in your own words."
+            )
+            box.textChanged.connect(self._touched)
+            return box
+        if kind == "number":
+            edit = AdaptiveLineEdit("0.90")
+            edit.setValidator(QDoubleValidator(0.0, 100000.0, 3))
+        else:
+            edit = AdaptiveLineEdit("what to look for", "text")
+        edit.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        edit.setMinimumWidth(70)
+        edit.setText(value)
+        edit.textChanged.connect(self._touched)
+        return edit
+
+    def _choices(self, kind: str) -> List[Tuple[str, str]]:
+        if kind == "category":
+            return [(c.value, c.label) for c in Category
+                    if c is not Category.UNCLASSIFIED_OTHER]
+        if kind == "topic":
+            return [(t.value, t.label) for t in profiles.ALL_TOPICS]
+        if kind == "mailbox":
+            return [(a.address or a.id, a.address or a.label) for a in self._mailboxes]
+        return [(f, f) for f in self._folders]
+
+    def _value_text(self) -> str:
+        widget = self._value_widget
+        if isinstance(widget, QComboBox):
+            return (widget.currentData() if not widget.isEditable()
+                    else widget.currentText()) or ""
+        if isinstance(widget, QPlainTextEdit):
+            return widget.toPlainText()
+        if isinstance(widget, QLineEdit):
+            return widget.text()
+        return ""
+
+    def _touched(self, *_args) -> None:
+        if not self._quiet:
+            self.changed.emit()
+
+    def _delete_button(self) -> QToolButton:
+        return _compact_button("−", "Remove this line",
+                               lambda: self.removed.emit(self))
+
+
+class ConditionRow(_RuleRow):
+    """Field, operator, value - the shape every mail rule has ever had."""
+
+    def __init__(self, condition, mailboxes=None, parent=None) -> None:
+        super().__init__(mailboxes=mailboxes, parent=parent)
+        self._quiet = True
+
+        self.field_combo = QComboBox()
+        for name, label, _kind in autoreply.FIELDS:
+            self.field_combo.addItem(label, name)
+        self.field_combo.setCurrentIndex(
+            max(0, self.field_combo.findData(condition.field)))
+        self.field_combo.setMinimumWidth(96)
+        self.field_combo.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                       QSizePolicy.Policy.Fixed)
+        self.field_combo.currentIndexChanged.connect(self._field_changed)
+        self.row.addWidget(self.field_combo, 3)
+
+        self.operator_combo = QComboBox()
+        self.operator_combo.setMinimumWidth(88)
+        self.operator_combo.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                          QSizePolicy.Policy.Fixed)
+        self.operator_combo.currentIndexChanged.connect(self._operator_changed)
+        self.row.addWidget(self.operator_combo, 3)
+
+        self.row.addWidget(self._delete_button())
+        self._fill_operators(condition.operator)
+        self._build_value(self._value_kind(), condition.value)
+        self._quiet = False
+
+    def _value_kind(self) -> str:
+        field = self.field_combo.currentData() or "anywhere"
+        kind = autoreply.field_kind(field)
+        if kind == "flag":
+            return "none"
+        return kind
+
+    def _fill_operators(self, wanted: str = "") -> None:
+        was_quiet, self._quiet = self._quiet, True
+        self.operator_combo.blockSignals(True)
+        self.operator_combo.clear()
+        field = self.field_combo.currentData() or "anywhere"
+        for name, label in autoreply.operators_for(field):
+            self.operator_combo.addItem(label, name)
+        found = self.operator_combo.findData(wanted)
+        self.operator_combo.setCurrentIndex(max(0, found))
+        self.operator_combo.blockSignals(False)
+        self._quiet = was_quiet
+
+    def _field_changed(self) -> None:
+        self._fill_operators()
+        self._build_value(self._value_kind(), "")
+        self._touched()
+
+    def _operator_changed(self) -> None:
+        self._touched()
+
+    def value(self):
+        return autoreply.Condition(
+            field=self.field_combo.currentData() or "anywhere",
+            operator=self.operator_combo.currentData() or "contains",
+            value=self._value_text(),
+        )
+
+
+class ActionRow(_RuleRow):
+    """What to do, and whatever that needs typing into it."""
+
+    def __init__(self, action, folders=None, parent=None) -> None:
+        super().__init__(folders=folders, parent=parent)
+        self._quiet = True
+
+        self.kind_combo = QComboBox()
+        for name, label, _needs in autoreply.ACTION_KINDS:
+            self.kind_combo.addItem(label, name)
+        self.kind_combo.setCurrentIndex(max(0, self.kind_combo.findData(action.kind)))
+        self.kind_combo.setMinimumWidth(130)
+        self.kind_combo.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                      QSizePolicy.Policy.Fixed)
+        self.kind_combo.currentIndexChanged.connect(self._kind_changed)
+        self.row.addWidget(self.kind_combo, 3)
+
+        self.row.addWidget(self._delete_button())
+        self._build_value(self._value_kind(), action.value)
+        self._quiet = False
+
+    def _value_kind(self) -> str:
+        needs = autoreply.action_input(self.kind_combo.currentData() or "draft")
+        return "folder_pick" if needs == "folder" else needs
+
+    def _kind_changed(self) -> None:
+        self._build_value(self._value_kind(), "")
+        self._touched()
+
+    def value(self):
+        return autoreply.Action(kind=self.kind_combo.currentData() or "draft",
+                                value=self._value_text())
+
+
 class SettingsDialog(QDialog):
     """Credentials, model, routing and folder configuration."""
 
-    def __init__(self, settings: Settings, store: CredentialStore, parent=None) -> None:
+    def __init__(self, settings: Settings, store: CredentialStore, parent=None,
+                 sample_items: Sequence[TriageItem] = ()) -> None:
         super().__init__(parent)
         self.setWindowTitle("Settings")
         self.setMinimumSize(640, 480)
@@ -1032,6 +1338,10 @@ class SettingsDialog(QDialog):
         self._account_index = 0
         self._account_passwords: Dict[str, str] = {}
         self._removed_accounts: List[Account] = []
+        self._row_lines_touched = False
+        self._loading_rule = False
+        #: What is on screen behind this dialog, so a rule can be tried on it.
+        self._sample_items: List[TriageItem] = list(sample_items)
 
         self.tabs = QTabWidget()
         # Each tab scrolls, so no amount of text can be cut off at any size.
@@ -1887,133 +2197,200 @@ class SettingsDialog(QDialog):
         self.model_note.setText(" · ".join(part for part in (note, price) if part))
 
     def _build_reply_tab(self) -> QWidget:
-        """Rules that draft a reply. Nothing here ever sends anything."""
+        """Rules that act on matching mail. Nothing here ever sends anything."""
         page = QWidget()
         outer = QVBoxLayout(page)
 
         headline = QLabel(
-            "<b>Replies are drafted, never sent.</b> A matching message gets a "
-            "reply written into your Drafts mailbox, threaded correctly, for "
-            "you to read and send yourself. Nothing leaves your account without "
-            "you pressing send in your mail app."
+            "<b>Replies are drafted, never sent.</b> A rule can write a reply "
+            "into your Drafts mailbox, file a message, tick it, flag it or mark "
+            "it read — but nothing leaves your account without you pressing send "
+            "in your mail app."
         )
         headline.setWordWrap(True)
         outer.addWidget(headline)
 
-        self.auto_reply_check = QCheckBox("Draft replies after a scan")
-        outer.addWidget(self.auto_reply_check)
-
-        signature_row = QHBoxLayout()
-        self.signature_edit = QLineEdit()
-        self.signature_edit.setPlaceholderText("the name to sign off with")
-        signature_row.addWidget(QLabel("Sign as"))
-        signature_row.addWidget(self.signature_edit, 1)
-        outer.addLayout(signature_row)
+        top = QHBoxLayout()
+        self.auto_reply_check = QCheckBox("Run these rules after a scan")
+        top.addWidget(self.auto_reply_check)
+        top.addStretch(1)
+        top.addWidget(QLabel("Sign as"))
+        self.signature_edit = AdaptiveLineEdit(
+            "the name to sign off with", "your name", "name")
+        self.signature_edit.setMinimumWidth(120)
+        self.signature_edit.setMaximumWidth(200)
+        top.addWidget(self.signature_edit)
+        outer.addLayout(top)
         outer.addWidget(_separator())
 
-        picker_row = QHBoxLayout()
-        self.rule_list = QComboBox()
-        self.rule_list.setMinimumWidth(280)
-        self.rule_list.currentIndexChanged.connect(self._rule_selected)
-        picker_row.addWidget(QLabel("Rule"))
-        picker_row.addWidget(self.rule_list, 1)
-        add_rule = QToolButton(); add_rule.setText("Add")
-        add_rule.clicked.connect(self._add_rule)
-        picker_row.addWidget(add_rule)
-        self.remove_rule_button = QToolButton(); self.remove_rule_button.setText("Remove")
-        self.remove_rule_button.clicked.connect(self._remove_rule)
-        picker_row.addWidget(self.remove_rule_button)
-        outer.addLayout(picker_row)
+        body = QHBoxLayout()
+        body.setSpacing(10)
+        outer.addLayout(body, 1)
 
-        form = QFormLayout()
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        # -- left: the rules, in the order they run ------------------------
+        left = QVBoxLayout()
+        left.setSpacing(4)
+        order_note = QLabel("Rules run top to bottom.")
+        order_note.setProperty("dim", "true")
+        order_note.setWordWrap(True)
+        left.addWidget(order_note)
 
-        self.rule_enabled = QCheckBox("Use this rule")
-        form.addRow("", self.rule_enabled)
-        self.rule_name_edit = QLineEdit()
-        form.addRow("Name", self.rule_name_edit)
+        self.rule_list = WrappingList()
+        self.rule_list.setMinimumWidth(150)
+        self.rule_list.setMaximumWidth(230)
+        self.rule_list.setSizePolicy(QSizePolicy.Policy.Preferred,
+                                     QSizePolicy.Policy.Expanding)
+        # Wrap rather than elide. A rule named for what it does is longer than
+        # this column, and half a name is no name at all.
+        self.rule_list.currentRowChanged.connect(self._rule_selected)
+        self.rule_list.itemChanged.connect(self._rule_ticked)
+        left.addWidget(self.rule_list, 1)
 
-        self.rule_action = QComboBox()
-        for value, label in autoreply.ACTIONS:
-            self.rule_action.addItem(label, value)
-        self.rule_action.currentIndexChanged.connect(self._rule_action_changed)
-        form.addRow("When it matches", self.rule_action)
+        buttons = QHBoxLayout()
+        buttons.setSpacing(4)
+        for text, tip, slot in (
+            ("＋", "Add a rule", self._add_rule),
+            ("⧉", "Duplicate this rule", self._duplicate_rule),
+            ("−", "Remove this rule", self._remove_rule),
+            ("↑", "Run this rule earlier", lambda: self._move_rule(-1)),
+            ("↓", "Run this rule later", lambda: self._move_rule(1)),
+        ):
+            button = _compact_button(text, tip, slot)
+            buttons.addWidget(button)
+            if text == "−":
+                self.remove_rule_button = button
+        buttons.addStretch(1)
+        left.addLayout(buttons)
+        body.addLayout(left)
 
-        self.rule_category = QComboBox()
-        self.rule_category.addItem("Any job category", "")
-        for category in Category:
-            if category is not Category.UNCLASSIFIED_OTHER:
-                self.rule_category.addItem(category.label, category.value)
-        form.addRow("Job category", self.rule_category)
+        # -- right: the rule itself ----------------------------------------
+        right = QVBoxLayout()
+        right.setSpacing(6)
 
-        self.rule_topic = QComboBox()
-        self.rule_topic.addItem("Any topic", "")
-        for topic in profiles.ALL_TOPICS:
-            self.rule_topic.addItem(topic.label, topic.value)
-        form.addRow("Everyday topic", self.rule_topic)
+        name_row = QHBoxLayout()
+        name_row.addWidget(QLabel("Name"))
+        self.rule_name_edit = AdaptiveLineEdit("what this rule is for", "name")
+        self.rule_name_edit.setMinimumWidth(120)
+        self.rule_name_edit.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                          QSizePolicy.Policy.Fixed)
+        self.rule_name_edit.editingFinished.connect(self._rule_renamed)
+        name_row.addWidget(self.rule_name_edit, 1)
+        self.rule_enabled = QCheckBox("On")
+        self.rule_enabled.toggled.connect(self._rule_enabled_toggled)
+        name_row.addWidget(self.rule_enabled)
+        right.addLayout(name_row)
 
-        self.rule_sender = QLineEdit()
-        self.rule_sender.setPlaceholderText("only from addresses containing this")
-        form.addRow("Sender contains", self.rule_sender)
+        match_row = QHBoxLayout()
+        match_row.addWidget(QLabel("Match"))
+        self.rule_match = QComboBox()
+        self.rule_match.addItem("all of these conditions", "all")
+        self.rule_match.addItem("any of these conditions", "any")
+        self.rule_match.currentIndexChanged.connect(self._rule_edited)
+        match_row.addWidget(self.rule_match)
+        match_row.addStretch(1)
+        add_condition = QToolButton()
+        add_condition.setText("Add a condition")
+        add_condition.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        add_condition.clicked.connect(self._add_condition)
+        match_row.addWidget(add_condition)
+        right.addLayout(match_row)
 
-        self.rule_contains = QLineEdit()
-        self.rule_contains.setPlaceholderText("only if the message contains this")
-        form.addRow("Message contains", self.rule_contains)
+        self.conditions_box = QWidget()
+        self.conditions_layout = QVBoxLayout(self.conditions_box)
+        self.conditions_layout.setContentsMargins(0, 0, 0, 0)
+        self.conditions_layout.setSpacing(4)
+        right.addWidget(self.conditions_box)
 
-        self.rule_confidence = QDoubleSpinBox()
-        self.rule_confidence.setRange(0.50, 1.00)
-        self.rule_confidence.setSingleStep(0.01)
-        self.rule_confidence.setDecimals(2)
-        form.addRow("Only above confidence", self.rule_confidence)
+        right.addWidget(_separator())
 
-        self.rule_skip_bulk = QCheckBox("Never reply to bulk mail")
+        action_row = QHBoxLayout()
+        action_row.addWidget(QLabel("<b>Then</b>"))
+        action_row.addStretch(1)
+        add_action = QToolButton()
+        add_action.setText("Add an action")
+        add_action.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        add_action.clicked.connect(self._add_action)
+        action_row.addWidget(add_action)
+        right.addLayout(action_row)
+
+        self.actions_box = QWidget()
+        self.actions_layout = QVBoxLayout(self.actions_box)
+        self.actions_layout.setContentsMargins(0, 0, 0, 0)
+        self.actions_layout.setSpacing(4)
+        right.addWidget(self.actions_box)
+
+        self.template_note = QLabel(
+            "In a template, {first_name}, {sender}, {subject} and {me} are "
+            "filled in. Anything in [square brackets] is left for you to "
+            "complete and is listed at the bottom of the draft."
+        )
+        self.template_note.setWordWrap(True)
+        self.template_note.setProperty("dim", "true")
+        right.addWidget(self.template_note)
+
+        switches = QHBoxLayout()
+        self.rule_skip_bulk = QCheckBox("Skip bulk mail")
         self.rule_skip_bulk.setToolTip(
-            "Anything carrying an unsubscribe header. Leave this on: replying "
-            "to a mailing list is at best useless and at worst embarrassing."
+            "Anything carrying an unsubscribe header. Leave this on for rules "
+            "that reply: writing back to a mailing list is at best useless and "
+            "at worst embarrassing."
         )
-        form.addRow("", self.rule_skip_bulk)
+        self.rule_skip_bulk.toggled.connect(self._rule_edited)
+        switches.addWidget(self.rule_skip_bulk)
+        self.rule_stop_after = QCheckBox("Stop here when this matches")
+        self.rule_stop_after.setToolTip(
+            "Later rules are skipped for that message. Useful for an exception "
+            "you put at the top of the list."
+        )
+        self.rule_stop_after.toggled.connect(self._rule_edited)
+        switches.addWidget(self.rule_stop_after)
+        switches.addStretch(1)
+        right.addLayout(switches)
 
-        self.rule_template = QPlainTextEdit()
-        self.rule_template.setPlaceholderText(
-            "Hello {first_name},\n\n…\n\nBest wishes,\n{me}"
-        )
-        self.rule_template.setMinimumHeight(120)
-        form.addRow("Template", self.rule_template)
-        template_note = QLabel(
-            "{first_name}, {sender}, {subject} and {me} are filled in. Anything "
-            "in [square brackets] is left for you to complete and is listed at "
-            "the bottom of the draft."
-        )
-        template_note.setWordWrap(True)
-        template_note.setProperty("dim", "true")
-        form.addRow("", template_note)
+        self.rule_summary = QLabel("")
+        self.rule_summary.setWordWrap(True)
+        right.addWidget(self.rule_summary)
 
-        self.rule_guidance = QPlainTextEdit()
-        self.rule_guidance.setPlaceholderText(
-            "What the reply needs to do, in your words. Only used when the "
-            "model writes it."
-        )
-        self.rule_guidance.setMinimumHeight(80)
-        form.addRow("Guidance", self.rule_guidance)
-        outer.addLayout(form)
-        outer.addStretch(1)
+        try_row = QHBoxLayout()
+        self.try_rule_button = QToolButton()
+        self.try_rule_button.setText("Try it on the last scan")
+        self.try_rule_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.try_rule_button.clicked.connect(self._try_rule)
+        try_row.addWidget(self.try_rule_button)
+        self.try_rule_result = QLabel("")
+        self.try_rule_result.setWordWrap(True)
+        try_row.addWidget(self.try_rule_result, 1)
+        right.addLayout(try_row)
+
+        right.addStretch(1)
+        body.addLayout(right, 1)
         return page
 
     # -- reply rules ------------------------------------------------------
     def _load_rules(self, settings: Settings) -> None:
         self._rules = list(settings.rules)
         self._rule_index = 0
+        self._condition_rows: List[ConditionRow] = []
+        self._action_rows: List[ActionRow] = []
         self.auto_reply_check.setChecked(settings.auto_reply)
         self.signature_edit.setText(settings.reply_signature)
         self._refresh_rule_list()
 
     def _refresh_rule_list(self) -> None:
+        """Redraw the list on the left without disturbing what is being edited."""
         self.rule_list.blockSignals(True)
         self.rule_list.clear()
         for rule in self._rules:
-            self.rule_list.addItem(("✓ " if rule.enabled else "○ ") + rule.name)
-        self.rule_list.setCurrentIndex(min(self._rule_index, len(self._rules) - 1))
+            entry = QListWidgetItem(self._rule_label(rule))
+            entry.setFlags(entry.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            entry.setCheckState(Qt.CheckState.Checked if rule.enabled
+                                else Qt.CheckState.Unchecked)
+            entry.setToolTip(self._rule_tooltip(rule))
+            self.rule_list.addItem(entry)
+        self._rule_index = max(0, min(self._rule_index, len(self._rules) - 1))
+        self.rule_list.setCurrentRow(self._rule_index)
         self.rule_list.blockSignals(False)
+        self.rule_list.measure()
         self.remove_rule_button.setEnabled(len(self._rules) > 1)
         self._show_rule(self._rule_index)
 
@@ -2022,60 +2399,287 @@ class SettingsDialog(QDialog):
             return
         rule = self._rules[index]
         self._rule_index = index
+        self._loading_rule = True
         self.rule_enabled.setChecked(rule.enabled)
         self.rule_name_edit.setText(rule.name)
-        self.rule_action.setCurrentIndex(max(0, self.rule_action.findData(rule.action)))
-        self.rule_category.setCurrentIndex(
-            max(0, self.rule_category.findData(rule.categories[0] if rule.categories else "")))
-        self.rule_topic.setCurrentIndex(
-            max(0, self.rule_topic.findData(rule.topics[0] if rule.topics else "")))
-        self.rule_sender.setText(rule.sender_matches)
-        self.rule_contains.setText(rule.contains)
-        self.rule_confidence.setValue(rule.min_confidence)
+        self.rule_match.setCurrentIndex(max(0, self.rule_match.findData(rule.match)))
         self.rule_skip_bulk.setChecked(rule.skip_bulk)
-        self.rule_template.setPlainText(rule.template)
-        self.rule_guidance.setPlainText(rule.guidance)
-        self._rule_action_changed()
+        self.rule_stop_after.setChecked(rule.stop_after)
+        self._rebuild_condition_rows(rule)
+        self._rebuild_action_rows(rule)
+        self._loading_rule = False
+        self.try_rule_result.setText("")
+        self._describe_rule()
+
+    def _clear_rows(self, layout, rows: List) -> None:
+        for row in rows:
+            layout.removeWidget(row)
+            row.setParent(None)
+            row.deleteLater()
+        rows.clear()
+
+    def _rebuild_condition_rows(self, rule) -> None:
+        self._clear_rows(self.conditions_layout, self._condition_rows)
+        for condition in rule.conditions:
+            self._add_condition_row(condition)
+        if not rule.conditions:
+            self._empty_note(self.conditions_layout,
+                             "No conditions yet, so this rule never runs.")
+
+    def _rebuild_action_rows(self, rule) -> None:
+        self._clear_rows(self.actions_layout, self._action_rows)
+        for action in rule.actions:
+            self._add_action_row(action)
+        if not rule.actions:
+            self._empty_note(self.actions_layout, "No actions yet.")
+
+    def _empty_note(self, layout, text: str) -> None:
+        note = QLabel(text)
+        note.setProperty("dim", "true")
+        layout.addWidget(note)
+
+    def _add_condition_row(self, condition) -> None:
+        self._drop_notes(self.conditions_layout)
+        row = ConditionRow(condition, mailboxes=self._accounts)
+        row.changed.connect(self._rule_edited)
+        row.removed.connect(self._remove_condition_row)
+        self.conditions_layout.addWidget(row)
+        self._condition_rows.append(row)
+
+    def _add_action_row(self, action) -> None:
+        self._drop_notes(self.actions_layout)
+        row = ActionRow(action, folders=self._folder_choices())
+        row.changed.connect(self._rule_edited)
+        row.removed.connect(self._remove_action_row)
+        self.actions_layout.addWidget(row)
+        self._action_rows.append(row)
+
+    def _drop_notes(self, layout) -> None:
+        """Take away the “nothing here yet” line once there is something."""
+        for index in reversed(range(layout.count())):
+            widget = layout.itemAt(index).widget()
+            if isinstance(widget, QLabel):
+                layout.removeWidget(widget)
+                widget.deleteLater()
+
+    def _folder_choices(self) -> List[str]:
+        """Folders a rule can file into: whatever this configuration creates.
+
+        Editable, so a folder that is not in this list is still allowed - the
+        list is a shortcut, not a fence.
+        """
+        root = (self.root_edit.text().strip() if hasattr(self, "root_edit")
+                else "") or self._settings.folder_root
+        other = (self.other_root_edit.text().strip()
+                 if hasattr(self, "other_root_edit")
+                 else "") or self._settings.other_folder_root
+        plan = FolderPlan(root=root, other_root=other)
+        choices = list(plan.all_folders)
+        choices += [plan.for_other_category(topic) for topic in OtherCategory
+                    if topic is not OtherCategory.NOT_APPLICABLE]
+        seen: List[str] = []
+        for folder in choices:
+            if folder and folder not in seen:
+                seen.append(folder)
+        return seen
+
+    def _remove_condition_row(self, row) -> None:
+        if row in self._condition_rows:
+            self._condition_rows.remove(row)
+            self.conditions_layout.removeWidget(row)
+            row.setParent(None)
+            row.deleteLater()
+        self._rule_edited()
+        if not self._condition_rows:
+            self._empty_note(self.conditions_layout,
+                             "No conditions yet, so this rule never runs.")
+
+    def _remove_action_row(self, row) -> None:
+        if row in self._action_rows:
+            self._action_rows.remove(row)
+            self.actions_layout.removeWidget(row)
+            row.setParent(None)
+            row.deleteLater()
+        self._rule_edited()
+        if not self._action_rows:
+            self._empty_note(self.actions_layout, "No actions yet.")
+
+    def _add_condition(self) -> None:
+        self._capture_rule()
+        self._add_condition_row(autoreply.Condition())
+        self._rule_edited()
+
+    def _add_action(self) -> None:
+        self._capture_rule()
+        self._add_action_row(autoreply.Action())
+        self._rule_edited()
 
     def _capture_rule(self) -> None:
+        """Read the editor back into the rule it is showing."""
+        if getattr(self, "_loading_rule", False):
+            return
         if not (0 <= self._rule_index < len(self._rules)):
             return
         rule = self._rules[self._rule_index]
         rule.enabled = self.rule_enabled.isChecked()
         rule.name = self.rule_name_edit.text().strip() or "New rule"
-        rule.action = self.rule_action.currentData() or "draft"
-        category = self.rule_category.currentData()
-        rule.categories = [category] if category else []
-        topic = self.rule_topic.currentData()
-        rule.topics = [topic] if topic else []
-        rule.sender_matches = self.rule_sender.text().strip()
-        rule.contains = self.rule_contains.text().strip()
-        rule.min_confidence = self.rule_confidence.value()
+        rule.match = self.rule_match.currentData() or "all"
         rule.skip_bulk = self.rule_skip_bulk.isChecked()
-        rule.template = self.rule_template.toPlainText()
-        rule.guidance = self.rule_guidance.toPlainText()
+        rule.stop_after = self.rule_stop_after.isChecked()
+        rule.conditions = [row.value() for row in self._condition_rows]
+        rule.actions = [row.value() for row in self._action_rows]
+
+    def _rule_edited(self, *_args) -> None:
+        if getattr(self, "_loading_rule", False):
+            return
+        self._capture_rule()
+        self._describe_rule()
+        self._refresh_current_list_item()
+
+    def _describe_rule(self) -> None:
+        """Say in one place what this rule does, and what is wrong with it."""
+        if not (0 <= self._rule_index < len(self._rules)):
+            return
+        rule = self._rules[self._rule_index]
+        drafts = rule.drafts_a_reply
+        self.template_note.setVisible(drafts)
+        problems = rule.problems()
+        if problems:
+            self.rule_summary.setText(
+                "<b>Not ready:</b> " + " ".join(problems)
+                + (" A rule with something missing never runs."
+                   if rule.enabled else "")
+            )
+            self.rule_summary.setProperty("tone", "warn")
+        else:
+            self.rule_summary.setText(rule.describe())
+            self.rule_summary.setProperty("tone", "")
+        self.rule_summary.style().unpolish(self.rule_summary)
+        self.rule_summary.style().polish(self.rule_summary)
+
+    def _refresh_current_list_item(self) -> None:
+        entry = self.rule_list.item(self._rule_index)
+        if entry is None:
+            return
+        rule = self._rules[self._rule_index]
+        self.rule_list.blockSignals(True)
+        entry.setText(self._rule_label(rule))
+        self.rule_list.measure()
+        entry.setCheckState(Qt.CheckState.Checked if rule.enabled
+                            else Qt.CheckState.Unchecked)
+        entry.setToolTip(self._rule_tooltip(rule))
+        self.rule_list.blockSignals(False)
+
+    def _rule_label(self, rule) -> str:
+        """The name, marked when the rule is not finished enough to run."""
+        return ("⚠ " if rule.problems() else "") + menu_text(rule.name)
+
+    def _rule_tooltip(self, rule) -> str:
+        """The whole name, which the list is too narrow to show, and the gist."""
+        problems = rule.problems()
+        if problems:
+            return f"{rule.name}\n\nNot ready:\n" + "\n".join(
+                f"• {problem}" for problem in problems)
+        return f"{rule.name}\n\n{rule.describe()}"
+
+    def _rule_renamed(self) -> None:
+        self._rule_edited()
+
+    def _rule_enabled_toggled(self, on: bool) -> None:
+        self._rule_edited()
+
+    def _rule_ticked(self, entry) -> None:
+        """The checkbox in the list, which is the fastest way to turn one off."""
+        index = self.rule_list.row(entry)
+        if not (0 <= index < len(self._rules)):
+            return
+        self._rules[index].enabled = entry.checkState() == Qt.CheckState.Checked
+        if index == self._rule_index:
+            self._loading_rule = True
+            self.rule_enabled.setChecked(self._rules[index].enabled)
+            self._loading_rule = False
+            self._describe_rule()
 
     def _rule_selected(self, index: int) -> None:
+        if index == self._rule_index:
+            return
         self._capture_rule()
         self._show_rule(index)
 
     def _add_rule(self) -> None:
         self._capture_rule()
-        self._rules.append(autoreply.Rule())
+        self._rules.append(autoreply.Rule(
+            conditions=[autoreply.Condition()], actions=[autoreply.Action()]))
         self._rule_index = len(self._rules) - 1
+        self._refresh_rule_list()
+
+    def _duplicate_rule(self) -> None:
+        self._capture_rule()
+        if not (0 <= self._rule_index < len(self._rules)):
+            return
+        copied = autoreply.Rule.from_dict(self._rules[self._rule_index].to_dict())
+        copied.name = f"{copied.name} (copy)"
+        copied.enabled = False
+        self._rules.insert(self._rule_index + 1, copied)
+        self._rule_index += 1
         self._refresh_rule_list()
 
     def _remove_rule(self) -> None:
         if len(self._rules) <= 1:
             return
+        self._loading_rule = True
         del self._rules[self._rule_index]
         self._rule_index = max(0, self._rule_index - 1)
+        self._loading_rule = False
         self._refresh_rule_list()
 
-    def _rule_action_changed(self) -> None:
-        uses_model = self.rule_action.currentData() == "draft_ai"
-        self.rule_guidance.setEnabled(uses_model)
-        self.rule_template.setEnabled(self.rule_action.currentData() != "none")
+    def _move_rule(self, step: int) -> None:
+        self._capture_rule()
+        target = self._rule_index + step
+        if not (0 <= target < len(self._rules)):
+            return
+        rules = self._rules
+        rules[self._rule_index], rules[target] = rules[target], rules[self._rule_index]
+        self._rule_index = target
+        self._refresh_rule_list()
+
+    def _try_rule(self) -> None:
+        """Run every switched-on rule over the messages already on screen.
+
+        Reading a rule and knowing what it will do are different things. This
+        answers the second question against real mail, without touching the
+        mailbox or the model - a rule that would ask the model reports that it
+        matched, and nothing is drafted.
+        """
+        self._capture_rule()
+        samples = list(self._sample_items)
+        if not samples:
+            self.try_rule_result.setText(
+                "Nothing to try it on yet. Run a scan, then come back.")
+            return
+        rules = [r for r in self._rules if r.enabled and r.ready]
+        if not rules:
+            self.try_rule_result.setText(
+                "No rule is both switched on and finished.")
+            return
+        hits = []
+        for item in samples:
+            outcome = autoreply.apply_rules(rules, item.email, item.classification)
+            if outcome is not None:
+                hits.append((item, outcome))
+        if not hits:
+            self.try_rule_result.setText(
+                f"No match in the {len(samples)} message"
+                f"{'' if len(samples) == 1 else 's'} on screen.")
+            return
+        lines = [f"<b>{len(hits)} of {len(samples)} matched.</b>"]
+        for item, outcome in hits[:4]:
+            lines.append(
+                f"• {menu_text(item.email.subject_display[:52])} — "
+                f"{outcome.describe()} ({menu_text(outcome.rule_name)})")
+        if len(hits) > 4:
+            lines.append(f"…and {len(hits) - 4} more.")
+        self.try_rule_result.setText("<br>".join(lines))
 
     def _build_appearance_tab(self) -> QWidget:
         page = QWidget()
@@ -2100,6 +2704,17 @@ class SettingsDialog(QDialog):
         contrast_note.setWordWrap(True)
         contrast_note.setProperty("dim", "true")
         form.addRow("", contrast_note)
+
+        self.density_combo = QComboBox()
+        for value, label, _blurb in theme.DENSITIES:
+            self.density_combo.addItem(label, value)
+        form.addRow("Spacing", self.density_combo)
+        self.density_note = QLabel()
+        self.density_note.setWordWrap(True)
+        self.density_note.setProperty("dim", "true")
+        form.addRow("", self.density_note)
+        self.density_combo.currentIndexChanged.connect(self._density_changed)
+        form.addRow(_separator())
 
         self.help_check = QCheckBox("Explain things on hover")
         self.help_check.setToolTip(
@@ -2132,6 +2747,7 @@ class SettingsDialog(QDialog):
         self.rows_spin = QSpinBox()
         self.rows_spin.setRange(1, 6)
         self.rows_spin.setSuffix(" lines per row")
+        self.rows_spin.valueChanged.connect(self._rows_chosen_by_hand)
         self.rows_spin.setToolTip(
             "How many lines of a summary or subject to show before it is cut "
             "off. Taller rows show more and fit fewer."
@@ -2168,6 +2784,10 @@ class SettingsDialog(QDialog):
             widget.currentIndexChanged.connect(self._preview_appearance)
         self.readable_check.toggled.connect(self._preview_appearance)
         return page
+
+    def _rows_chosen_by_hand(self) -> None:
+        """Touching the spinner means this is now a deliberate choice."""
+        self._row_lines_touched = True
 
     def _export_settings(self) -> None:
         """Write the current settings, including anything not yet saved."""
@@ -2218,6 +2838,13 @@ class SettingsDialog(QDialog):
             "Press OK to keep it."
         )
 
+    def _density_changed(self) -> None:
+        """Say what the choice does, and show it straight away."""
+        name = self.density_combo.currentData() or "comfortable"
+        blurb = next((b for n, _l, b in theme.DENSITIES if n == name), "")
+        self.density_note.setText(blurb)
+        self._preview_appearance()
+
     def _toggle_help(self, on: bool) -> None:
         """Mirror the window's switch, and keep the checkbox in step."""
         helpmode.install(QApplication.instance(), on)
@@ -2255,7 +2882,15 @@ class SettingsDialog(QDialog):
         theme.apply(app,
                     self.mode_combo.currentData() or "system",
                     self.contrast_combo.currentData() or "normal",
-                    self.readable_check.isChecked())
+                    self.readable_check.isChecked(),
+                    self.density_combo.currentData() or "comfortable")
+        window = self.parent()
+        if hasattr(window, "_apply_spacing"):
+            # Show the spacing on the window behind the dialog, not just here.
+            was = window.settings.density
+            window.settings.density = self.density_combo.currentData() or "comfortable"
+            window._apply_spacing()
+            window.settings.density = was
 
     def _build_folders_tab(self) -> QWidget:
         page = QWidget()
@@ -2325,7 +2960,10 @@ class SettingsDialog(QDialog):
         self.help_check.setChecked(settings.help_mode)
         self.help_check.toggled.connect(
             lambda on: self.help_button.setChecked(on))
-        self.rows_spin.setValue(settings.row_lines)
+        self.density_combo.setCurrentIndex(
+            max(0, self.density_combo.findData(settings.density)))
+        self._density_changed()
+        self.rows_spin.setValue(settings.effective_row_lines)
 
         try:
             self.password_edit.setText(self._store.get_icloud_password(settings.icloud_email))
@@ -2372,8 +3010,10 @@ class SettingsDialog(QDialog):
             appearance_mode=self.mode_combo.currentData() or "system",
             contrast=self.contrast_combo.currentData() or "normal",
             readable=self.readable_check.isChecked(),
+            density=self.density_combo.currentData() or "comfortable",
             help_mode=self.help_check.isChecked(),
             row_lines=self.rows_spin.value(),
+            row_lines_auto=self._settings.row_lines_auto and not self._row_lines_touched,
             auto_reply=self.auto_reply_check.isChecked(),
             reply_signature=self.signature_edit.text().strip(),
             reply_rules=[r.to_dict() for r in self._rules],
@@ -2529,6 +3169,12 @@ class MainWindow(QMainWindow):
         #: What the primary button currently does, so it can be rewired
         #: without disconnecting slots that were never attached.
         self._scan_button_action = None
+        #: Whether the row height was chosen by hand. Until it is, it follows
+        #: the density, which is what somebody picking "compact" expects.
+        self._row_lines_chosen = False
+        #: Whether the preview has been opened deliberately. The densest
+        #: setting starts it closed, but should not keep closing it.
+        self._preview_opened = False
         #: Mailboxes whose messages are shown, and whether "all" is in force.
         #: The two are kept apart so that unticking the last mailbox means an
         #: empty table rather than silently meaning every mailbox.
@@ -2563,6 +3209,7 @@ class MainWindow(QMainWindow):
         # current choice now rather than waiting for the first change.
         self._sync_menu_bar_model()
         helpmode.install(QApplication.instance(), self.settings.help_mode)
+        self._apply_spacing()
 
         self.schedule_timer = QTimer(self)
         self.schedule_timer.setSingleShot(False)
@@ -2677,16 +3324,17 @@ class MainWindow(QMainWindow):
     #: Default column widths, also used by View -> Reset column widths.
     COLUMN_WIDTHS = {
         TriageTableModel.COL_SELECT: 34,
-        TriageTableModel.COL_SENDER: 165,
-        TriageTableModel.COL_SUBJECT: 250,
-        TriageTableModel.COL_DATE: 112,
-        TriageTableModel.COL_CATEGORY: 172,
-        TriageTableModel.COL_FOLDER: 128,
-        TriageTableModel.COL_CONFIDENCE: 92,
-        # The reasoning is shown in full in the preview pane, so the summary -
-        # which is the column people actually read across - gets the stretch.
-        TriageTableModel.COL_REASONING: 210,
-        TriageTableModel.COL_ACCOUNT: 190,
+        TriageTableModel.COL_SENDER: 150,
+        TriageTableModel.COL_SUBJECT: 230,
+        TriageTableModel.COL_DATE: 108,
+        TriageTableModel.COL_CATEGORY: 150,
+        TriageTableModel.COL_FOLDER: 118,
+        TriageTableModel.COL_CONFIDENCE: 84,
+        # Summary is the column people read across, and it has the stretch, so
+        # everything beside it is sized to leave it room. Reasoning is here in
+        # one line and in full in the pane below, so it gives up the most.
+        TriageTableModel.COL_REASONING: 170,
+        TriageTableModel.COL_ACCOUNT: 175,
     }
 
     def _reset_columns(self) -> None:
@@ -2730,6 +3378,31 @@ class MainWindow(QMainWindow):
             self.table.setColumnWidth(
                 column, min(300, max(self.COLUMN_WIDTHS[column], longest + 24)))
 
+    #: Below this the summary is a word and an ellipsis, which is no use to
+    #: anybody. It is the column people read across, and it has the stretch.
+    MIN_SUMMARY_WIDTH = 160
+
+    def _heal_column_widths(self) -> None:
+        """Undo a saved layout that leaves the summary too narrow to read.
+
+        Column widths are remembered, which is right - somebody who widened a
+        column meant it. But a layout saved on a narrower window, or before a
+        column was added, can add up to more than the window has, and the
+        stretch column is the one that gives way. Past a certain point that is
+        not a layout anybody chose, so it goes back to the defaults.
+        """
+        summary = TriageTableModel.COL_SUMMARY
+        if self.table.isColumnHidden(summary):
+            return
+        if self.table.columnWidth(summary) >= self.MIN_SUMMARY_WIDTH:
+            return
+        available = self.table.viewport().width()
+        if available <= 0:
+            return
+        for column, width in self.COLUMN_WIDTHS.items():
+            if not self.table.isColumnHidden(column):
+                self.table.setColumnWidth(column, width)
+
     def _restore_hidden_columns(self) -> None:
         for column in self.settings.hidden_columns:
             if 1 <= column < self.model.columnCount():
@@ -2766,6 +3439,7 @@ class MainWindow(QMainWindow):
         frame = QFrame()
         frame.setFrameShape(QFrame.Shape.NoFrame)
         row = FlowLayout(frame, margin=0, spacing=6, vertical_spacing=6)
+        self.action_bar_layout = row
 
         self.window_buttons: Dict[TimeWindow, QToolButton] = {}
         for window in TimeWindow:
@@ -3085,20 +3759,62 @@ class MainWindow(QMainWindow):
         if app is None:
             return
         theme.apply(app, self.settings.appearance_mode, self.settings.contrast,
-                    self.settings.readable)
+                    self.settings.readable, self.settings.density)
+        self._apply_spacing()
         helpmode.install(app, self.settings.help_mode)
         if hasattr(self, "help_button") and \
                 self.help_button.isChecked() != self.settings.help_mode:
             self.help_button.blockSignals(True)
             self.help_button.setChecked(self.settings.help_mode)
             self.help_button.blockSignals(False)
-        # Reading mode wants taller rows as well as larger type; the two only
-        # help together.
-        if self.settings.readable and self.settings.row_lines < 3:
-            self.settings.row_lines = 3
-        self._apply_density(self.settings.row_lines)
+        self._apply_density(self.settings.effective_row_lines)
         self._reset_columns()
         self.table.viewport().update()
+
+    def _apply_spacing(self) -> None:
+        """Push the chosen density into the parts a stylesheet cannot reach.
+
+        Margins between the toolbar rows, how much of the window the message
+        preview takes, and whether it is open at all. A stylesheet can set
+        padding inside a widget but not the space a layout leaves around it.
+        """
+        room = theme.density(self.settings.density)
+        central = self.centralWidget()
+        if central is not None and central.layout() is not None:
+            central.layout().setContentsMargins(
+                room.margin, room.margin, room.margin, room.margin)
+            central.layout().setSpacing(room.spacing)
+        for bar in ("action_bar_layout", "filter_bar_layout"):
+            layout = getattr(self, bar, None)
+            if layout is not None:
+                layout.setSpacing(max(4, room.spacing))
+                layout.setVerticalSpacing(max(3, room.spacing - 2))
+        if hasattr(self, "metrics_bar"):
+            self.metrics_bar.setContentsMargins(
+                room.margin, max(2, room.cell_pad), room.margin, max(2, room.cell_pad))
+
+        # Row height follows the density unless the user has said otherwise.
+        self.settings.row_lines = self.settings.effective_row_lines
+        if hasattr(self, "table"):
+            self._apply_density(self.settings.row_lines)
+
+        if hasattr(self, "splitter"):
+            self._apply_preview_share(room)
+
+    def _apply_preview_share(self, room) -> None:
+        """Give the table everything the preview is not using.
+
+        Skipped while the splitter has no height of its own, which is the case
+        during construction; showEvent runs it again once it has.
+        """
+        total = self.splitter.height()
+        if total <= 1:
+            return
+        if not room.preview_open and not self._preview_opened:
+            self.splitter.setSizes([total, 0])
+            return
+        preview = int(total * room.preview_share)
+        self.splitter.setSizes([total - preview, preview])
 
     def _switch_profile(self, name: str) -> None:
         """Change what gets a folder of its own, and rebuild the folder plan."""
@@ -3196,6 +3912,7 @@ class MainWindow(QMainWindow):
     def _build_filter_bar(self) -> QWidget:
         frame = QFrame()
         row = FlowLayout(frame, margin=0, spacing=6, vertical_spacing=6)
+        self.filter_bar_layout = row
 
         self.search_edit = AdaptiveLineEdit(
             "Filter by sender, subject, summary or reasoning…",
@@ -3264,6 +3981,13 @@ class MainWindow(QMainWindow):
         row.addWidget(self.help_button)
 
         return frame
+
+    def _density_changed(self) -> None:
+        """Say what the choice does, and show it straight away."""
+        name = self.density_combo.currentData() or "comfortable"
+        blurb = next((b for n, _l, b in theme.DENSITIES if n == name), "")
+        self.density_note.setText(blurb)
+        self._preview_appearance()
 
     def _toggle_help(self, on: bool) -> None:
         """Turn the explanations on or off, and remember which."""
@@ -3470,11 +4194,11 @@ class MainWindow(QMainWindow):
         self.undo_action.triggered.connect(self.undo_last_apply)
         file_menu.addAction(self.undo_action)
 
-        reply_action = QAction("Draft &Replies…", self)
+        reply_action = QAction("Run Reply &Rules…", self)
         reply_action.setShortcut(QKeySequence("Ctrl+R"))
         reply_action.setToolTip(
-            "Write replies for whatever the auto-reply rules match, into your "
-            "Drafts mailbox. Nothing is sent."
+            "Run the auto-reply rules over what was scanned: draft, file, tick, "
+            "flag or mark read, whatever they say. Nothing is ever sent."
         )
         reply_action.triggered.connect(self.draft_replies)
         file_menu.addAction(reply_action)
@@ -3639,6 +4363,7 @@ class MainWindow(QMainWindow):
             if not self.table.isColumnHidden(column) and self.table.columnWidth(column) <= 0:
                 self.table.setColumnWidth(
                     column, self.COLUMN_WIDTHS.get(column, 140))
+        self._heal_column_widths()
 
     def showEvent(self, event) -> None:  # noqa: N802
         """Run the first-run prompt the first time the window actually appears.
@@ -3648,6 +4373,10 @@ class MainWindow(QMainWindow):
         happens exactly once, at the only moment it makes sense.
         """
         super().showEvent(event)
+        # The splitter only has a height once the window has been laid out.
+        QTimer.singleShot(0, self, lambda: self._apply_preview_share(
+            theme.density(self.settings.density)))
+        QTimer.singleShot(0, self, self._heal_column_widths)
         if not self._first_run_checked:
             self._first_run_checked = True
             QTimer.singleShot(0, self, self._first_run_check)
@@ -3962,7 +4691,8 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def open_settings(self, tab: int = 0) -> None:
-        dialog = SettingsDialog(self.settings, self.store, self)
+        dialog = SettingsDialog(self.settings, self.store, self,
+                                sample_items=self.model.items)
         if tab:
             dialog.tabs.setCurrentIndex(tab)
         if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -4034,12 +4764,51 @@ class MainWindow(QMainWindow):
         def spell(moment) -> str:
             return f"{moment.strftime(fmt)}, {clock(moment)}"
 
-        self.window_label.setText(
-            f"<span style='opacity:0.7'>covering</span> "
-            f"<b>{spell(start)}</b> "
-            f"<span style='opacity:0.7'>to</span> <b>{spell(end)}</b>"
+        # Three phrasings, longest first. The toolbar has to fit a row of
+        # buttons, two menus and two actions, and this is the part that can
+        # give up words without anything becoming unclear.
+        brief = f"{start.strftime(fmt)} – {end.strftime(fmt)}"
+        wordings = (
+            f"<span style='opacity:0.7'>covering</span> <b>{spell(start)}</b> "
+            f"<span style='opacity:0.7'>to</span> <b>{spell(end)}</b>",
+            f"<span style='opacity:0.7'>covering</span> <b>{brief}</b>",
+            f"<b>{brief}</b>",
         )
         self.window_label.setTextFormat(Qt.TextFormat.RichText)
+        self._window_wordings = wordings
+        self.window_label.setText(wordings[0])
+        self.window_label.setToolTip(
+            f"The next scan covers {spell(start)} to {spell(end)}.")
+        self._fit_window_label()
+        self.window_label.setTextFormat(Qt.TextFormat.RichText)
+
+    def _fit_window_label(self) -> None:
+        """Pick the longest wording that fits beside everything else."""
+        wordings = getattr(self, "_window_wordings", ())
+        if not wordings or not hasattr(self, "action_bar_layout"):
+            return
+        bar = self.action_bar_layout.geometry().width()
+        if bar <= 0:
+            return
+        others = 0
+        for index in range(self.action_bar_layout.count()):
+            item = self.action_bar_layout.itemAt(index)
+            widget = item.widget()
+            if widget is None or widget.isHidden() or widget is self.window_label:
+                continue
+            others += item.sizeHint().width() + self.action_bar_layout.spacing()
+        room = bar - others
+        metrics = self.window_label.fontMetrics()
+        for wording in wordings:
+            plain = re.sub(r"<[^>]+>", "", wording)
+            if metrics.horizontalAdvance(plain) <= room or wording is wordings[-1]:
+                if self.window_label.text() != wording:
+                    self.window_label.setText(wording)
+                return
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._fit_window_label()
 
     def _current_window(self):
         window = self.settings.window
@@ -4219,15 +4988,16 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def draft_replies(self) -> None:
-        """Write replies for whatever the rules match, into Drafts."""
+        """Run the reply rules over what was scanned."""
         if self._busy():
             return
         if not self.settings.replies_armed:
             QMessageBox.information(
                 self, "Auto reply is off",
                 "No reply rules are switched on.\n\nSettings → Auto Reply has "
-                "three ready-made rules; tick the ones you want and turn on "
-                "\u201cDraft replies after a scan\u201d.",
+                "ready-made rules to start from, and you can build your own out "
+                "of any conditions you like. Tick the ones you want and turn on "
+                "\u201cRun these rules after a scan\u201d.",
             )
             self.open_settings(tab=3)
             return
@@ -4243,7 +5013,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Keychain", str(exc))
             return
 
-        self._set_busy(True, "Drafting replies…")
+        self._set_busy(True, "Running reply rules…")
         self.reply_worker = ReplyWorker(
             settings=self.settings, mailbox_password=passwords,
             api_key=api_key, items=items, parent=self,
@@ -4252,25 +5022,63 @@ class MainWindow(QMainWindow):
         self.reply_worker.progress.connect(self._on_progress)
         self.reply_worker.log_message.connect(self._append_log)
         self.reply_worker.failed.connect(self._on_failed)
-        self.reply_worker.finished_ok.connect(self._on_replies_drafted)
+        self.reply_worker.finished_ok.connect(self._on_rules_run)
         self.reply_worker.start()
 
     @Slot(object)
-    def _on_replies_drafted(self, drafts) -> None:
+    def _on_rules_run(self, run) -> None:
+        """Show what the rules did, and put their table changes on screen."""
         self._set_busy(False)
-        written = [d for d in drafts if d.ok]
-        failed = [d for d in drafts if not d.ok]
-        if not drafts:
+        if not run.outcomes:
             self._set_status("No message matched a reply rule.")
             return
-        lines = [f"{len(written)} draft{'s' if len(written) != 1 else ''} saved to "
-                 "your Drafts mailbox. Nothing has been sent."]
+
+        filed, ticked = self._apply_outcomes(run)
+        drafts = run.drafts
+        written = [d for d in drafts if d.ok]
+        failed = [d for d in drafts if not d.ok]
+
+        lines = [f"{run.matched} message"
+                 f"{'' if run.matched == 1 else 's'} matched a reply rule."]
+        if drafts:
+            lines.append(f"{len(written)} draft{'' if len(written) == 1 else 's'} "
+                         f"saved to your Drafts mailbox. Nothing has been sent.")
+        if filed:
+            lines.append(f"{filed} pointed at a different folder. Nothing has "
+                         "moved yet — press Apply when you are happy.")
+        if ticked:
+            lines.append(f"{ticked} ticked or unticked.")
+        if run.marked_read:
+            lines.append(f"{run.marked_read} marked as read.")
+        if run.flagged:
+            lines.append(f"{run.flagged} flagged.")
         if failed:
             lines.append("")
             lines.append(f"{len(failed)} could not be written:")
             lines.extend(f"  · {d.subject}: {d.error}" for d in failed[:5])
-        QMessageBox.information(self, "Replies drafted", "\n".join(lines))
-        self._set_status(lines[0])
+        QMessageBox.information(self, "Reply rules", "\n".join(lines))
+        self._set_status(lines[0] + (f" {lines[1]}" if len(lines) > 1 else ""))
+
+    def _apply_outcomes(self, run) -> Tuple[int, int]:
+        """Carry the filing and ticking decisions into the table."""
+        filed = ticked = 0
+        for item, outcome in run.outcomes:
+            if outcome.leave:
+                if item.override_folder is not None:
+                    item.override_folder = None
+                    filed += 1
+                item.approved = False
+            elif outcome.file_into and outcome.file_into != item.target_folder:
+                item.override_folder = outcome.file_into
+                filed += 1
+            if outcome.tick is not None and item.approved != outcome.tick:
+                item.approved = outcome.tick
+                ticked += 1
+        if filed or ticked:
+            self.model._refresh_all()
+            self.model.selectionChanged.emit()
+            self._update_status()
+        return filed, ticked
 
     def apply_moves(self) -> None:
         if self._busy():
@@ -4622,10 +5430,18 @@ class MainWindow(QMainWindow):
         summary = self.model.summary()
         running = bool(self.running_workers())
         self.apply_button.setEnabled(summary.approved > 0 and not running)
+        # Short enough not to push the toolbar onto a second row, which cost
+        # forty pixels of height and left thirteen hundred of empty space
+        # beside it. The full wording is the tooltip.
         self.apply_button.setText(
-            f"Apply {summary.approved} Approved Folder Move{'s' if summary.approved != 1 else ''}"
+            f"Apply {summary.approved} Move{'s' if summary.approved != 1 else ''}"
+            if summary.approved else "Apply Moves"
+        )
+        self.apply_button.setToolTip(
+            f"Move the {summary.approved} ticked message"
+            f"{'s' if summary.approved != 1 else ''} into their folders."
             if summary.approved
-            else "Apply Approved Folder Moves"
+            else "Tick the messages you want filed, then press this."
         )
         if hasattr(self, "scan_button"):
             self._set_scan_button(running)

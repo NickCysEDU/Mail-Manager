@@ -212,24 +212,61 @@ the sorter it will use, the schedule, and the result of the last background run,
 without opening the window. The **Model** entry is named after whatever is
 currently selected, and switching there is the same as switching in the window.
 
-## Replying
+## Rules
 
-**Settings → Auto Reply.** Three ready-made rules, all switched off:
-acknowledging an interview invitation, answering a request for documents or
-times, and declining a recruiter politely. You can add your own, matched on
-category, topic, sender, a phrase, and a confidence floor.
+**Settings → Auto Reply.** A rule is a list of conditions and a list of things
+to do, so it is whatever you need it to be rather than one of a fixed set.
 
-**Nothing is ever sent.** A matching message gets a reply written into your
-Drafts mailbox, threaded correctly with `In-Reply-To` and `References`, and you
-press send yourself in Mail. An app that answers a stranger's post on your
-behalf, with a model, without you reading it first, is not a feature anybody
-asks for twice.
+Five rules ship, all switched off: acknowledging an interview invitation,
+answering a request for documents or times, declining a recruiter politely,
+filing security notices, and leaving anything from a colleague alone. They are
+worked examples as much as defaults — open one, see how it is built, change it.
 
-A rule can fill a template (`{first_name}`, `{sender}`, `{subject}`, `{me}`) or
-hand the message to the model with your own guidance. The model is told not to
-invent a fact and not to commit you to anything; where it needs something it
-does not have, it leaves `[a note in brackets]` and the draft lists those at the
-bottom. Bulk mail is never replied to, and that is on by default.
+**Conditions** test the job category, the everyday topic, the sender, the
+sender's domain, the subject, the message text, either of those, the
+confidence, which mailbox it arrived in, how old it is, and whether it is bulk
+mail, carries an attachment or is a reply. Operators are the obvious ones —
+is, is not, contains, does not contain, starts with, ends with, is exactly,
+matches a pattern, is at least, is at most. A rule matches on **all** of its
+conditions or on **any** of them.
+
+**Actions** are what happens next:
+
+| Action | What it does |
+| --- | --- |
+| Draft a reply from a template | Fills `{first_name}`, `{sender}`, `{subject}` and `{me}` |
+| Draft a reply with the model | Hands the message to the model with your guidance |
+| File it into a folder | Points the row at a folder. Nothing moves until you press Apply |
+| Tick it / Leave it unticked | Sets the checkbox, so Apply picks it up or skips it |
+| Mark it as read | `\Seen` on the server |
+| Flag it | `\Flagged` on the server |
+| Leave it where it is | Cancels any filing an earlier rule asked for |
+| Stop | Skips every later rule for that message |
+
+Rules run top to bottom, and **↑ ↓** reorder them. A later rule adds to what an
+earlier one decided until one of them says stop, which is what makes an
+exception at the top of the list work: *leave anything from a colleague alone,
+and stop* above a rule that files everything else.
+
+**Try it on the last scan** runs every finished, switched-on rule over the
+messages already on screen and tells you what would happen, without touching
+the mailbox or the model. Reading a rule and knowing what it does are different
+things.
+
+A rule that is half-written is never run — the editor lists what is missing
+rather than refusing to save it, because half-written is a normal state to
+leave a rule in overnight. The same list catches a pattern that would hang the
+app: `(a+)+` and `.*.*x` are refused before they run, because a regular
+expression cannot be interrupted once it has started.
+
+**Nothing is ever sent.** A drafted reply is written into your Drafts mailbox,
+threaded correctly with `In-Reply-To` and `References`, and you press send
+yourself in Mail. An app that answers a stranger's post on your behalf, with a
+model, without you reading it first, is not a feature anybody asks for twice.
+
+The model is told not to invent a fact and not to commit you to anything; where
+it needs something it does not have, it leaves `[a note in brackets]` and the
+draft lists those at the bottom. Bulk mail is skipped by default, per rule.
 
 ## Undo
 

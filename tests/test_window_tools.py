@@ -6,6 +6,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
+from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 import accounts as accounts_module  # noqa: E402
@@ -166,15 +167,142 @@ class TestTheAutoReplyTab:
         dialog = SettingsDialog(window.settings, InMemoryCredentialStore(), window)
         try:
             dialog.auto_reply_check.setChecked(True)
-            dialog.rule_enabled.setChecked(True)
             dialog.rule_name_edit.setText("My rule")
-            dialog.rule_confidence.setValue(0.97)
+            condition = dialog._condition_rows[-1]
+            condition.field_combo.setCurrentIndex(
+                condition.field_combo.findData("confidence"))
+            condition.operator_combo.setCurrentIndex(
+                condition.operator_combo.findData("at_least"))
+            condition._value_widget.setText("0.97")
+            dialog.rule_enabled.setChecked(True)
             collected = dialog.collect()
             rule = collected.rules[0]
             assert collected.auto_reply is True
             assert rule.enabled and rule.name == "My rule"
-            assert rule.min_confidence == pytest.approx(0.97)
+            assert rule.conditions[-1].field == "confidence"
+            assert rule.conditions[-1].value == "0.97"
             assert collected.replies_armed is True
+        finally:
+            dialog.deleteLater()
+
+    def test_a_rule_can_be_built_out_of_nothing(self, window):
+        """Add a rule, give it a condition and an action, and it is ready."""
+        dialog = SettingsDialog(window.settings, InMemoryCredentialStore(), window)
+        try:
+            before = len(dialog._rules)
+            dialog._add_rule()
+            dialog.rule_name_edit.setText("Flag anything from Dana")
+            condition = dialog._condition_rows[0]
+            condition.field_combo.setCurrentIndex(
+                condition.field_combo.findData("sender"))
+            condition._value_widget.setText("dana@northwind.example")
+            action = dialog._action_rows[0]
+            action.kind_combo.setCurrentIndex(action.kind_combo.findData("flag"))
+            dialog.rule_enabled.setChecked(True)
+            dialog._capture_rule()
+            built = dialog._rules[-1]
+            assert len(dialog._rules) == before + 1
+            assert built.ready and built.enabled
+            assert built.describe() == (
+                "Sender contains \u201cdana@northwind.example\u201d \u2192 flag it")
+        finally:
+            dialog.deleteLater()
+
+    def test_a_half_written_rule_says_what_is_missing(self, window):
+        dialog = SettingsDialog(window.settings, InMemoryCredentialStore(), window)
+        try:
+            dialog._add_rule()
+            dialog._capture_rule()
+            dialog._describe_rule()
+            assert "Not ready" in dialog.rule_summary.text()
+            assert not dialog._rules[-1].ready
+        finally:
+            dialog.deleteLater()
+
+    def test_rules_can_be_reordered_duplicated_and_removed(self, window):
+        dialog = SettingsDialog(window.settings, InMemoryCredentialStore(), window)
+        try:
+            names = [r.name for r in dialog._rules]
+            dialog.rule_list.setCurrentRow(1)
+            dialog._move_rule(-1)
+            assert [r.name for r in dialog._rules][:2] == [names[1], names[0]]
+            count = len(dialog._rules)
+            dialog._duplicate_rule()
+            assert len(dialog._rules) == count + 1
+            assert dialog._rules[1].name.endswith("(copy)")
+            assert dialog._rules[1].enabled is False, "a copy starts switched off"
+            dialog._remove_rule()
+            assert len(dialog._rules) == count
+        finally:
+            dialog.deleteLater()
+
+    def test_the_last_rule_cannot_be_removed(self, window):
+        dialog = SettingsDialog(window.settings, InMemoryCredentialStore(), window)
+        try:
+            while len(dialog._rules) > 1:
+                dialog._remove_rule()
+            dialog._remove_rule()
+            assert len(dialog._rules) == 1
+        finally:
+            dialog.deleteLater()
+
+    def test_trying_a_rule_with_nothing_scanned_says_so(self, window):
+        dialog = SettingsDialog(window.settings, InMemoryCredentialStore(), window)
+        try:
+            dialog._try_rule()
+            assert "Run a scan" in dialog.try_rule_result.text()
+        finally:
+            dialog.deleteLater()
+
+    def test_trying_a_rule_reports_what_it_would_do(self, window):
+        from models import (Category, Classification, EmailMessage, FolderPlan,
+                            OtherCategory, TriageItem)
+        item = TriageItem(
+            email=EmailMessage(uid="1", subject="Interview invitation",
+                               sender_email="dana@northwind.example"),
+            classification=Classification(
+                summary="s", reasoning="r", is_job_related=True,
+                category=Category.INTERVIEW,
+                other_category=OtherCategory.NOT_APPLICABLE,
+                confidence_score=0.99),
+            folders=FolderPlan())
+        dialog = SettingsDialog(window.settings, InMemoryCredentialStore(), window,
+                                sample_items=[item])
+        try:
+            dialog._add_rule()
+            condition = dialog._condition_rows[0]
+            condition.field_combo.setCurrentIndex(
+                condition.field_combo.findData("subject"))
+            condition._value_widget.setText("interview")
+            action = dialog._action_rows[0]
+            action.kind_combo.setCurrentIndex(action.kind_combo.findData("tick"))
+            dialog.rule_enabled.setChecked(True)
+            dialog._try_rule()
+            assert "1 of 1 matched" in dialog.try_rule_result.text()
+            assert "tick it" in dialog.try_rule_result.text()
+        finally:
+            dialog.deleteLater()
+
+    def test_the_ticks_in_the_list_switch_rules_on(self, window):
+        dialog = SettingsDialog(window.settings, InMemoryCredentialStore(), window)
+        try:
+            entry = dialog.rule_list.item(2)
+            entry.setCheckState(Qt.CheckState.Checked)
+            assert dialog._rules[2].enabled is True
+            entry.setCheckState(Qt.CheckState.Unchecked)
+            assert dialog._rules[2].enabled is False
+        finally:
+            dialog.deleteLater()
+
+    def test_switching_rules_keeps_what_was_typed(self, window):
+        """The classic way an editor loses work: click away from it."""
+        dialog = SettingsDialog(window.settings, InMemoryCredentialStore(), window)
+        try:
+            dialog.rule_name_edit.setText("Renamed while editing")
+            dialog.rule_list.setCurrentRow(2)
+            dialog.rule_list.setCurrentRow(0)
+            assert dialog._rules[0].name == "Renamed while editing"
+            assert dialog.rule_name_edit.text() == "Renamed while editing"
         finally:
             dialog.deleteLater()
 
@@ -498,3 +626,71 @@ class TestHelpToggleIsInBothPlaces:
         finally:
             window._quitting = True
             window.close()
+
+
+class TestTheRuleListNeverCutsAName:
+    """The rule names are longer than the column, at every font size."""
+
+    def _elides(self, dialog) -> list:
+        """Names whose wrapped text will not fit the row it was given."""
+        from PySide6.QtCore import QRect
+        listing = dialog.rule_list
+        metrics = listing.fontMetrics()
+        cramped = []
+        for index in range(listing.count()):
+            item = listing.item(index)
+            room = max(40, listing.viewport().width() - 40)
+            needed = metrics.boundingRect(
+                QRect(0, 0, room, 0), int(Qt.TextFlag.TextWordWrap),
+                item.text()).height()
+            if item.sizeHint().height() < needed:
+                cramped.append(item.text())
+        return cramped
+
+    @pytest.mark.parametrize("width", [640, 760, 1100])
+    def test_every_name_gets_the_room_it_needs(self, window, width):
+        dialog = SettingsDialog(Settings(), InMemoryCredentialStore(), window)
+        try:
+            dialog.tabs.setCurrentIndex(3)
+            dialog.resize(width, 700)
+            dialog.show()
+            QApplication.processEvents()
+            assert self._elides(dialog) == []
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+
+    @pytest.mark.parametrize("point_size", [11, 15, 20])
+    def test_a_bigger_font_re_measures_rather_than_cutting(self, window, point_size):
+        """Turning on “increase readability” must not clip the names."""
+        from PySide6.QtGui import QFont
+        dialog = SettingsDialog(Settings(), InMemoryCredentialStore(), window)
+        try:
+            dialog.tabs.setCurrentIndex(3)
+            dialog.show()
+            QApplication.processEvents()
+            bigger = QFont(dialog.rule_list.font())
+            bigger.setPointSize(point_size)
+            dialog.rule_list.setFont(bigger)      # fires the font-change hook
+            QApplication.processEvents()
+            assert self._elides(dialog) == []
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+
+    def test_a_very_long_name_still_fits(self, window):
+        dialog = SettingsDialog(Settings(), InMemoryCredentialStore(), window)
+        try:
+            dialog.tabs.setCurrentIndex(3)
+            dialog.show()
+            QApplication.processEvents()
+            dialog.rule_name_edit.setText(
+                "File anything from the recruiting team at a company with a "
+                "very long name indeed into the folder for later")
+            dialog._rule_renamed()
+            QApplication.processEvents()
+            assert self._elides(dialog) == []
+            assert dialog.rule_list.item(0).sizeHint().height() > 60
+        finally:
+            dialog.close()
+            dialog.deleteLater()

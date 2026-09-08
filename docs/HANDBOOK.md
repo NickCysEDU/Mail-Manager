@@ -23,6 +23,7 @@ Nothing is ever moved without an explicit tick in the table.
 - [Building the `.app`](#building-the-app)
 - [Getting your credentials](#getting-your-credentials)
 - [Settings reference](#settings-reference)
+- [Reply rules](#reply-rules)
 - [How a scan works](#how-a-scan-works)
 - [Stopping, and process hygiene](#stopping-and-process-hygiene)
 - [Architecture](#architecture)
@@ -688,6 +689,118 @@ when no key is stored in the Keychain.
 | Sorted mail folder | `Sorted Mail` |
 | Pre-tick non-job mail | Off |
 | Subscribe to new folders | On |
+
+### Auto Reply
+| Setting | Default | Notes |
+|---|---|---|
+| Run these rules after a scan | Off | Also on demand, ⌘R |
+| Sign as | — | Fills `{me}` in a template, and is given to the model |
+| Rules | Five, all off | See [Reply rules](#reply-rules) |
+
+---
+
+## Reply rules
+
+A rule is **a list of conditions and a list of actions**. Nothing about it is
+fixed: the shipped rules are worked examples, not a menu.
+
+### Conditions
+
+| Field | Kind | Notes |
+|---|---|---|
+| `category` | Job category | Empty for everyday mail, so a job rule cannot fire on a receipt |
+| `topic` | Everyday topic | Empty for job mail, for the same reason |
+| `sender` | Text | Display name and address together |
+| `sender_domain` | Text | Everything after the last `@` |
+| `subject`, `body`, `anywhere` | Text | `anywhere` is subject and body joined |
+| `confidence` | Number | 0–1, as the sorter reports it |
+| `mailbox` | Mailbox | Matches the account's id, address **or** label |
+| `age_days` | Number | Measured from now, not from the scan window |
+| `is_bulk` | Flag | Carries a `List-Unsubscribe` header |
+| `has_attachment`, `is_reply` | Flag | |
+
+Operators are `is`, `is not`, `contains`, `does not contain`, `starts with`,
+`ends with`, `is exactly`, `matches the pattern` (a regular expression),
+`is at least`, `is at most`, and `yes` / `no` for the flags. A field only
+offers the operators that make sense for it, and switching field re-offers
+them.
+
+Three deliberate refusals, each of which stops a rule doing something nobody
+meant:
+
+- **An empty text test never matches.** `subject contains ""` matches every
+  message ever written, which is not what somebody halfway through typing a
+  rule was asking for.
+- **A rule with no conditions never runs**, for the same reason.
+- **A pattern that will not compile, or a number that is not a number, fails
+  the test** rather than raising. The editor says so, in words, under the rule.
+
+Conditions read at most 20,000 characters of a message. A rule runs over every
+message in a scan, and somebody's own regular expression is allowed to be
+careless.
+
+### Patterns that are refused
+
+Python's regular expressions backtrack, and `re` holds the interpreter while
+it does, so a pattern with the wrong shape does not slow the app down — it
+stops it, and the Stop button cannot help. Two shapes are refused before they
+run, with the reason shown under the rule:
+
+| Shape | Example | Why |
+|---|---|---|
+| A repeat inside a repeat | `(a+)+`, `([a-z]+)*` | Exponential in the length of the message |
+| A repeat over a choice whose options overlap | `(a\|a)*`, `(\d\|\w)+` | The same trap by another name |
+| The same repeat twice in a row | `.*.*x` | What happens when you paste twice |
+
+Ordinary patterns are untouched: `^Interview\b`, `\d{4}-\d{2}-\d{2}`,
+`(foo|bar)+`, `https?://\S+`, `^(?!spam).*$` all run as written.
+
+A leading or trailing `.*` is taken off before the pattern runs. Under a
+search it says nothing the search was not already doing, and leaving it in
+makes `.*urgent.*` quadratic — two seconds a message on a long one, against
+half a millisecond without it.
+
+### Actions
+
+| Action | Where it lands |
+|---|---|
+| Draft a reply from a template | Drafts mailbox, over IMAP `APPEND` |
+| Draft a reply with the model | Same, written by the model from your guidance |
+| File it into a folder | The row's folder in the table. Nothing moves until Apply |
+| Tick it / Leave it unticked | The row's checkbox |
+| Mark it as read | `UID STORE +FLAGS.SILENT (\Seen)` |
+| Flag it | `UID STORE +FLAGS.SILENT (\Flagged)` |
+| Leave it where it is | Clears any folder an earlier rule chose |
+| Stop | Skips every later rule for that message |
+
+Only `\Seen`, `\Flagged` and `\Answered` can ever be set. The flag list is a
+fixed map, not a passthrough, so a mangled configuration cannot invent a flag
+and take the whole `STORE` command down with it.
+
+### Order
+
+Rules run top to bottom. A later rule adds to what an earlier one decided,
+until a rule says to stop. Two consequences worth knowing:
+
+- The **last** rule to speak wins on any single question — file *into* versus
+  leave alone, tick versus untick.
+- Only the **first** draft is written, however many rules ask for one.
+
+That is what makes an exception at the top work: *anything from a colleague —
+leave it alone, and stop*, above a rule that files everything else.
+
+### Trying one
+
+**Try it on the last scan** runs every finished, switched-on rule over the
+messages already in the table and reports what would happen. It touches
+neither the mailbox nor the model: a rule that would ask the model reports that
+it matched, and nothing is drafted.
+
+### What is never automatic
+
+Nothing is sent. A draft goes to the Drafts mailbox with `In-Reply-To` and
+`References` set so it threads, and a person presses send. Bulk mail is skipped
+per rule, and that is on by default.
 
 ---
 

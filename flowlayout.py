@@ -54,6 +54,22 @@ class FlowLayout(QLayout):
     def heightForWidth(self, width: int) -> int:  # noqa: N802
         return self._layout(QRect(0, 0, width, 0), apply=False)
 
+    def setSpacing(self, spacing: int) -> None:  # noqa: N802
+        """Space between items on a row."""
+        self._hspacing = max(0, int(spacing))
+        self.invalidate()
+
+    def spacing(self) -> int:
+        return self._hspacing
+
+    def setVerticalSpacing(self, spacing: int) -> None:  # noqa: N802
+        """Space between rows, when the toolbar has to wrap."""
+        self._vspacing = max(0, int(spacing))
+        self.invalidate()
+
+    def verticalSpacing(self) -> int:  # noqa: N802
+        return self._vspacing
+
     def setGeometry(self, rect: QRect) -> None:  # noqa: N802
         super().setGeometry(rect)
         self._layout(rect, apply=True)
