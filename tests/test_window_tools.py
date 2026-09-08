@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 pytest.importorskip("PySide6")
@@ -12,6 +14,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 import accounts as accounts_module  # noqa: E402
 import autoreply  # noqa: E402
 import helpmode  # noqa: E402
+import providers  # noqa: E402
 from accounts import Account  # noqa: E402
 from config import InMemoryCredentialStore, Settings  # noqa: E402
 from gui import MainWindow, SettingsDialog, TriageTableModel  # noqa: E402
@@ -806,3 +809,144 @@ class TestRulesRunAfterAScan:
         window._on_rules_run(leave)
         assert item.override_folder is None
         assert item.approved is False
+
+
+class TestTheOnDevicePanelNeverFreezes:
+    """Installing Ollama used to block the UI thread for the whole install."""
+
+    def _drain(self, dialog, limit=12.0):
+        """Pump the event loop until the worker finishes; report the worst stall.
+
+        The queue is flushed first. Every test before this one leaves deferred
+        deletions behind, and the first processEvents pays for all of them —
+        measured at 0.7s under the full suite and 0ms on every iteration
+        after. Timing that backlog says nothing about whether this worker
+        blocks the window.
+        """
+        for _ in range(3):
+            QApplication.processEvents()
+        started = time.perf_counter()
+        worst = 0.0
+        while dialog._ollama_worker is not None and \
+                time.perf_counter() - started < limit:
+            tick = time.perf_counter()
+            QApplication.processEvents()
+            worst = max(worst, time.perf_counter() - tick)
+            time.sleep(0.01)
+        return worst
+
+    def test_the_ui_thread_keeps_running_throughout(self, window):
+        dialog = SettingsDialog(window.settings, InMemoryCredentialStore(), window)
+        try:
+            dialog._begin_ollama_step(
+                "pull", ["/bin/sh", "-c", "echo start; sleep 1.2; echo done"])
+            worst = self._drain(dialog)
+            # A frame is 16ms. A tenth of a second is already a visible stutter
+            # and this used to be the whole length of a Homebrew install.
+            assert worst < 0.1, f"the UI thread stalled for {worst * 1000:.0f} ms"
+        finally:
+            dialog.deleteLater()
+
+    def test_progress_is_reported_as_it_happens(self, window):
+        dialog = SettingsDialog(window.settings, InMemoryCredentialStore(), window)
+        try:
+            seen = []
+            script = (r'printf "pulling manifest\n"; '
+                      r'for p in 10 50 90; do printf "pulling ab12cd34ef56... $p%% |#|\r"; '
+                      r'sleep 0.15; done; printf "\nsuccess\n"')
+            dialog._begin_ollama_step("pull", ["/bin/sh", "-c", script])
+            dialog._ollama_worker.progress.connect(
+                lambda done, total, msg: seen.append(done))
+            self._drain(dialog)
+            assert seen, "no progress was reported at all"
+            assert max(seen) == 100
+            assert seen == sorted(seen), f"the bar went backwards: {seen}"
+        finally:
+            dialog.deleteLater()
+
+    def test_stopping_actually_stops_it(self, window):
+        dialog = SettingsDialog(window.settings, InMemoryCredentialStore(), window)
+        try:
+            dialog._begin_ollama_step("install",
+                                      ["/bin/sh", "-c", "echo start; sleep 60"])
+            QApplication.processEvents()
+            time.sleep(0.3)
+            QApplication.processEvents()
+            started = time.perf_counter()
+            dialog._stop_ollama_step()
+            self._drain(dialog)
+            assert time.perf_counter() - started < 6.0
+            assert "Stopped" in dialog.status.text()
+            assert dialog.ollama_button.isEnabled()
+            assert not dialog.ollama_stop.isVisible()
+        finally:
+            dialog.deleteLater()
+
+    def test_a_failure_is_shown_rather_than_swallowed(self, window, monkeypatch):
+        warned = []
+        monkeypatch.setattr(QMessageBox, "warning",
+                            lambda *a, **k: warned.append(a))
+        dialog = SettingsDialog(window.settings, InMemoryCredentialStore(), window)
+        try:
+            dialog._begin_ollama_step(
+                "install", ["/bin/sh", "-c", "echo 'Error: no such cask' >&2; exit 1"])
+            self._drain(dialog)
+            assert "did not work" in dialog.status.text()
+            assert warned, "a failed install said nothing"
+        finally:
+            dialog.deleteLater()
+
+    def test_a_missing_binary_is_reported(self, window, monkeypatch):
+        monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+        dialog = SettingsDialog(window.settings, InMemoryCredentialStore(), window)
+        try:
+            dialog._begin_ollama_step("pull", ["/nope/ollama", "pull", "x"])
+            self._drain(dialog)
+            assert "not on this Mac" in dialog.status.text()
+        finally:
+            dialog.deleteLater()
+
+    def test_two_presses_do_not_start_two_installs(self, window):
+        dialog = SettingsDialog(window.settings, InMemoryCredentialStore(), window)
+        try:
+            dialog._begin_ollama_step("pull", ["/bin/sh", "-c", "sleep 1"])
+            first = dialog._ollama_worker
+            dialog._do_ollama_step()
+            assert dialog._ollama_worker is first
+            self._drain(dialog)
+        finally:
+            dialog.deleteLater()
+
+    def test_closing_mid_install_asks_first(self, window, monkeypatch):
+        """Killing Homebrew part-way through is not something to do silently."""
+        asked = []
+        monkeypatch.setattr(
+            QMessageBox, "question",
+            lambda *a, **k: (asked.append(a), QMessageBox.StandardButton.Cancel)[1])
+        dialog = SettingsDialog(window.settings, InMemoryCredentialStore(), window)
+        try:
+            dialog._begin_ollama_step("install", ["/bin/sh", "-c", "sleep 30"])
+            QApplication.processEvents()
+            dialog.done(0)
+            assert asked, "it closed without asking"
+            assert dialog._ollama_worker is not None, "it stopped anyway"
+            monkeypatch.setattr(
+                QMessageBox, "question",
+                lambda *a, **k: QMessageBox.StandardButton.Discard)
+            dialog.done(0)
+            assert dialog._ollama_worker is None
+        finally:
+            dialog.deleteLater()
+
+    def test_the_probe_does_not_block_the_panel(self, window):
+        """An endpoint that drops packets costs the full timeout."""
+        dialog = SettingsDialog(window.settings, InMemoryCredentialStore(), window)
+        try:
+            dialog.base_url_edit.setText("http://10.255.255.1:11434")
+            started = time.perf_counter()
+            dialog._refresh_ollama_panel(providers.provider_class("ollama"))
+            assert time.perf_counter() - started < 0.5
+        finally:
+            if dialog._ollama_probe is not None:
+                dialog._ollama_probe.stop(3000)
+            dialog.deleteLater()

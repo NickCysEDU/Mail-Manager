@@ -401,3 +401,53 @@ class TestHeadAndTail:
     def test_zero_limit_disables_truncation(self):
         text = "x" * 500
         assert head_and_tail(text, 0) == (text, False, 500)
+
+
+class TestZeroFontSizeIsALayoutIdiom:
+    """`font-size:0` on a container is not the same as hidden text.
+
+    Every responsive email builder puts it on the element holding the columns,
+    to close the whitespace between inline-blocks, and each column sets its
+    own size again. Reading it as "hidden" threw away the entire body of every
+    Workday message — seven of a hundred and fifty-six in one real mailbox,
+    none of which contained a `display:none` anywhere.
+    """
+
+    def test_a_child_that_sets_a_size_is_visible_again(self):
+        html = ('<div style="font-size:0px;text-align:left;display:table-cell;">'
+                '<div style="font-size:14px;">Hello Nick,</div></div>')
+        assert "Hello Nick," in html_to_text(html).text
+
+    def test_text_directly_inside_a_zero_font_element_is_still_dropped(self):
+        html = '<div style="font-size:0px">Secret preheader</div><p>Visible</p>'
+        result = html_to_text(html).text
+        assert "Secret preheader" not in result and "Visible" in result
+
+    def test_a_background_colour_is_not_read_as_a_text_colour(self):
+        """"background-color:#ffffff" contains "color:#fff"."""
+        html = ('<div style="font-size:0px;background-color:#ffffff;">'
+                '<span style="font-size:13px">Kept</span></div>')
+        assert "Kept" in html_to_text(html).text
+
+    @pytest.mark.parametrize("extra", [
+        "max-height:0", "opacity:0", "mso-hide:all", "height:0",
+    ])
+    def test_zero_font_with_a_real_hiding_cue_still_hides(self, extra):
+        html = (f'<div style="font-size:0px;{extra};">'
+                '<span style="font-size:13px">Secret</span></div><p>Visible</p>')
+        result = html_to_text(html).text
+        assert "Secret" not in result and "Visible" in result
+
+    def test_a_zero_font_container_nested_deeply_still_unwinds(self):
+        html = ('<table><tr><td style="line-height:0px;font-size:0px;">'
+                '<div style="font-size:0px;"><p style="font-size:16px">Deep</p>'
+                '</div></td></tr></table><p>After</p>')
+        result = html_to_text(html).text
+        assert "Deep" in result and "After" in result
+
+    def test_unbalanced_markup_does_not_strand_the_state(self):
+        """Email HTML is routinely missing its closing tags."""
+        html = ('<div style="font-size:0px"><span style="font-size:12px">One'
+                '<div style="font-size:0px">two<p style="font-size:11px">Three')
+        result = html_to_text(html).text
+        assert "One" in result and "Three" in result and "two" not in result

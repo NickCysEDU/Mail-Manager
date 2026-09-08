@@ -16,6 +16,7 @@ Nothing is ever moved without an explicit tick in the table.
 - [The zero-misclassification protocol](#the-zero-misclassification-protocol)
 - [Choosing a model backend](#choosing-a-model-backend)
 - [Is it a job at all](#is-it-a-job-at-all)
+- [Acknowledgements](#acknowledgements)
 - [Categories](#categories)
 - [Folders it creates](#folders-it-creates)
 - [Quick start](#quick-start)
@@ -31,6 +32,7 @@ Nothing is ever moved without an explicit tick in the table.
 - [Tests](#tests)
 - [Measuring a model](#measuring-a-model)
 - [Privacy and cost](#privacy-and-cost)
+- [Running a model on this Mac](#running-a-model-on-this-mac)
 - [Troubleshooting](#troubleshooting)
 
 ---
@@ -317,6 +319,30 @@ Three consequences worth knowing:
 Redirects are opened out before any of this: a click tracker keeps the real
 destination percent-encoded inside its own URL, so matching a domain list
 against the raw link found the tracker and never the booking page.
+
+## Acknowledgements
+
+The commonest mail in a job search is "we got it, we'll read it, we'll be in
+touch", and it is the least interesting: it is the *absence* of a decision.
+Every applicant-tracking vendor writes it differently and no two share a
+phrase, so a list of phrases catches whichever vendor was in the corpus.
+
+`acknowledgement_score` counts moves instead — the application arrived, a
+promise to read it, a conditional promise to be in touch, a statement that
+nothing is needed from you. Two moves is enough; one is not, because "thank
+you for applying" opens a rejection too.
+
+Two rules keep it from swallowing things that matter:
+
+- **A decision outranks an acknowledgement.** A rejection acknowledges the
+  application as well, and the decision is the point, so a qualifying
+  rejection or offer suppresses this entirely.
+- **"Next steps" that are promised are not asked for.** "If your experience
+  aligns, we will reach out to discuss next steps" ends almost every
+  acknowledgement, and reading it as an action item turned the commonest mail
+  in the inbox into a to-do. `steps_are_only_promised` checks whether every
+  mention sits behind a future or conditional; one mention addressed to the
+  reader is enough to keep it.
 
 ## Categories
 
@@ -1037,6 +1063,40 @@ enough for a targeted set and not enough for the 102-message labelled one.
   or Haiku 4.5 in Settings costs proportionally less.
 
 ---
+
+## Running a model on this Mac
+
+**Settings → Analysis → Ollama.** If Ollama is not installed and Homebrew is,
+the panel offers to install it; otherwise it opens the download page.
+
+Everything it runs happens on a worker thread, with the same progress bar,
+running commentary and single red Stop button a scan gets. This was not always
+true: it used to be a blocking `subprocess.run` with a ten-minute timeout on
+the UI thread, so `brew install` beachballed the whole app for the length of
+the install, said nothing while it did, and could not be stopped — which from
+the outside is indistinguishable from a crash.
+
+Three details worth knowing:
+
+- **The pipe is polled, not iterated.** Iterating blocks until a line arrives,
+  so a download that stalls could not be cancelled — the one case where
+  somebody most wants to cancel it. Polling checks the stop flag five times a
+  second whether or not anything was written.
+- **A carriage return ends a line.** Ollama draws its progress bar with `\r`
+  and no newline; waiting for a newline makes a two-gigabyte download into one
+  line that arrives once it has finished.
+- **Stopping takes the children with it.** Homebrew spawns `curl` and `git`;
+  the command runs in its own process group and the group is signalled, so
+  nothing outlives the Stop button.
+
+The bar shows a real percentage when the tool reports one and a busy animation
+when it does not — Homebrew says what it is doing and never how far through it
+is, and a bar stuck at nought for four minutes reads as a broken install. It
+never goes backwards either: a pull reports each layer from zero, and a bar
+that restarts four times reads as four failures.
+
+Closing Settings mid-install asks first. Homebrew part-way through unpacking a
+cask is not a good thing to kill because somebody pressed Escape.
 
 ## Troubleshooting
 

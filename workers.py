@@ -769,6 +769,117 @@ class ReplyWorker(_BaseWorker):
                 result.flagged += touched
 
 
+@dataclass
+class OnDeviceResult:
+    """What one install, start or download step did."""
+
+    step: str = ""
+    ok: bool = False
+    cancelled: bool = False
+    lines: List[str] = field(default_factory=list)
+
+    @property
+    def tail(self) -> str:
+        """The last line that says anything, for a one-line summary."""
+        for line in reversed(self.lines):
+            if line.strip():
+                return line.strip()
+        return ""
+
+    def describe(self) -> str:
+        if self.cancelled:
+            return "Stopped. Nothing was left half-installed on purpose, but " \
+                   "check with “Test” before relying on it."
+        if self.ok:
+            return {"install": "Ollama is installed.",
+                    "pull": "The model is downloaded and ready.",
+                    "start": "Ollama is running."}.get(self.step, "Done.")
+        return f"That did not work. {self.tail[:160]}"
+
+
+class OnDeviceProbeWorker(_BaseWorker):
+    """Asks the local model server what it has, off the UI thread.
+
+    Two seconds does not sound like a freeze until it happens every time
+    somebody opens a menu. An endpoint that drops packets rather than refusing
+    them costs the full timeout, and the endpoint is a field the user can type
+    anything into.
+    """
+
+    finished_ok = Signal(object)
+    task_name = "on-device probe"
+
+    def __init__(self, endpoint: str = "", parent=None) -> None:
+        super().__init__(parent)
+        self.endpoint = endpoint
+
+    def run(self) -> None:
+        import ondevice
+
+        try:
+            state = ondevice.status(self.endpoint or ondevice.DEFAULT_ENDPOINT)
+        except Exception as exc:  # noqa: BLE001 - reported, never raised
+            state = ondevice.Status(error=str(exc))
+        self.finished_ok.emit(state)
+
+
+class OnDeviceWorker(_BaseWorker):
+    """Installs Ollama, or downloads a model, without freezing the window.
+
+    This used to be a blocking subprocess call on the UI thread. A Homebrew
+    install takes minutes, so the app beachballed for the whole of it with no
+    output and no way to stop - indistinguishable, from the outside, from a
+    crash.
+    """
+
+    finished_ok = Signal(object)
+    task_name = "on-device setup"
+
+    def __init__(self, step: str, command: Sequence[str], parent=None) -> None:
+        super().__init__(parent)
+        self.step = step
+        self.command = list(command)
+
+    def run(self) -> None:
+        import ondevice
+
+        result = OnDeviceResult(step=self.step)
+        seen_percent = 0.0
+        started = time.monotonic()
+
+        def line(text: str) -> None:
+            nonlocal seen_percent
+            result.lines.append(text)
+            # Only the last few hundred, so a chatty install cannot grow
+            # without bound on a long download.
+            if len(result.lines) > 500:
+                del result.lines[:200]
+            percent, label = ondevice.parse_progress(text)
+            if percent is None:
+                # Nothing to go on, so keep the bar where it is and say what
+                # is happening. A bar that jumps back to zero on every log
+                # line is worse than one that waits.
+                self._emit_progress(int(seen_percent), 100, label or text[:80])
+                return
+            # Never let the bar go backwards: a pull reports each layer from
+            # zero, and a bar that restarts four times reads as four failures.
+            seen_percent = max(seen_percent, percent)
+            self._emit_progress(int(seen_percent), 100, label or "Working")
+
+        self._log(f"Running: {' '.join(self.command)}")
+        self._emit_progress(0, 100, "Starting…")
+        ok = ondevice.stream(self.command, line, cancel=self.cancel_event)
+        result.cancelled = self.cancel_event.is_set()
+        result.ok = ok and not result.cancelled
+        if result.ok:
+            self._emit_progress(100, 100, "Finished.")
+        took = time.monotonic() - started
+        self._log(f"{result.describe()} ({took:.0f}s)")
+        for text in result.lines[-4:]:
+            self._log(f"    {text}")
+        self.finished_ok.emit(result)
+
+
 class ConnectionTestWorker(_BaseWorker):
     """Runs the Settings dialog's two “Test” buttons off the UI thread."""
 

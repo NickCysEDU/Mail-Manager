@@ -1803,6 +1803,23 @@ class SettingsDialog(QDialog):
         self.ollama_note.setVisible(False)
         self.ollama_button = QPushButton("Install Ollama")
         self.ollama_button.setVisible(False)
+        # The same shape the window uses for a scan: a bar that means
+        # something, a line saying what is happening, and one red way to stop.
+        self.ollama_progress = QProgressBar()
+        self.ollama_progress.setRange(0, 100)
+        self.ollama_progress.setTextVisible(True)
+        self.ollama_progress.setVisible(False)
+        self.ollama_step_label = QLabel("")
+        self.ollama_step_label.setWordWrap(True)
+        self.ollama_step_label.setProperty("dim", "true")
+        self.ollama_step_label.setVisible(False)
+        self.ollama_stop = QPushButton("Stop")
+        self.ollama_stop.setVisible(False)
+        _paint_button(self.ollama_stop, "danger")
+        self.ollama_stop.clicked.connect(self._stop_ollama_step)
+        self._ollama_worker = None
+        self._ollama_probe = None
+        self._ollama_state = None
         self.ollama_button.clicked.connect(self._do_ollama_step)
 
         self.model_combo = QComboBox()
@@ -1928,8 +1945,11 @@ class SettingsDialog(QDialog):
         form.addRow("", self.ollama_note)
         ollama_row = QHBoxLayout()
         ollama_row.addWidget(self.ollama_button)
+        ollama_row.addWidget(self.ollama_stop)
         ollama_row.addStretch(1)
         form.addRow("", ollama_row)
+        form.addRow("", self.ollama_progress)
+        form.addRow("", self.ollama_step_label)
         form.addRow("Model", self.model_combo)
         form.addRow("", self.model_note)
         form.addRow(self.key_label, self.key_row_widget)
@@ -1965,9 +1985,16 @@ class SettingsDialog(QDialog):
             self.ollama_button.setVisible(False)
             return
 
-        state = ondevice.status(self.base_url_edit.text().strip() or ondevice.DEFAULT_ENDPOINT)
-        self._ollama_state = state
+        # The network half of this is asked for in the background: an
+        # endpoint that drops packets costs the full timeout, and the endpoint
+        # is a field somebody can type anything into.
+        self._start_ollama_probe()
+        state = getattr(self, "_ollama_state", None)
         self.ollama_note.setVisible(True)
+        if state is None:
+            self.ollama_note.setText("Checking what is installed…")
+            self.ollama_button.setVisible(False)
+            return
         step = state.next_step()
 
         if not step:
@@ -2011,7 +2038,9 @@ class SettingsDialog(QDialog):
         self.ollama_button.setVisible(True)
 
     def _do_ollama_step(self) -> None:
-        """Run whichever step the panel is currently offering."""
+        """Run whichever step the panel is offering, off the UI thread."""
+        if self._ollama_worker is not None:
+            return
         state = getattr(self, "_ollama_state", None) or ondevice.status()
         step = state.next_step()
         if step == "install" and not ondevice.install_command():
@@ -2030,27 +2059,129 @@ class SettingsDialog(QDialog):
             # serve does not return, so it is launched rather than waited on.
             try:
                 subprocess.Popen(command, stdout=subprocess.DEVNULL,
-                                 stderr=subprocess.DEVNULL)
+                                 stderr=subprocess.DEVNULL, start_new_session=True)
             except OSError as exc:
                 self.status.setText(f"Could not start Ollama: {exc}")
                 return
-            self.status.setText("Starting Ollama… give it a few seconds, then test.")
-            QTimer.singleShot(4000, lambda: self._refresh_ollama_panel(
-                providers.provider_class(self.provider_combo.currentData() or "ollama")))
+            self.status.setText("Starting Ollama… give it a few seconds.")
+            QTimer.singleShot(4000, self._recheck_ollama)
             return
 
+        self._begin_ollama_step(step, command)
+
+    def _begin_ollama_step(self, step: str, command) -> None:
+        """Hand the command to a thread and show it working."""
+        from workers import OnDeviceWorker
+
+        worker = OnDeviceWorker(step, command, parent=self)
+        self._ollama_worker = worker
         self.ollama_button.setEnabled(False)
-        self.status.setText(f"Running: {' '.join(command)} — this can take a while.")
-        QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
-        try:
-            ok, output = ondevice.run(command)
-        finally:
-            QApplication.restoreOverrideCursor()
-            self.ollama_button.setEnabled(True)
-        tail = output.strip().splitlines()[-1] if output.strip() else ""
-        self.status.setText(("Done. " if ok else "That did not work: ") + tail[:160])
-        self._refresh_ollama_panel(
-            providers.provider_class(self.provider_combo.currentData() or "ollama"))
+        self.ollama_stop.setVisible(True)
+        self.ollama_progress.setVisible(True)
+        self.ollama_progress.setValue(0)
+        self.ollama_step_label.setVisible(True)
+        self.ollama_step_label.setText("Starting…")
+        self.status.setText(
+            "Installing Ollama…" if step == "install"
+            else "Downloading the model… this is a couple of gigabytes.")
+
+        worker.progress.connect(self._on_ollama_progress)
+        worker.log_message.connect(self._on_ollama_log)
+        worker.failed.connect(self._on_ollama_failed)
+        worker.finished_ok.connect(self._on_ollama_done)
+        worker.finished.connect(self._clear_ollama_worker)
+        worker.start()
+
+    @Slot(int, int, str)
+    def _on_ollama_progress(self, done: int, total: int, message: str) -> None:
+        if total:
+            self.ollama_progress.setRange(0, total)
+            self.ollama_progress.setValue(max(0, min(total, done)))
+        else:                                   # nothing to go on: busy bar
+            self.ollama_progress.setRange(0, 0)
+        if message:
+            self.ollama_step_label.setText(message[:120])
+
+    @Slot(str)
+    def _on_ollama_log(self, message: str) -> None:
+        window = self.parent()
+        if hasattr(window, "_append_log"):
+            window._append_log(message)
+
+    @Slot(str, str)
+    def _on_ollama_failed(self, title: str, detail: str) -> None:
+        """A worker that raised rather than finishing. Never silent."""
+        self._finish_ollama_ui()
+        self.ollama_step_label.setText(f"{title}: {detail}"[:160])
+        self.status.setText(f"{title}: {detail}"[:200])
+        self._recheck_ollama()
+
+    @Slot(object)
+    def _on_ollama_done(self, result) -> None:
+        self._finish_ollama_ui()
+        self.status.setText(result.describe())
+        self.ollama_step_label.setText(result.describe()[:160])
+        if not result.ok and not result.cancelled:
+            QMessageBox.warning(
+                self, "On-device setup",
+                result.describe() + "\n\n"
+                + "\n".join(result.lines[-6:])[:800])
+        self._recheck_ollama()
+
+    def _finish_ollama_ui(self) -> None:
+        self.ollama_progress.setRange(0, 100)
+        self.ollama_progress.setVisible(False)
+        self.ollama_stop.setVisible(False)
+        self.ollama_button.setEnabled(True)
+
+    def _clear_ollama_worker(self) -> None:
+        self._ollama_worker = None
+
+    def _stop_ollama_step(self) -> None:
+        worker = self._ollama_worker
+        if worker is None:
+            return
+        self.ollama_stop.setEnabled(False)
+        self.ollama_step_label.setText("Stopping…")
+        worker.cancel()
+
+    def _start_ollama_probe(self) -> None:
+        """Ask the server what it has, without making anybody wait for it."""
+        if getattr(self, "_ollama_probe", None) is not None:
+            return
+        from workers import OnDeviceProbeWorker
+
+        probe = OnDeviceProbeWorker(
+            self.base_url_edit.text().strip() or ondevice.DEFAULT_ENDPOINT,
+            parent=self)
+        self._ollama_probe = probe
+        probe.finished_ok.connect(self._on_ollama_probed)
+        probe.finished.connect(self._clear_ollama_probe)
+        probe.start()
+
+    @Slot(object)
+    def _on_ollama_probed(self, state) -> None:
+        previous = getattr(self, "_ollama_state", None)
+        self._ollama_state = state
+        # Only redraw when something changed, so a probe every few seconds
+        # does not fight with somebody reading the panel.
+        if previous is None or previous.next_step() != state.next_step() \
+                or previous.models != state.models:
+            self._paint_ollama_panel()
+
+    def _clear_ollama_probe(self) -> None:
+        self._ollama_probe = None
+
+    def _paint_ollama_panel(self) -> None:
+        name = self.provider_combo.currentData() or providers.DEFAULT_PROVIDER
+        spec = providers.provider_class(name)
+        if getattr(spec, "on_device", False):
+            self._refresh_ollama_panel(spec)
+
+    def _recheck_ollama(self) -> None:
+        """Re-read the panel for whichever backend is selected."""
+        name = self.provider_combo.currentData() or providers.DEFAULT_PROVIDER
+        self._refresh_ollama_panel(providers.provider_class(name))
 
     def _provider_changed(self) -> None:
         """Repopulate the model list and show only the fields this backend uses."""
@@ -3136,12 +3267,45 @@ class SettingsDialog(QDialog):
         if worker is not None and worker.isRunning() and not worker.stop(3000):
             _abandon(worker)
 
+    def _stop_ollama_workers(self) -> bool:
+        """Shut down the on-device threads. False means "do not close yet".
+
+        A probe is thrown away without ceremony. An install is not: Homebrew
+        part-way through unpacking a cask is not a good thing to kill because
+        somebody pressed Escape, so they are asked first.
+        """
+        probe, self._ollama_probe = getattr(self, "_ollama_probe", None), None
+        if probe is not None and probe.isRunning() and not probe.stop(2000):
+            _abandon(probe)
+
+        worker = getattr(self, "_ollama_worker", None)
+        if worker is None or not worker.isRunning():
+            return True
+        what = ("Ollama is still installing." if worker.step == "install"
+                else "The model is still downloading.")
+        answer = QMessageBox.question(
+            self, "Still running", f"{what}\n\nStop it, or keep this window "
+            "open until it finishes?",
+            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Discard,
+            QMessageBox.StandardButton.Cancel)
+        if answer != QMessageBox.StandardButton.Discard:
+            return False
+        self._ollama_worker = None
+        if not worker.stop(8000):
+            _abandon(worker)
+        return True
+
     def done(self, result: int) -> None:  # noqa: N802
         """Qt funnels OK, Cancel, Escape and the close box through here."""
+        if not self._stop_ollama_workers():
+            return
         self._stop_test_worker()
         super().done(result)
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        if not self._stop_ollama_workers():
+            event.ignore()
+            return
         self._stop_test_worker()
         super().closeEvent(event)
 

@@ -56,6 +56,10 @@ QUALIFY_SCORE_UNSOLICITED = 3.5
 #: Multiplier applied when a phrase matched only with words inserted into it.
 GAPPED_PENALTY = 0.75
 
+#: What the phrase "next steps" is worth, and so what to take back off when
+#: every mention of it turns out to be a promise rather than a request.
+PROMISED_STEPS_WEIGHT = 1.6
+
 #: How much of a message the rules look at. What a message is gets settled in
 #: its opening; past this it is quoted threads, footers and legal boilerplate.
 #: Five hundred signals against a hundred and sixty thousand characters costs
@@ -279,6 +283,27 @@ REJECTION_SIGNALS: Tuple[Signal, ...] = (
     Signal("gone with another candidate", 2.6),
     Signal("position has been filled", 2.6),
     Signal("role has been filled", 2.6),
+    # The same news in the active voice, which half of them use. Word order
+    # is the only difference and a literal list does not see past it.
+    Signal("filled the position", 2.6),
+    Signal("filled the role", 2.6),
+    Signal("filled this position", 2.6),
+    Signal("we have filled", 2.4),
+    Signal("with another candidate", 2.6),
+    Signal("with a different candidate", 2.6),
+    Signal("another candidate was selected", 3.0),
+    Signal("another candidate has been selected", 3.0),
+    Signal("offer to another candidate", 3.0),
+    Signal("hired another candidate", 2.8),
+    Signal("someone whose experience", 2.0),
+    Signal("candidates whose qualifications more closely", 3.0),
+    Signal("decided to move forward with other", 3.0),
+    Signal("moving forward with another", 3.0),
+    Signal("progressing with other candidates", 3.0),
+    Signal("not able to offer you", 2.6),
+    Signal("unable to offer you a position", 3.0),
+    Signal("will not be extending an offer", 3.0),
+    Signal("we have decided not to", 2.4),
     Signal("this position is now closed", 2.2),
     Signal("we have closed this role", 2.2),
     Signal("keep your resume on file", 1.8),
@@ -1371,6 +1396,60 @@ def unwrap_links(links: Sequence[str]) -> str:
     return " ".join(seen)
 
 
+#: What an acknowledgement of an application actually does. Every vendor
+#: writes it differently and no two share a phrase, but all of them do the
+#: same three things: say the application arrived, promise to read it, and
+#: promise to be in touch if it is a match. Counting those moves catches the
+#: whole family; listing phrases catches whichever vendor was in the corpus.
+_ACKNOWLEDGEMENT = (
+    ("it says the application arrived", re.compile(
+        r"\b(?:receiv\w+ your (?:recent )?(?:application|resume|cv|submission)|"
+        r"your (?:recent )?application (?:to|for|has been)|"
+        r"thank you (?:very much )?for (?:your |applying|submitting|taking the time)"
+        r"[^.!?]{0,40}(?:application|apply|interest|submission|resume)|"
+        r"applied (?:to|for) (?:the |our )|"
+        r"you have submitted an (?:employment )?application|"
+        r"application (?:has been |was )?(?:received|submitted)|"
+        r"thanks for (?:applying|submitting))\b")),
+    ("it promises to read it", re.compile(
+        r"\b(?:will be reviewed|reviewing (?:your |applications|candidates)|"
+        r"under review|being reviewed|"
+        r"(?:recruiting|talent acquisition|hiring) (?:staff|team|group)"
+        r"[^.!?]{0,30}review|"
+        r"review(?:ing)? your (?:application|experience|qualifications|"
+        r"background|resume|profile|submission))\b")),
+    ("it promises to be in touch if it fits", re.compile(
+        r"\b(?:we will (?:contact|reach out to|be in touch with|get in touch)|"
+        r"will be in (?:touch|contact)|you will (?:hear|be contacted)|"
+        r"someone will (?:contact|reach)|"
+        r"(?:if|should) (?:your|we|there|you|selected)"
+        r"[^.!?]{0,60}(?:match|align|need|fit|qualif|interest|progress|"
+        r"selected|suitable|contact|touch|reach))\b")),
+    ("it says nothing is needed from you", re.compile(
+        r"\b(?:no (?:further )?action (?:is )?(?:required|needed)|"
+        r"you do not need to (?:do|take) any|"
+        r"this is an automated (?:email|message|response|reply)|"
+        r"please do not reply|no reply is (?:required|needed))\b")),
+)
+
+
+def acknowledgement_score(subject: str, body: str) -> Tuple[float, List[str]]:
+    """How strongly this is "we got your application, we will be in touch".
+
+    The commonest thing in a job-search inbox and the least interesting, which
+    is exactly why it should be filed without being read. One move is not
+    enough - "thank you for applying" opens a rejection too - so it takes two.
+    """
+    blob = f"{subject} {body}"
+    reasons = [describes for describes, pattern in _ACKNOWLEDGEMENT
+               if pattern.search(blob)]
+    # Two moves is worth 2.6 rather than 3.0, which was tried and rejected:
+    # 3.0 filed eight more messages on the labelled set and one wrong one on
+    # the held-out set, which is the only set whose opinion counts here.
+    score = {0: 0.0, 1: 0.0, 2: 2.6, 3: 3.2}.get(len(reasons), 3.6)
+    return score, reasons
+
+
 def other_world_context(subject: str, body: str) -> Tuple[float, str]:
     """How strongly the message is about something other than a job search."""
     hits = set(_OTHER_WORLD.findall(f"{subject} {body}"))
@@ -1664,6 +1743,39 @@ _NOT_A_REQUEST = re.compile(
 )
 
 
+#: "Next steps" as something that will happen to you later, rather than
+#: something being asked of you now. Every acknowledgement ends this way -
+#: "if your experience aligns, we will reach out to discuss next steps" - and
+#: reading it as a request turns the commonest mail in a job search into an
+#: action item.
+_PROMISED_STEPS = re.compile(
+    r"(?:\bwe(?:'| a|'?ll| will)?\b[^.!?]{0,40}(?:contact|reach out|be in touch|"
+    r"share|discuss|send|let you know|follow up|advise|update)|"
+    r"\byou will (?:receive|hear|be (?:contacted|notified|informed))|"
+    r"\b(?:if|should|when|once)\b[^.!?]{0,70}|"
+    r"\bsomeone (?:will|from)\b[^.!?]{0,40}|"
+    r"\bto discuss\b|\babout\b|\bwith\b|\bregarding\b|\bon\b)"
+    r"[^.!?]{0,30}$"
+)
+
+
+def steps_are_only_promised(body: str) -> bool:
+    """Whether every mention of next steps is a promise rather than a request.
+
+    True means the message says somebody else will do something later. False
+    means at least one mention is addressed to the reader, or that the phrase
+    does not appear at all.
+    """
+    mentions = list(re.finditer(r"\bnext steps?\b", body))
+    if not mentions:
+        return False
+    for mention in mentions:
+        lead = body[max(0, mention.start() - 100):mention.start()]
+        if not _PROMISED_STEPS.search(lead):
+            return False
+    return True
+
+
 def _is_a_real_request(body: str, start: int) -> bool:
     """Is the instruction at `start` addressed to the reader, right now?"""
     lead = body[max(0, start - 90):start]
@@ -1892,6 +2004,22 @@ class RuleClassifier:
                 matches[Category.INTERVIEW].append(
                     "(discounted: a meeting, but nothing says it is about work)")
 
+        # An acknowledgement is the commonest thing in a job-search inbox and
+        # the least interesting: it is the absence of a decision. A rejection
+        # acknowledges the application too, and there the decision is the
+        # point, so this never outweighs one.
+        acknowledged, acknowledged_why = acknowledgement_score(subject_n, body_n)
+        if acknowledged:
+            decided = max(scores[Category.NOT_INTERESTED], scores[Category.OFFER])
+            if decided >= QUALIFY_SCORE:
+                acknowledged = 0.0
+                acknowledged_why = []
+            else:
+                scores[Category.APPLICATION_RECEIVED] += acknowledged
+                strongest[Category.APPLICATION_RECEIVED] = max(
+                    strongest[Category.APPLICATION_RECEIVED], acknowledged)
+                matches[Category.APPLICATION_RECEIVED].extend(acknowledged_why[:2])
+
         ats_present = any(domain in link_blob or domain in sender_n for domain in ATS_LINK_DOMAINS)
 
         job_bonus = 0.0
@@ -1934,6 +2062,10 @@ class RuleClassifier:
             job_score += min(2.4, meeting * min(1.0,
                                                 max(professional, context_now) / 2.0))
             job_matches.append("a working conversation is being proposed")
+        if acknowledged:
+            job_score += min(2.0, acknowledged)
+            job_matches.append("it acknowledges an application ("
+                               + ", ".join(acknowledged_why[:2]) + ")")
         non_job_score, non_job_matches = self._score(
             NON_JOB_SIGNALS, subject_n, subject_t, body_n, body_t
         )
@@ -1970,6 +2102,16 @@ class RuleClassifier:
                     strongest[Category.NEXT_STEPS], peak_action
                 )
                 matches[Category.NEXT_STEPS].extend(action_notes[:3])
+
+        # "We will reach out to discuss next steps" is a promise about the
+        # future, not a step for the reader. Every acknowledgement ends that
+        # way, so reading it as a request turned the commonest mail in a job
+        # search into an action item.
+        if scores[Category.NEXT_STEPS] and steps_are_only_promised(body_n):
+            scores[Category.NEXT_STEPS] = max(
+                0.0, scores[Category.NEXT_STEPS] - PROMISED_STEPS_WEIGHT)
+            matches[Category.NEXT_STEPS].append(
+                "(discounted: next steps are promised, not asked for)")
 
         # ---- pick a category ------------------------------------------
         # Precedence is an order, not a tiebreak: an offer outranks the
