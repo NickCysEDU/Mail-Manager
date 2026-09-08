@@ -506,17 +506,18 @@ class GeminiProvider(Provider):
                     "cheapest, always current - a good default"),
         ModelChoice("gemini-flash-latest", "Gemini Flash (latest)", "balanced, always current"),
         ModelChoice("gemini-pro-latest", "Gemini Pro (latest)", "most accurate, always current"),
+        ModelChoice("gemini-3.6-flash", "Gemini 3.6 Flash", "pinned version"),
         ModelChoice("gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite", "pinned version"),
         ModelChoice("gemini-3.5-flash", "Gemini 3.5 Flash", "pinned version"),
-        ModelChoice("gemini-2.5-flash", "Gemini 2.5 Flash", "previous generation"),
-        ModelChoice("gemini-2.5-pro", "Gemini 2.5 Pro", "previous generation"),
     )
     #: Only rates that are actually known. An unknown rate shows no price
     #: rather than a made-up one.
-    pricing = {
-        "gemini-2.5-flash": (0.30, 2.50),
-        "gemini-2.5-pro": (1.25, 10.00),
-    }
+    #:
+    #: The 2.x ids were removed on 8 September 2026 after the API answered a
+    #: request for gemini-2.5-flash with "no longer available". Offering a
+    #: retired id in a menu is worse than offering none: it fails at the point
+    #: the user is trying to check their settings work.
+    pricing = {}
     ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models"
 
     def list_models(self) -> List[str]:
