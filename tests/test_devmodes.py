@@ -75,10 +75,19 @@ class TestDemoData:
         assert dispositions == {Disposition.MOVE, Disposition.REVIEW, Disposition.LEAVE}
 
     def test_the_ambiguous_samples_are_not_pre_ticked(self):
+        """Nothing the sorter is unsure about is ticked, whatever it is.
+
+        Where it goes depends on what it is: uncertain job mail waits in Needs
+        Review, and uncertain post that is not job mail simply stays in the
+        inbox, because Needs Review is a folder inside the job-search tree.
+        """
         for item in demo_data.demo_items():
             if item.classification.confidence_score < 0.95:
                 assert item.approved is False
-                assert item.target_folder == "Job Search/Needs Review"
+                if item.classification.is_job_related:
+                    assert item.target_folder == "Job Search/Needs Review"
+                else:
+                    assert item.target_folder is None      # left where it is
 
     def test_the_precedence_sample_files_as_interview(self):
         """A rejection that also offers a call belongs in Interview."""

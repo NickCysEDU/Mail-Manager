@@ -31,6 +31,7 @@ class HelpButton(QToolButton):
         self.setCheckable(True)
         self.setAutoRaise(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setObjectName("helpButton")   # excluded from the shared control height
         self.setFixedSize(26, 26)
         self.setText("")
         self._sync_text()
@@ -90,14 +91,24 @@ class HelpFilter(QObject):
             QToolTip.hideText()
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
-        if not self.enabled or event.type() != QEvent.Type.ToolTip:
+        """Tooltips appear only while help is on.
+
+        Qt shows any tooltip a widget happens to carry, which on a window this
+        dense means explanations arriving unasked while somebody is working.
+        With help off this swallows them; with help on it also lends a widget
+        its parent's wording when it has none of its own, and leaves it up long
+        enough to finish reading.
+        """
+        if event.type() != QEvent.Type.ToolTip:
             return False
+        if not self.enabled:
+            QToolTip.hideText()
+            return True                     # eaten: nothing asked for it
         widget = watched if isinstance(watched, QWidget) else None
         if widget is None:
             return False
         text = widget.toolTip()
         if not text:
-            # Nothing of its own to say; the parent might.
             parent = widget.parentWidget()
             text = parent.toolTip() if parent is not None else ""
         if not text:

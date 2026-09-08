@@ -750,17 +750,31 @@ class TriageItem:
     # -- routing ---------------------------------------------------------
     @property
     def disposition(self) -> Disposition:
+        """Where this message goes: filed, held for review, or left alone.
+
+        Whether it is job mail is decided before how sure the sorter is, which
+        is the other way round from how this used to read. Needs Review is a
+        folder inside the job-search tree, and it means "this is part of your
+        job search and I cannot tell which part". A promotion the sorter is
+        only 88% sure about is not that. It is simply not job mail, and the
+        right place for it is where it already is.
+        """
         cls_ = self.classification
         if cls_.error is not None:
             return Disposition.REVIEW
-        if cls_.confidence_score < self.threshold:
-            return Disposition.REVIEW
+
         if not cls_.is_job_related:
             if self.non_job_routing is NonJobRouting.REVIEW:
                 return Disposition.REVIEW
-            if self.non_job_routing is NonJobRouting.FILE:
+            if (self.non_job_routing is NonJobRouting.FILE
+                    and cls_.confidence_score >= self.threshold):
                 return Disposition.MOVE
+            # Either the user wants non-job mail left alone, or the topic is
+            # not certain enough to file. Both mean: leave it in the inbox.
             return Disposition.LEAVE
+
+        if cls_.confidence_score < self.threshold:
+            return Disposition.REVIEW
         if cls_.category is Category.UNCLASSIFIED_OTHER:
             return Disposition.REVIEW
         return Disposition.MOVE

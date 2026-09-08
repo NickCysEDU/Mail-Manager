@@ -1050,7 +1050,17 @@ class SettingsDialog(QDialog):
         self.status = QLabel("")
         self.status.setWordWrap(True)
 
+        # The same help switch as the window's, because most of the writing
+        # that benefits from it is in here.
+        self.help_button = helpmode.HelpButton()
+        self.help_button.setChecked(settings.help_mode)
+        self.help_button.toggled.connect(self._toggle_help)
+        header = QHBoxLayout()
+        header.addStretch(1)
+        header.addWidget(self.help_button)
+
         layout = QVBoxLayout(self)
+        layout.addLayout(header)
         layout.addWidget(self.tabs)
         layout.addWidget(self.status)
         layout.addWidget(self.buttons)
@@ -1083,11 +1093,13 @@ class SettingsDialog(QDialog):
 
         buttons = QHBoxLayout()
         self.add_account_button = QPushButton("Add mailbox")
+        _paint_button(self.add_account_button, "primary", bold=False)
         self.add_account_button.setToolTip("Set up another mailbox")
         self.add_account_button.clicked.connect(self._add_account)
         buttons.addWidget(self.add_account_button)
 
         self.remove_account_button = QPushButton("Remove")
+        _paint_button(self.remove_account_button, "destructive", bold=False)
         self.remove_account_button.setToolTip(
             "Forget the selected mailbox. Nothing in it is touched, and its "
             "password is removed from the Keychain."
@@ -1505,7 +1517,7 @@ class SettingsDialog(QDialog):
 
         self.test_model_button = QPushButton("Test this model")
         self.test_model_button.clicked.connect(lambda: self._run_test("claude"))
-        _paint_button(self.test_model_button, ACCENT_BLUE)
+        _paint_button(self.test_model_button, "primary")
         self.refresh_models_button = QPushButton("Refresh model list")
         self.refresh_models_button.setToolTip(
             "Ask the service which models it currently serves. Providers retire "
@@ -2206,6 +2218,18 @@ class SettingsDialog(QDialog):
             "Press OK to keep it."
         )
 
+    def _toggle_help(self, on: bool) -> None:
+        """Mirror the window's switch, and keep the checkbox in step."""
+        helpmode.install(QApplication.instance(), on)
+        if hasattr(self, "help_check") and self.help_check.isChecked() != on:
+            self.help_check.blockSignals(True)
+            self.help_check.setChecked(on)
+            self.help_check.blockSignals(False)
+        self.status.setText(
+            "Help is on. Rest the pointer on anything to see what it does."
+            if on else "Help is off."
+        )
+
     def _threshold_changed(self) -> None:
         """Say what the number means, since a percentage on its own does not."""
         percent = self.threshold_slider.value()
@@ -2299,6 +2323,8 @@ class SettingsDialog(QDialog):
             max(0, self.contrast_combo.findData(settings.contrast)))
         self.readable_check.setChecked(settings.readable)
         self.help_check.setChecked(settings.help_mode)
+        self.help_check.toggled.connect(
+            lambda on: self.help_button.setChecked(on))
         self.rows_spin.setValue(settings.row_lines)
 
         try:
@@ -2747,7 +2773,6 @@ class MainWindow(QMainWindow):
             button.setText(window.label)
             button.setCheckable(True)
             button.setAutoExclusive(True)
-            button.setMinimumHeight(28)
             button.clicked.connect(lambda checked, w=window: self._window_selected(w))
             self.window_buttons[window] = button
             row.addWidget(button)
@@ -2787,8 +2812,6 @@ class MainWindow(QMainWindow):
         self.model_button = QToolButton()
         self.model_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.model_button.setToolTip("Switch the model backend (⌘M)")
-        self.model_button.setMinimumHeight(30)
-        self.model_button.setStyleSheet("QToolButton { padding: 4px 22px 4px 10px; }")
         self.model_menu = QMenu(self)
         self.model_button.setMenu(self.model_menu)
         row.addWidget(self.model_button)
@@ -2796,14 +2819,11 @@ class MainWindow(QMainWindow):
         # Only worth the space once there is more than one mailbox.
         self.account_button = QToolButton()
         self.account_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.account_button.setMinimumHeight(30)
-        self.account_button.setStyleSheet("QToolButton { padding: 4px 22px 4px 10px; }")
         self.account_menu = QMenu(self)
         self.account_button.setMenu(self.account_menu)
         row.addWidget(self.account_button)
 
         self.scan_button = QPushButton("Scan && Analyze")
-        self.scan_button.setMinimumHeight(30)
         # Width is pinned to the wider of its two labels so the toolbar does
         # not jump when it turns into Stop.
         self.scan_button.setMinimumWidth(
@@ -2812,10 +2832,9 @@ class MainWindow(QMainWindow):
         row.addWidget(self.scan_button)
 
         self.apply_button = QPushButton("Apply Approved Folder Moves")
-        self.apply_button.setMinimumHeight(30)
         self.apply_button.setEnabled(False)
         self.apply_button.clicked.connect(self.apply_moves)
-        _paint_button(self.apply_button, ACCENT_GREEN)
+        _paint_button(self.apply_button, "confirm")
         row.addWidget(self.apply_button)
 
         self._sync_range_visibility()
@@ -2889,7 +2908,7 @@ class MainWindow(QMainWindow):
         if busy:
             self.scan_button.setText("Stop")
             self.scan_button.setDefault(False)
-            _paint_button(self.scan_button, ACCENT_RED)
+            _paint_button(self.scan_button, "danger")
             self.scan_button.setToolTip(
                 "Stop everything now: the mailbox fetch, the model requests and "
                 "the local sorter, and close the connections they are using (⌘.)"
@@ -2900,7 +2919,7 @@ class MainWindow(QMainWindow):
             self.scan_button.setText(
                 "Reload Sample Data" if self.demo else "Scan && Analyze")
             self.scan_button.setDefault(True)
-            _paint_button(self.scan_button, ACCENT_BLUE)
+            _paint_button(self.scan_button, "primary")
             self.scan_button.setToolTip(
                 "Read the selected mailboxes over the chosen period and sort "
                 "what is found."
@@ -4868,34 +4887,28 @@ def _swatch(color: str, size: int = 12) -> "QIcon":
     return QIcon(pixmap)
 
 
-def _paint_button(button, color: str, bold: bool = True) -> None:
-    """Give a button a solid accent colour that works in both themes.
+def _paint_button(button, role: str, bold: bool = True) -> None:
+    """Mark a button's role, and let the theme decide what that looks like.
 
-    Weight is set on the QFont rather than in the stylesheet: a ``font-weight``
-    rule makes Qt re-resolve the family and quietly drop the macOS system font
-    for a synthesised fallback.
+    Roles rather than colours, and a property rather than a stylesheet on the
+    widget. A per-widget stylesheet carries its own padding and radius, which
+    is why the coloured buttons used to be a different size from the plain ones
+    beside them; and it cannot follow a change of theme, because it does not
+    know one happened.
+
+        primary      the main action, and only ever one of them
+        confirm      it will change your mailbox, and you meant it to
+        danger       it stops or undoes something, right now
+        destructive  it removes something, and is outlined rather than filled
     """
-    if bold:
+    button.setProperty("role", role)
+    if bold and role in ("primary", "confirm", "danger"):
         font = button.font()
         font.setWeight(QFont.Weight.DemiBold)
         button.setFont(font)
-    button.setStyleSheet(
-        f"""
-        QPushButton {{
-            background-color: {color};
-            color: #FFFFFF;
-            border: none;
-            border-radius: 6px;
-            padding: 6px 14px;
-        }}
-        QPushButton:hover:!disabled {{ background-color: {_shade(color, 1.12)}; }}
-        QPushButton:pressed        {{ background-color: {_shade(color, 0.88)}; }}
-        QPushButton:disabled {{
-            background-color: rgba(140, 140, 140, 0.16);
-            color: rgba(140, 140, 140, 0.95);
-        }}
-        """
-    )
+    # A property that changes after the style was applied needs saying so.
+    button.style().unpolish(button)
+    button.style().polish(button)
 
 
 def _shade(hex_color: str, factor: float) -> str:
