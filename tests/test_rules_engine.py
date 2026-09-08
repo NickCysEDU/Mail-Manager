@@ -157,12 +157,38 @@ class TestJobCategories:
 
 class TestLinkEvidence:
     def test_a_scheduling_link_carries_the_interview_verdict(self, rules):
+        """With something to say the conversation is a working one."""
         result = verdict(
-            rules, "Chat?", "Grab whatever slot suits you.", "dana@acme.example",
+            rules, "Chat?",
+            "I run the platform team and would like to hear about your "
+            "background. Grab whatever slot suits you.",
+            "dana@acme.example",
             links=("https://calendly.com/acme/30min",),
         )
         assert result.category is Category.INTERVIEW
         assert "scheduling link" in " ".join(result.matched)
+
+    def test_a_scheduling_link_alone_decides_nothing(self, rules):
+        """A booking link proves a meeting, never what the meeting is for.
+
+        A dentist, a school and a sales team all send the same link. Reading
+        one as an interview is how a reminder about a cleaning ended up in the
+        job-search folder.
+        """
+        result = verdict(
+            rules, "Chat?", "Grab whatever slot suits you.", "dana@acme.example",
+            links=("https://calendly.com/acme/30min",),
+        )
+        assert result.is_job_related is False
+
+    def test_a_named_hiring_step_needs_no_corroboration(self, rules):
+        """"Phone screen" is not ambiguous the way "pick a time" is."""
+        result = verdict(
+            rules, "Next steps",
+            "Please let me know your availability for a phone screen.",
+            "dana@acme.example",
+        )
+        assert result.category is Category.INTERVIEW
 
     def test_an_assessment_link_carries_next_steps(self, rules):
         result = verdict(

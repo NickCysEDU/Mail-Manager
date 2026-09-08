@@ -789,3 +789,40 @@ class TestAuthFailsFast:
         with pytest.raises(LLMAuthError):
             subject.classify_many(self.messages(3))
         assert subject.fallback_count == 0
+
+
+class TestTheSystemPromptCoversWhatWasMissed:
+    """Two shapes the prompt's definition of "job related" left out.
+
+    Found on real mail: a call proposed with no role named, and a job
+    description mailed to oneself. Both sat outside "a referral or networking
+    thread about a specific role", so the model said no — confidently, at 0.95
+    and above. These assert the instructions still say otherwise; what the
+    model then does with them is measured by ``./dev eval-llm``, not here.
+    """
+
+    def test_a_call_with_no_named_role_is_covered(self):
+        from llm_engine import SYSTEM_PROMPT
+        step_one = SYSTEM_PROMPT[SYSTEM_PROMPT.index("# STEP 1"):
+                                 SYSTEM_PROMPT.index("# STEP 2")]
+        assert "A named role is NOT required" in step_one
+
+    def test_a_saved_job_description_is_covered(self):
+        from llm_engine import SYSTEM_PROMPT
+        step_one = SYSTEM_PROMPT[SYSTEM_PROMPT.index("# STEP 1"):
+                                 SYSTEM_PROMPT.index("# STEP 2")]
+        assert "saved, forwarded, or mailed to" in step_one
+
+    def test_the_near_misses_are_still_spelled_out(self):
+        """Widening what counts must not quietly widen it to everything."""
+        from llm_engine import SYSTEM_PROMPT
+        step_one = SYSTEM_PROMPT[SYSTEM_PROMPT.index("# STEP 1"):
+                                 SYSTEM_PROMPT.index("# STEP 2")]
+        for near_miss in ("dentist", "parent-teacher", "sales or product demo",
+                          "current employer", "job-board digests"):
+            assert near_miss in step_one, near_miss
+
+    def test_a_booking_link_is_not_treated_as_proof(self):
+        from llm_engine import SYSTEM_PROMPT
+        assert "A booking link proves a meeting, never that it is about a job" \
+            in SYSTEM_PROMPT

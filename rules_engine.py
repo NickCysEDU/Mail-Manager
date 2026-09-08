@@ -33,6 +33,7 @@ import html
 import math
 import re
 import unicodedata
+import urllib.parse
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -425,6 +426,29 @@ INTERVIEW_SIGNALS: Tuple[Signal, ...] = (
     Signal("vorstellungsgesprach", 2.2, label="German interview"),
 )
 
+#: The interview phrases that any meeting could use. A dentist asks for your
+#: availability; a school asks you to pick a time; a sales team books a slot.
+#: Everything NOT in this set names a hiring process outright - "phone screen",
+#: "technical interview" - and needs no corroboration to be about a job.
+#:
+#: The split exists because discounting all interview evidence when a message
+#: lacks other job wording threw away the clearest signals there are: "please
+#: let me know your availability for a phone screen" scored eight and was cut
+#: to two and a half.
+GENERIC_SCHEDULING: frozenset = frozenset({
+    "schedule a call", "set up a call", "set up some time", "book a time",
+    "pick a time", "choose a time", "find a time", "grab some time",
+    "your availability", "let me know your availability",
+    "when are you available", "times that work for you",
+    "looking forward to speaking", "meet the team", "30 minutes", "45 minutes",
+})
+
+#: Interview phrases that name a hiring process and so speak for themselves.
+HIRING_SPECIFIC_SIGNALS: Tuple[Signal, ...] = tuple(
+    signal for signal in INTERVIEW_SIGNALS
+    if signal.phrase not in GENERIC_SCHEDULING
+)
+
 NEXT_STEPS_SIGNALS: Tuple[Signal, ...] = (
     Signal("coding assessment", 3.0),
     Signal("technical assessment", 3.0),
@@ -615,6 +639,12 @@ SCHEDULING_LINK_DOMAINS: Tuple[str, ...] = (
     "calendly.com", "cal.com", "savvycal.com", "meetings.hubspot.com",
     "hubspot.com/meetings", "chilipiper.com", "goodtime.io", "youcanbook.me",
     "acuityscheduling.com", "doodle.com", "when2meet.com", "calendarhero.com",
+    # Google's and Microsoft's own booking pages, which are what somebody
+    # without a scheduling product reaches for.
+    "calendar.app.google", "calendar.google.com", "bookings.microsoft.com",
+    "outlook.office.com/bookwithme", "outlook.office365.com/book",
+    "koalendar.com", "tidycal.com", "zcal.co", "usemotion.com", "clara.com",
+    "appointlet.com", "setmore.com", "vcita.com", "book.morgen.so",
     "zoom.us", "teams.microsoft.com", "meet.google.com", "whereby.com",
     "hirevue.com", "sparkhire.com", "spark.hire", "willo.video",
     "modernhire.com", "vidcruiter.com", "loom.com",
@@ -1125,6 +1155,222 @@ def solicitation_score(subject: str, body: str, raw_subject: str = "") -> Tuple[
     return score, reasons
 
 
+#: A meeting being proposed, in the shapes real mail uses. The verb and the
+#: noun are allowed up to forty characters between them and may not cross a
+#: sentence, which is what lets one entry cover "schedule a call", "schedule a
+#: 20-minute Google Meet call" and "set up a quick intro chat" alike. Fixed
+#: phrases cannot: they break the moment somebody says how long it will take.
+_MEETING_VERB = (r"(?:schedule|set ?up|book|arrange|organi[sz]e|line up|find|"
+                 r"pick|choose|grab|hop on|jump on|get on|put in|coordinate)")
+_MEETING_NOUN = (r"(?:call|chat|meeting|conversation|sync|catch ?up|zoom|"
+                 r"hangout|huddle|time|slot|session|screen(?:ing)?|interview|"
+                 r"appointment)")
+_MEETING_REQUEST = (
+    ("a proposal to meet", re.compile(
+        rf"\b{_MEETING_VERB}\b[^.!?\n]{{0,40}}?\b{_MEETING_NOUN}\b")),
+    ("a span of time offered", re.compile(
+        r"\b(?:grab|find|spare|block|carve out|put aside|have)\b"
+        r"[^.!?\n]{0,20}?\b\d{1,3}\s*(?:-|\s)?\s*(?:min(?:ute)?s?|hours?)\b")),
+    ("a stated length for it", re.compile(
+        r"\b\d{1,3}\s*(?:-|\s)?\s*(?:min(?:ute)?s?|hours?|hrs?)\b"
+        r"[^.!?\n]{0,30}?\b(?:call|chat|meeting|conversation|zoom|meet|"
+        r"session|slot|interview|screen)\b")),
+    ("an offer of times", re.compile(
+        r"\b(?:your availability|when (?:are|would) you (?:be )?(?:free|available)|"
+        r"what times? (?:work|suits?)|times? that work|let me know (?:a|what|when|"
+        r"your)|does .{0,20}work for you|are you (?:free|available)|"
+        r"whatever slot|any slot|slot that suits|pick a (?:time|slot))\b")),
+    ("a wish to speak", re.compile(
+        r"\b(?:would like to (?:meet|speak|talk|chat|connect)|"
+        r"like to (?:meet|speak|talk|chat|connect) (?:with )?you|"
+        r"love to (?:meet|speak|talk|chat|connect)|happy to (?:meet|speak|talk|"
+        r"chat|connect)|free to (?:meet|speak|talk|chat|connect)|"
+        r"keen to (?:meet|speak|talk|chat)|good time to (?:speak|talk|chat))\b")),
+)
+
+
+def meeting_request_score(subject: str, body: str) -> Tuple[float, List[str]]:
+    """How strongly this message proposes a meeting. Says nothing about why.
+
+    A dentist, a sales team and a hiring manager all book calls in the same
+    words, so this is deliberately blind to the reason. What the meeting is
+    *for* is a separate question, answered by professional_context_score, and
+    keeping the two apart is what stops a reminder about a cleaning being
+    filed as an interview.
+    """
+    blob = f"{subject} {body}"
+    reasons = [describes for describes, pattern in _MEETING_REQUEST
+               if pattern.search(blob)]
+    score = {0: 0.0, 1: 1.6, 2: 2.6}.get(len(reasons), 3.2)
+    return score, reasons
+
+
+#: Language that places a conversation in somebody's working life rather than
+#: their dentist's diary. None of it is decisive alone - "the team" is a phrase
+#: every workplace uses - which is why it is counted in families and only ever
+#: qualifies other evidence.
+_PROFESSIONAL_CONTEXT = (
+    ("an interest in your background", re.compile(
+        r"\b(?:learn more about you|hear about (?:your|you)|about your "
+        r"(?:background|experience|career|work|profile)|your background|"
+        r"tell (?:me|us) about (?:your|you)|walk (?:me|us) through your|"
+        r"more about your (?:background|experience|career)|"
+        r"your (?:details|profile|cv|resume|r\xe9sum\xe9|portfolio|"
+        r"credentials|qualifications))\b")),
+    ("a role or an opening", re.compile(
+        r"\b(?:(?:the|this|that|our|a) (?:\w+ ){0,3}"
+        r"(?:role|position|opening|vacancy|headcount|req)\b|"
+        r"(?:the|our|that|my) (?:\w+ ){0,3}team\b|"
+        r"the opportunity|requisition|"
+        r"where you (?:might|would|could) fit|what we(?:'re| are) building)\b")),
+    ("hiring vocabulary", re.compile(
+        r"\b(?:recruit\w*|hiring|hire|talent|candidate|candidacy|sourc(?:er|ing)|"
+        r"staffing|placement|résumé|resume|cv|cover letter|portfolio|"
+        r"employer|employment|career)\b")),
+    ("a professional introduction", re.compile(
+        r"\b(?:i (?:am|'m) .{0,40}(?:assistant|recruiter|partner|manager|"
+        r"director|founder|lead|facilitator)|my name is .{0,30} and i"
+        r"|i (?:run|lead|head up) (?:the|our)|on behalf of)\b")),
+)
+
+
+def professional_context_score(subject: str, body: str,
+                               sender: str = "") -> Tuple[float, List[str]]:
+    """Whether a conversation is a working one. Qualifies, never decides."""
+    blob = f"{subject} {body}"
+    reasons = [describes for describes, pattern in _PROFESSIONAL_CONTEXT
+               if pattern.search(blob)]
+    score = {0: 0.0, 1: 1.0, 2: 2.0}.get(len(reasons), 2.8)
+    return score, reasons
+
+
+#: The sections a job description is built out of. A posting almost always
+#: carries several; ordinary mail that happens to use one of these headings
+#: carries exactly one. Counting sections rather than phrases is what tells a
+#: description apart from a digest that quotes one line of it.
+_POSTING_SECTIONS = (
+    ("a role summary", re.compile(
+        r"\b(?:job summary|position summary|role summary|job description|"
+        r"position description|about (?:the|this) (?:role|position|job|"
+        r"opportunity)|the opportunity)\b")),
+    ("a list of responsibilities", re.compile(
+        r"\b(?:job responsibilities|key responsibilities|responsibilities|"
+        r"essential (?:duties|functions)|duties and responsibilities|"
+        r"what you(?: wi)?'?ll do|in this role you will|day to day|"
+        r"primary duties)\b")),
+    ("a list of requirements", re.compile(
+        r"\b(?:qualifications|requirements|what we(?:'re| are) looking for|"
+        r"what you(?: wi)?'?ll bring|skills and experience|"
+        r"required skills|minimum (?:qualifications|requirements)|"
+        r"preferred (?:qualifications|skills))\b")),
+    ("terms of employment", re.compile(
+        r"\b(?:equal opportunity employer|eeo|affirmative action|"
+        r"salary range|compensation range|pay range|base salary|"
+        r"benefits package|reports to|full[- ]time|part[- ]time|"
+        r"exempt|non[- ]exempt|work authorization)\b")),
+    ("a posting reference", re.compile(
+        r"\b(?:requisition(?: id| number)?|req(?: id| #|#)|job (?:id|code|"
+        r"number|req)|position id|posting (?:id|date))\b")),
+    ("an experience demand", re.compile(
+        r"\b(?:\d{1,2}\+? years? of experience|\d{1,2}\s*-\s*\d{1,2} years|"
+        r"bachelor'?s degree|master'?s degree|degree in [a-z ]{3,30}|"
+        r"equivalent experience)\b")),
+)
+
+
+def job_posting_score(subject: str, body: str,
+                      list_unsubscribe: str = "") -> Tuple[float, List[str]]:
+    """How strongly the message *is* a job description, rather than about one.
+
+    Somebody mailing a posting to themselves is doing their job search, and
+    the sorter used to score that at zero because a description contains none
+    of the words a hiring process uses - no "your application", no "we would
+    like to", no "recruiter". It is all headings.
+
+    A digest quoting one heading is not a posting, which is why this counts
+    sections and discounts bulk mail: a description arrives from a person, or
+    from you, and a blast about "hundreds of openings" arrives from a list.
+    """
+    blob = f"{subject} {body}"
+    reasons = [describes for describes, pattern in _POSTING_SECTIONS
+               if pattern.search(blob)]
+    # One heading is not a description. Ordinary mail uses "requirements" and
+    # "about the role" in passing; a posting carries several sections at once.
+    score = {0: 0.0, 1: 0.0, 2: 2.6, 3: 3.4}.get(len(reasons), 4.0)
+    if list_unsubscribe.strip() and score:
+        # A posting you were sent by a mailing list is a job board writing to
+        # everybody, not a description you kept.
+        score *= 0.45
+        reasons.append("(discounted: it arrived on a mailing list)")
+    return score, reasons
+
+
+#: What a job board's broadcast does that a single posting does not: it offers
+#: many roles, and it asks you to go and look at them.
+_JOB_BOARD_BLAST = (
+    ("more than one opening at once", re.compile(
+        r"\b(?:\d{1,4}\+? (?:new )?(?:jobs|roles|openings|positions|vacancies)|"
+        r"hundreds of (?:jobs|roles|openings|positions)|"
+        r"(?:jobs|roles|openings|positions) (?:matching|for you|near you)|"
+        r"(?:new|top|featured|recommended) (?:jobs|roles|openings|picks)|"
+        r"see all \d|more (?:jobs|roles|openings))\b")),
+    ("an invitation to go and browse", re.compile(
+        r"\b(?:browse|explore|view|see) (?:all |more |hundreds |our |the )?"
+        r"(?:jobs|roles|openings|positions|listings|opportunities)\b|"
+        r"\bapply (?:in one click|with one click|now)\b|"
+        r"\b(?:job alert|saved search|job digest|daily digest)\b")),
+    ("a board writing on its own schedule", re.compile(
+        r"\b(?:new today|this week'?s? (?:jobs|roles|picks)|"
+        r"today'?s? (?:jobs|matches|picks)|your (?:weekly|daily) )\b")),
+)
+
+
+def job_board_blast(subject: str, body: str,
+                    list_unsubscribe: str = "") -> Tuple[float, str]:
+    """How strongly this is a job board broadcasting, not a job being offered.
+
+    The vocabulary is identical to a real posting - that is the whole problem.
+    What differs is the shape: a board offers many roles at once and sends you
+    somewhere to look at them, and it arrives on a mailing list.
+    """
+    if not list_unsubscribe.strip():
+        return 0.0, ""
+    blob = f"{subject} {body}"
+    reasons = [describes for describes, pattern in _JOB_BOARD_BLAST
+               if pattern.search(blob)]
+    if not reasons:
+        return 0.0, ""
+    score = {1: 1.4, 2: 2.8}.get(len(reasons), 3.6)
+    return score, "a job board writing to a list (" + ", ".join(reasons[:2]) + ")"
+
+
+#: How many times to unwrap a redirect. Trackers nest - a mail platform wraps
+#: a link the sender had already wrapped - but never deeply.
+MAX_LINK_UNWRAPS = 3
+
+
+def unwrap_links(links: Sequence[str]) -> str:
+    """One lower-case blob of link text, with redirects opened out.
+
+    Click trackers keep the real destination inside the URL, percent-encoded:
+    ``streak-link.com/DBv8/https%3A%2F%2Fcalendar.app.google%2F…``. Matching a
+    domain list against that finds the tracker and never the destination, so a
+    scheduling link sent through any mail platform - which is most of them -
+    was invisible. Decoding costs nothing and makes the evidence readable.
+    """
+    seen: List[str] = []
+    for link in links:
+        text = (link or "").lower()
+        seen.append(text)
+        for _ in range(MAX_LINK_UNWRAPS):
+            opened = urllib.parse.unquote(text)
+            if opened == text:
+                break
+            seen.append(opened)
+            text = opened
+    return " ".join(seen)
+
+
 def other_world_context(subject: str, body: str) -> Tuple[float, str]:
     """How strongly the message is about something other than a job search."""
     hits = set(_OTHER_WORLD.findall(f"{subject} {body}"))
@@ -1495,6 +1741,8 @@ class RuleClassifier:
         self._context = JOB_CONTEXT_SIGNALS + self.ruleset.context
         self._compiled[id(self._context)] = [_Matcher(s) for s in self._context]
         self._compiled[id(NON_JOB_SIGNALS)] = [_Matcher(s) for s in NON_JOB_SIGNALS]
+        self._compiled[id(HIRING_SPECIFIC_SIGNALS)] = [
+            _Matcher(s) for s in HIRING_SPECIFIC_SIGNALS]
         for table in TOPIC_SIGNALS.values():
             self._compiled[id(table)] = [_Matcher(signal) for signal in table]
 
@@ -1574,7 +1822,7 @@ class RuleClassifier:
         subject_n, subject_t = normalize(subject), tighten(subject)
         body_n, body_t = normalize(body), tighten(body)
         sender_n = normalize(sender)
-        link_blob = " ".join(links).lower()
+        link_blob = unwrap_links(links)
 
         scores: Dict[Category, float] = {}
         matches: Dict[Category, List[str]] = {}
@@ -1587,15 +1835,63 @@ class RuleClassifier:
             matches[category] = matched
             strongest[category] = peak
 
+        # ---- is this a working conversation? ---------------------------
+        # Asked before the link evidence, because a booking link says a
+        # meeting is being arranged and nothing whatever about what for. A
+        # dentist, a sales team and a hiring manager all send the same link.
+        professional, professional_why = professional_context_score(
+            subject_n, body_n, sender_n)
+        meeting, meeting_why = meeting_request_score(subject_n, body_n)
+        posting, posting_why = job_posting_score(subject_n, body_n, list_unsubscribe)
+        # The job-search vocabulary counts as working context too. A bare
+        # calendar invite whose subject is "Interview - Roadrunner" says what
+        # it is without any of the phrasings above.
+        context_now, _context_why = self._score(
+            self._context, subject_n, subject_t, body_n, body_t)
+        named_process, _named_why = self._score(
+            HIRING_SPECIFIC_SIGNALS, subject_n, subject_t, body_n, body_t)
+        working = (professional > 0.0 or context_now >= 1.0
+                   or named_process > 0.0)
+
         # ---- link evidence, which outweighs prose ----------------------
         if any(domain in link_blob for domain in SCHEDULING_LINK_DOMAINS):
-            scores[Category.INTERVIEW] += 3.0
-            strongest[Category.INTERVIEW] = max(strongest[Category.INTERVIEW], 3.0)
-            matches[Category.INTERVIEW].append("a scheduling link")
+            if working:
+                scores[Category.INTERVIEW] += 3.0
+                strongest[Category.INTERVIEW] = max(strongest[Category.INTERVIEW], 3.0)
+                matches[Category.INTERVIEW].append("a scheduling link")
+            else:
+                # Kept as a weak hint rather than dropped: it is still a
+                # meeting, it is just nobody's job search.
+                scores[Category.INTERVIEW] += 0.6
+                matches[Category.INTERVIEW].append(
+                    "a scheduling link, with nothing to say it is about work")
         if any(domain in link_blob for domain in ASSESSMENT_LINK_DOMAINS):
             scores[Category.NEXT_STEPS] += 3.0
             strongest[Category.NEXT_STEPS] = max(strongest[Category.NEXT_STEPS], 3.0)
             matches[Category.NEXT_STEPS].append("an assessment-platform link")
+        if meeting and working:
+            # Neither half is worth much alone. "Let's find 20 minutes" is a
+            # sentence from every part of life, and "the team" is a phrase
+            # every workplace uses; together they are somebody proposing to
+            # talk to you about your working life.
+            weight = min(3.0, meeting * min(1.0, max(professional, context_now) / 2.0))
+            scores[Category.INTERVIEW] += weight
+            strongest[Category.INTERVIEW] = max(strongest[Category.INTERVIEW], weight)
+            because = (professional_why[0] if professional_why
+                       else "job-search wording elsewhere in the message")
+            matches[Category.INTERVIEW].append(meeting_why[0] + ", and " + because)
+        elif meeting and not working:
+            # Somebody is arranging a meeting and nothing in the message says
+            # it has anything to do with work. "Pick a time", "book a slot"
+            # and a calendar link are how a dentist, a school and a sales team
+            # all write, and reading them as an interview is how a reminder
+            # about a cleaning ends up in the job-search folder.
+            if scores[Category.INTERVIEW]:
+                scores[Category.INTERVIEW] *= 0.3
+                strongest[Category.INTERVIEW] *= 0.3
+                matches[Category.INTERVIEW].append(
+                    "(discounted: a meeting, but nothing says it is about work)")
+
         ats_present = any(domain in link_blob or domain in sender_n for domain in ATS_LINK_DOMAINS)
 
         job_bonus = 0.0
@@ -1628,6 +1924,16 @@ class RuleClassifier:
         )
         job_score += job_bonus
         job_matches.extend(structure_notes)
+        if posting:
+            # A description is job-search material even though it contains not
+            # one word a hiring process uses. It is all headings.
+            job_score += posting
+            job_matches.append("it reads as a job description (" +
+                               ", ".join(posting_why[:2]) + ")")
+        if meeting and working:
+            job_score += min(2.4, meeting * min(1.0,
+                                                max(professional, context_now) / 2.0))
+            job_matches.append("a working conversation is being proposed")
         non_job_score, non_job_matches = self._score(
             NON_JOB_SIGNALS, subject_n, subject_t, body_n, body_t
         )
@@ -1703,6 +2009,12 @@ class RuleClassifier:
             non_job_score += selling
             non_job_matches.append(
                 "reads as unsolicited commercial mail (" + ", ".join(selling_why[:2]) + ")")
+
+        blast, blast_why = job_board_blast(subject_n, body_n, list_unsubscribe)
+        if blast:
+            job_evidence = max(0.0, job_evidence - blast)
+            non_job_score += blast
+            non_job_matches.append(blast_why)
 
         elsewhere, elsewhere_why = other_world_context(subject_n, body_n)
         if elsewhere:

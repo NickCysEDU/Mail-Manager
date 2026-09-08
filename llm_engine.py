@@ -201,6 +201,17 @@ as the candidate:
 - an employer or applicant-tracking system responding to an application they submitted
 - an assessment or interviewing platform acting for an employer
 - a referral or networking thread about a specific role for them
+- someone proposing a call, meeting or introduction about the user's career, \
+background or an opening - even when no role is named, no company is named, and \
+the message is only "would you like to find 20 minutes to talk". A named role is \
+NOT required. This is the most commonly missed case: the wording is ordinary \
+("schedule a 20-minute Google Meet call", "set up a quick intro chat") and the \
+only thing marking it out is that a stranger wants to talk to you about your work
+- a job description, posting or advert the user saved, forwarded, or mailed to \
+themselves. These carry no hiring-process wording at all - they are headings \
+(JOB SUMMARY, RESPONSIBILITIES, QUALIFICATIONS, salary range, requisition id) - \
+and they are still the user's job search. Category UNCLASSIFIED_OTHER, since a \
+posting is not a stage of a process
 
 Set false for everything else, including these near-misses:
 - job-board digests ("12 new jobs matching your search"), career newsletters, \
@@ -209,6 +220,15 @@ salary-report marketing, "companies hiring now" blasts
 connection requests, "your job alert", premium upsells
 - mail addressed to the user as an interviewer or hiring manager rather than as a candidate
 - payroll, benefits, or HR mail from their CURRENT employer
+- a meeting being arranged for any other reason: a dentist or clinic appointment, \
+a parent-teacher conference, a sales or product demo, a catch-up with a friend, \
+an internal meeting at their current employer. A booking link proves a meeting, \
+never that it is about a job - check what the meeting is FOR. The test that \
+separates a career conversation from a sales pitch is who the meeting is about: \
+someone who wants to hear about the user's background, experience or plans is \
+talking about their career, and someone who wants to show the user a product, \
+a service or a programme is selling. An assistant writing on behalf of a person \
+who "would like to meet you and learn more about you" is the first, not the second
 - everything unrelated to employment
 
 # STEP 2 - category

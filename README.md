@@ -212,6 +212,21 @@ the sorter it will use, the schedule, and the result of the last background run,
 without opening the window. The **Model** entry is named after whatever is
 currently selected, and switching there is the same as switching in the window.
 
+## What counts as job mail
+
+Whether a message is part of your job search is asked before which part. Two
+things it now recognises that it used to score at zero:
+
+- **A call being proposed, with no role named.** "Please use this link to
+  schedule a 20-minute Google Meet call" — the fixed phrase "schedule a call"
+  breaks the moment somebody says how long it will take.
+- **A job description you saved or mailed to yourself.** It contains not one
+  word a hiring process uses. It is all headings.
+
+Both are checked against what the meeting is *for*. A booking link proves a
+meeting and never that it is about a job, so a dentist's reminder, a
+parent-teacher conference and a sales demo stay where they are.
+
 ## Rules
 
 **Settings → Auto Reply.** A rule is a list of conditions and a list of things

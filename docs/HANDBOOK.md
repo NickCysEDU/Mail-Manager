@@ -15,6 +15,7 @@ Nothing is ever moved without an explicit tick in the table.
 - [What it does](#what-it-does)
 - [The zero-misclassification protocol](#the-zero-misclassification-protocol)
 - [Choosing a model backend](#choosing-a-model-backend)
+- [Is it a job at all](#is-it-a-job-at-all)
 - [Categories](#categories)
 - [Folders it creates](#folders-it-creates)
 - [Quick start](#quick-start)
@@ -28,6 +29,7 @@ Nothing is ever moved without an explicit tick in the table.
 - [Stopping, and process hygiene](#stopping-and-process-hygiene)
 - [Architecture](#architecture)
 - [Tests](#tests)
+- [Measuring a model](#measuring-a-model)
 - [Privacy and cost](#privacy-and-cost)
 - [Troubleshooting](#troubleshooting)
 
@@ -281,6 +283,40 @@ instruction about the others. Local backends are never batched — a 3B model
 handed six emails at once produces mush.
 
 ---
+
+## Is it a job at all
+
+Two questions, deliberately kept apart: **is a meeting being proposed**, and
+**is this about work**. A dentist, a school, a sales team and a hiring manager
+all book calls in the same words, so the first question cannot answer the
+second.
+
+| Detector | What it reads | What it does not do |
+| --- | --- | --- |
+| `meeting_request_score` | A verb near a meeting noun within one sentence, a stated length, an offer of times, a wish to speak | Say why. It is blind to the reason on purpose |
+| `professional_context_score` | Interest in your background, a role or opening, hiring vocabulary, a professional introduction | Decide anything alone. It only ever qualifies |
+| `job_posting_score` | The sections a description is built from: summary, responsibilities, requirements, terms, a reference, an experience demand | Fire on one heading. Ordinary mail uses "requirements" in passing |
+| `job_board_blast` | Many roles at once, an invitation to browse, a board's own schedule — and an unsubscribe header | Fire on mail from a person. No list, no blast |
+
+Three consequences worth knowing:
+
+- **A booking link decides nothing.** It used to add 3.0 to Interview
+  unconditionally, which filed a dentist's reminder and a parent-teacher
+  conference as job mail. It now counts only when something says the
+  conversation is a working one.
+- **A phrase that names a hiring process needs no corroboration.** "Phone
+  screen" and "technical interview" are not ambiguous the way "pick a time"
+  is, so `HIRING_SPECIFIC_SIGNALS` is exempt from the check above. Discounting
+  everything took "let me know your availability for a phone screen" from a
+  score of eight to two and a half.
+- **A description is job-search material even with no process words in it.**
+  Somebody mailing themselves a posting is doing their job search, and a
+  posting is all headings — no "your application", no "we would like to", no
+  "recruiter". It scored exactly zero before.
+
+Redirects are opened out before any of this: a click tracker keeps the real
+destination percent-encoded inside its own URL, so matching a domain list
+against the raw link found the tracker and never the booking page.
 
 ## Categories
 
@@ -963,6 +999,28 @@ moves, **every original message is either still in the inbox or copied exactly
 once** — never both, never neither.
 
 ---
+
+## Measuring a model
+
+    ./dev eval             # the offline sorter, against the labelled sets
+    ./dev eval-llm         # a real model, against the same sets
+
+The two are not interchangeable. `eval-llm` sends real requests and costs real
+money, so it goes one message at a time and reports what it spent.
+
+It also **refuses to count a fallback**. The engine drops to the offline rules
+when a request fails, which is right for a scan and wrong for a measurement: a
+run that quietly answers a third of its questions locally reports the rule
+set's accuracy under the model's name. The tell is `model` ending in
+`→ local rules`; those rows are listed as "not scored, and not counted either".
+
+This is not hypothetical. A first attempt at measuring the prompt change below
+reported four model failures which were, every one of them, the rule set's
+output arriving through the fallback — identical category and identical
+confidence, on exactly the four rows that were marked wrong and no others.
+
+Free tiers are small. Gemini's is 20 requests per day *per model*, which is
+enough for a targeted set and not enough for the 102-message labelled one.
 
 ## Privacy and cost
 
