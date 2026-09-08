@@ -287,6 +287,11 @@ class TestCliFlags:
 
     def test_show_config_reports_missing_credentials(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        # Never the machine's own Keychain: what it holds is not this test's
+        # business, and asking it can block on a permission prompt nobody is
+        # there to answer.
+        monkeypatch.setattr("config.CredentialStore",
+                            lambda *a, **k: InMemoryCredentialStore())
         assert main_module.main(["--show-config"]) == 0
         output = capsys.readouterr().out
         assert "confidence_threshold" in output
@@ -296,6 +301,8 @@ class TestCliFlags:
     def test_show_config_never_prints_a_secret(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-super-secret-value")
+        monkeypatch.setattr("config.CredentialStore",
+                            lambda *a, **k: InMemoryCredentialStore())
         main_module.main(["--show-config"])
         output = capsys.readouterr().out
         assert "sk-ant-super-secret-value" not in output

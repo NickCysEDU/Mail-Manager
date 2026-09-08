@@ -384,3 +384,39 @@ def test_migration_is_skipped_when_the_home_is_overridden(tmp_path, monkeypatch)
     monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
     assert config.legacy_app_support_dir() is None
     assert config.migrate_legacy_support_files() == []
+
+
+class TestAKeychainThatWillNotAnswer:
+    """macOS asks permission per signed binary, and can be left waiting.
+
+    A rebuilt or re-signed copy is a different app as far as the Keychain is
+    concerned, so it asks again; run from a terminal or a launchd agent there
+    is nobody to click Allow. None of that should stop a key that was handed
+    over another way from being used.
+    """
+
+    class Blocked(CredentialStore):
+        def get(self, account):
+            raise CredentialError("the Keychain did not answer in time")
+
+    def test_the_environment_is_still_read(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-from-the-environment")
+        assert (self.Blocked().get_provider_key("anthropic")
+                == "sk-ant-from-the-environment")
+
+    def test_the_trouble_is_reported_when_there_is_nothing_else(self, monkeypatch):
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        with pytest.raises(CredentialError, match="did not answer"):
+            self.Blocked().get_provider_key("gemini")
+
+    def test_a_stored_key_still_wins_over_the_environment(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-from-the-environment")
+        store = InMemoryCredentialStore()
+        store.set_provider_key("anthropic", "sk-ant-from-the-keychain")
+        assert store.get_provider_key("anthropic") == "sk-ant-from-the-keychain"
+
+    def test_a_timeout_is_only_asked_for_where_nobody_is_watching(self):
+        """A window can afford to wait; a terminal command cannot."""
+        assert CredentialStore().read_timeout is None
+        assert CredentialStore(read_timeout=5.0).read_timeout == 5.0

@@ -7,7 +7,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import Qt  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 import accounts as accounts_module  # noqa: E402
 import autoreply  # noqa: E402
@@ -694,3 +694,115 @@ class TestTheRuleListNeverCutsAName:
         finally:
             dialog.close()
             dialog.deleteLater()
+
+
+class TestRulesRunAfterAScan:
+    """“Run these rules after a scan” has to actually do that."""
+
+    def _outcome(self, items):
+        from workers import ScanOutcome
+        return ScanOutcome(items=list(items))
+
+    def _item(self):
+        from models import (Category, Classification, EmailMessage, FolderPlan,
+                            OtherCategory, TriageItem)
+        return TriageItem(
+            email=EmailMessage(uid="1", subject="Interview invitation"),
+            classification=Classification(
+                summary="s", reasoning="r", is_job_related=True,
+                category=Category.INTERVIEW,
+                other_category=OtherCategory.NOT_APPLICABLE,
+                confidence_score=0.99),
+            folders=FolderPlan())
+
+    def _armed_settings(self):
+        rule = autoreply.Rule(
+            name="tick interviews", enabled=True,
+            conditions=[autoreply.Condition("subject", "contains", "interview")],
+            actions=[autoreply.Action("tick")])
+        return Settings(auto_reply=True, reply_rules=[rule.to_dict()])
+
+    def test_it_is_started_when_armed(self, window, monkeypatch):
+        window.settings = self._armed_settings()
+        assert window.settings.replies_armed
+        called = []
+        monkeypatch.setattr(window, "draft_replies",
+                            lambda prompted=True: called.append(prompted))
+        window._on_scan_done(self._outcome([self._item()]))
+        QApplication.processEvents()
+        assert called == [False], "the rules did not run, or asked to be prompted"
+
+    def test_it_is_not_started_when_the_setting_is_off(self, window, monkeypatch):
+        window.settings = Settings(auto_reply=False)
+        called = []
+        monkeypatch.setattr(window, "draft_replies",
+                            lambda prompted=True: called.append(prompted))
+        window._on_scan_done(self._outcome([self._item()]))
+        QApplication.processEvents()
+        assert called == []
+
+    def test_it_is_not_started_when_no_rule_is_finished(self, window, monkeypatch):
+        half = autoreply.Rule(name="half", enabled=True,
+                              actions=[autoreply.Action("draft", "")])
+        window.settings = Settings(auto_reply=True, reply_rules=[half.to_dict()])
+        called = []
+        monkeypatch.setattr(window, "draft_replies",
+                            lambda prompted=True: called.append(prompted))
+        window._on_scan_done(self._outcome([self._item()]))
+        QApplication.processEvents()
+        assert called == []
+
+    def test_an_empty_scan_starts_nothing(self, window, monkeypatch):
+        window.settings = self._armed_settings()
+        called = []
+        monkeypatch.setattr(window, "draft_replies",
+                            lambda prompted=True: called.append(prompted))
+        window._on_scan_done(self._outcome([]))
+        QApplication.processEvents()
+        assert called == []
+
+    def test_an_unprompted_run_does_not_raise_a_box(self, window, monkeypatch):
+        """Nobody asked, so the result goes to the log, not in front of them."""
+        from workers import ReplyRun
+        boxes = []
+        monkeypatch.setattr(QMessageBox, "information",
+                            lambda *a, **k: boxes.append(a))
+        window.model.set_items([self._item()])
+        window._replies_prompted = False
+        run = ReplyRun()
+        run.add(window.model.items[0], autoreply.Outcome(
+            rule_names=["tick interviews"], tick=True))
+        window._on_rules_run(run)
+        assert boxes == []
+        assert window.model.items[0].approved is True
+
+    def test_a_prompted_run_does_raise_one(self, window, monkeypatch):
+        from workers import ReplyRun
+        boxes = []
+        monkeypatch.setattr(QMessageBox, "information",
+                            lambda *a, **k: boxes.append(a))
+        window.model.set_items([self._item()])
+        window._replies_prompted = True
+        run = ReplyRun()
+        run.add(window.model.items[0], autoreply.Outcome(
+            rule_names=["tick interviews"], tick=True))
+        window._on_rules_run(run)
+        assert len(boxes) == 1
+
+    def test_filing_and_leaving_reach_the_table(self, window):
+        from workers import ReplyRun
+        window.model.set_items([self._item()])
+        item = window.model.items[0]
+        run = ReplyRun()
+        run.add(item, autoreply.Outcome(rule_names=["r"],
+                                        file_into="Sorted Mail/Work", tick=True))
+        window._replies_prompted = False
+        window._on_rules_run(run)
+        assert item.override_folder == "Sorted Mail/Work"
+        assert item.approved is True
+
+        leave = ReplyRun()
+        leave.add(item, autoreply.Outcome(rule_names=["r"], leave=True))
+        window._on_rules_run(leave)
+        assert item.override_folder is None
+        assert item.approved is False

@@ -56,6 +56,47 @@ FIELDS: Tuple[Tuple[str, str, str], ...] = (
 )
 _FIELD_KIND = {name: kind for name, _label, kind in FIELDS}
 
+#: What each field actually looks at, for the help text beside it.
+FIELD_HELP: Dict[str, str] = {
+    "category": "Which part of a job search this is. Empty for everyday mail, "
+                "so a job rule cannot fire on a receipt.",
+    "topic": "What kind of everyday mail this is. Empty for job mail, for the "
+             "same reason.",
+    "sender": "The display name and the address together — “Dana Reyes "
+              "dana@northwind.example”.",
+    "sender_domain": "Everything after the last @. Use “ends with” to catch a "
+                     "company and all its subdomains.",
+    "subject": "The subject line as it arrived, decoded.",
+    "body": "The message text, with quoted history and signatures already "
+            "taken out. The first 20,000 characters.",
+    "anywhere": "The subject and the message text together.",
+    "confidence": "How sure the sorter is, from 0 to 1. Anything above 0.9 is "
+                  "a strong signal; below 0.7 it is guessing.",
+    "mailbox": "Which account it arrived in. Matches the address, the label "
+               "or the internal id.",
+    "age_days": "How long ago it arrived, counted from now rather than from "
+                "the start of the scan.",
+    "is_bulk": "Whether it carries an unsubscribe header — a newsletter, a "
+               "mailing list, a marketing send.",
+    "has_attachment": "Whether anything was attached.",
+    "is_reply": "Whether the subject starts with Re:.",
+}
+
+#: What each action does, and what it does not do.
+ACTION_HELP: Dict[str, str] = {
+    "draft": "Fills your template in and saves it to Drafts. Nothing is sent.",
+    "draft_ai": "Hands the message to the model with your guidance and saves "
+                "what comes back to Drafts. Nothing is sent.",
+    "file_into": "Points the row at this folder. Nothing moves until you "
+                 "press Apply.",
+    "tick": "Ticks the row, so Apply will file it.",
+    "untick": "Unticks the row, so Apply will skip it.",
+    "mark_read": "Marks it read on the server, straight away.",
+    "flag": "Flags it on the server, straight away.",
+    "leave": "Cancels any folder an earlier rule chose for it.",
+    "stop": "Skips every later rule for this message.",
+}
+
 #: Which operators make sense for which kind of field.
 OPERATORS: Tuple[Tuple[str, str, Tuple[str, ...]], ...] = (
     ("is", "is", ("category", "topic", "mailbox")),
@@ -570,7 +611,9 @@ class Rule:
         if len(self.conditions) > 3:
             conditions += f", and {len(self.conditions) - 3} more"
         doing = ", ".join(_uncapitalise(a.describe())
-                          for a in self.actions[:2]) or "nothing"
+                          for a in self.actions[:3]) or "nothing"
+        if len(self.actions) > 3:
+            doing += f", and {len(self.actions) - 3} more"
         return f"{conditions} → {doing}"
 
     # -- matching ---------------------------------------------------------
