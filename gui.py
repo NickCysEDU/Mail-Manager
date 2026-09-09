@@ -118,6 +118,7 @@ from models import (
 from flowlayout import FlowLayout, Spacer
 import accounts
 import autoreply
+import buildinfo
 import helpmode
 import ondevice
 import theme
@@ -1017,6 +1018,24 @@ def _reasoning_html(item: TriageItem) -> str:
 # ==========================================================================
 # Settings dialog
 # ==========================================================================
+class VersionLabel(QLabel):
+    """The build, bottom right. Click to copy it for a bug report."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(buildinfo.short(), parent)
+        self.setProperty("dim", "true")
+        self.setToolTip(f"{buildinfo.full()}\n\nClick to copy.")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        QApplication.clipboard().setText(buildinfo.full())
+        window = self.window()
+        if hasattr(window, "_set_status"):
+            window._set_status("Build details copied.")
+        super().mouseReleaseEvent(event)
+
+
 class WrappingList(QListWidget):
     """A list whose items wrap onto as many lines as their text needs.
 
@@ -1820,6 +1839,7 @@ class SettingsDialog(QDialog):
         self._ollama_worker = None
         self._ollama_probe = None
         self._ollama_state = None
+        self._keychain_worker = None
         self.ollama_button.clicked.connect(self._do_ollama_step)
 
         self.model_combo = QComboBox()
@@ -2056,24 +2076,38 @@ class SettingsDialog(QDialog):
             return
 
         if step == "start":
-            # serve does not return, so it is launched rather than waited on.
-            try:
-                subprocess.Popen(command, stdout=subprocess.DEVNULL,
-                                 stderr=subprocess.DEVNULL, start_new_session=True)
-            except OSError as exc:
-                self.status.setText(f"Could not start Ollama: {exc}")
-                return
-            self.status.setText("Starting Ollama… give it a few seconds.")
-            QTimer.singleShot(4000, self._recheck_ollama)
+            self._begin_ollama_start(command)
             return
 
-        self._begin_ollama_step(step, command)
+        alternatives = ondevice.install_commands() if step == "install" else ()
+        self._begin_ollama_step(step, command, alternatives)
 
-    def _begin_ollama_step(self, step: str, command) -> None:
+    def _begin_ollama_start(self, command) -> None:
+        """Start the server and wait for it to answer, rather than assuming."""
+        from workers import OnDeviceStartWorker
+
+        worker = OnDeviceStartWorker(
+            command, self.base_url_edit.text().strip(), parent=self)
+        self._ollama_worker = worker
+        self.ollama_button.setEnabled(False)
+        self.ollama_stop.setVisible(True)
+        self.ollama_progress.setVisible(True)
+        self.ollama_progress.setRange(0, 0)          # it cannot say how long
+        self.ollama_step_label.setVisible(True)
+        self.ollama_step_label.setText("Starting Ollama…")
+        self.status.setText("Starting Ollama…")
+        worker.progress.connect(self._on_ollama_progress)
+        worker.log_message.connect(self._on_ollama_log)
+        worker.failed.connect(self._on_ollama_failed)
+        worker.finished_ok.connect(self._on_ollama_done)
+        worker.finished.connect(self._clear_ollama_worker)
+        worker.start()
+
+    def _begin_ollama_step(self, step: str, command, alternatives=()) -> None:
         """Hand the command to a thread and show it working."""
         from workers import OnDeviceWorker
 
-        worker = OnDeviceWorker(step, command, parent=self)
+        worker = OnDeviceWorker(step, command, alternatives, parent=self)
         self._ollama_worker = worker
         self.ollama_button.setEnabled(False)
         self.ollama_stop.setVisible(True)
@@ -3109,14 +3143,37 @@ class SettingsDialog(QDialog):
         self._density_changed()
         self.rows_spin.setValue(settings.effective_row_lines)
 
-        try:
-            self.password_edit.setText(self._store.get_icloud_password(settings.icloud_email))
-            self.status.setText(f"Keychain backend: {self._store.backend_name()}")
-        except CredentialError as exc:
-            self.status.setText(f"<span style='color:{ACCENT_RED}'>{_html(str(exc))}</span>")
+        self._read_keychain(settings.icloud_email)
 
         self._routing_changed()
         self._update_folder_preview()
+
+    def _read_keychain(self, address: str) -> None:
+        """Fill in the stored password, off the thread that draws the window.
+
+        This used to be a plain call here. macOS asks permission whenever the
+        app's signature changes, which is every rebuild, and the window froze
+        behind the prompt asking about it.
+        """
+        from workers import KeychainReadWorker
+
+        self.status.setText("Reading the Keychain…")
+        worker = KeychainReadWorker(self._store, address, parent=self)
+        self._keychain_worker = worker
+        worker.finished_ok.connect(self._on_keychain_read)
+        worker.finished.connect(lambda: setattr(self, "_keychain_worker", None))
+        worker.start()
+
+    @Slot(object)
+    def _on_keychain_read(self, found: dict) -> None:
+        if found.get("error"):
+            self.status.setText(
+                f"<span style='color:{ACCENT_RED}'>{_html(found['error'])}</span>")
+            return
+        # Only if nobody has started typing in the meantime.
+        if not self.password_edit.text():
+            self.password_edit.setText(found.get("password", ""))
+        self.status.setText(f"Keychain backend: {found.get('backend', '')}")
 
     def _routing_changed(self) -> None:
         routing = NonJobRouting.parse(self.routing_combo.currentData())
@@ -3274,9 +3331,11 @@ class SettingsDialog(QDialog):
         part-way through unpacking a cask is not a good thing to kill because
         somebody pressed Escape, so they are asked first.
         """
-        probe, self._ollama_probe = getattr(self, "_ollama_probe", None), None
-        if probe is not None and probe.isRunning() and not probe.stop(2000):
-            _abandon(probe)
+        for name in ("_ollama_probe", "_keychain_worker"):
+            spare = getattr(self, name, None)
+            setattr(self, name, None)
+            if spare is not None and spare.isRunning() and not spare.stop(2000):
+                _abandon(spare)
 
         worker = getattr(self, "_ollama_worker", None)
         if worker is None or not worker.isRunning():
@@ -3494,8 +3553,14 @@ class MainWindow(QMainWindow):
         self.status_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.usage_label = QLabel("")
         self.usage_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        # Which build this is, in the corner. A version number alone does not
+        # identify one during development - every change between releases
+        # carries the same one - so it is the commit that makes a bug report
+        # answerable. Click it to copy the lot.
+        self.version_label = VersionLabel()
         self.statusBar().addWidget(self.status_label, 1)
         self.statusBar().addPermanentWidget(self.usage_label)
+        self.statusBar().addPermanentWidget(self.version_label)
         self.statusBar().setSizeGripEnabled(True)
 
     #: Default column widths, also used by View -> Reset column widths.

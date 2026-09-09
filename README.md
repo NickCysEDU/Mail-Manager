@@ -297,6 +297,13 @@ The model is told not to invent a fact and not to commit you to anything; where
 it needs something it does not have, it leaves `[a note in brackets]` and the
 draft lists those at the bottom. Bulk mail is skipped by default, per rule.
 
+## Which build is this
+
+Bottom right: `1.0.0 · a1b2c3d`. A version number alone does not identify a
+build between releases; the commit does. Hover for the full line — Python
+version, and whether it is running the Intel or the Apple silicon slice — and
+click to copy it into a bug report.
+
 ## Undo
 
 ⌘Z after an Apply moves everything back where it came from. The app moves real

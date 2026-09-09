@@ -56,7 +56,21 @@ TARGET_ARCH = _target_arch()
 
 ROOT = Path(SPECPATH).resolve()
 
-datas = []
+# Which commit this app came from. There is no git inside a .app, so it is
+# written down here and read back by buildinfo at runtime.
+_stamp = ROOT / "BUILD_STAMP"
+try:
+    import sys as _sys
+
+    _sys.path.insert(0, str(ROOT))
+    import buildinfo as _buildinfo
+
+    _buildinfo.write_stamp(_stamp)
+    print(f"==> Build stamp: {_stamp.read_text().strip()}")
+except Exception as _exc:      # never fail a build over a label
+    print(f"==> No build stamp ({_exc})")
+
+datas = [(str(_stamp), ".")] if _stamp.exists() else []
 for asset in ("icon.png", "icon.icns"):
     path = ROOT / "assets" / asset
     if path.exists():

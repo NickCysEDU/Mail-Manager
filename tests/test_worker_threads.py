@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from datetime import datetime, timezone
 
 import pytest
@@ -524,3 +525,165 @@ class TestReplyWorker:
         worker.run()
         assert recorder.progress[0][0] == 0
         assert recorder.progress[-1][:2] == (5, 5)
+
+
+# --------------------------------------------------------------------------
+# On-device setup
+# --------------------------------------------------------------------------
+class TestKeychainReadWorker:
+    """Reading a secret must never be done on the thread drawing the window.
+
+    macOS asks permission whenever an app's signature changes — every rebuild —
+    and the call blocks until somebody answers. Made from the UI thread, the
+    window freezes behind the very dialog it is asking about. That happened
+    during development: three processes ended up wedged in uninterruptible
+    state behind one unanswered prompt.
+    """
+
+    class SlowStore:
+        def __init__(self, delay=0.4, blow_up=False):
+            self.delay, self.blow_up = delay, blow_up
+
+        def get_icloud_password(self, address):
+            time.sleep(self.delay)
+            if self.blow_up:
+                raise RuntimeError("the Keychain did not answer")
+            return "app-specific"
+
+        def backend_name(self):
+            return "test.Keyring"
+
+    def test_the_password_comes_back(self, qapp):
+        from workers import KeychainReadWorker
+
+        worker = KeychainReadWorker(self.SlowStore(0.05), "you@icloud.example")
+        recorder = Recorder(worker)
+        worker.run()
+        assert recorder.result["password"] == "app-specific"
+        assert recorder.result["backend"] == "test.Keyring"
+        assert not recorder.result["error"]
+
+    def test_a_refusal_is_reported_not_raised(self, qapp):
+        from workers import KeychainReadWorker
+
+        worker = KeychainReadWorker(self.SlowStore(0.01, blow_up=True), "x@y.example")
+        recorder = Recorder(worker)
+        worker.run()
+        assert "did not answer" in recorder.result["error"]
+
+    def test_the_window_keeps_running_while_it_waits(self, qapp):
+        from workers import KeychainReadWorker
+
+        worker = KeychainReadWorker(self.SlowStore(0.6), "you@icloud.example")
+        recorder = Recorder(worker)
+        worker.start()
+        worst, started = 0.0, time.perf_counter()
+        while worker.isRunning() and time.perf_counter() - started < 10:
+            tick = time.perf_counter()
+            qapp.processEvents()
+            worst = max(worst, time.perf_counter() - tick)
+            time.sleep(0.01)
+        worker.wait(2000)
+        qapp.processEvents()
+        assert worst < 0.1, f"the UI thread stalled for {worst:.2f}s"
+        assert recorder.result["password"] == "app-specific"
+
+
+class TestOnDeviceStartWorker:
+    def test_already_running_is_noticed_without_launching_anything(self, qapp,
+                                                                   monkeypatch):
+        import ondevice
+        from workers import OnDeviceStartWorker
+
+        monkeypatch.setattr(ondevice, "probe", lambda *a, **k: (True, [], ""))
+        launched = []
+        monkeypatch.setattr("workers.subprocess.Popen",
+                            lambda *a, **k: launched.append(a))
+        worker = OnDeviceStartWorker(["/bin/sh", "-c", "true"], "")
+        recorder = Recorder(worker)
+        worker.run()
+        assert recorder.result.ok is True
+        assert launched == [], "it started a second server"
+
+    def test_it_waits_for_a_real_answer(self, qapp, monkeypatch):
+        """Launching and waiting a fixed few seconds was a guess."""
+        import ondevice
+        from workers import OnDeviceStartWorker
+
+        answers = iter([False, False, True])
+        monkeypatch.setattr(ondevice, "probe",
+                            lambda *a, **k: (next(answers, True), [], ""))
+        monkeypatch.setattr("workers.subprocess.Popen", lambda *a, **k: None)
+        monkeypatch.setattr(ondevice.time, "sleep", lambda _s: None)
+        worker = OnDeviceStartWorker(["/bin/sh", "-c", "true"], "")
+        recorder = Recorder(worker)
+        worker.run()
+        assert recorder.result.ok is True
+
+    def test_never_answering_says_so(self, qapp, monkeypatch):
+        import ondevice
+        from workers import OnDeviceStartWorker
+
+        monkeypatch.setattr(ondevice, "probe", lambda *a, **k: (False, [], "refused"))
+        monkeypatch.setattr(ondevice, "wait_until_answering",
+                            lambda *a, **k: False)
+        monkeypatch.setattr("workers.subprocess.Popen", lambda *a, **k: None)
+        worker = OnDeviceStartWorker(["/bin/sh", "-c", "true"],
+                                     "http://127.0.0.1:1")
+        recorder = Recorder(worker)
+        worker.run()
+        assert recorder.result.ok is False
+        assert "never answered" in recorder.result.describe()
+
+    def test_a_command_that_will_not_launch_is_reported(self, qapp, monkeypatch):
+        import ondevice
+        from workers import OnDeviceStartWorker
+
+        monkeypatch.setattr(ondevice, "probe", lambda *a, **k: (False, [], ""))
+        worker = OnDeviceStartWorker(["/nope/does-not-exist"], "")
+        recorder = Recorder(worker)
+        worker.run()
+        assert recorder.result.ok is False
+        assert "Could not start" in recorder.result.describe()
+
+
+class TestOnDeviceWorkerAlternatives:
+    def test_an_unknown_package_name_falls_through(self, qapp):
+        """Homebrew renames casks; the old name stops working without notice."""
+        from workers import OnDeviceWorker
+
+        worker = OnDeviceWorker(
+            "install",
+            ["/bin/sh", "-c", "echo 'Error: No casks found for x.' >&2; exit 1"],
+            [["/bin/sh", "-c", "echo installed"]])
+        recorder = Recorder(worker)
+        worker.run()
+        assert recorder.result.ok is True
+        assert any("trying the next one" in line for line in recorder.logs)
+
+    def test_an_ordinary_failure_does_not_try_another_name(self, qapp):
+        from workers import OnDeviceWorker
+
+        worker = OnDeviceWorker(
+            "install",
+            ["/bin/sh", "-c", "echo 'no space left on device' >&2; exit 1"],
+            [["/bin/sh", "-c", "echo SHOULD-NOT-RUN"]])
+        recorder = Recorder(worker)
+        worker.run()
+        assert recorder.result.ok is False
+        assert not any("SHOULD-NOT-RUN" in line for line in recorder.result.lines)
+        assert "disk space" in recorder.result.describe()
+
+    def test_progress_is_reported_and_never_goes_backwards(self, qapp):
+        from workers import OnDeviceWorker
+
+        script = (r'printf "pulling manifest\n"; '
+                  r'printf "pulling ab12cd34ef56:  20%% 400 MB/2.0 GB\n"; '
+                  r'printf "pulling ab12cd34ef56:  80%% 1.6 GB/2.0 GB\n"; '
+                  r'printf "success\n"')
+        worker = OnDeviceWorker("pull", ["/bin/sh", "-c", script])
+        recorder = Recorder(worker)
+        worker.run()
+        percents = [done for done, _total, _msg in recorder.progress]
+        assert percents == sorted(percents), percents
+        assert max(percents) == 100

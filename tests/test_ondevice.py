@@ -153,3 +153,147 @@ class TestProbing:
         for endpoint in ("", "not a url", "http://", "ftp://x", "http://x.invalid"):
             running, models, _error = ondevice.probe(endpoint, timeout=0.5)
             assert running is False and models == []
+
+
+class TestTerminalOutput:
+    """Ollama draws a redrawn frame, not a log. Most of its output is escapes."""
+
+    def test_escape_codes_never_reach_the_reader(self):
+        raw = "\x1b[?2026h\x1b[?25l\x1b[1Gpulling manifest ⠙ \x1b[K\x1b[?25h\x1b[?2026l"
+        assert ondevice.clean_terminal_text(raw) == "pulling manifest"
+
+    def test_a_redrawn_frame_is_split_into_its_rows(self):
+        """A frame carries the heading and the bar; one line would hide one.
+
+        This is why a two-gigabyte download reported "reading the manifest"
+        from beginning to end: the heading came first in the same blob.
+        """
+        seen = []
+        frame = ("pulling dde5aa3fc5ff:  21% 429 MB/2.0 GB\x1b[K"
+                 "\x1b[A\x1b[1Gpulling manifest \x1b[K")
+        ondevice._emit(frame.encode(), seen.append, final=True)
+        assert seen == ["pulling dde5aa3fc5ff:  21% 429 MB/2.0 GB",
+                        "pulling manifest"]
+
+    def test_a_spinner_is_not_a_label(self):
+        assert "⠙" not in ondevice.clean_terminal_text("pulling manifest ⠙")
+
+
+class TestProgressReader:
+    def _feed(self, lines):
+        reader = ondevice.ProgressReader()
+        return [reader.feed(line) for line in lines]
+
+    def test_bytes_drive_the_bar(self):
+        out = self._feed(["pulling abc123def456:  25% ▕██▏ 500 MB/2.0 GB"])
+        assert out[0][0] == pytest.approx(25.0, abs=0.5)
+        assert out[0][1] == "Downloading 500 MB of 2 GB"
+
+    def test_a_redrawn_heading_does_not_drag_it_back(self):
+        """The heading arrives between every update of the bar."""
+        reader = ondevice.ProgressReader()
+        reader.feed("pulling abc123def456:  60% 1.2 GB/2.0 GB")
+        before = reader.percent
+        assert reader.feed("pulling manifest") is None
+        assert reader.percent == before
+
+    def test_it_never_goes_backwards(self):
+        reader = ondevice.ProgressReader()
+        seen = []
+        for line in ("pulling manifest",
+                     "pulling aaa111bbb222:  40% 800 MB/2.0 GB",
+                     "pulling aaa111bbb222:  10% 200 MB/2.0 GB",
+                     "verifying sha256 digest",
+                     "writing manifest", "success"):
+            out = reader.feed(line)
+            if out:
+                seen.append(out[0])
+        assert seen == sorted(seen), seen
+
+    def test_a_small_layer_does_not_restart_the_bar(self):
+        """A model is one big file and a few tiny ones."""
+        reader = ondevice.ProgressReader()
+        reader.feed("pulling aaa111bbb222:  50% 1.0 GB/2.0 GB")
+        assert reader.feed("pulling ccc333ddd444:  10% 1 KB/12 KB") is None
+        assert reader.percent == pytest.approx(50.0, abs=0.5)
+
+    def test_finishing_reaches_a_hundred(self):
+        reader = ondevice.ProgressReader()
+        reader.feed("pulling aaa111bbb222:  50% 1.0 GB/2.0 GB")
+        assert reader.finish() == (100.0, "Finished.")
+
+    @pytest.mark.parametrize("junk", ["", "   ", "%%%", "\x00", "MB/GB",
+                                      "999999 ZB/1 QB", "-5 MB/2 GB"])
+    def test_junk_does_not_raise(self, junk):
+        ondevice.ProgressReader().feed(junk)
+
+
+class TestInstallCandidates:
+    def test_more_than_one_name_is_offered(self):
+        """The cask was renamed from "ollama" to "ollama-app" once already."""
+        assert ondevice.BREW_CASKS[0] == "ollama-app"
+        assert "ollama" in ondevice.BREW_CASKS
+
+    @pytest.mark.parametrize("output", [
+        "Warning: Cask 'x' is unavailable: No Cask with this name exists.",
+        "Error: No casks found for x.",
+        "Error: No formulae or casks found for x.",
+        "Warning: No available formula with the name \"x\".",
+    ])
+    def test_homebrew_saying_it_never_heard_of_it(self, output):
+        assert ondevice.is_unknown_package(output) is True
+
+    @pytest.mark.parametrize("output", [
+        "Error: no space left on device",
+        "==> Downloading https://example.com/x.tar.gz",
+        "curl: (6) Could not resolve host",
+        "",
+    ])
+    def test_other_failures_are_not_worth_another_name(self, output):
+        assert ondevice.is_unknown_package(output) is False
+
+
+class TestPlainLanguageErrors:
+    @pytest.mark.parametrize("output, expected", [
+        ("Error: pull model manifest: file does not exist", "no model by that name"),
+        ("Error: could not connect to ollama app", "server is not running"),
+        ("write /blobs: no space left on device", "disk space"),
+        ("Error: No casks found for ollama", "does not have a package"),
+    ])
+    def test_a_known_failure_is_explained(self, output, expected):
+        assert expected in ondevice.explain(output)
+
+    def test_an_unknown_failure_invents_nothing(self):
+        assert ondevice.explain("something nobody has ever seen") == ""
+
+
+class TestStartingTheServer:
+    def test_the_app_is_preferred_over_serve(self, monkeypatch):
+        """A second `ollama serve` exits with "address already in use"."""
+        monkeypatch.setattr(ondevice, "find_app", lambda: "/Applications/Ollama.app")
+        monkeypatch.setattr(ondevice, "find_binary", lambda: "/usr/local/bin/ollama")
+        assert ondevice.start_command()[:2] == ["/usr/bin/open", "-a"]
+
+    def test_serve_is_the_fallback(self, monkeypatch):
+        monkeypatch.setattr(ondevice, "find_app", lambda: None)
+        monkeypatch.setattr(ondevice, "find_binary", lambda: "/usr/local/bin/ollama")
+        assert ondevice.start_command() == ["/usr/local/bin/ollama", "serve"]
+
+    def test_nothing_installed_means_no_command(self, monkeypatch):
+        monkeypatch.setattr(ondevice, "find_app", lambda: None)
+        monkeypatch.setattr(ondevice, "find_binary", lambda: None)
+        assert ondevice.start_command() is None
+
+    def test_waiting_gives_up_rather_than_hanging(self):
+        started = time.perf_counter()
+        assert ondevice.wait_until_answering("http://127.0.0.1:1",
+                                             timeout=1.5) is False
+        assert time.perf_counter() - started < 5.0
+
+    def test_waiting_can_be_stopped(self):
+        cancel = threading.Event()
+        threading.Timer(0.4, cancel.set).start()
+        started = time.perf_counter()
+        assert ondevice.wait_until_answering("http://127.0.0.1:1", timeout=30,
+                                             cancel=cancel) is False
+        assert time.perf_counter() - started < 3.0

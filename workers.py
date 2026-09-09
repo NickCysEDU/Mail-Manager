@@ -9,6 +9,7 @@ of 200 messages can spend minutes in the model backend.
 from __future__ import annotations
 
 import logging
+import subprocess
 import threading
 import traceback
 from dataclasses import dataclass, field, replace
@@ -786,6 +787,9 @@ class OnDeviceResult:
                 return line.strip()
         return ""
 
+    #: A plain sentence for a known failure, filled in by the worker.
+    explanation: str = ""
+
     def describe(self) -> str:
         if self.cancelled:
             return "Stopped. Nothing was left half-installed on purpose, but " \
@@ -794,6 +798,8 @@ class OnDeviceResult:
             return {"install": "Ollama is installed.",
                     "pull": "The model is downloaded and ready.",
                     "start": "Ollama is running."}.get(self.step, "Done.")
+        if self.explanation:
+            return self.explanation
         return f"That did not work. {self.tail[:160]}"
 
 
@@ -835,42 +841,66 @@ class OnDeviceWorker(_BaseWorker):
     finished_ok = Signal(object)
     task_name = "on-device setup"
 
-    def __init__(self, step: str, command: Sequence[str], parent=None) -> None:
+    def __init__(self, step: str, command: Sequence[str],
+                 alternatives: Sequence[Sequence[str]] = (), parent=None) -> None:
         super().__init__(parent)
         self.step = step
         self.command = list(command)
+        #: Other ways to do the same thing, tried only when the first fails
+        #: because the tool has never heard of it. Homebrew renames casks.
+        self.alternatives = [list(a) for a in alternatives]
 
     def run(self) -> None:
         import ondevice
 
         result = OnDeviceResult(step=self.step)
-        seen_percent = 0.0
+        reader = ondevice.ProgressReader()
         started = time.monotonic()
+        last_said = [0.0]
 
         def line(text: str) -> None:
-            nonlocal seen_percent
+            # Keep only the last few hundred lines: a download redraws its
+            # bar ten times a second for several minutes.
             result.lines.append(text)
-            # Only the last few hundred, so a chatty install cannot grow
-            # without bound on a long download.
-            if len(result.lines) > 500:
+            if len(result.lines) > 400:
                 del result.lines[:200]
-            percent, label = ondevice.parse_progress(text)
-            if percent is None:
-                # Nothing to go on, so keep the bar where it is and say what
-                # is happening. A bar that jumps back to zero on every log
-                # line is worse than one that waits.
-                self._emit_progress(int(seen_percent), 100, label or text[:80])
+            update = reader.feed(text)
+            if update is None:
                 return
-            # Never let the bar go backwards: a pull reports each layer from
-            # zero, and a bar that restarts four times reads as four failures.
-            seen_percent = max(seen_percent, percent)
-            self._emit_progress(int(seen_percent), 100, label or "Working")
+            percent, label = update
+            # Ten times a second is more than a progress bar can show and
+            # more than the queue should carry. A tenth of a per cent, or a
+            # second, is enough to look alive.
+            now = time.monotonic()
+            if percent < 100.0 and now - last_said[0] < 0.2:
+                return
+            last_said[0] = now
+            self._emit_progress(int(percent), 100, label or "Working")
 
-        self._log(f"Running: {' '.join(self.command)}")
-        self._emit_progress(0, 100, "Starting…")
-        ok = ondevice.stream(self.command, line, cancel=self.cancel_event)
+        attempts = [self.command] + [a for a in self.alternatives
+                                     if a != self.command]
+        ok = False
+        for index, command in enumerate(attempts):
+            if self.cancel_event.is_set():
+                break
+            if index:
+                self._log("That name is unknown here; trying the next one.")
+                reader = ondevice.ProgressReader()
+            self._log(f"Running: {' '.join(command)}")
+            self._emit_progress(0, 100, "Starting…")
+            before = len(result.lines)
+            ok = ondevice.stream(command, line, cancel=self.cancel_event)
+            if ok or self.cancel_event.is_set():
+                break
+            # Only a name Homebrew does not know is worth another go. A
+            # download that failed will fail the same way under another name.
+            if not ondevice.is_unknown_package("\n".join(result.lines[before:])):
+                break
+
         result.cancelled = self.cancel_event.is_set()
         result.ok = ok and not result.cancelled
+        if not result.ok and not result.cancelled:
+            result.explanation = ondevice.explain("\n".join(result.lines[-40:]))
         if result.ok:
             self._emit_progress(100, 100, "Finished.")
         took = time.monotonic() - started
@@ -878,6 +908,95 @@ class OnDeviceWorker(_BaseWorker):
         for text in result.lines[-4:]:
             self._log(f"    {text}")
         self.finished_ok.emit(result)
+
+
+class OnDeviceStartWorker(_BaseWorker):
+    """Starts the local server and waits until it actually answers.
+
+    The old flow launched it, waited four seconds and said it had started.
+    That was a guess, and wrong in both directions: too short for a cold
+    start, and it claimed success when nothing had come up at all.
+    """
+
+    finished_ok = Signal(object)
+    task_name = "starting Ollama"
+
+    def __init__(self, command: Sequence[str], endpoint: str = "",
+                 parent=None) -> None:
+        super().__init__(parent)
+        self.command = list(command)
+        self.endpoint = endpoint
+
+    def run(self) -> None:
+        import ondevice
+
+        result = OnDeviceResult(step="start")
+        endpoint = self.endpoint or ondevice.DEFAULT_ENDPOINT
+
+        if ondevice.probe(endpoint, timeout=1.5)[0]:
+            result.ok = True
+            result.lines.append("It was already running.")
+            self._emit_progress(100, 100, "Already running.")
+            self.finished_ok.emit(result)
+            return
+
+        self._log(f"Running: {' '.join(self.command)}")
+        self._emit_progress(0, 0, "Starting Ollama…")
+        try:
+            subprocess.Popen(self.command, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError as exc:
+            result.lines.append(str(exc))
+            result.explanation = f"Could not start Ollama: {exc}"
+            self.finished_ok.emit(result)
+            return
+
+        def waiting(left: float) -> None:
+            self._emit_progress(0, 0, f"Waiting for the server… {left:.0f}s")
+
+        result.ok = ondevice.wait_until_answering(
+            endpoint, cancel=self.cancel_event, on_wait=waiting)
+        result.cancelled = self.cancel_event.is_set()
+        if not result.ok and not result.cancelled:
+            result.explanation = (
+                "Ollama was started but its server never answered on "
+                f"{endpoint}. Open the Ollama app once by hand and see what "
+                "it says.")
+        self._emit_progress(100, 100, "Ready." if result.ok else "No answer.")
+        self._log(result.describe())
+        self.finished_ok.emit(result)
+
+
+class KeychainReadWorker(_BaseWorker):
+    """Reads stored secrets without holding up the window.
+
+    macOS asks permission the first time a particular build of an app touches
+    an entry, and identifies the app by its code signature - so every rebuild
+    asks again. That prompt can take seconds to appear, and while the call is
+    outstanding the thread that made it is stopped dead. Making it from the
+    thread that draws the window means the window freezes behind the very
+    dialog the person is being asked to answer.
+    """
+
+    finished_ok = Signal(object)
+    task_name = "keychain read"
+
+    def __init__(self, store, address: str, parent=None) -> None:
+        super().__init__(parent)
+        self.store = store
+        self.address = address
+
+    def run(self) -> None:
+        found = {"password": "", "backend": "", "error": ""}
+        try:
+            found["password"] = self.store.get_icloud_password(self.address)
+        except Exception as exc:  # noqa: BLE001 - reported, never raised
+            found["error"] = str(exc)
+        try:
+            found["backend"] = self.store.backend_name()
+        except Exception:  # noqa: BLE001 - a name is not worth an error
+            found["backend"] = "unavailable"
+        self.finished_ok.emit(found)
 
 
 class ConnectionTestWorker(_BaseWorker):

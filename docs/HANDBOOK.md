@@ -33,6 +33,7 @@ Nothing is ever moved without an explicit tick in the table.
 - [Measuring a model](#measuring-a-model)
 - [Privacy and cost](#privacy-and-cost)
 - [Running a model on this Mac](#running-a-model-on-this-mac)
+- [Which build is this](#which-build-is-this)
 - [Troubleshooting](#troubleshooting)
 
 ---
@@ -1097,6 +1098,53 @@ that restarts four times reads as four failures.
 
 Closing Settings mid-install asks first. Homebrew part-way through unpacking a
 cask is not a good thing to kill because somebody pressed Escape.
+
+### What the output actually looks like
+
+Ollama does not write a log, it draws a frame and redraws it in place, using
+cursor-up and column-reset rather than newlines. Three consequences, each of
+which was a visible fault:
+
+- **The escape codes are stripped.** Otherwise they reach the status line.
+- **Cursor moves break lines.** Without that, a whole frame — the progress row
+  *and* the heading above it — arrives as one line, and whichever row is read
+  first wins. That is why a two-gigabyte download reported "reading the
+  manifest" from beginning to end.
+- **The heading arrives between every bar update**, so reporting the newest
+  row makes the display flicker between 2% and the real figure.
+  `ProgressReader` keeps state: a row carrying bytes beats a row carrying only
+  a phase, the percentage never goes backwards, and the largest layer drives
+  the bar — a model is one big file and a handful of small ones, and a bar
+  that restarts for each reads as four failures.
+
+### Names and errors
+
+The Homebrew cask was renamed from `ollama` to `ollama-app`, and the old name
+survives only as an alias. Both are tried, in that order, and only when
+Homebrew says it has never heard of the first — a download that failed will
+fail the same way under either name.
+
+Failures are translated: "Ollama has no model by that name", "there is not
+enough disk space", "its server is not running". The original line is always
+shown underneath, because a wrong translation is worse than none.
+
+**Starting** prefers the app over `ollama serve`: opening it twice is
+harmless, a second `serve` exits with *address already in use*, and the app
+brings the server back after a reboot. It then polls until the server actually
+answers rather than waiting a fixed few seconds and declaring success — that
+guess was wrong in both directions.
+
+## Which build is this
+
+Bottom right of the window: `1.0.0 · a1b2c3d`. The version alone does not
+identify a build — every change between releases carries the same one — so the
+commit is the part that answers "which code was this?". Hover for the full
+line, including the Python version and whether the Intel or the Apple silicon
+slice is running; click to copy it into a bug report.
+
+Inside a packaged app there is no git to ask, so the spec file writes the
+commit into `BUILD_STAMP` at build time and `buildinfo` reads it back. A
+checkout asks git directly, and marks a dirty tree with a trailing `+`.
 
 ## Troubleshooting
 
