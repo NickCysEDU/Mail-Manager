@@ -88,7 +88,10 @@ def install_exception_hook(app) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="icloud-job-triage", description=__doc__)
-    parser.add_argument("--version", action="version", version=f"{APP_DISPLAY_NAME} {APP_VERSION}")
+    import buildinfo
+
+    parser.add_argument("--version", action="version",
+                        version=f"{APP_DISPLAY_NAME} {buildinfo.full()}")
     parser.add_argument(
         "--log-level",
         default=os.environ.get("ICLOUD_TRIAGE_LOG_LEVEL", "INFO"),
@@ -172,7 +175,9 @@ def self_test() -> int:
             ok = False
             print(f"  {label:.<34} FAILED: {type(exc).__name__}: {exc}")
 
-    print(f"{APP_DISPLAY_NAME} {APP_VERSION} - self test")
+    import buildinfo
+
+    print(f"{APP_DISPLAY_NAME} {buildinfo.full()} - self test")
     print(f"  {'frozen bundle':.<34} {bool(getattr(sys, 'frozen', False))}")
     print(f"  {'python':.<34} {sys.version.split()[0]}")
 

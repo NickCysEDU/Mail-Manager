@@ -950,3 +950,27 @@ class TestTheOnDevicePanelNeverFreezes:
             if dialog._ollama_probe is not None:
                 dialog._ollama_probe.stop(3000)
             dialog.deleteLater()
+
+
+class TestTheVersionInTheCorner:
+    def test_it_is_shown_bottom_right(self, window):
+        import buildinfo
+
+        assert window.version_label.text() == buildinfo.short()
+        # Permanent widgets are the right-hand side of a status bar.
+        assert window.statusBar().isAncestorOf(window.version_label)
+
+    def test_the_tooltip_carries_enough_for_a_bug_report(self, window):
+        import buildinfo
+
+        tip = window.version_label.toolTip()
+        assert buildinfo.full() in tip
+        assert "Python" in tip
+
+    def test_clicking_copies_it(self, window):
+        from PySide6.QtTest import QTest
+        import buildinfo
+
+        QApplication.clipboard().setText("")
+        QTest.mouseClick(window.version_label, Qt.MouseButton.LeftButton)
+        assert QApplication.clipboard().text() == buildinfo.full()
