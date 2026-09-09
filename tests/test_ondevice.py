@@ -297,3 +297,43 @@ class TestStartingTheServer:
         assert ondevice.wait_until_answering("http://127.0.0.1:1", timeout=30,
                                              cancel=cancel) is False
         assert time.perf_counter() - started < 3.0
+
+
+class TestListingAndRemoving:
+    """Seeing what is installed, and getting rid of it.
+
+    Downloading was possible from the start; nothing showed what you had, so
+    a Mac filled up several gigabytes at a time with nothing saying so.
+    """
+
+    def test_a_model_describes_itself(self):
+        model = ondevice.Model(name="llama3.2:3b", size=2_019_393_189,
+                               parameters="3.2B", quantisation="Q4_K_M")
+        assert "2 GB" in model.size_text
+        assert "3.2B" in model.describe() and "Q4_K_M" in model.describe()
+
+    def test_loaded_and_unloaded_read_differently(self):
+        assert ondevice.Model(loaded=True).status_text == "in memory, ready"
+        assert ondevice.Model(loaded=False).status_text == "on disk"
+
+    def test_an_unknown_size_does_not_print_a_zero(self):
+        assert ondevice.Model(name="x").size_text == "unknown size"
+
+    def test_listing_a_server_that_is_not_there_returns_a_reason(self):
+        models, error = ondevice.installed_models("http://127.0.0.1:1", timeout=1.0)
+        assert models == [] and error
+
+    @pytest.mark.parametrize("name", ["", "   ", "-rf", "--all"])
+    def test_a_name_that_is_not_a_name_gets_no_command(self, name):
+        assert ondevice.remove_command(name) is None
+
+    def test_a_hostile_name_is_one_argument_not_a_shell(self, monkeypatch):
+        """`ollama rm "; rm -rf ~"` is a model that does not exist."""
+        monkeypatch.setattr(ondevice, "find_binary", lambda: "/usr/local/bin/ollama")
+        command = ondevice.remove_command("; rm -rf ~")
+        assert command == ["/usr/local/bin/ollama", "rm", "; rm -rf ~"]
+        assert len(command) == 3, "the name must stay a single argument"
+
+    def test_nothing_installed_means_no_remove_command(self, monkeypatch):
+        monkeypatch.setattr(ondevice, "find_binary", lambda: None)
+        assert ondevice.remove_command("llama3.2:3b") is None

@@ -1117,6 +1117,40 @@ which was a visible fault:
   the bar — a model is one big file and a handful of small ones, and a bar
   that restarts for each reads as four failures.
 
+### Managing what is installed
+
+**Settings → Analysis → Manage models…** lists every model on this Mac with
+its size, its parameter count and whether it is in memory or only on disk, and
+removes one when you no longer want it. Each is a couple of gigabytes and
+nothing used to say so.
+
+The model field is a plain dropdown for a local backend and stays typeable for
+a hosted one. That is not an inconsistency: a hosted backend releases models
+faster than any bundled list can follow — Gemini's pinned 2.x ids went stale
+and started answering 404 — whereas a local backend's valid names are exactly
+the models on this Mac, and a typo there is a scan that fails on every single
+message.
+
+### How long it actually takes
+
+A local model is not fast. Measured on an Intel Mac with `llama3.2:3b` and the
+real classification prompt: **12 seconds** to load the weights, **56 seconds**
+for one message through `/api/chat` directly, and longer again through a full
+scan. The Test button reports what it measured and what that means for forty
+or a hundred messages, because at a minute each a full inbox is an afternoon.
+
+Two consequences in the code:
+
+- **Connecting and answering have separate timeouts.** They used to share one.
+  A short leash meant for "is the server there?" was applied to the whole
+  request, so an on-device scan gave the model four seconds to answer and then
+  reported that Ollama was not installed. Connecting keeps its four seconds;
+  answering gets ten minutes, because there is no meter running on a local
+  model and Stop always works.
+- **The endpoint is `127.0.0.1`, not `localhost`.** On macOS `localhost`
+  resolves to `::1` as well, Ollama listens on IPv4 only, and the wasted
+  attempt shows up as a pause on every request.
+
 ### Names and errors
 
 The Homebrew cask was renamed from `ollama` to `ollama-app`, and the old name

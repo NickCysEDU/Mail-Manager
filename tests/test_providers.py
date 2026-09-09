@@ -44,8 +44,10 @@ class FakeSession(HttpSession):
         self._handler = handler
         self.closed = False
 
-    def post_json(self, url, payload, headers=None):
-        self.requests.append({"url": url, "payload": payload, "headers": headers or {}})
+    def post_json(self, url, payload, headers=None, connect_timeout=None):
+        self.requests.append({"url": url, "payload": payload,
+                              "headers": headers or {},
+                              "connect_timeout": connect_timeout})
         if self._handler is not None:
             return self._handler(url, payload, headers or {})
         if not self._responses:
@@ -335,10 +337,38 @@ class TestOllama:
         assert json.loads(completion.text)["category"] == "INTERVIEW"
         assert (completion.input_tokens, completion.output_tokens) == (700, 80)
 
-    def test_it_talks_to_localhost_by_default(self):
+    def test_it_talks_to_the_loopback_address_by_default(self):
+        """127.0.0.1 rather than localhost.
+
+        On macOS "localhost" resolves to ::1 as well, Ollama listens on IPv4
+        only, and the wasted attempt is a pause on every single request.
+        """
         session = FakeSession([{"message": {"content": "{}"}, "done": True}])
         OllamaProvider(session=session).complete(SYSTEM_PROMPT, "p", CLASSIFICATION_SCHEMA)
-        assert session.requests[0]["url"] == "http://localhost:11434/api/chat"
+        assert session.requests[0]["url"] == "http://127.0.0.1:11434/api/chat"
+
+    def test_reaching_it_has_a_shorter_leash_than_answering(self):
+        """They used to share one timeout, and whichever number was chosen
+        was wrong for one of them: an on-device scan gave the model four
+        seconds to answer and then reported Ollama was not installed."""
+        session = FakeSession([{"message": {"content": "{}"}, "done": True}])
+        provider = OllamaProvider(session=session)
+        provider.complete(SYSTEM_PROMPT, "p", CLASSIFICATION_SCHEMA)
+        assert session.requests[0]["connect_timeout"] == provider.CONNECT_TIMEOUT
+        assert provider.timeout > provider.CONNECT_TIMEOUT * 10
+
+    def test_a_slow_answer_does_not_read_as_a_missing_install(self):
+        """"Install it from ollama.com" sent people to reinstall software
+        that was working perfectly and merely thinking."""
+        def slow(_url, _payload, _headers):
+            raise ProviderError("127.0.0.1 timed out after 600s while answering.")
+
+        provider = OllamaProvider(session=FakeSession(handler=slow))
+        with pytest.raises(ProviderError) as caught:
+            provider.complete(SYSTEM_PROMPT, "p", CLASSIFICATION_SCHEMA)
+        message = str(caught.value)
+        assert "did not answer in time" in message
+        assert "Install it" not in message
 
     def test_the_schema_is_passed_straight_through(self):
         session = FakeSession([{"message": {"content": "{}"}, "done": True}])

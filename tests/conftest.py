@@ -500,3 +500,31 @@ def qapp():
     pytest.importorskip("PySide6")
     from PySide6.QtWidgets import QApplication
     return QApplication.instance() or QApplication([])
+
+
+# --------------------------------------------------------------------------
+# Qt housekeeping
+# --------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def reap_deleted_widgets():
+    """Actually destroy what each test asked to be destroyed.
+
+    ``deleteLater`` only queues the deletion; without an event loop running
+    nothing collects it, so every dialog a test builds stays alive for the
+    rest of the session. That is not merely untidy: ``setStyleSheet`` restyles
+    every live widget, so the cost of a theme change grows with the number of
+    leftovers - measured at 0.17s after one dialog pair and 0.89s after five,
+    which is what eventually pushed a test that changes the theme over its
+    timeout.
+    """
+    yield
+    try:
+        from PySide6.QtCore import QEvent
+        from PySide6.QtWidgets import QApplication
+    except ImportError:                      # pragma: no cover - no Qt here
+        return
+    app = QApplication.instance()
+    if app is None:
+        return
+    app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()

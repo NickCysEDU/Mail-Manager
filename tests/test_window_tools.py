@@ -9,7 +9,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import Qt  # noqa: E402
-from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLabel, QMessageBox  # noqa: E402
 
 import accounts as accounts_module  # noqa: E402
 import autoreply  # noqa: E402
@@ -974,3 +974,163 @@ class TestTheVersionInTheCorner:
         QApplication.clipboard().setText("")
         QTest.mouseClick(window.version_label, Qt.MouseButton.LeftButton)
         assert QApplication.clipboard().text() == buildinfo.full()
+
+
+class TestTheModelsDialog:
+    """What is installed, with status, and a way to remove it."""
+
+    def _dialog(self, window, models, error=""):
+        from gui import ModelsDialog
+
+        dialog = ModelsDialog(parent=window)
+        # Answer the background probe by hand rather than needing a server.
+        dialog._show_models((models, error))
+        return dialog
+
+    def _model(self, **kwargs):
+        import ondevice
+
+        base = dict(name="llama3.2:3b", size=2_019_393_189, parameters="3.2B",
+                    quantisation="Q4_K_M", modified="2026-09-08", loaded=True)
+        base.update(kwargs)
+        return ondevice.Model(**base)
+
+    def test_each_model_shows_its_size_and_status(self, window):
+        dialog = self._dialog(window, [self._model()])
+        try:
+            assert dialog.listing.count() == 1
+            text = dialog.listing.item(0).text()
+            assert "llama3.2:3b" in text
+            assert "2 GB" in text and "in memory, ready" in text
+            assert "2 GB of disk in total" in dialog.status.text()
+        finally:
+            dialog.done(0)
+
+    def test_an_unloaded_model_says_so(self, window):
+        dialog = self._dialog(window, [self._model(loaded=False)])
+        try:
+            assert "on disk" in dialog.listing.item(0).text()
+        finally:
+            dialog.done(0)
+
+    def test_nothing_installed_says_what_to_do(self, window):
+        dialog = self._dialog(window, [])
+        try:
+            assert "No models yet" in dialog.status.text()
+            assert not dialog.remove_button.isEnabled()
+        finally:
+            dialog.done(0)
+
+    def test_a_server_that_is_not_answering_says_that_instead(self, window):
+        dialog = self._dialog(window, [], error="connection refused")
+        try:
+            assert "not answering" in dialog.status.text()
+            assert not dialog.remove_button.isEnabled()
+        finally:
+            dialog.done(0)
+
+    def test_removing_asks_before_deleting_gigabytes(self, window, monkeypatch):
+        asked = []
+        monkeypatch.setattr(
+            QMessageBox, "question",
+            lambda *a, **k: (asked.append(True),
+                             QMessageBox.StandardButton.Cancel)[1])
+        started = []
+        dialog = self._dialog(window, [self._model()])
+        monkeypatch.setattr(dialog, "_run",
+                            lambda *a, **k: started.append(a))
+        try:
+            dialog.listing.setCurrentRow(0)
+            dialog._remove_selected()
+            assert asked, "it deleted without asking"
+            assert not started, "Cancel should have stopped it"
+        finally:
+            dialog.done(0)
+
+    def test_confirming_runs_the_remove(self, window, monkeypatch):
+        monkeypatch.setattr(QMessageBox, "question",
+                            lambda *a, **k: QMessageBox.StandardButton.Yes)
+        started = []
+        dialog = self._dialog(window, [self._model()])
+        monkeypatch.setattr(dialog, "_run", lambda step, command, saying:
+                            started.append((step, command)))
+        try:
+            dialog.listing.setCurrentRow(0)
+            dialog._remove_selected()
+            assert started and started[0][0] == "remove"
+            assert started[0][1][-1] == "llama3.2:3b"
+        finally:
+            dialog.done(0)
+
+
+class TestTheModelFieldIsADropdownForLocalModels:
+    """Typing a name is right for a hosted backend and wrong for a local one.
+
+    A hosted backend releases models faster than a bundled list can follow —
+    Gemini's pinned ids went stale and started answering 404. A local backend's
+    valid names are exactly the models on this Mac, so a typo there is a scan
+    that fails on every single message.
+    """
+
+    def test_a_local_backend_offers_a_plain_dropdown(self, window):
+        dialog = SettingsDialog(Settings(provider="ollama"),
+                                InMemoryCredentialStore(), window)
+        try:
+            assert dialog.model_combo.isEditable() is False
+        finally:
+            dialog.deleteLater()
+
+    @pytest.mark.parametrize("provider", ["anthropic", "gemini"])
+    def test_a_hosted_backend_still_takes_a_typed_name(self, window, provider):
+        dialog = SettingsDialog(Settings(provider=provider),
+                                InMemoryCredentialStore(), window)
+        try:
+            assert dialog.model_combo.isEditable() is True
+        finally:
+            dialog.deleteLater()
+
+    def test_switching_to_a_local_backend_stops_it_being_editable(self, window):
+        dialog = SettingsDialog(Settings(provider="anthropic"),
+                                InMemoryCredentialStore(), window)
+        try:
+            assert dialog.model_combo.isEditable() is True
+            index = dialog.provider_combo.findData("ollama")
+            dialog.provider_combo.setCurrentIndex(index)
+            assert dialog.model_combo.isEditable() is False
+        finally:
+            dialog.deleteLater()
+
+    def test_an_installed_model_that_is_not_in_the_list_is_kept(self, window):
+        """Choosing it once must not lose it the next time Settings opens."""
+        dialog = SettingsDialog(Settings(provider="ollama", model="mistral:7b"),
+                                InMemoryCredentialStore(), window)
+        try:
+            assert dialog._chosen_model() == "mistral:7b"
+        finally:
+            dialog.deleteLater()
+
+
+class TestErrorTextCanBeCopied:
+    def test_a_message_box_becomes_selectable_when_shown(self, window):
+        import gui
+        from PySide6.QtCore import Qt as QtNS
+
+        app = QApplication.instance()
+        gui.install_selectable_messages(app)
+        box = QMessageBox(QMessageBox.Icon.Critical, "Connection failed",
+                          "Could not reach Ollama at http://127.0.0.1:11434.",
+                          parent=window)
+        try:
+            box.show()
+            QApplication.processEvents()
+            labels = [l for l in box.findChildren(QLabel) if l.text()]
+            assert labels, "no text in the box"
+            assert all(l.textInteractionFlags()
+                       & QtNS.TextInteractionFlag.TextSelectableByMouse
+                       for l in labels), "the error text cannot be selected"
+        finally:
+            box.close()
+            box.deleteLater()
+            # An application-wide filter must not outlive the test that
+            # wanted it: it runs on every event of every test after this one.
+            gui.remove_selectable_messages(app)

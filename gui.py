@@ -17,6 +17,7 @@ from PySide6.QtCore import (
     QUrl,
     QAbstractTableModel,
     QEvent,
+    QObject,
     QRect,
     QThread,
     QByteArray,
@@ -1351,6 +1352,245 @@ class ActionRow(_RuleRow):
                                 value=self._value_text())
 
 
+class ModelsDialog(QDialog):
+    """What is installed on this Mac, and how to add to it or remove from it.
+
+    Downloading a model was already possible from the Analysis tab; there was
+    no way to see what you had or to get rid of it, so a machine slowly filled
+    with several gigabytes each and nothing said so.
+    """
+
+    def __init__(self, endpoint: str = "", parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Local models")
+        self.setMinimumSize(560, 420)
+        self.resize(620, 480)
+        self._endpoint = endpoint or ondevice.DEFAULT_ENDPOINT
+        self._worker = None
+        self._probe = None
+
+        outer = QVBoxLayout(self)
+        blurb = QLabel(
+            "Models run on this Mac. Nothing is sent anywhere and there is "
+            "nothing to pay for, but each one takes a few gigabytes of disk "
+            "and the first message after a scan starts is slow while it loads."
+        )
+        blurb.setWordWrap(True)
+        outer.addWidget(blurb)
+
+        self.listing = WrappingList()
+        self.listing.setMinimumHeight(160)
+        self.listing.setMaximumWidth(16777215)
+        self.listing.currentRowChanged.connect(self._selection_changed)
+        outer.addWidget(self.listing, 1)
+
+        row = QHBoxLayout()
+        self.refresh_button = QPushButton("Refresh")
+        self.refresh_button.clicked.connect(self.refresh)
+        row.addWidget(self.refresh_button)
+        self.remove_button = QPushButton("Remove…")
+        _paint_button(self.remove_button, "destructive")
+        self.remove_button.clicked.connect(self._remove_selected)
+        row.addWidget(self.remove_button)
+        row.addStretch(1)
+        outer.addLayout(row)
+
+        outer.addWidget(_separator())
+
+        add = QHBoxLayout()
+        add.addWidget(QLabel("Add"))
+        self.catalogue = QComboBox()
+        self.catalogue.setEditable(True)
+        self.catalogue.setMinimumWidth(220)
+        for choice in providers.provider_class("ollama").models:
+            self.catalogue.addItem(f"{choice.label} — {choice.note}", choice.value)
+        self.catalogue.setToolTip(
+            "Any name from ollama.com/library works, not only these.")
+        add.addWidget(self.catalogue, 1)
+        self.download_button = QPushButton("Download")
+        _paint_button(self.download_button, "primary")
+        self.download_button.clicked.connect(self._download)
+        add.addWidget(self.download_button)
+        self.stop_button = QPushButton("Stop")
+        _paint_button(self.stop_button, "danger")
+        self.stop_button.setVisible(False)
+        self.stop_button.clicked.connect(self._stop)
+        add.addWidget(self.stop_button)
+        outer.addLayout(add)
+
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setVisible(False)
+        outer.addWidget(self.progress)
+
+        self.status = QLabel("")
+        self.status.setWordWrap(True)
+        outer.addWidget(self.status)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        buttons.accepted.connect(self.accept)
+        outer.addWidget(buttons)
+
+        self.refresh()
+
+    # -- what is here ----------------------------------------------------
+    def refresh(self) -> None:
+        """Re-read the list, off the thread that draws the window."""
+        if self._probe is not None:
+            return
+        from workers import InstalledModelsWorker
+
+        self.status.setText("Reading what is installed…")
+        worker = InstalledModelsWorker(self._endpoint, parent=self)
+        self._probe = worker
+        worker.finished_ok.connect(self._show_models)
+        worker.finished.connect(lambda: setattr(self, "_probe", None))
+        worker.start()
+
+    @Slot(object)
+    def _show_models(self, outcome) -> None:
+        models, error = outcome
+        self.listing.clear()
+        if error:
+            self.status.setText(
+                f"Ollama is not answering on {self._endpoint}. Start it from "
+                "Settings → Analysis, then press Refresh.")
+            self._selection_changed(-1)
+            return
+        if not models:
+            self.status.setText(
+                "No models yet. Pick one below and press Download.")
+            self._selection_changed(-1)
+            return
+        for model in models:
+            entry = QListWidgetItem(
+                f"{model.name}\n{model.describe()} · {model.status_text}")
+            entry.setData(Qt.ItemDataRole.UserRole, model.name)
+            entry.setToolTip(f"Added {model.modified}" if model.modified else "")
+            self.listing.addItem(entry)
+        self.listing.measure()
+        self.listing.setCurrentRow(0)
+        total = sum(m.size for m in models)
+        self.status.setText(
+            f"{len(models)} model{'' if len(models) == 1 else 's'}, "
+            f"{ondevice._human(float(total))} of disk in total.")
+
+    def _selection_changed(self, row: int) -> None:
+        self.remove_button.setEnabled(row >= 0 and self._worker is None)
+
+    def _selected_name(self) -> str:
+        item = self.listing.currentItem()
+        return item.data(Qt.ItemDataRole.UserRole) if item else ""
+
+    # -- adding and removing ---------------------------------------------
+    def _download(self) -> None:
+        wanted = (self.catalogue.currentData()
+                  if self.catalogue.currentIndex() >= 0
+                  and self.catalogue.currentText().startswith(
+                      self.catalogue.itemText(self.catalogue.currentIndex()))
+                  else self.catalogue.currentText().strip())
+        wanted = (wanted or self.catalogue.currentText()).strip()
+        command = ondevice.pull_command(wanted)
+        if not command:
+            self.status.setText(
+                "Ollama is not installed. Settings → Analysis can install it.")
+            return
+        self._run("pull", command, f"Downloading {wanted}…")
+
+    def _remove_selected(self) -> None:
+        name = self._selected_name()
+        if not name:
+            return
+        answer = QMessageBox.question(
+            self, "Remove this model?",
+            f"Delete “{name}” from this Mac?\n\nIt can be downloaded again, "
+            "which means waiting for the whole thing a second time.",
+            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
+            QMessageBox.StandardButton.Cancel)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        command = ondevice.remove_command(name)
+        if not command:
+            self.status.setText("Ollama is not installed, so there is nothing "
+                                "to remove it with.")
+            return
+        self._run("remove", command, f"Removing {name}…")
+
+    def _run(self, step: str, command, saying: str) -> None:
+        from workers import OnDeviceWorker
+
+        if self._worker is not None:
+            return
+        worker = OnDeviceWorker(step, command, parent=self)
+        self._worker = worker
+        self.status.setText(saying)
+        self.progress.setVisible(True)
+        self.progress.setValue(0)
+        self.download_button.setEnabled(False)
+        self.remove_button.setEnabled(False)
+        self.refresh_button.setEnabled(False)
+        self.stop_button.setVisible(True)
+        self.stop_button.setEnabled(True)
+        worker.progress.connect(self._on_progress)
+        worker.finished_ok.connect(self._on_done)
+        worker.failed.connect(self._on_failed)
+        worker.finished.connect(lambda: setattr(self, "_worker", None))
+        worker.start()
+
+    @Slot(int, int, str)
+    def _on_progress(self, done: int, total: int, message: str) -> None:
+        if total:
+            self.progress.setRange(0, total)
+            self.progress.setValue(max(0, min(total, done)))
+        else:
+            self.progress.setRange(0, 0)
+        if message:
+            self.status.setText(message[:120])
+
+    @Slot(str, str)
+    def _on_failed(self, title: str, detail: str) -> None:
+        self._finish()
+        self.status.setText(f"{title}: {detail}"[:200])
+
+    @Slot(object)
+    def _on_done(self, result) -> None:
+        self._finish()
+        self.status.setText(result.describe())
+        if not result.ok and not result.cancelled:
+            box = QMessageBox(QMessageBox.Icon.Warning, "Local models",
+                              result.describe(), parent=self)
+            box.setDetailedText("\n".join(result.lines[-40:]))
+            selectable(box)
+            box.exec()
+        self.refresh()
+
+    def _finish(self) -> None:
+        self.progress.setRange(0, 100)
+        self.progress.setVisible(False)
+        self.stop_button.setVisible(False)
+        self.download_button.setEnabled(True)
+        self.refresh_button.setEnabled(True)
+        self._selection_changed(self.listing.currentRow())
+
+    def _stop(self) -> None:
+        worker = self._worker
+        if worker is None:
+            return
+        self.stop_button.setEnabled(False)
+        self.status.setText("Stopping…")
+        worker.cancel()
+
+    # -- leaving ---------------------------------------------------------
+    def done(self, result: int) -> None:  # noqa: N802
+        for name in ("_worker", "_probe"):
+            spare = getattr(self, name, None)
+            setattr(self, name, None)
+            if spare is not None and spare.isRunning() and not spare.stop(4000):
+                _abandon(spare)
+        super().done(result)
+
+
 class SettingsDialog(QDialog):
     """Credentials, model, routing and folder configuration."""
 
@@ -1966,6 +2206,10 @@ class SettingsDialog(QDialog):
         ollama_row = QHBoxLayout()
         ollama_row.addWidget(self.ollama_button)
         ollama_row.addWidget(self.ollama_stop)
+        self.manage_models_button = QPushButton("Manage models…")
+        self.manage_models_button.setVisible(False)
+        self.manage_models_button.clicked.connect(self._open_models)
+        ollama_row.addWidget(self.manage_models_button)
         ollama_row.addStretch(1)
         form.addRow("", ollama_row)
         form.addRow("", self.ollama_progress)
@@ -2003,7 +2247,9 @@ class SettingsDialog(QDialog):
         if not getattr(spec, "on_device", False):
             self.ollama_note.setVisible(False)
             self.ollama_button.setVisible(False)
+            self.manage_models_button.setVisible(False)
             return
+        self.manage_models_button.setVisible(True)
 
         # The network half of this is asked for in the background: an
         # endpoint that drops packets costs the full timeout, and the endpoint
@@ -2056,6 +2302,35 @@ class SettingsDialog(QDialog):
             )
             self.ollama_button.setText(f"Download {model}")
         self.ollama_button.setVisible(True)
+
+    def _open_models(self) -> None:
+        """What is installed, and how to add to it or remove from it."""
+        dialog = ModelsDialog(self.base_url_edit.text().strip(), self)
+        dialog.exec()
+        # Whatever was added or removed changes what the model list should say.
+        self._recheck_ollama()
+        self._refresh_installed_models()
+
+    def _refresh_installed_models(self) -> None:
+        """Offer the models this Mac actually has, for a local backend."""
+        spec = providers.provider_class(
+            self.provider_combo.currentData() or providers.DEFAULT_PROVIDER)
+        if not getattr(spec, "on_device", False):
+            return
+        state = getattr(self, "_ollama_state", None)
+        if state is None or not state.models:
+            return
+        wanted = self._chosen_model()
+        self._loading_models = True
+        known = {self.model_combo.itemData(i)
+                 for i in range(self.model_combo.count())}
+        for name in state.models:
+            if name not in known:
+                self.model_combo.addItem(f"{name} — installed", name)
+        self._loading_models = False
+        index = self.model_combo.findData(wanted)
+        if index >= 0:
+            self.model_combo.setCurrentIndex(index)
 
     def _do_ollama_step(self) -> None:
         """Run whichever step the panel is offering, off the UI thread."""
@@ -2229,6 +2504,12 @@ class SettingsDialog(QDialog):
         self.model_combo.clear()
         for choice in spec.models:
             self.model_combo.addItem(choice.label, choice.value)
+        # Typing a name is right for a hosted backend - they release models
+        # faster than any bundled list can follow, and today's list going
+        # stale is a real thing that happened. It is wrong for a local one:
+        # there the valid names are exactly the models on this Mac, that set
+        # is knowable, and a typo becomes a scan that fails on every message.
+        self.model_combo.setEditable(not getattr(spec, "on_device", False))
         self._loading_models = False
 
         stored = self._settings.model if self._settings.provider == name else ""
@@ -2236,8 +2517,13 @@ class SettingsDialog(QDialog):
         index = self.model_combo.findData(wanted)
         if index >= 0:
             self.model_combo.setCurrentIndex(index)
-        else:
+        elif self.model_combo.isEditable():
             self.model_combo.setEditText(wanted)
+        else:
+            # A local model that is not in the bundled list but is installed:
+            # keep it, so choosing it once does not lose it on the next open.
+            self.model_combo.addItem(wanted, wanted)
+            self.model_combo.setCurrentIndex(self.model_combo.count() - 1)
         self._provider_seen = name
         self._model_changed()
 
@@ -3304,6 +3590,19 @@ class SettingsDialog(QDialog):
                 f"{result['category']} at {result['confidence'] * 100:.0f}% confidence "
                 f"({result['input_tokens']:,} in / {result['output_tokens']:,} out, {price})."
             )
+            # On a hosted backend a few seconds is noise. On a model running
+            # here it is the whole story: at a minute a message, a scan of a
+            # full inbox is an afternoon, and knowing that up front is the
+            # difference between "it is broken" and "it is slow".
+            seconds = float(result.get("seconds") or 0)
+            if result.get("on_device") and seconds >= 8:
+                each = seconds
+                message += (
+                    f"\n\nThat is {each:.0f}s for one message on this Mac, so "
+                    f"about {each * 40 / 60:.0f} minutes for 40 and "
+                    f"{each * 100 / 60:.0f} for 100. A smaller model is faster, "
+                    "and the built-in rule set is instant."
+                )
             for note in result.get("degradations") or ():
                 message += f"\nNote: {note}"
         self.status.setText(f"<span style='color:{ACCENT_GREEN}'>{_html(message)}</span>")
@@ -3402,6 +3701,8 @@ class MainWindow(QMainWindow):
         #: Set only by an explicit Quit, so closeEvent can tell "put this
         #: away" apart from "stop the app".
         self._quitting = False
+        #: The Settings window while it is open, so Quit can deal with it.
+        self._settings_dialog = None
         #: What the primary button currently does, so it can be rewired
         #: without disconnecting slots that were never attached.
         self._scan_button_action = None
@@ -4469,7 +4770,9 @@ class MainWindow(QMainWindow):
         quit_action = QAction("&Quit", self)
         quit_action.setShortcut(QKeySequence.StandardKey.Quit)
         quit_action.setMenuRole(QAction.MenuRole.QuitRole)
-        quit_action.triggered.connect(QApplication.quit)
+        # Not QApplication.quit: that leaves without asking about a scan you
+        # have not applied, and without noticing that Settings is open.
+        quit_action.triggered.connect(self.quit_app)
         file_menu.addAction(quit_action)
 
         edit_menu = menubar.addMenu("&Edit")
@@ -4820,6 +5123,8 @@ class MainWindow(QMainWindow):
 
     def quit_app(self) -> None:
         """Leave for good, rather than hiding to the menu bar."""
+        if not self._close_settings_first():
+            return
         if not self.confirm_quit():
             return
         self._quitting = True
@@ -4829,6 +5134,35 @@ class MainWindow(QMainWindow):
             self.showNormal()
         self.close()
         QApplication.quit()
+
+    def _close_settings_first(self) -> bool:
+        """Deal with an open Settings window before leaving. False = stay.
+
+        Settings is modal, so it owns the keyboard while it is up and Cmd-Q
+        never reaches the main window. Rather than ignore the request, ask
+        the question that is actually being asked - keep these changes or
+        not - and carry it out.
+        """
+        dialog = getattr(self, "_settings_dialog", None)
+        if dialog is None or not dialog.isVisible():
+            return True
+        answer = QMessageBox.question(
+            dialog, "Save your settings?",
+            "Settings is open. Do you want to save your changes before "
+            "quitting?",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+        if answer == QMessageBox.StandardButton.Cancel:
+            return False
+        if answer == QMessageBox.StandardButton.Save:
+            dialog.accept()          # the same path the Save button takes
+        else:
+            dialog.reject()
+        QApplication.processEvents()  # let exec() unwind before we close
+        return True
 
     def _hides_to_menu_bar(self) -> bool:
         return (
@@ -4937,7 +5271,15 @@ class MainWindow(QMainWindow):
                                 sample_items=self.model.items)
         if tab:
             dialog.tabs.setCurrentIndex(tab)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+        # Remembered so that Quit can deal with it. Settings is modal, so a
+        # Cmd-Q while it is open goes to the dialog and the app simply does
+        # not leave - which reads as a hang, not as a refusal.
+        self._settings_dialog = dialog
+        try:
+            outcome = dialog.exec()
+        finally:
+            self._settings_dialog = None
+        if outcome != QDialog.DialogCode.Accepted:
             self.apply_appearance()      # undo any live preview
             return
         new_settings = dialog.collect()
@@ -5461,6 +5803,7 @@ class MainWindow(QMainWindow):
             )
         icon = QMessageBox.Icon.Warning if report.failed else QMessageBox.Icon.Information
         box = QMessageBox(icon, "Folder moves", "\n\n".join(details), parent=self)
+        selectable(box)
         box.exec()
         self._update_status(message)
 
@@ -5602,6 +5945,7 @@ class MainWindow(QMainWindow):
     def _on_failed(self, title: str, detail: str) -> None:
         self._append_log(f"✗ {title}: {detail}")
         box = QMessageBox(QMessageBox.Icon.Critical, title, detail, parent=self)
+        selectable(box)
         box.exec()
         self._set_status(title)
 
@@ -6063,6 +6407,80 @@ def _scrollable(page: QWidget) -> QScrollArea:
     area.setFrameShape(QFrame.Shape.NoFrame)
     area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     return area
+
+
+class SelectableMessages(QObject):
+    """Makes the text in every message box selectable, as it is shown.
+
+    Qt labels are not selectable by default, which is right for "are you
+    sure?" and wrong for an error: the one thing anybody wants to do with a
+    failure is paste it into a search or a bug report. Doing it here rather
+    than at each of the thirty-odd call sites means the ones written later
+    are covered too, including the boxes Qt raises itself.
+    """
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        # Every event in the application passes through here, so the cheapest
+        # possible test comes first and the work happens at most once per box.
+        if event.type() != QEvent.Type.Show:
+            return False
+        if not isinstance(watched, QMessageBox):
+            return False
+        if watched.property("selectableDone"):
+            return False
+        watched.setProperty("selectableDone", True)
+        selectable(watched)
+        return False
+
+
+def install_selectable_messages(app) -> "SelectableMessages":
+    """Attach the filter once. Attaching twice would double every check."""
+    existing = getattr(app, "_selectable_messages", None)
+    if existing is None:
+        existing = SelectableMessages(app)
+        app.installEventFilter(existing)
+        app._selectable_messages = existing
+    return existing
+
+
+def remove_selectable_messages(app) -> None:
+    """Take it off again. Used by tests, so one does not leak into the next."""
+    existing = getattr(app, "_selectable_messages", None)
+    if existing is not None:
+        app.removeEventFilter(existing)
+        app._selectable_messages = None
+
+
+def selectable(box: "QMessageBox") -> "QMessageBox":
+    """Let the text in a message box be selected and copied.
+
+    Qt makes label text unselectable by default, which is fine for "are you
+    sure?" and useless for an error: the one thing anybody wants to do with a
+    failure message is paste it somewhere. Cmd-C copies the whole box either
+    way; this makes the visible text behave like text.
+    """
+    box.setTextInteractionFlags(
+        Qt.TextInteractionFlag.TextSelectableByMouse
+        | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+    for label in box.findChildren(QLabel):
+        label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+        label.setCursor(Qt.CursorShape.IBeamCursor)
+    return box
+
+
+def say(parent, icon, title: str, text: str, detail: str = "") -> "QMessageBox":
+    """A message box whose text can be selected, shown and returned.
+
+    Errors go through here so that every one of them can be copied.
+    """
+    box = QMessageBox(icon, title, text, parent=parent)
+    if detail:
+        box.setDetailedText(detail)
+    selectable(box)
+    box.exec()
+    return box
 
 
 def _separator() -> QFrame:

@@ -134,6 +134,101 @@ def probe(endpoint: str = DEFAULT_ENDPOINT, timeout: float = 2.0) -> Tuple[bool,
     return True, models, ""
 
 
+@dataclass
+class Model:
+    """One model the local server holds."""
+
+    name: str = ""
+    size: int = 0
+    family: str = ""
+    parameters: str = ""
+    quantisation: str = ""
+    modified: str = ""
+    loaded: bool = False
+
+    @property
+    def size_text(self) -> str:
+        return _human(float(self.size)) if self.size else "unknown size"
+
+    def describe(self) -> str:
+        bits = [self.size_text]
+        if self.parameters:
+            bits.append(self.parameters)
+        if self.quantisation:
+            bits.append(self.quantisation)
+        return " · ".join(bits)
+
+    @property
+    def status_text(self) -> str:
+        return "in memory, ready" if self.loaded else "on disk"
+
+
+def installed_models(endpoint: str = DEFAULT_ENDPOINT,
+                     timeout: float = 4.0) -> Tuple[List[Model], str]:
+    """Every model on this machine, with what is known about each.
+
+    Returns (models, error). Never raises: the panel that shows this must
+    not be able to take the window down.
+    """
+    payload, error = _ask(endpoint, "/api/tags", timeout)
+    if error:
+        return [], error
+    running = {name for name in _loaded(endpoint, timeout)}
+    found: List[Model] = []
+    for entry in (payload.get("models") or []):
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or entry.get("model") or "").strip()
+        if not name:
+            continue
+        details = entry.get("details") or {}
+        found.append(Model(
+            name=name,
+            size=int(entry.get("size") or 0),
+            family=str(details.get("family") or ""),
+            parameters=str(details.get("parameter_size") or ""),
+            quantisation=str(details.get("quantization_level") or ""),
+            modified=str(entry.get("modified_at") or "")[:10],
+            loaded=name in running,
+        ))
+    found.sort(key=lambda m: m.name)
+    return found, ""
+
+
+def _loaded(endpoint: str, timeout: float) -> List[str]:
+    """Which models are in memory right now. Empty when it cannot tell."""
+    payload, error = _ask(endpoint, "/api/ps", timeout)
+    if error:
+        return []
+    return [str(e.get("name") or "") for e in (payload.get("models") or [])
+            if isinstance(e, dict)]
+
+
+def _ask(endpoint: str, path: str, timeout: float) -> Tuple[dict, str]:
+    """One GET against the local server. Never raises."""
+    url = (endpoint or DEFAULT_ENDPOINT).rstrip("/") + path
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8", "replace")), ""
+    except urllib.error.URLError as exc:
+        return {}, str(getattr(exc, "reason", exc))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return {}, str(exc)
+
+
+def remove_command(name: str) -> Optional[List[str]]:
+    """The command that deletes a model, if Ollama is installed.
+
+    The name is passed as its own argument and never through a shell, so a
+    model called ``; rm -rf ~`` is just a name that does not exist.
+    """
+    binary = find_binary()
+    cleaned = (name or "").strip()
+    if not binary or not cleaned or cleaned.startswith("-"):
+        return None
+    return [binary, "rm", cleaned]
+
+
 def status(endpoint: str = DEFAULT_ENDPOINT) -> Status:
     running, models, error = probe(endpoint)
     return Status(binary=find_binary(), app=find_app(), running=running,

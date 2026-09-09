@@ -10,7 +10,8 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QThread, Signal  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtGui import QAction  # noqa: E402
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox  # noqa: E402
 
 from config import InMemoryCredentialStore, Settings  # noqa: E402
 from conftest import FakeAnthropic, FakeResponse  # noqa: E402
@@ -532,3 +533,115 @@ class TestMetrics:
 
         html = _metrics_html({"phase": "analyze", "done": 2, "total": 9, "rate": 0.25})
         assert "4.0 s/msg" in html
+
+
+class TestQuittingWithSettingsOpen:
+    """Settings is modal, so Cmd-Q goes to it and the app appears to hang.
+
+    Reported as "Mail Manager does not quit when settings is open". It was
+    two faults: the Quit action went straight to QApplication.quit, skipping
+    every check, and nothing knew the dialog was there.
+    """
+
+    @pytest.fixture
+    def window(self, qapp, tmp_path, monkeypatch):
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        window = MainWindow(Settings(icloud_email="you@icloud.example"),
+                            InMemoryCredentialStore())
+        yield window
+        window._settings_dialog = None
+        window.close()
+
+    def _open_settings(self, window):
+        from gui import SettingsDialog
+        from config import InMemoryCredentialStore
+
+        dialog = SettingsDialog(window.settings, InMemoryCredentialStore(), window)
+        dialog.show()
+        window._settings_dialog = dialog
+        return dialog
+
+    def test_quit_asks_about_unsaved_settings(self, window, monkeypatch):
+        asked = []
+        monkeypatch.setattr(
+            QMessageBox, "question",
+            lambda *a, **k: (asked.append(a[1] if len(a) > 1 else ""),
+                             QMessageBox.StandardButton.Cancel)[1])
+        dialog = self._open_settings(window)
+        try:
+            window.quit_app()
+            assert asked, "it tried to quit without asking"
+            assert dialog.isVisible(), "Cancel should have left it open"
+        finally:
+            window._settings_dialog = None
+            dialog.deleteLater()
+
+    def test_cancel_keeps_the_app_running(self, window, monkeypatch):
+        monkeypatch.setattr(QMessageBox, "question",
+                            lambda *a, **k: QMessageBox.StandardButton.Cancel)
+        quit_called = []
+        monkeypatch.setattr(QApplication, "quit",
+                            lambda *a: quit_called.append(True))
+        dialog = self._open_settings(window)
+        try:
+            window.quit_app()
+            assert not quit_called
+        finally:
+            window._settings_dialog = None
+            dialog.deleteLater()
+
+    def test_saving_accepts_the_dialog(self, window, monkeypatch):
+        monkeypatch.setattr(QMessageBox, "question",
+                            lambda *a, **k: QMessageBox.StandardButton.Save)
+        monkeypatch.setattr(QApplication, "quit", lambda *a: None)
+        dialog = self._open_settings(window)
+        try:
+            window.quit_app()
+            assert dialog.result() == QDialog.DialogCode.Accepted
+        finally:
+            window._settings_dialog = None
+            dialog.deleteLater()
+
+    def test_discarding_rejects_it(self, window, monkeypatch):
+        monkeypatch.setattr(QMessageBox, "question",
+                            lambda *a, **k: QMessageBox.StandardButton.Discard)
+        monkeypatch.setattr(QApplication, "quit", lambda *a: None)
+        dialog = self._open_settings(window)
+        try:
+            window.quit_app()
+            assert dialog.result() == QDialog.DialogCode.Rejected
+        finally:
+            window._settings_dialog = None
+            dialog.deleteLater()
+
+    def test_no_settings_open_means_no_extra_question(self, window, monkeypatch):
+        monkeypatch.setattr(QApplication, "quit", lambda *a: None)
+        window._settings_dialog = None
+        assert window._close_settings_first() is True
+
+    def test_the_quit_action_goes_through_the_checks(self, window, monkeypatch):
+        """It used to be wired straight to QApplication.quit, which skipped
+        the unapplied-scan warning as well as the Settings question.
+
+        Proved by triggering the real action with Settings open: if it still
+        went straight to the application, nothing would be asked.
+        """
+        asked = []
+        monkeypatch.setattr(
+            QMessageBox, "question",
+            lambda *a, **k: (asked.append(True),
+                             QMessageBox.StandardButton.Cancel)[1])
+        quit_called = []
+        monkeypatch.setattr(QApplication, "quit",
+                            lambda *a: quit_called.append(True))
+        dialog = self._open_settings(window)
+        try:
+            actions = [a for a in window.findChildren(QAction)
+                       if a.text() == "&Quit"]
+            assert actions, "no Quit action found"
+            actions[0].trigger()
+            assert asked, "Quit bypassed the window's own checks"
+            assert not quit_called, "it left anyway after Cancel"
+        finally:
+            window._settings_dialog = None
+            dialog.deleteLater()

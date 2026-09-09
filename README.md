@@ -297,6 +297,17 @@ The model is told not to invent a fact and not to commit you to anything; where
 it needs something it does not have, it leaves `[a note in brackets]` and the
 draft lists those at the bottom. Bulk mail is skipped by default, per rule.
 
+## Running a model on this Mac
+
+**Settings → Analysis.** If Ollama is missing and Homebrew is there, the panel
+installs it; **Manage models…** shows what you have — size, parameters, and
+whether it is loaded — and removes what you do not want.
+
+Be realistic about speed. Measured on an Intel Mac with a 3B model: twelve
+seconds to load the weights and about a minute for one message. The Test
+button says what it measured and what that means for a full inbox. The
+built-in rule set is instant and needs nothing installed.
+
 ## Which build is this
 
 Bottom right: `1.0.0 · a1b2c3d`. A version number alone does not identify a
