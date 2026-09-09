@@ -18,6 +18,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import QThread, Signal
 
+import autoreply
 import corrections
 import verdict_cache
 from config import Settings
@@ -484,6 +485,33 @@ class ScanWorker(_BaseWorker):
         # ---- 3. Routing --------------------------------------------------
         self._finish_routing(outcome, messages, classifications, plan)
 
+    def _apply_sorting_rules(self, items) -> None:
+        """Run the rules that only file and tick. Never fatal."""
+        rules = self.settings.sorting_rules
+        if not rules:
+            return
+        touched = 0
+        for item in items:
+            try:
+                decision = autoreply.apply_rules(
+                    rules, item.email, item.classification)
+            except Exception as exc:  # noqa: BLE001 - one bad rule, not a scan
+                log.warning("A sorting rule failed (%s).", exc)
+                continue
+            if decision is None or not decision.does_anything:
+                continue
+            if decision.leave:
+                item.override_folder = None
+                item.approved = False
+            elif decision.file_into:
+                item.override_folder = decision.file_into
+                item.rule_name = decision.rule_name
+            if decision.tick is not None:
+                item.approved = decision.tick
+            touched += 1
+        if touched:
+            self._log(f"{touched} message(s) matched a rule you wrote.")
+
     def _finish_routing(self, outcome, messages, classifications, plan) -> None:
         """Turn verdicts into rows, apply what was learned, and hand it over.
 
@@ -517,6 +545,12 @@ class ScanWorker(_BaseWorker):
                 if taught:
                     self._log(f"{taught} message(s) filed the way you corrected "
                               "them before.")
+
+        # ---- 5. Rules the user wrote --------------------------------------
+        # Last, so a rule can override both the sorter and the memory - it is
+        # the most explicit statement of intent there is, somebody sat down
+        # and wrote it.
+        self._apply_sorting_rules(outcome.items)
         self._log(f"Analysis complete. {outcome.usage_text}")
         self.finished_ok.emit(outcome)
 

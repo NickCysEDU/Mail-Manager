@@ -771,6 +771,8 @@ class TriageItem:
     #: the sorter. A ``corrections.Learned``, kept as ``object`` so models has
     #: no import to make - it is only ever read for its ``.because`` sentence.
     learned_from: Optional[object] = None
+    #: Set when a rule the user wrote decided where this goes.
+    rule_name: str = ""
 
     def __post_init__(self) -> None:
         if self.approved is None:
@@ -868,6 +870,8 @@ class TriageItem:
         """
         if not self.override_folder:
             return ""
+        if self.rule_name:
+            return f"rule: {self.rule_name}"
         return "learned" if self.learned_from is not None else "manual"
 
     @property
