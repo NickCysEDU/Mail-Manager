@@ -375,14 +375,14 @@ class TestTheMailboxColumnIsActuallyVisible:
 
     def test_the_address_is_what_identifies_a_mailbox(self):
         from models import EmailMessage
-        assert EmailMessage(uid="1", account_label="nick",
-                            account_address="sam@icloud.com").mailbox_display \
-            == "sam@icloud.com"
+        assert EmailMessage(uid="1", account_label="me",
+                            account_address="me@icloud.com").mailbox_display \
+            == "me@icloud.com"
         # A name that says something the address does not is worth keeping,
         # but the domain still has to be there.
         assert "@gmail.com" in EmailMessage(
             uid="1", account_label="Work",
-            account_address="sam@gmail.com").mailbox_display
+            account_address="other@gmail.com").mailbox_display
 
 
 class TestMenusDoNotLoop:

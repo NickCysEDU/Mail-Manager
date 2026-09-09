@@ -183,6 +183,10 @@ class Settings:
     non_job_routing: str = NonJobRouting.LEAVE.value
     auto_approve_non_job: bool = False
     subscribe_new_folders: bool = True
+    #: Whether a scan should file mail the way it was corrected last time.
+    #: On by default: a sorter that keeps making the same mistake after being
+    #: told is the single most annoying thing one can do.
+    learn_from_corrections: bool = True
 
     last_window: str = TimeWindow.LAST_24_HOURS.name
     custom_start: str = ""
@@ -316,7 +320,7 @@ class Settings:
                     "hide_non_job", "fallback_to_rules", "auto_file_background",
                     "background_agent", "menu_bar_icon", "close_to_menu_bar",
                     "start_in_menu_bar", "readable", "help_mode", "auto_reply",
-                    "row_lines_auto"):
+                    "row_lines_auto", "learn_from_corrections"):
             data[key] = bool(data[key])
         settled = Settings(**data)
         settled._sync_mailboxes()

@@ -18,6 +18,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import QThread, Signal
 
+import corrections
 from config import Settings
 import time
 
@@ -449,6 +450,20 @@ class ScanWorker(_BaseWorker):
             )
             for message, classification in zip(messages, classifications)
         ]
+
+        # ---- 4. What we were taught last time ----------------------------
+        # After routing, not before: the memory only speaks where it disagrees
+        # with the sorter, so it needs the sorter's answer to compare against.
+        if self.settings.learn_from_corrections:
+            try:
+                memory = corrections.Memory.load()
+                taught = corrections.apply_to(outcome.items, memory)
+            except Exception as exc:  # noqa: BLE001 - never fail a scan for this
+                log.warning("Could not apply learned corrections (%s).", exc)
+            else:
+                if taught:
+                    self._log(f"{taught} message(s) filed the way you corrected "
+                              "them before.")
         self._log(f"Analysis complete. {outcome.usage_text}")
         self.finished_ok.emit(outcome)
 

@@ -48,8 +48,8 @@ class TestAccountIdentity:
         assert Account().id != Account().id
 
     def test_accounts_are_told_apart_in_the_table(self):
-        pair = [Account.for_address("sam@icloud.com"),
-                Account.for_address("sam@gmail.com")]
+        pair = [Account.for_address("me@icloud.com"),
+                Account.for_address("me@gmail.com")]
         accounts.assign_colors(pair)
         accounts.unique_labels(pair)
         assert pair[0].color != pair[1].color
