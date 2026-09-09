@@ -4875,7 +4875,12 @@ class MainWindow(QMainWindow):
         view_menu.addAction(open_logs)
 
         help_menu = menubar.addMenu("&Help")
-        setup = QAction("Run setup again...", self)
+        # Named for what people come looking for. "Run setup again" reads as
+        # something you would only do after a disaster; linking a second
+        # mailbox is an ordinary Tuesday.
+        setup = QAction("Add or Link &Mailboxes…", self)
+        setup.setToolTip("The setup wizard: link another mailbox, or change "
+                         "which folders get created.")
         setup.triggered.connect(self.run_setup)
         help_menu.addAction(setup)
 

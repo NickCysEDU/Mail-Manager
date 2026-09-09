@@ -33,6 +33,7 @@ Nothing is ever moved without an explicit tick in the table.
 - [Measuring a model](#measuring-a-model)
 - [Privacy and cost](#privacy-and-cost)
 - [Running a model on this Mac](#running-a-model-on-this-mac)
+- [Setup, and running natively](#setup-and-running-natively)
 - [Which build is this](#which-build-is-this)
 - [Troubleshooting](#troubleshooting)
 
@@ -1167,6 +1168,38 @@ harmless, a second `serve` exits with *address already in use*, and the app
 brings the server back after a reboot. It then polls until the server actually
 answers rather than waiting a fixed few seconds and declaring success — that
 guess was wrong in both directions.
+
+## Setup, and running natively
+
+The first run opens a wizard: link your mailboxes, choose a backend, and pick
+which folders to create. It reappears from **Help → Add or Link Mailboxes…**,
+which is also how you link a second account later.
+
+The mailbox page takes as many accounts as you like, from any of the ten
+providers the app knows, and puts each password in the Keychain under its own
+address. It used to ask for an iCloud address and nothing else, so anyone
+whose mail is on Gmail could not finish setup at all.
+
+The folder page asks the question directly — job-search folders, everyday
+folders, or both — and each option states what it creates. That sentence is
+built from the profile itself rather than typed out, so it cannot drift from
+what actually gets made.
+
+### Rosetta, and the warning about Python
+
+macOS says *"Python includes a component that will not work with future
+versions of macOS"* when an Intel interpreter is run on Apple silicon: Rosetta
+is being retired, and the warning is about the interpreter, not this app.
+
+`./dev` now prefers an interpreter that runs natively — the universal2 build
+in `.toolchain` first, then anything on the machine that matches its own
+architecture, and only then anything at all, so a machine with nothing else
+still works rather than refusing. If you already have an Intel `.venv`, delete
+it and run `./dev setup` again; `lipo -archs .venv/bin/python3` says which you
+have.
+
+The built `.app` was never the problem: all 104 of its Mach-O files are
+universal, and `build_app.sh` checks both slices before it finishes.
 
 ## Which build is this
 

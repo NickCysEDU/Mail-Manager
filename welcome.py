@@ -7,6 +7,7 @@ scan, so a new user never has to hunt through Settings to get started.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Qt
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
     QRadioButton,
     QToolButton,
     QVBoxLayout,
@@ -29,12 +31,32 @@ from PySide6.QtWidgets import (
     QWizardPage,
 )
 
+import accounts
 import profiles
 import providers
 import rulesets
 from accounts import Account
 from config import CredentialError, CredentialStore, Settings
 from models import APP_DISPLAY_NAME, FolderPlan
+
+
+def _watermark() -> Optional[QPixmap]:
+    """The app's icon, sized for the wizard's side panel. None if missing."""
+    import sys
+
+    roots = [Path(__file__).resolve().parent]
+    bundled = getattr(sys, "_MEIPASS", None)
+    if bundled:                      # pragma: no cover - only in the .app
+        roots.insert(0, Path(bundled))
+    for root in roots:
+        candidate = root / "assets" / "icon.png"
+        if candidate.exists():
+            pixmap = QPixmap(str(candidate))
+            if not pixmap.isNull():
+                return pixmap.scaled(
+                    140, 140, Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation)
+    return None
 
 
 def _body(text: str) -> QLabel:
@@ -64,56 +86,211 @@ class IntroPage(QWizardPage):
         layout.addStretch(1)
 
 
-class MailboxPage(QWizardPage):
+class AccountsPage(QWizardPage):
+    """Link one mailbox, or several, before anything else happens.
+
+    This used to ask for an iCloud address and an app-specific password and
+    nothing else, so somebody whose mail is on Gmail could not finish setup,
+    and nobody could add a second account without going to Settings
+    afterwards. The app has supported both since long before this page did.
+    """
+
     def __init__(self, store: CredentialStore, parent=None) -> None:
         super().__init__(parent)
         self._store = store
-        self.setTitle("Your mailbox")
-        self.setSubTitle("Stored in the macOS Keychain, never in a file.")
+        self._accounts: list = []
+        self._passwords: dict = {}
+        self._editing = -1
+        self.setTitle("Your mailboxes")
+        self.setSubTitle(
+            "Add as many as you like. Passwords go in the macOS Keychain, "
+            "never into a file.")
+
+        outer = QVBoxLayout(self)
+
+        self.listing = QListWidget()
+        self.listing.setMaximumHeight(110)
+        self.listing.currentRowChanged.connect(self._show)
+        outer.addWidget(self.listing)
+
+        buttons = QHBoxLayout()
+        self.add_button = QToolButton()
+        self.add_button.setText("Add another")
+        self.add_button.clicked.connect(self._add)
+        buttons.addWidget(self.add_button)
+        self.remove_button = QToolButton()
+        self.remove_button.setText("Remove")
+        self.remove_button.clicked.connect(self._remove)
+        buttons.addWidget(self.remove_button)
+        buttons.addStretch(1)
+        outer.addLayout(buttons)
+
+        form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+
+        self.preset = QComboBox()
+        for name, label in accounts.choices():
+            self.preset.addItem(label, name)
+        self.preset.currentIndexChanged.connect(self._preset_changed)
+        form.addRow("Provider", self.preset)
 
         self.email = QLineEdit()
-        self.email.setPlaceholderText("you@icloud.com")
+        self.email.textChanged.connect(self._capture)
+        form.addRow("Email address", self.email)
+
         self.password = QLineEdit()
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
-        self.password.setPlaceholderText("xxxx-xxxx-xxxx-xxxx")
+        self.password.textChanged.connect(self._capture)
         reveal = QToolButton()
         reveal.setText("Show")
         reveal.setCheckable(True)
         reveal.toggled.connect(
             lambda on: self.password.setEchoMode(
-                QLineEdit.EchoMode.Normal if on else QLineEdit.EchoMode.Password
-            )
-        )
-        row = QHBoxLayout()
+                QLineEdit.EchoMode.Normal if on else QLineEdit.EchoMode.Password))
+        holder = QWidget()
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(0, 0, 0, 0)
         row.addWidget(self.password, 1)
         row.addWidget(reveal)
-        holder = QWidget()
-        holder.setLayout(row)
-        row.setContentsMargins(0, 0, 0, 0)
+        form.addRow("Password", holder)
 
-        form = QFormLayout(self)
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        form.addRow("iCloud email", self.email)
-        form.addRow("App-specific password", holder)
-        form.addRow(_body(
-            "<p>iCloud rejects your normal Apple ID password over IMAP when two-factor "
-            "authentication is on, so you need an app-specific password:</p>"
-            "<ol><li>Open <a href='https://account.apple.com'>account.apple.com</a> and "
-            "sign in</li><li>Go to <b>Sign-In and Security</b>, then "
-            "<b>App-Specific Passwords</b></li><li>Create one, name it "
-            "<i>Mail Manager</i>, and paste it above</li></ol>"
-        ))
-        self.registerField("email*", self.email)
-        self.registerField("password", self.password)
+        self.server = QLineEdit()
+        self.server.textChanged.connect(self._capture)
+        self.server_label = QLabel("IMAP server")
+        form.addRow(self.server_label, self.server)
+
+        outer.addLayout(form)
+
+        self.hint = _body("")
+        outer.addWidget(self.hint)
+        outer.addStretch(1)
+
+        self._add()
+
+    # -- the list --------------------------------------------------------
+    def _add(self) -> None:
+        self._accounts.append(Account(preset="icloud"))
+        self._editing = len(self._accounts) - 1
+        self._refresh()
+        self.email.setFocus()
+
+    def _remove(self) -> None:
+        if len(self._accounts) <= 1:
+            return
+        del self._accounts[self._editing]
+        self._editing = max(0, self._editing - 1)
+        self._refresh()
+
+    def _refresh(self) -> None:
+        self.listing.blockSignals(True)
+        self.listing.clear()
+        for account in self._accounts:
+            self.listing.addItem(self._describe(account))
+        self.listing.setCurrentRow(self._editing)
+        self.listing.blockSignals(False)
+        self.remove_button.setEnabled(len(self._accounts) > 1)
+        self._show(self._editing)
+
+    def _describe(self, account) -> str:
+        if not account.address:
+            return "New mailbox — enter an address"
+        host = accounts.host_for(account.preset)
+        ready = bool(self._passwords.get(account.address, "").strip())
+        return (f"{account.address}  ·  {host.label}"
+                f"  ·  {'ready' if ready else 'needs a password'}")
+
+    def _show(self, index: int) -> None:
+        if not (0 <= index < len(self._accounts)):
+            return
+        self._editing = index
+        account = self._accounts[index]
+        self._loading = True
+        self.preset.setCurrentIndex(max(0, self.preset.findData(account.preset)))
+        self.email.setText(account.address)
+        self.password.setText(self._passwords.get(account.address, ""))
+        self.server.setText(account.host)
+        self._loading = False
+        self._preset_changed()
+
+    # -- the form --------------------------------------------------------
+    def _preset_changed(self) -> None:
+        name = self.preset.currentData() or "custom"
+        host = accounts.host_for(name)
+        custom = name == "custom"
+        self.server_label.setVisible(custom)
+        self.server.setVisible(custom)
+        if not custom:
+            self.server.setText(host.host)
+        self.email.setPlaceholderText(
+            f"you@{host.domains[0]}" if host.domains else "you@example.com")
+        note = f"<p><b>{host.secret_label}.</b> {host.note}"
+        if host.help_url:
+            note += f" <a href='{host.help_url}'>Generate one</a>."
+        self.hint.setText(note + "</p>")
+        if not getattr(self, "_loading", False):
+            # Switching provider while an address from the old one is still in
+            # the box is not a change of server, it is a different mailbox.
+            # Keeping it is how a Gmail password once got filed under an
+            # iCloud address.
+            address = self.email.text().strip()
+            belongs = accounts.host_for_address(address) if address else None
+            if (address and belongs is not None and not belongs.is_custom
+                    and belongs.name != name):
+                self.email.clear()
+                self.password.clear()
+            self._capture()
+
+    def _capture(self) -> None:
+        """Read the form back into the account being edited, on every keystroke."""
+        if getattr(self, "_loading", False):
+            return
+        if not (0 <= self._editing < len(self._accounts)):
+            return
+        name = self.preset.currentData() or "custom"
+        host = accounts.host_for(name)
+        account = self._accounts[self._editing]
+        account.address = self.email.text().strip()
+        account.preset = name
+        account.host = (self.server.text().strip() if name == "custom"
+                        else host.host)
+        account.port = host.port
+        if account.address:
+            self._passwords[account.address] = self.password.text()
+        item = self.listing.item(self._editing)
+        if item is not None:
+            item.setText(self._describe(account))
+        self.completeChanged.emit()
+
+    # -- what the wizard asks for ----------------------------------------
+    def ready_accounts(self) -> list:
+        """Only the ones with an address and a password worth storing."""
+        return [a for a in self._accounts
+                if a.address and accounts.valid_address(a.address)]
+
+    def passwords(self) -> dict:
+        return {a.address: self._passwords.get(a.address, "")
+                for a in self.ready_accounts()}
+
+    def isComplete(self) -> bool:  # noqa: N802
+        """Next stays off until at least one address is a real address."""
+        return bool(self.ready_accounts())
 
     def initializePage(self) -> None:
-        settings = Settings.load()
-        if settings.icloud_email:
-            self.email.setText(settings.icloud_email)
+        stored = Settings.load()
+        existing = [a for a in stored.mailboxes if a.address]
+        if not existing:
+            return
+        self._accounts = [Account(**{f: getattr(a, f) for f in
+                                     ("id", "label", "address", "preset",
+                                      "host", "port")}) for a in existing]
+        for account in self._accounts:
             try:
-                self.password.setText(self._store.get_icloud_password(settings.icloud_email))
+                self._passwords[account.address] = \
+                    self._store.get_icloud_password(account.address)
             except CredentialError:
-                pass
+                self._passwords[account.address] = ""
+        self._editing = 0
+        self._refresh()
 
 
 class ClassifierPage(QWizardPage):
@@ -183,18 +360,26 @@ class PurposePage(QWizardPage):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setTitle("What are you sorting?")
-        self.setSubTitle("This decides which folders get made. You can change it later.")
+        self.setTitle("Which folders should be created?")
+        self.setSubTitle(
+            "Job-search folders, everyday folders, or both. Changeable later "
+            "in Settings, and nothing is created until your first scan.")
 
         self.choice = QButtonGroup(self)
         self.choice.setExclusive(True)
         layout = QVBoxLayout(self)
 
         for index, (name, label, blurb) in enumerate(profiles.choices()):
+            profile = profiles.get(name)
             button = QRadioButton(label)
             button.setProperty("profile", name)
             self.choice.addButton(button, index)
-            note = _body(f"<p style='margin:0 0 10px 22px'>{blurb}</p>")
+            # What each one builds, written from the profile itself so the
+            # description cannot drift from what actually gets made.
+            note = _body(
+                f"<p style='margin:0 0 2px 22px'>{blurb}</p>"
+                f"<p style='margin:0 0 10px 22px;opacity:0.75'>"
+                f"<b>Creates</b> {profile.creates()}.</p>")
             layout.addWidget(button)
             layout.addWidget(note)
             if name == profiles.DEFAULT_PROFILE:
@@ -292,11 +477,17 @@ class SetupWizard(QWizard):
         self._store = store
         self.setWindowTitle(f"Set up {APP_DISPLAY_NAME}")
         self.setWizardStyle(QWizard.WizardStyle.MacStyle)
+        # Qt's MacStyle wizard ships a stock watermark - a dress shirt and a
+        # bow tie - which has nothing to do with this app and is the first
+        # thing a new user sees. The app's own icon says what they opened.
+        badge = _watermark()
+        if badge is not None:
+            self.setPixmap(QWizard.WizardPixmap.BackgroundPixmap, badge)
         self.setOption(QWizard.WizardOption.NoBackButtonOnStartPage, True)
         self.setMinimumSize(680, 520)
 
         self.intro = IntroPage(self)
-        self.mailbox = MailboxPage(store, self)
+        self.mailbox = AccountsPage(store, self)
         self.purpose = PurposePage(self)
         self.classifier = ClassifierPage(store, self)
         self.folders = FoldersPage(self)
@@ -310,11 +501,13 @@ class SetupWizard(QWizard):
 
         provider = self.classifier.backend.currentData() or providers.DEFAULT_PROVIDER
         profile = profiles.get(self.purpose.profile_name())
-        address = self.mailbox.email.text().strip()
+        linked = self.mailbox.ready_accounts()
         return replace(
             self._settings,
-            mailboxes=[Account.for_address(address)] if address else [],
-            icloud_email=address,
+            mailboxes=list(linked),
+            # The first one still fills the older single-mailbox fields, which
+            # a good deal of the app reads.
+            icloud_email=linked[0].address if linked else "",
             sort_profile=profile.name,
             topics=[t.value for t in self.purpose.chosen_topics()],
             non_job_routing=profile.non_job_routing.value,
@@ -328,10 +521,9 @@ class SetupWizard(QWizard):
     def save(self) -> Settings:
         settings = self.result_settings()
         try:
-            if self.mailbox.password.text():
-                self._store.set_icloud_password(
-                    settings.icloud_email, self.mailbox.password.text()
-                )
+            for address, secret in self.mailbox.passwords().items():
+                if secret.strip():
+                    self._store.set_icloud_password(address, secret)
             if settings.needs_api_key and self.classifier.key.text():
                 self._store.set_provider_key(settings.provider, self.classifier.key.text())
         except CredentialError:

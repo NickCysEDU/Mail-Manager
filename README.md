@@ -308,6 +308,16 @@ seconds to load the weights and about a minute for one message. The Test
 button says what it measured and what that means for a full inbox. The
 built-in rule set is instant and needs nothing installed.
 
+## Setting up
+
+The first run opens a wizard. Link as many mailboxes as you like — iCloud,
+Gmail, Outlook and seven others — and choose which folders to create:
+job-search folders, everyday folders, or both. Each option says what it will
+build before you pick it, and nothing is created until your first scan.
+
+**Help → Add or Link Mailboxes…** reopens it, which is how you link another
+account later.
+
 ## Which build is this
 
 Bottom right: `1.0.0 · a1b2c3d`. A version number alone does not identify a
