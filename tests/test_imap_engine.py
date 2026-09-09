@@ -595,7 +595,7 @@ class TestMoves:
         engine.connect("you@icloud.example", "app-specific")
         report = engine.move_messages([MovePlan("1", "Job Search/Interview")])
         assert any(name == "EXPUNGE" for name, _ in server.commands)
-        assert report.warnings and "UIDPLUS" in report.warnings[0]
+        assert any("UIDPLUS" in warning for warning in report.warnings)
 
     def test_uid_expunge_only_removes_our_messages(self, engine_factory):
         """A message the user flagged \\Deleted by hand must survive."""
@@ -792,3 +792,50 @@ class TestParallelFetch:
         engine.fetch_window(datetime(2026, 8, 1, tzinfo=UTC), connections=3,
                             progress=lambda d, t, m: seen.append((d, t)))
         assert seen and max(d for d, _ in seen) == 90
+
+
+class TestTheCopyReceipt:
+    """A COPY assigns new UIDs, and UIDPLUS servers say which."""
+
+    def test_it_reads_a_copyuid_line(self):
+        from imap_engine import copied_uids
+        assert copied_uids([b"[COPYUID 1234567 5:7 100:102] (Success)"]) == {
+            "5": "100", "6": "101", "7": "102"}
+
+    def test_it_handles_a_mixed_set(self):
+        from imap_engine import copied_uids
+        assert copied_uids([b"[COPYUID 1 5:7,9 100:102,205] Done"]) == {
+            "5": "100", "6": "101", "7": "102", "9": "205"}
+
+    def test_a_reversed_range_still_pairs_up(self):
+        from imap_engine import copied_uids
+        assert copied_uids([b"[COPYUID 1 7:5 100:102] ok"]) == {
+            "5": "100", "6": "101", "7": "102"}
+
+    def test_a_server_with_no_uidplus_says_nothing(self):
+        from imap_engine import copied_uids
+        assert copied_uids([b"(Success)"]) == {}
+        assert copied_uids([]) == {}
+        assert copied_uids(None) == {}
+
+    def test_mismatched_sets_are_refused_rather_than_guessed(self):
+        from imap_engine import copied_uids
+        assert copied_uids([b"[COPYUID 1 5:7 100] nope"]) == {}
+
+    def test_junk_does_not_raise(self):
+        from imap_engine import copied_uids
+        for line in (b"[COPYUID]", b"[COPYUID a b c]", b"[COPYUID 1 x:y 1:2]",
+                     "a string not bytes", b"\xff\xfe binary"):
+            assert isinstance(copied_uids([line]), dict)
+
+    def test_the_last_line_wins(self):
+        """imaplib puts the tagged response last, which is the one with it."""
+        from imap_engine import copied_uids
+        assert copied_uids([b"* 1 EXISTS",
+                            b"[COPYUID 1 5 100] (Success)"]) == {"5": "100"}
+
+    def test_expanding_a_set(self):
+        from imap_engine import _expand_uid_set
+        assert _expand_uid_set("1:3,7,10:11") == ["1", "2", "3", "7", "10", "11"]
+        assert _expand_uid_set("") == []
+        assert _expand_uid_set("not,a,set") == ["not", "a", "set"]
