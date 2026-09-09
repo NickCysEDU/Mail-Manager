@@ -694,6 +694,19 @@ class SettingsDialog(QDialog):
         advanced.addRow("IMAP port", self.port_spin)
         advanced.addRow("Mailbox to scan", self.mailbox_edit)
         advanced.addRow("Parallel connections", self.connections_spin)
+        # Folders per mailbox, because people keep separate mailboxes for
+        # separate reasons - a work account where a folder called Job Search
+        # would be conspicuous, a personal one where it does not matter.
+        self.account_root_edit = QLineEdit()
+        self.account_root_edit.setToolTip(
+            "Where this mailbox's job-search folders go. Leave empty to use "
+            "the one on the Folders tab.")
+        self.account_other_root_edit = QLineEdit()
+        self.account_other_root_edit.setToolTip(
+            "Where this mailbox's sorted non-job mail goes. Leave empty to "
+            "use the one on the Folders tab.")
+        advanced.addRow("Job Search folder", self.account_root_edit)
+        advanced.addRow("Sorted mail folder", self.account_other_root_edit)
         form.addRow(self.advanced_box)
 
         self.fetch_kb_spin = QSpinBox()
@@ -709,7 +722,8 @@ class SettingsDialog(QDialog):
         # Every field writes into the selected mailbox as it changes, so the
         # list above is always showing the truth and there is nothing to press.
         for widget in (self.email_edit, self.account_label_edit, self.host_edit,
-                       self.mailbox_edit):
+                       self.mailbox_edit, self.account_root_edit,
+                       self.account_other_root_edit):
             widget.textChanged.connect(self._capture_account)
         for widget in (self.port_spin, self.connections_spin):
             widget.valueChanged.connect(self._capture_account)
@@ -803,7 +817,8 @@ class SettingsDialog(QDialog):
         self._account_index = index
         editors = (self.preset_combo, self.email_edit, self.host_edit,
                    self.port_spin, self.mailbox_edit, self.connections_spin,
-                   self.account_label_edit, self.password_edit)
+                   self.account_label_edit, self.password_edit,
+                   self.account_root_edit, self.account_other_root_edit)
         for widget in editors:
             widget.blockSignals(True)
         self.preset_combo.setCurrentIndex(
@@ -815,6 +830,8 @@ class SettingsDialog(QDialog):
         self.connections_spin.setValue(account.connections)
         self.account_label_edit.setText(account.label)
         self.password_edit.setText(self._password_for(account))
+        self.account_root_edit.setText(account.folder_root)
+        self.account_other_root_edit.setText(account.other_folder_root)
         for widget in editors:
             widget.blockSignals(False)
         # Open the server box on its own when it holds something unexpected.
@@ -840,6 +857,8 @@ class SettingsDialog(QDialog):
         account.source_mailbox = self.mailbox_edit.text().strip() or "INBOX"
         account.connections = self.connections_spin.value()
         account.label = self.account_label_edit.text().strip()
+        account.folder_root = self.account_root_edit.text().strip()
+        account.other_folder_root = self.account_other_root_edit.text().strip()
         if address:
             # Cleaned on the way in as well as on the way out, so what is shown,
             # what is stored and what is sent are all the same thing.
@@ -2312,6 +2331,10 @@ class SettingsDialog(QDialog):
         self.folders_preview.setTextFormat(Qt.TextFormat.RichText)
         self.root_edit.textChanged.connect(self._update_folder_preview)
         self.other_root_edit.textChanged.connect(self._update_folder_preview)
+        # The per-mailbox fields show what they would inherit, so "empty"
+        # never means "nowhere".
+        self.root_edit.textChanged.connect(self._sync_root_placeholders)
+        self.other_root_edit.textChanged.connect(self._sync_root_placeholders)
 
         form.addRow("Job Search folder", self.root_edit)
         form.addRow("Non-job mail", self.routing_combo)
@@ -2514,6 +2537,7 @@ class SettingsDialog(QDialog):
         self.auto_non_job_check.setChecked(settings.auto_approve_non_job)
         self.subscribe_check.setChecked(settings.subscribe_new_folders)
         self.learn_check.setChecked(settings.learn_from_corrections)
+        self._sync_root_placeholders()
         self.reuse_check.setChecked(settings.reuse_verdicts)
 
         self.mode_combo.setCurrentIndex(
@@ -2567,6 +2591,14 @@ class SettingsDialog(QDialog):
         self.other_root_edit.setEnabled(filing)
         self.auto_non_job_check.setEnabled(filing)
         self._update_folder_preview()
+
+    def _sync_root_placeholders(self) -> None:
+        if not hasattr(self, "account_root_edit"):
+            return
+        self.account_root_edit.setPlaceholderText(
+            self.root_edit.text().strip() or "Job Search")
+        self.account_other_root_edit.setPlaceholderText(
+            self.other_root_edit.text().strip() or "Sorted Mail")
 
     def _update_folder_preview(self) -> None:
         plan = FolderPlan(

@@ -324,14 +324,24 @@ class MainWindow(QMainWindow):
         self.log_view.setFont(_mono_font())
         self.log_view.setVisible(self.settings.show_log_panel)
 
+        # Two splitters rather than one. The inner pair is the table and the
+        # preview, whose arrangement is a preference - beside each other on a
+        # wide screen, stacked on a tall one - and the outer one is the log,
+        # which is always along the bottom.
         self.splitter = QSplitter(Qt.Orientation.Vertical)
         self.splitter.addWidget(self.table_stack)
         self.splitter.addWidget(self.preview)
-        self.splitter.addWidget(self.log_view)
         self.splitter.setStretchFactor(0, 3)
         self.splitter.setStretchFactor(1, 2)
-        self.splitter.setSizes([420, 300, 0])
-        layout.addWidget(self.splitter, 1)
+        self.splitter.setSizes([420, 300])
+
+        self.outer_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.outer_splitter.addWidget(self.splitter)
+        self.outer_splitter.addWidget(self.log_view)
+        self.outer_splitter.setStretchFactor(0, 5)
+        self.outer_splitter.setSizes([720, 0])
+        layout.addWidget(self.outer_splitter, 1)
+        self._apply_preview_position(self.settings.preview_position)
 
         self.setCentralWidget(central)
 
@@ -1425,6 +1435,18 @@ class MainWindow(QMainWindow):
             density_menu.addAction(action)
             self.density_actions[lines] = action
 
+        preview_menu = view_menu.addMenu("Preview pane")
+        self.preview_actions = {}
+        for value, label in (("below", "Below the table"),
+                             ("right", "Beside the table")):
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setChecked(value == self.settings.preview_position)
+            action.triggered.connect(
+                lambda checked=False, where=value: self.set_preview_position(where))
+            preview_menu.addAction(action)
+            self.preview_actions[value] = action
+
         reset_columns = QAction("Reset column widths", self)
         reset_columns.triggered.connect(self._reset_columns)
         view_menu.addAction(reset_columns)
@@ -1467,6 +1489,9 @@ class MainWindow(QMainWindow):
             self.restoreGeometry(QByteArray.fromBase64(self.settings.window_geometry.encode()))
         if self.settings.splitter_state:
             self.splitter.restoreState(QByteArray.fromBase64(self.settings.splitter_state.encode()))
+        if self.settings.log_splitter_state:
+            self.outer_splitter.restoreState(
+                QByteArray.fromBase64(self.settings.log_splitter_state.encode()))
         if self.settings.table_state:
             self.table.horizontalHeader().restoreState(
                 QByteArray.fromBase64(self.settings.table_state.encode())
@@ -1580,6 +1605,8 @@ class MainWindow(QMainWindow):
         if not self.isFullScreen():
             self.settings.window_geometry = bytes(self.saveGeometry().toBase64()).decode()
         self.settings.splitter_state = bytes(self.splitter.saveState().toBase64()).decode()
+        self.settings.log_splitter_state = bytes(
+            self.outer_splitter.saveState().toBase64()).decode()
         self.settings.table_state = bytes(
             self.table.horizontalHeader().saveState().toBase64()
         ).decode()
@@ -2877,9 +2904,38 @@ class MainWindow(QMainWindow):
     def _toggle_log(self, visible: bool) -> None:
         self.log_view.setVisible(visible)
         if visible:
-            sizes = self.splitter.sizes()
+            sizes = self.outer_splitter.sizes()
             if sizes[-1] < 60:
-                self.splitter.setSizes([sizes[0], max(160, sizes[1] - 140), 140])
+                self.outer_splitter.setSizes([max(240, sizes[0] - 140), 140])
+
+    def _apply_preview_position(self, position: str) -> None:
+        """Put the preview under the table or beside it.
+
+        Under is right on a laptop, where height is what there is least of in
+        a table and most of everywhere else. Beside is right on a wide screen,
+        where the table has more width than it can use and the preview would
+        otherwise be reading a paragraph across sixteen hundred pixels.
+        """
+        beside = position == "right"
+        self.splitter.setOrientation(
+            Qt.Orientation.Horizontal if beside else Qt.Orientation.Vertical)
+        span = self.splitter.width() if beside else self.splitter.height()
+        if span > 1:
+            share = 0.42 if beside else 0.40
+            self.splitter.setSizes(
+                [int(span * (1 - share)), int(span * share)])
+        if hasattr(self, "preview_actions"):
+            for value, action in self.preview_actions.items():
+                action.setChecked(value == position)
+
+    @Slot(str)
+    def set_preview_position(self, position: str) -> None:
+        if position not in ("below", "right"):
+            return
+        if position == self.settings.preview_position:
+            return
+        self.settings.preview_position = position
+        self._apply_preview_position(position)
 
     @Slot(str)
     def _append_log(self, message: str) -> None:

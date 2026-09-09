@@ -208,6 +208,14 @@ class Account:
     connections: int = 4
     enabled: bool = True
     color: str = ""
+    #: Where this mailbox's folders go. Empty means "whatever Settings says",
+    #: which is the ordinary case. It is here at all because people keep
+    #: separate mailboxes for separate reasons - a work account where the
+    #: employer would rather not see a folder called Job Search, a personal
+    #: one where everything can live under one tree - and one global root
+    #: forced the same shape on both.
+    folder_root: str = ""
+    other_folder_root: str = ""
 
     def __post_init__(self) -> None:
         self.address = (self.address or "").strip()
@@ -233,6 +241,13 @@ class Account:
             self.connections = 4
         self.label = (self.label or "").strip() or self.default_label()
         self.color = (self.color or "").strip()
+        self.folder_root = (self.folder_root or "").strip()
+        self.other_folder_root = (self.other_folder_root or "").strip()
+
+    def roots(self, job_root: str, other_root: str) -> "Tuple[str, str]":
+        """This mailbox's folder roots, falling back to the shared ones."""
+        return (self.folder_root or job_root,
+                self.other_folder_root or other_root)
 
     def default_label(self) -> str:
         """What to call an account nobody has named: the local part, usually."""

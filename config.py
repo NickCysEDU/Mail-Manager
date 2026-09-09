@@ -199,6 +199,9 @@ class Settings:
 
     window_geometry: str = ""
     splitter_state: str = ""
+    log_splitter_state: str = ""
+    #: Where the preview sits relative to the table: "below" or "right".
+    preview_position: str = "below"
     table_state: str = ""
     show_log_panel: bool = False
     row_lines: int = 3
@@ -320,6 +323,8 @@ class Settings:
         )
         if data["last_window"] not in {w.name for w in TimeWindow}:
             data["last_window"] = TimeWindow.LAST_24_HOURS.name
+        if data.get("preview_position") not in ("below", "right"):
+            data["preview_position"] = "below"
         for key in ("auto_approve_non_job", "subscribe_new_folders", "show_log_panel",
                     "hide_non_job", "fallback_to_rules", "auto_file_background",
                     "background_agent", "menu_bar_icon", "close_to_menu_bar",
