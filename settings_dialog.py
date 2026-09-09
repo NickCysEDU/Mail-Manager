@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 
 import accounts
 import autoreply
+import corrections
 import helpmode
 import ondevice
 import profiles
@@ -2318,7 +2319,122 @@ class SettingsDialog(QDialog):
         form.addRow("", self.subscribe_check)
         form.addRow(_separator())
         form.addRow("Will use", self.folders_preview)
+        form.addRow(_separator())
+        form.addRow("Learned", self._build_learned_box())
         return page
+
+    def _build_learned_box(self) -> QWidget:
+        """What the app has picked up from being corrected, and a way out.
+
+        Anything that changes where mail goes has to be visible and has to be
+        undoable, or it stops being a feature and starts being the app having
+        opinions behind your back.
+        """
+        box = QWidget()
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        self.learn_check = QCheckBox(
+            "File mail the way I corrected it last time")
+        self.learn_check.setToolTip(
+            "When you move a message to a folder the app did not suggest, it "
+            "remembers, and files the next message from that sender the same "
+            "way.")
+        layout.addWidget(self.learn_check)
+
+        self.learned_summary = QLabel("")
+        self.learned_summary.setWordWrap(True)
+        self.learned_summary.setStyleSheet("opacity:0.75")
+        layout.addWidget(self.learned_summary)
+
+        self.learned_list = QListWidget()
+        self.learned_list.setAlternatingRowColors(True)
+        self.learned_list.setMaximumHeight(150)
+        self.learned_list.setToolTip(
+            "Select a row and press Forget to undo what was learned from it.")
+        layout.addWidget(self.learned_list)
+
+        buttons = QHBoxLayout()
+        buttons.setSpacing(6)
+        self.forget_button = QPushButton("Forget selected")
+        self.forget_button.setToolTip(
+            "Undo what the app learned from the selected row.")
+        self.forget_button.clicked.connect(self._forget_selected)
+        self.forget_all_button = QPushButton("Forget everything")
+        self.forget_all_button.setToolTip(
+            "Throw away every correction the app has learned from.")
+        self.forget_all_button.clicked.connect(self._forget_everything)
+        buttons.addWidget(self.forget_button)
+        buttons.addWidget(self.forget_all_button)
+        buttons.addStretch(1)
+        layout.addLayout(buttons)
+
+        self.learned_list.itemSelectionChanged.connect(self._learned_selection)
+        self._reload_learned()
+        return box
+
+    def _memory(self):
+        """The corrections file, loaded once per dialog."""
+        if getattr(self, "_corrections", None) is None:
+            try:
+                self._corrections = corrections.Memory.load()
+            except Exception:  # noqa: BLE001 - a broken file is an empty one
+                self._corrections = corrections.Memory()
+        return self._corrections
+
+    def _reload_learned(self) -> None:
+        memory = self._memory()
+        self.learned_list.clear()
+        for learned in memory.summary():
+            leaf = learned.folder.rsplit("/", 1)[-1]
+            row = QListWidgetItem(f"{learned.key}  →  {leaf}")
+            row.setToolTip(learned.because.capitalize() + ".")
+            row.setData(Qt.ItemDataRole.UserRole, learned.key)
+            self.learned_list.addItem(row)
+        self.learned_summary.setText(memory.describe())
+        empty = self.learned_list.count() == 0
+        self.forget_all_button.setEnabled(not empty)
+        self._learned_selection()
+
+    def _learned_selection(self) -> None:
+        self.forget_button.setEnabled(bool(self.learned_list.selectedItems()))
+
+    def _forget_selected(self) -> None:
+        keys = [row.data(Qt.ItemDataRole.UserRole)
+                for row in self.learned_list.selectedItems()]
+        if not keys:
+            return
+        memory = self._memory()
+        for key in keys:
+            memory.forget(key)
+        self._save_memory(memory)
+        self._reload_learned()
+
+    def _forget_everything(self) -> None:
+        memory = self._memory()
+        if not len(memory):
+            return
+        confirmed = QMessageBox.question(
+            self, "Forget every correction?",
+            f"This throws away all {len(memory)} correction(s) the app has "
+            "learned from. Mail will go wherever the sorter puts it until you "
+            "start correcting it again.\n\nThis cannot be undone.",
+            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
+            QMessageBox.StandardButton.Cancel)
+        if confirmed is not QMessageBox.StandardButton.Yes:
+            return
+        memory.clear()
+        self._save_memory(memory)
+        self._reload_learned()
+
+    def _save_memory(self, memory) -> None:
+        try:
+            memory.save()
+        except OSError as exc:
+            QMessageBox.warning(
+                self, "Could not save",
+                f"The corrections file could not be written:\n\n{exc}")
 
     # -- values ----------------------------------------------------------
     def _load_values(self) -> None:
@@ -2346,6 +2462,7 @@ class SettingsDialog(QDialog):
         self.routing_combo.setCurrentIndex(max(0, routing_index))
         self.auto_non_job_check.setChecked(settings.auto_approve_non_job)
         self.subscribe_check.setChecked(settings.subscribe_new_folders)
+        self.learn_check.setChecked(settings.learn_from_corrections)
 
         self.mode_combo.setCurrentIndex(
             max(0, self.mode_combo.findData(settings.appearance_mode)))
@@ -2446,6 +2563,7 @@ class SettingsDialog(QDialog):
             non_job_routing=NonJobRouting.parse(self.routing_combo.currentData()).value,
             auto_approve_non_job=self.auto_non_job_check.isChecked(),
             subscribe_new_folders=self.subscribe_check.isChecked(),
+            learn_from_corrections=self.learn_check.isChecked(),
         )
         return Settings(**data).normalized()
 

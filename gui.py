@@ -52,6 +52,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import corrections
 import llm_engine
 import profiles
 import providers
@@ -2460,8 +2461,40 @@ class MainWindow(QMainWindow):
 
     @Slot(int, object)
     def _override_changed(self, row: int, folder: Optional[str]) -> None:
+        item = self.model.item_at(row)
         self.model.set_override(row, folder)
+        if folder and item is not None:
+            self._learn_from(item, folder)
         self._update_status()
+
+    def _learn_from(self, item: TriageItem, folder: str) -> None:
+        """Write down that this sender's mail belongs somewhere else.
+
+        Best-effort throughout. Being unable to record a correction is not
+        worth interrupting somebody mid-triage over, and the correction they
+        just made still applies to the message in front of them either way.
+        """
+        if not self.settings.learn_from_corrections:
+            return
+        try:
+            memory = corrections.Memory.load()
+            recorded = memory.remember_move(
+                item.email.sender_email, folder,
+                suggested=item.suggested_folder or "",
+                was_job_related=item.classification.is_job_related,
+                subject=item.email.subject)
+            if recorded:
+                memory.save()
+        except Exception as exc:  # noqa: BLE001 - never interrupt triage
+            log.warning("Could not record that correction (%s).", exc)
+            return
+        if not recorded:
+            return
+        hit = memory.lookup(item.email.sender_email)
+        if hit is not None and hit.strength == 1 and hit.scope == "address":
+            leaf = folder.rsplit(item.folders.delimiter, 1)[-1]
+            self._set_status(f"Noted - mail from "
+                             f"{item.email.sender_email} will go to {leaf}.")
 
     def _select_first_row(self) -> None:
         if self.proxy.rowCount() > 0:

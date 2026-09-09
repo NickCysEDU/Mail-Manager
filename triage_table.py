@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QLabel,
 from imap_engine import MoveReport
 from models import (CATEGORY_COLORS, OTHER_COLOR, Category, Disposition,
                     TriageItem, TriageSummary)
-from widgets import (ACCENT_RED, _confidence_rgb, _draw_wrapped, _html,
+from widgets import (ACCENT_BLUE, ACCENT_RED, _confidence_rgb, _draw_wrapped, _html,
                      _is_dark, _mono_font, _one_line, _tint, _wrap,
                      system_font)
 
@@ -753,6 +753,11 @@ def _reasoning_html(item: TriageItem) -> str:
             f"(threshold {item.threshold * 100:.0f}%)",
         ),
     ]
+    if item.learned_because:
+        # Directly under the decision, because it is the reason for it.
+        rows.append(("Learned",
+                     f"<span style='color:{ACCENT_BLUE}'>"
+                     f"{_html(item.learned_because)}</span>"))
     if classification.model:
         rows.append(("Model", _html(classification.model)))
     if classification.input_tokens or classification.output_tokens:

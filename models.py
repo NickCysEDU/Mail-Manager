@@ -745,10 +745,19 @@ class TriageItem:
     override_folder: Optional[str] = None
     moved: bool = False
     move_error: Optional[str] = None
+    #: Set when the folder above came from a past correction rather than from
+    #: the sorter. A ``corrections.Learned``, kept as ``object`` so models has
+    #: no import to make - it is only ever read for its ``.because`` sentence.
+    learned_from: Optional[object] = None
 
     def __post_init__(self) -> None:
         if self.approved is None:
             self.approved = self.default_approved
+
+    @property
+    def learned_because(self) -> str:
+        """Why this row is where it is, when a correction put it there."""
+        return getattr(self.learned_from, "because", "")
 
     # -- routing ---------------------------------------------------------
     @property
@@ -828,13 +837,24 @@ class TriageItem:
         return self.email.source_folder or "Inbox"
 
     @property
+    def override_note(self) -> str:
+        """Why this row is not going where the sorter said.
+
+        "Learned" and "manual" both mean the folder was overridden, but they
+        are worth telling apart: one is something you did to this message, the
+        other is something you did to a previous one.
+        """
+        if not self.override_folder:
+            return ""
+        return "learned" if self.learned_from is not None else "manual"
+
+    @property
     def folder_display(self) -> str:
         folder = self.target_folder
         if folder is None:
             return self.source_label
-        if self.override_folder:
-            return f"{folder}  (manual)"
-        return folder
+        note = self.override_note
+        return f"{folder}  ({note})" if note else folder
 
     @property
     def folder_short(self) -> str:
@@ -843,7 +863,8 @@ class TriageItem:
         if folder is None:
             return self.source_label
         leaf = folder.rsplit(self.folders.delimiter, 1)[-1]
-        return f"{leaf}  (manual)" if self.override_folder else leaf
+        note = self.override_note
+        return f"{leaf}  ({note})" if note else leaf
 
     @property
     def status_display(self) -> str:
