@@ -79,14 +79,17 @@ class TestShapesRatherThanWords:
             "FR7712 STN to DUB, Tuesday. Bags close 40 minutes before. "
             "Your reference is J4KP2W.")
         assert OtherCategory.TRAVEL in found
-        assert "an airport pair" in why
+        assert any("STN" in reason for reason in why), why
 
-    def test_a_parcel(self):
-        found, why = entity_scores(
-            "", "", "It's here",
-            "Collection point 4, Stockport. Bring the QR code or the order "
-            "number. We'll hold it for seven days.")
-        assert OtherCategory.SHIPPING in found
+    def test_a_parcel(self, sorter):
+        """"Collection point" is a phrase, so it lives with the words now —
+        what matters is that the message still reads as a parcel."""
+        got = sorter.classify(
+            subject="It's here",
+            body="Collection point 4, Stockport. Bring the QR code or the "
+                 "order number. We'll hold it for seven days.",
+            sender="noreply@argos.example")
+        assert got.other_category is OtherCategory.SHIPPING
 
     def test_a_direct_debit(self):
         found, _why = entity_scores(

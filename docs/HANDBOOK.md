@@ -368,6 +368,32 @@ read the shape instead:
 | `entity_scores` | Structured things: a flight number beside an airport pair, a booking reference, a tracking number, a direct debit, a meter reading, a table for four. Run on the **raw** text, because normalising folds case and case is half of what makes `FR7712 STN to DUB` a flight |
 | `personal_register` | Whether two people are talking: a person's own address, no unsubscribe, a question, contractions, an apology, arranging something, and short |
 
+### What it knows about the world
+
+Shape gets you a long way and then stops. `STN to DUB` is a flight and
+`PDF to DOC` is a file conversion, and no amount of pattern-matching tells
+them apart — you have to know that STN is an airport and PDF is not.
+
+`data/lexicon.json.gz` is 330 KB holding two public datasets, rebuilt by
+`tools/build_lexicon.py` and committed so nothing ever touches the network at
+run time:
+
+| Source | What it gives | Licence |
+| --- | --- | --- |
+| [OurAirports](https://ourairports.com/data/) | 4,570 IATA codes for every large and medium airport | Public domain |
+| [Wikidata](https://www.wikidata.org/) | 44,170 company domains, resolved to 35,150 brand names, with the sector each belongs to | CC0 |
+
+Sectors are airline, bank, telecom, utility, retail, courier, social, news and
+hotel. The match is on the **brand name**, not the whole domain, because one
+shop writes from `argos.co.uk`, `email.argos.co.uk` and `argos-mail.com` and
+all three are Argos. Where a name is claimed twice the canonical suffix wins:
+`amazon.com` is a shop and `amazon.jobs` had been filed under airlines;
+`royalmail.com` is a courier and `royalmail.com.au` a hotel.
+
+Rebuild it with `python tools/build_lexicon.py`, or ask what is in the current
+one with `--report`. A missing or damaged file is not an error: the sorter
+loses this layer and keeps every other.
+
 ### They rank, they never decide
 
 Every one of these is capped at `SOFT_EVIDENCE_CEILING` — **0.90**, deliberately
@@ -377,7 +403,12 @@ somebody's mail unasked. Without that cap the new layers doubled the held-out
 score and started filing wrong answers, which costs far more than an extra row
 to look at.
 
-Two gates keep them honest:
+Words come first. A topic backed by real phrases is never overturned by
+shape, whatever the totals say — a one-time code from a bank is a security
+notice, and "halifax is a bank" plus an amount of money is not a reason to
+call it a bank statement, which is exactly what it had been doing.
+
+Two more gates keep them honest:
 
 - **A recruiter is a human too.** The register says a person wrote this, not
   what it is about, so it is silent whenever another topic has real evidence

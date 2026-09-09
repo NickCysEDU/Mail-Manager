@@ -3988,6 +3988,11 @@ class MainWindow(QMainWindow):
         self.window_buttons: Dict[TimeWindow, QToolButton] = {}
         for window in TimeWindow:
             button = QToolButton()
+            # These four are read as one control, so they are sized as one:
+            # the theme's button padding is meant for a lone button with a
+            # sentence on it, and four of them side by side wasted enough
+            # width to push Apply onto a row of its own.
+            button.setProperty("segment", "true")
             button.setText(window.label)
             button.setCheckable(True)
             button.setAutoExclusive(True)
@@ -4003,9 +4008,9 @@ class MainWindow(QMainWindow):
         # full QCalendarWidget, which is about a tenth of a second per field.
         # _sync_range_visibility turns it on the first time the fields show.
         self.start_date = QDateEdit()
-        self.start_date.setDisplayFormat("d MMM yyyy")
+        self.start_date.setDisplayFormat("d MMM yy")
         self.end_date = QDateEdit()
-        self.end_date.setDisplayFormat("d MMM yyyy")
+        self.end_date.setDisplayFormat("d MMM yy")
         today = QDate.currentDate()
         self.start_date.setDate(_stored_date(self.settings.custom_start, today.addDays(-7)))
         self.end_date.setDate(_stored_date(self.settings.custom_end, today))
@@ -4022,9 +4027,15 @@ class MainWindow(QMainWindow):
         dates_row.setSpacing(4)
         separator = QLabel("–")
         separator.setProperty("dim", "true")
+        for field in (self.start_date, self.end_date):
+            field.setSizePolicy(QSizePolicy.Policy.Fixed,
+                                QSizePolicy.Policy.Preferred)
         dates_row.addWidget(self.start_date)
         dates_row.addWidget(separator)
         dates_row.addWidget(self.end_date)
+        # The slot is as wide as the longest wording of the label, so without
+        # this the two fields stretch to fill it and drift apart.
+        dates_row.addStretch(1)
         self.range_widgets = [self.start_date, separator, self.end_date]
 
         self.range_stack = QStackedWidget()

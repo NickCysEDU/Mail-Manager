@@ -403,6 +403,11 @@ def stylesheet(colours: Palette, readable: bool = False,
     QToolButton#helpButton {{ min-height: 0; max-height: none; padding: 0; }}
     /* Nor are the small square buttons that add and remove a line: the
        standard padding would push the one character they hold outside them. */
+    /* Four buttons read as one segmented control. The standard padding is
+       for a lone button carrying a phrase; here it is dead width. */
+    QToolButton[segment="true"] {{
+        padding-left: {8 if readable else 7}px; padding-right: {8 if readable else 7}px;
+    }}
     QToolButton[compact="true"] {{
         min-height: 0; min-width: 0; padding: 0; margin: 0;
         border: {border}px solid transparent;
