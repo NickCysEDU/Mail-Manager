@@ -790,6 +790,28 @@ def _disposition_badge(item: TriageItem) -> str:
     return " &nbsp;·&nbsp; ".join(parts)
 
 
+def _runners_up(classification) -> str:
+    """The categories that nearly won, and by how little.
+
+    A verdict that beat its nearest rival by a tenth of a point is a
+    different thing from one that beat it by five, and the confidence number
+    alone does not distinguish them. Shown only when there is a contest.
+    """
+    scores = {name: value for name, value in (classification.scores or {}).items()
+              if value > 0}
+    if len(scores) < 2:
+        return ""
+    ranked = sorted(scores.items(), key=lambda pair: -pair[1])
+    winner = ranked[0][1] or 1.0
+    parts = []
+    for name, value in ranked[1:4]:
+        share = value / winner
+        parts.append(f"{_html(name.replace('_', ' ').title())} "
+                     f"<span style='opacity:0.7'>({share * 100:.0f}% of the "
+                     "winner)</span>")
+    return "<br>".join(parts)
+
+
 def _reasoning_html(item: TriageItem) -> str:
     classification = item.classification
     rows = [
@@ -802,6 +824,18 @@ def _reasoning_html(item: TriageItem) -> str:
             f"(threshold {item.threshold * 100:.0f}%)",
         ),
     ]
+    if classification.signals:
+        # What actually fired, in the sorter's own words. A verdict with a
+        # reason you can read is one you can argue with; "confidence 0.91" is
+        # not something anybody can act on.
+        shown = [f"• {_html(signal)}" for signal in classification.signals[:8]]
+        extra = len(classification.signals) - len(shown)
+        if extra > 0:
+            shown.append(f"<span style='opacity:0.6'>…and {extra} more</span>")
+        rows.append(("Matched", "<br>".join(shown)))
+    runners = _runners_up(classification)
+    if runners:
+        rows.append(("Runners-up", runners))
     if item.learned_because:
         # Directly under the decision, because it is the reason for it.
         rows.append(("Learned",

@@ -534,6 +534,14 @@ class Classification:
     error: Optional[str] = None
     input_tokens: int = 0
     output_tokens: int = 0
+    #: The phrases that actually fired, when the sorter can name them. The
+    #: rules engine always can; a model backend never does, and leaves this
+    #: empty rather than inventing one.
+    signals: Tuple[str, ...] = ()
+    #: What every category scored, so the runners-up can be shown. A verdict
+    #: that beat its nearest rival by a hair is a different kind of 90% from
+    #: one that beat it by five points, and only this says which.
+    scores: Dict[str, float] = field(default_factory=dict)
 
     @property
     def confidence_percent(self) -> float:
@@ -659,6 +667,18 @@ class Classification:
 
         usage = payload.get("_usage") if isinstance(payload.get("_usage"), Mapping) else {}
 
+        raw_signals = payload.get("signals")
+        signals = tuple(str(s) for s in raw_signals[:12]) \
+            if isinstance(raw_signals, (list, tuple)) else ()
+        raw_scores = payload.get("scores")
+        scores: Dict[str, float] = {}
+        if isinstance(raw_scores, Mapping):
+            for name, value in raw_scores.items():
+                try:
+                    scores[str(name)] = float(value)
+                except (TypeError, ValueError):
+                    continue
+
         return cls(
             summary=summary,
             is_job_related=is_job_related,
@@ -670,6 +690,8 @@ class Classification:
             adjustments=tuple(adjustments),
             input_tokens=int(usage.get("input_tokens") or 0),
             output_tokens=int(usage.get("output_tokens") or 0),
+            signals=signals,
+            scores=scores,
         )
 
 

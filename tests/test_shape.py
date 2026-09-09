@@ -196,3 +196,57 @@ class TestItStillRefusesToBeCertain:
             sender="no-reply@bank.example")
         assert got.other_category is OtherCategory.SECURITY
         assert got.confidence >= 0.90
+
+
+class TestTheLiteralPrefilter:
+    """The anchor test must only ever say "definitely not"."""
+
+    def test_it_agrees_with_the_regex_on_every_signal(self):
+        """Exhaustive: for every signal in every table, on realistic text.
+
+        The prefilter is a claim about the patterns - that a matching phrase
+        always leaves its longest word intact in the tightened text. This
+        checks that claim against every signal the app ships rather than
+        trusting the argument.
+        """
+        from rules_engine import _Matcher, normalize, tighten
+        from rules_engine import (_CATEGORY_TABLES, JOB_CONTEXT_SIGNALS,
+                                  NON_JOB_SIGNALS, TOPIC_SIGNALS)
+
+        tables = [table for _, table in _CATEGORY_TABLES]
+        tables += list(TOPIC_SIGNALS.values())
+        tables += [JOB_CONTEXT_SIGNALS, NON_JOB_SIGNALS]
+
+        disagreements = []
+        for table in tables:
+            for signal in table:
+                matcher = _Matcher(signal)
+                if not matcher.anchor:
+                    continue
+                for text in (signal.phrase,
+                             f"Hello, {signal.phrase} - regards",
+                             signal.phrase.upper(),
+                             signal.phrase.replace(" ", "  "),
+                             signal.phrase.replace(" ", ".")):
+                    normalized, tightened = normalize(text), tighten(text)
+                    filtered = matcher.hit(normalized, tightened)
+                    unfiltered = matcher._hit(normalized, tightened)
+                    if filtered != unfiltered:
+                        disagreements.append((signal.phrase, text))
+        assert disagreements == [], disagreements[:5]
+
+    def test_it_rejects_text_that_cannot_match(self):
+        from rules_engine import Signal, _Matcher, normalize, tighten
+        matcher = _Matcher(Signal("invite you to interview", 3.0))
+        text = "your parcel is out for delivery today"
+        assert matcher.hit(normalize(text), tighten(text)) == 0.0
+
+    def test_a_sender_signal_skips_the_prefilter(self):
+        """A sender arrives untightened, so the anchor test would misfire."""
+        from rules_engine import Signal, _Matcher
+        matcher = _Matcher(Signal("royalmail", 2.0, field="sender"))
+        assert matcher.sender_hit("no-reply@royalmail.com") == 1.0
+
+    def test_short_phrases_get_no_anchor(self):
+        from rules_engine import Signal, _Matcher
+        assert _Matcher(Signal("we are", 1.0)).anchor == ""
