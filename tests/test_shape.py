@@ -18,11 +18,16 @@ called bookings@, two people arranging something.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from models import OtherCategory
 from rules_engine import (RuleClassifier, entity_scores, looks_like_a_person,
                           personal_register, sender_purpose)
+
+
+ROOT = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture(scope="module")
@@ -250,3 +255,138 @@ class TestTheLiteralPrefilter:
     def test_short_phrases_get_no_anchor(self):
         from rules_engine import Signal, _Matcher
         assert _Matcher(Signal("we are", 1.0)).anchor == ""
+
+
+class TestAHiringMailbox:
+    """Who sent it is context a phrase table cannot read."""
+
+    @pytest.mark.parametrize("sender,word", [
+        ("Careers <no-reply@brightpath.example>", "careers"),
+        ("Talent <hiring@vellum.example>", "talent"),
+        ("Recruitment <careers@stanfield.example>", "recruitment"),
+        ("recruiter@acme.example", "recruiter"),
+        ("Talent Acquisition <ta@acme.example>", "talent acquisition"),
+        ("People Team <people.team@acme.example>", "people team"),
+        ("jobs@acme.example", "jobs"),
+    ])
+    def test_it_is_recognised(self, sender, word):
+        from rules_engine import hiring_mailbox
+        assert hiring_mailbox(sender) == word
+
+    @pytest.mark.parametrize("sender", [
+        "Imogen Blake <i.blake@harlow-tech.example>",
+        "no-reply@amazon.example",
+        "billing@utility.example",
+        "Hazel Croft <hazel@croftandco.example>",
+        "",
+        "not an address at all",
+    ])
+    def test_an_ordinary_sender_is_not(self, sender):
+        from rules_engine import hiring_mailbox
+        assert hiring_mailbox(sender) == ""
+
+    def test_it_stops_a_rejection_reading_as_a_note_from_a_friend(self):
+        """The warmth in a rejection was what made personal_register fire."""
+        from rules_engine import personal_register
+        body = ("Thank you for the time you put into this. On this occasion "
+                "the panel has chosen someone whose background sits closer "
+                "to the brief. We'd be glad to hear from you again.")
+        warm, _ = personal_register("An update", body,
+                                    "Imogen <i.blake@harlow.example>")
+        assert warm > 0, "the same words from a person do read as personal"
+
+        from_careers, why = personal_register(
+            "An update", body, "Careers <no-reply@brightpath.example>")
+        assert from_careers == 0.0
+        assert why == []
+
+
+class TestConditionalSignals:
+    """Weak words the context has licensed."""
+
+    def test_they_do_nothing_without_a_hiring_sender(self):
+        from rules_engine import RuleClassifier
+        engine = RuleClassifier()
+        verdict = engine.classify(
+            subject="Terms attached",
+            body="The paperwork is attached. As we discussed, starting the 6th.",
+            sender="Hazel Croft <hazel@croftandco.example>")
+        assert not verdict.is_job_related, "a letting agent is not an offer"
+
+    def test_they_fire_from_a_careers_mailbox(self):
+        from rules_engine import RuleClassifier
+        from models import Category
+        engine = RuleClassifier()
+        verdict = engine.classify(
+            subject="Got it",
+            body=("This is just to say your details are with us and the team "
+                  "will look at them over the next fortnight. No need to do "
+                  "anything."),
+            sender="Recruitment <careers@stanfield.example>")
+        assert verdict.is_job_related
+        assert verdict.category is Category.APPLICATION_RECEIVED
+
+    def test_a_paraphrased_rejection_is_still_a_rejection(self):
+        from rules_engine import RuleClassifier
+        from models import Category
+        engine = RuleClassifier()
+        verdict = engine.classify(
+            subject="An update",
+            body=("Thank you for the time you put into this. On this occasion "
+                  "the panel has chosen someone whose background sits closer "
+                  "to the brief. We'd be glad to hear from you again."),
+            sender="Careers <no-reply@brightpath.example>")
+        assert verdict.is_job_related
+        assert verdict.category is Category.NOT_INTERESTED
+
+
+class TestTieBreaking:
+    """Two topics on the same score must not be settled by table order."""
+
+    def test_the_order_of_the_tables_does_not_decide(self, monkeypatch):
+        """Reverse every table's order; the verdicts must not move."""
+        import json
+        import rules_engine
+        from tools import evaluate
+
+        fixture = ROOT / "tests" / "fixtures" / "labelled.json"
+        rows = json.loads(fixture.read_text())
+        before = evaluate.score(rows)[1]
+
+        original = dict(rules_engine.TOPIC_SIGNALS)
+        try:
+            for topic, table in original.items():
+                rules_engine.TOPIC_SIGNALS[topic] = tuple(reversed(table))
+            after = evaluate.score(rows)[1]
+        finally:
+            rules_engine.TOPIC_SIGNALS.clear()
+            rules_engine.TOPIC_SIGNALS.update(original)
+        assert after == before
+
+    def test_the_more_specific_topic_wins_a_tie(self):
+        from models import OtherCategory
+        from rules_engine import _topic_rank
+        assert _topic_rank(OtherCategory.SECURITY) < _topic_rank(OtherCategory.OTHER)
+        assert _topic_rank(OtherCategory.TRAVEL) < _topic_rank(OtherCategory.PERSONAL)
+        assert _topic_rank(OtherCategory.PERSONAL) < _topic_rank(OtherCategory.OTHER)
+
+    def test_every_topic_has_a_place_in_the_order(self):
+        from models import OtherCategory
+        from rules_engine import _TOPIC_PRECEDENCE
+        placed = set(_TOPIC_PRECEDENCE)
+        for topic in OtherCategory:
+            if topic is OtherCategory.NOT_APPLICABLE:
+                continue
+            assert topic in placed, f"{topic} would sort last by accident"
+
+    def test_a_repeat_run_gives_the_same_answer(self):
+        from rules_engine import RuleClassifier
+        engine = RuleClassifier()
+        args = dict(subject="Your statement is ready",
+                    body="Your balance is £412.30 and the code is 448193.",
+                    sender="no-reply@bank.example")
+        first = engine.classify(**args)
+        for _ in range(5):
+            again = engine.classify(**args)
+            assert again.other_category is first.other_category
+            assert again.confidence == first.confidence

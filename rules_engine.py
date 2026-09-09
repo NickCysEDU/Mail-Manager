@@ -771,6 +771,64 @@ ATS_LINK_DOMAINS: Tuple[str, ...] = (
 )
 
 #: Signals that a message is about employment at all.
+#: Phrases that mean nothing on their own and a great deal from a careers
+#: mailbox.
+#:
+#: This is the thing a language model does that a phrase table does not: read
+#: the same words differently depending on who said them. "Got it - your
+#: details are with us, the team will look at them over the next fortnight"
+#: contains no hiring vocabulary whatever. It is an application
+#: acknowledgement, and the only thing that makes it one is the From line
+#: saying Recruitment.
+#:
+#: So these are scored only when the sender is a hiring mailbox or the message
+#: has already established a named hiring process. Off that leash they would
+#: be a disaster - "the paperwork is attached" is a sentence from a solicitor,
+#: an accountant and a letting agent - which is exactly why they live here
+#: rather than in the tables proper, and why their weights are modest even
+#: when they do fire.
+CONDITIONAL_SIGNALS: Dict[Category, Tuple[Signal, ...]] = {
+    Category.NOT_INTERESTED: (
+        Signal("chosen someone", 2.4), Signal("chosen another", 2.4),
+        Signal("gone with another", 2.4), Signal("went with another", 2.4),
+        Signal("offered the role to", 2.4), Signal("offered it to", 2.0),
+        Signal("closer to what", 2.0),
+        Signal("a closer match", 2.2),
+        Signal("on this occasion", 1.8), 
+        Signal("strong field", 1.6), Signal("difficult decision", 1.6),
+        Signal("hear from you again", 1.2),
+        Signal("keep your details", 1.6), Signal("keep you in mind", 1.6),
+    ),
+    Category.APPLICATION_RECEIVED: (
+        Signal("your details are", 1.8),
+        Signal("no need to do anything", 2.2),
+        Signal("nothing you need to do", 2.2),
+        Signal("nothing for you to do", 2.2),
+        Signal("sit tight", 1.8),
+        Signal("under review", 1.6), Signal("being reviewed", 1.6),
+        Signal("with the team", 1.2), 
+        Signal("shortlisting", 2.0),
+    ),
+    Category.NEXT_STEPS: (
+        Signal("the exercise", 2.0), 
+        Signal("spend some time on", 2.0),
+        Signal("back to us by", 2.0),
+        Signal("no time limit", 1.8), Signal("linked below", 1.6),
+    ),
+    Category.INTERVIEW: (
+        Signal("the panel", 2.4), 
+        Signal("see you again", 2.0),
+        Signal("meet the team", 2.0), Signal("are you around", 2.0),
+        Signal("speak again", 1.6), Signal("another conversation", 1.6),
+    ),
+    Category.OFFER: (
+        Signal("paperwork is attached", 2.4),
+        Signal("as we discussed", 1.6), 
+        Signal("starting the", 1.2),
+    ),
+}
+
+
 JOB_CONTEXT_SIGNALS: Tuple[Signal, ...] = (
     Signal("your application", 2.0),
     Signal("the position", 1.4),
@@ -1611,6 +1669,40 @@ def sender_purpose(sender: str) -> Tuple[Dict["OtherCategory", float], List[str]
     return found, why
 
 
+#: Mailboxes that exist to talk to candidates. Checked against the display
+#: name as well as the address, because "Careers <no-reply@brightpath>" tells
+#: you what it is in the half a phrase table would never read.
+_HIRING_MAILBOX = re.compile(
+    r"(?:^|[\W_])(?:careers?|recruit(?:ing|ment|er|ers)?|talent"
+    r"(?:[\W_]?acquisition)?|hiring|jobs?|vacanc(?:y|ies)|"
+    r"people[\W_]?(?:team|ops|operations)|human[\W_]?resources|"
+    r"campus[\W_]?recruit\w*|graduate[\W_]?(?:recruit\w*|scheme))"
+    r"(?:$|[\W_])", re.I)
+
+
+def hiring_mailbox(sender: str) -> str:
+    """The word that says this mailbox exists to talk about hiring, if any.
+
+    "Got it - your details are with us" is a sentence from every part of
+    life. From ``Recruitment <careers@stanfield>`` it is an application
+    acknowledgement and nothing else, and no amount of reading the body was
+    going to establish that: the evidence is in the From line.
+
+    Both halves are read. A company that sends candidate mail from
+    ``no-reply@`` still puts "Careers" or "Talent" in the display name,
+    because a person has to know who it is from.
+    """
+    sender = sender or ""
+    name = sender.split("<")[0]
+    local = sender.split("@")[0].split("<")[-1]
+    for part in (name, local):
+        found = _HIRING_MAILBOX.search(part or "")
+        if found:
+            return re.sub(r"^[\W_]+|[\W_]+$", "",
+                          found.group(0)).lower()
+    return ""
+
+
 def looks_like_a_person(sender: str) -> bool:
     """Whether the address belongs to a person rather than a department."""
     local = (sender or "").split("@")[0].split("<")[-1].strip().lower()
@@ -1721,6 +1813,12 @@ def personal_register(subject: str, body: str, sender: str,
         return 0.0, []
     fake, _fake_why = impersonation_score(sender, normalize(subject), normalize(body))
     if fake:
+        return 0.0, []
+    # A careers mailbox is not a person writing to you, however warmly it is
+    # written. "Thank you for the time you put into this" from Careers@ is a
+    # rejection in a friendly register, not a note from a friend - and the
+    # warmth is exactly what made this fire on it.
+    if hiring_mailbox(sender):
         return 0.0, []
     text = f"{subject}\n{body}"
     reasons = [describes for describes, pattern in _CONVERSATIONAL
@@ -2118,6 +2216,41 @@ _CATEGORY_TABLES: Tuple[Tuple[Category, Tuple[Signal, ...]], ...] = (
 
 #: Precedence, matching the system prompt exactly. Ties break toward the
 #: earlier entry.
+#: How to settle a tie between two topics with the same score.
+#:
+#: ``max`` on a dict returns whichever key happened to be inserted first,
+#: which means the answer to "is this a receipt or a promotion" was decided by
+#: the order the tables are written in - invisible, arbitrary, and liable to
+#: change the moment somebody reorders a literal. This is the order instead,
+#: and it runs from specific to generic: a topic that describes one kind of
+#: message beats one that describes a category of them, and the two catch-alls
+#: come last because "something else" should never win a tie against a real
+#: answer.
+_TOPIC_PRECEDENCE: Tuple[OtherCategory, ...] = (
+    OtherCategory.SECURITY,     # a code or a sign-in alert is unmistakable
+    OtherCategory.TRAVEL,       # a flight number is not a metaphor
+    OtherCategory.SHIPPING,     # nor is a tracking number
+    OtherCategory.RECEIPT,      # money that already moved
+    OtherCategory.FINANCE,      # money that has not
+    OtherCategory.EVENT,
+    OtherCategory.SOCIAL,
+    OtherCategory.WORK,
+    OtherCategory.NEWSLETTER,
+    OtherCategory.PROMOTION,
+    OtherCategory.SPAM,
+    OtherCategory.PERSONAL,     # a register, not a subject
+    OtherCategory.OTHER,        # the absence of an answer
+)
+
+
+def _topic_rank(topic: "OtherCategory") -> int:
+    """Lower is more specific. Anything unlisted sorts last."""
+    try:
+        return _TOPIC_PRECEDENCE.index(topic)
+    except ValueError:
+        return len(_TOPIC_PRECEDENCE)
+
+
 _PRECEDENCE: Tuple[Category, ...] = (
     Category.UNSOLICITED,
     Category.OFFER,
@@ -2155,6 +2288,8 @@ class RuleClassifier:
         self._compiled[id(HIRING_SPECIFIC_SIGNALS)] = [
             _Matcher(s) for s in HIRING_SPECIFIC_SIGNALS]
         for table in TOPIC_SIGNALS.values():
+            self._compiled[id(table)] = [_Matcher(signal) for signal in table]
+        for table in CONDITIONAL_SIGNALS.values():
             self._compiled[id(table)] = [_Matcher(signal) for signal in table]
 
     @property
@@ -2261,8 +2396,30 @@ class RuleClassifier:
             self._context, subject_n, subject_t, body_n, body_t)
         named_process, _named_why = self._score(
             HIRING_SPECIFIC_SIGNALS, subject_n, subject_t, body_n, body_t)
+        # Who it came from is context in its own right. A careers mailbox has
+        # one job, and mail from it is about that job even when the body is
+        # four words long - which is exactly the case a phrase table cannot
+        # reach, because there are no phrases in it.
+        from_hiring = hiring_mailbox(sender)
+        if from_hiring:
+            context_now += 1.6
         working = (professional > 0.0 or context_now >= 1.0
-                   or named_process > 0.0)
+                   or named_process > 0.0 or bool(from_hiring))
+
+        # ---- weak evidence the context has licensed --------------------
+        # Only now, with the sender and the process established, are the
+        # conditional phrases allowed to count. Read without that licence
+        # they would file a solicitor's letter under Offer.
+        licensed = bool(from_hiring) or named_process > 0.0
+        if licensed:
+            for category, table in CONDITIONAL_SIGNALS.items():
+                extra, extra_matched, extra_peak = self._score_detail(
+                    table, subject_n, subject_t, body_n, body_t)
+                if not extra:
+                    continue
+                scores[category] += extra
+                strongest[category] = max(strongest[category], extra_peak)
+                matches[category].extend(extra_matched)
 
         # ---- link evidence, which outweighs prose ----------------------
         if any(domain in link_blob for domain in SCHEDULING_LINK_DOMAINS):
@@ -2598,11 +2755,25 @@ class RuleClassifier:
         # an amount of money outscored the code itself.
         hard = {topic: score - soft.get(topic, 0.0)
                 for topic, score in topic_scores.items()}
+
+        def strength(topic) -> tuple:
+            """What settles it, in order, when two topics score the same.
+
+            The score first, then the strongest single phrase behind it - one
+            decisive sentence beats three vague ones - then how much of the
+            score was words rather than shape, and only then the written
+            precedence. Every step of that is a reason; dict order was not.
+            """
+            return (round(topic_scores[topic], 6),
+                    round(topic_peak.get(topic, 0.0), 6),
+                    round(hard.get(topic, 0.0), 6),
+                    -_topic_rank(topic))
+
         spoken_for = [topic for topic, score in hard.items() if score >= MIN_SCORE]
         if spoken_for:
-            best_topic = max(spoken_for, key=lambda t: topic_scores[t])
+            best_topic = max(spoken_for, key=strength)
         else:
-            best_topic = max(topic_scores, key=lambda t: topic_scores[t])
+            best_topic = max(topic_scores, key=strength)
         best = topic_scores[best_topic]
         ranked = sorted(topic_scores.values(), reverse=True)
         runner_up = ranked[1] if len(ranked) > 1 else 0.0
