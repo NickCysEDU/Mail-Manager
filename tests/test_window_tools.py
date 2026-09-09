@@ -109,27 +109,94 @@ class TestHelpMode:
         window.help_button.setChecked(False)
 
 
+def filed(window, folder="Job Search/Interview", count=1, first_uid=900):
+    """Report that the first `count` rows were filed, with fresh UIDs."""
+    items = window.model.items[:count]
+    return MoveReport(
+        moved={item.email.uid: folder for item in items},
+        new_uids={item.email.uid: str(first_uid + n)
+                  for n, item in enumerate(items)})
+
+
 class TestUndoingTheLastFiling:
     def test_undo_is_off_until_something_has_been_filed(self, window):
         assert window.undo_action.isEnabled() is False
 
     def test_a_completed_apply_arms_undo_with_the_right_journey(self, window):
         window._load_demo_data()
-        first = window.model.items[0]
-        report = MoveReport(moved={first.email.uid: "Job Search/Interview"})
-        window._on_apply_done(report)
+        window._on_apply_done(filed(window))
         assert window.undo_action.isEnabled() is True
-        plan = window._last_apply[0]
+        plan = window._undo_stack[-1].plans[0]
         # It goes back to the inbox, starting from where it was filed.
         assert plan.source_folder == "Job Search/Interview"
         assert plan.target_folder == window.settings.source_mailbox
 
+    def test_it_uses_the_uid_the_copy_assigned(self, window):
+        """A COPY gives the message a new UID; the old one names other mail."""
+        window._load_demo_data()
+        original = window.model.items[0].email.uid
+        window._on_apply_done(filed(window, first_uid=900))
+        plan = window._undo_stack[-1].plans[0]
+        assert plan.uid == "900"
+        assert plan.uid != original
+
+    def test_a_message_the_server_gave_no_receipt_for_is_left_alone(self, window):
+        """Guessing at its UID would move whatever else holds that number."""
+        window._load_demo_data()
+        uid = window.model.items[0].email.uid
+        window._on_apply_done(MoveReport(moved={uid: "Somewhere"}))
+        assert window._undo_stack == []
+        assert window.undo_action.isEnabled() is False
+
     def test_undo_disarms_once_it_has_run(self, window):
         window._load_demo_data()
-        window._on_apply_done(MoveReport(moved={window.model.items[0].email.uid: "X"}))
-        window._on_undo_done(MoveReport(moved={"1": "INBOX"}))
+        window._on_apply_done(filed(window))
+        window.undo_action.trigger  # armed
+        window._undoing = window._undo_stack[-1]
+        window._on_undo_done(MoveReport(moved={"900": "INBOX"}))
         assert window.undo_action.isEnabled() is False
-        assert window._last_apply == []
+        assert window._undo_stack == []
+
+
+class TestUndoingMoreThanOnce:
+    """Filing is done in passes, so undo has to be too."""
+
+    def test_each_filing_is_its_own_step(self, window):
+        window._load_demo_data()
+        window._on_apply_done(filed(window, "First", count=1, first_uid=900))
+        window._on_apply_done(filed(window, "Second", count=2, first_uid=910))
+        assert len(window._undo_stack) == 2
+
+    def test_undo_takes_the_newest_first(self, window):
+        window._load_demo_data()
+        window._on_apply_done(filed(window, "First", count=1, first_uid=900))
+        window._on_apply_done(filed(window, "Second", count=2, first_uid=910))
+
+        newest = window._undo_stack[-1]
+        assert [p.source_folder for p in newest.plans] == ["Second"] * 2
+
+        window._undoing = newest
+        window._on_undo_done(MoveReport(moved={}))
+        assert len(window._undo_stack) == 1
+        assert window._undo_stack[-1].plans[0].source_folder == "First"
+        assert window.undo_action.isEnabled() is True
+
+    def test_the_menu_says_how_many_are_left(self, window):
+        window._load_demo_data()
+        window._on_apply_done(filed(window, "First", count=1, first_uid=900))
+        window._on_apply_done(filed(window, "Second", count=2, first_uid=910))
+        assert "2 Messages" in window.undo_action.text()
+        assert "1 earlier filing" in window.undo_action.toolTip()
+
+    def test_the_stack_has_a_floor(self, window):
+        import gui
+        window._load_demo_data()
+        for n in range(gui.UNDO_DEPTH + 5):
+            window._on_apply_done(filed(window, f"F{n}", first_uid=900 + n))
+        assert len(window._undo_stack) == gui.UNDO_DEPTH
+        # The oldest went, not the newest.
+        assert window._undo_stack[-1].plans[0].source_folder == \
+            f"F{gui.UNDO_DEPTH + 4}"
 
 
 class TestApplyGroupsByWhereMessagesActuallyAre:

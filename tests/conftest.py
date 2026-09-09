@@ -158,6 +158,8 @@ class FakeIMAP:
         self.internaldates = dict(internaldates or {})
         self.deleted: set = set()
         self.copies: List[Tuple[str, str]] = []
+        #: UIDs handed out to copies, so no two collide.
+        self._next_copy_uid = 9000
         self.expunged: List[str] = []
         self.commands: List[Tuple[str, tuple]] = []
         self.selected: Optional[str] = None
@@ -300,9 +302,21 @@ class FakeIMAP:
             return ("NO", [b"[TRYCREATE] Mailbox does not exist"])
         if name not in self.folders:
             return ("NO", [b"[TRYCREATE] Mailbox does not exist"])
-        for uid in str(uid_set).split(","):
+        copied = [uid for uid in str(uid_set).split(",") if uid]
+        for uid in copied:
             self.copies.append((uid, name))
-        return ("OK", [b"COPY completed"])
+        if "UIDPLUS" not in self.post_auth_capabilities:
+            return ("OK", [b"COPY completed"])
+        # A UIDPLUS server says which UIDs it gave the copies, and the caller
+        # needs them: a COPY does not preserve a message's UID, so without
+        # this there is no way to name the copy afterwards.
+        assigned = []
+        for _ in copied:
+            self._next_copy_uid += 1
+            assigned.append(str(self._next_copy_uid))
+        receipt = (f"[COPYUID 1 {','.join(copied)} {','.join(assigned)}] "
+                   "COPY completed").encode()
+        return ("OK", [receipt])
 
     def _uid_store(self, uid_set, mode, flags):
         if self.fail_store:

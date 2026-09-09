@@ -8,6 +8,7 @@ import re
 import logging
 import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -111,6 +112,20 @@ from workers import (
 
 log = logging.getLogger(__name__)
 
+#: How many filings to keep undoable. Deep enough that a session of ticking,
+#: filing, looking again and filing again stays reversible; shallow enough
+#: that the stack never describes mail from a scan two hours ago that has
+#: since been touched elsewhere.
+UNDO_DEPTH = 10
+
+
+@dataclass
+class UndoBatch:
+    """One completed filing, and how to put it back."""
+
+    plans: List[MovePlan]
+    when: datetime
+
 class MainWindow(QMainWindow):
     """The application window."""
 
@@ -134,7 +149,11 @@ class MainWindow(QMainWindow):
         self.reply_worker = None
         self.undo_worker = None
         #: The last batch of moves, so they can be reversed.
-        self._last_apply: List[MovePlan] = []
+        #: One entry per completed filing, newest last. A stack rather than
+        #: a single slot because filing is done in passes - tick the obvious
+        #: ones, file, look again, file again - and undoing only the last pass
+        #: leaves you stuck with the one before it.
+        self._undo_stack: List[UndoBatch] = []
         #: Every background thread this window has started and not yet reaped.
         self._workers: List[QThread] = []
         self.folder_plan: Optional[FolderPlan] = settings.folder_plan()
@@ -2100,16 +2119,22 @@ class MainWindow(QMainWindow):
 
     # -- applying --------------------------------------------------------
     @Slot()
-    @Slot()
     def undo_last_apply(self) -> None:
-        """Move the last batch back where it came from."""
-        if self._busy() or not self._last_apply:
+        """Move the most recent batch back where it came from."""
+        if self._busy() or not self._undo_stack:
             return
-        count = len(self._last_apply)
+        batch = self._undo_stack[-1]
+        count = len(batch.plans)
+        remaining = len(self._undo_stack) - 1
+        question = (f"Move {count} message{'s' if count != 1 else ''} back to "
+                    "the mailbox they came from?")
+        if remaining:
+            question += (f"\n\nThis is the most recent of {len(self._undo_stack)} "
+                         f"filings; {remaining} earlier "
+                         f"{'one' if remaining == 1 else 'ones'} can be undone "
+                         "after it.")
         if QMessageBox.question(
-            self, "Undo filing",
-            f"Move {count} message{'s' if count != 1 else ''} back to the "
-            "mailbox they came from?",
+            self, "Undo filing", question,
             QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
             QMessageBox.StandardButton.Yes,
         ) != QMessageBox.StandardButton.Yes:
@@ -2120,10 +2145,11 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Keychain", str(exc))
             return
 
+        self._undoing = batch
         self._set_busy(True, "Putting messages back…")
         self.undo_worker = ApplyWorker(
             settings=self.settings, mailbox_password=passwords,
-            plans=self._last_apply, extra_folders=(), parent=self,
+            plans=batch.plans, extra_folders=(), parent=self,
         )
         self._register(self.undo_worker)
         self.undo_worker.progress.connect(self._on_progress)
@@ -2135,16 +2161,37 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def _on_undo_done(self, report: MoveReport) -> None:
         self._set_busy(False)
-        self._last_apply = []
-        if hasattr(self, "undo_action"):
-            self.undo_action.setEnabled(False)
-            self.undo_action.setText("Undo Last Filing")
+        batch = getattr(self, "_undoing", None)
+        self._undoing = None
+        if batch is not None and batch in self._undo_stack:
+            self._undo_stack.remove(batch)
+        self._sync_undo_action()
         message = f"Put {report.moved_count} message(s) back."
         if report.failed:
             message += f" {report.failed_count} could not be moved back."
         self._append_log(message)
         QMessageBox.information(self, "Undo filing", message)
         self._update_status(message)
+
+    def _sync_undo_action(self) -> None:
+        """Say what pressing undo would actually do."""
+        if not hasattr(self, "undo_action"):
+            return
+        self.undo_action.setEnabled(bool(self._undo_stack))
+        if not self._undo_stack:
+            self.undo_action.setText("Undo Last Filing")
+            self.undo_action.setToolTip(
+                "Nothing has been filed yet in this session.")
+            return
+        batch = self._undo_stack[-1]
+        count = len(batch.plans)
+        self.undo_action.setText(
+            f"Undo Filing of {count} Message{'s' if count != 1 else ''}")
+        depth = len(self._undo_stack)
+        tip = f"Filed at {batch.when:%H:%M}."
+        if depth > 1:
+            tip += f" {depth - 1} earlier filing(s) can be undone after it."
+        self.undo_action.setToolTip(tip)
 
     @Slot()
     def draft_replies(self, prompted: bool = True) -> None:
@@ -2333,27 +2380,30 @@ class MainWindow(QMainWindow):
         # Remember where everything came from, so it can be put back. The app
         # moves real mail; being able to undo that is what makes it safe to
         # try rather than something to be careful with.
-        self._last_apply = []
+        plans: List[MovePlan] = []
         for item in self.model.items:
             filed_to = report.moved.get(item.email.uid)
             if not filed_to:
                 continue
+            # The UID the message has *now*, which a COPY changed. Without
+            # the server's receipt there is no way to name it, so it is left
+            # out rather than pointed at whatever else holds that number.
+            landed = report.new_uids.get(item.email.uid)
+            if not landed:
+                continue
             account = self.settings.account_by_id(item.email.account_id)
             home = account.source_mailbox if account else self.settings.source_mailbox
-            self._last_apply.append(MovePlan(
-                uid=item.email.uid,
+            plans.append(MovePlan(
+                uid=landed,
                 target_folder=home,
                 subject=item.email.subject_display,
                 account_id=item.email.account_id,
                 source_folder=filed_to,
             ))
-        if hasattr(self, "undo_action"):
-            self.undo_action.setEnabled(bool(self._last_apply))
-            self.undo_action.setText(
-                f"Undo Filing of {len(self._last_apply)} Message"
-                f"{'s' if len(self._last_apply) != 1 else ''}"
-                if self._last_apply else "Undo Last Filing"
-            )
+        if plans:
+            self._undo_stack.append(UndoBatch(plans=plans, when=datetime.now()))
+            del self._undo_stack[:-UNDO_DEPTH]
+        self._sync_undo_action()
         self.model.apply_report(report)
         self._refresh_folder_choices()
         message = f"Filed {report.moved_count} message(s)."

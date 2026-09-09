@@ -461,6 +461,11 @@ class MoveReport:
     created_folders: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     expunged: bool = False
+    #: Where each message ended up: source uid -> the uid it was given in the
+    #: destination folder. A COPY assigns a new one, and without this the
+    #: only way back was to guess that it had not - which is wrong on every
+    #: server that has ever been written.
+    new_uids: Dict[str, str] = field(default_factory=dict)
 
     @property
     def moved_count(self) -> int:
@@ -1136,6 +1141,7 @@ class IMAPEngine:
         total = len(plans)
         done = 0
         deleted_uids: List[str] = []
+        missing_receipts: set = set()
 
         for folder, uids in by_folder.items():
             _check_cancel(cancel)
@@ -1147,7 +1153,7 @@ class IMAPEngine:
 
                 # 1. COPY - must succeed before anything is marked for deletion.
                 try:
-                    self._cmd(
+                    response = self._cmd(
                         f"Copying to “{folder}”",
                         conn.uid, "COPY", uid_set, quote_mailbox(folder),
                     )
@@ -1174,12 +1180,27 @@ class IMAPEngine:
                     done += len(batch)
                     continue
 
+                # Where they landed, so they can be put back. A COPY gives
+                # every message a new UID in the destination, so the one the
+                # message had here says nothing about where it is now.
+                landed = copied_uids(response)
                 for uid in batch:
                     report.moved[uid] = folder
+                    if uid in landed:
+                        report.new_uids[uid] = landed[uid]
+                if not landed:
+                    missing_receipts.add(folder)
                 deleted_uids.extend(batch)
                 done += len(batch)
                 if progress:
                     progress(done, total, f"Filed {done} of {total} message(s)…")
+
+        if missing_receipts:
+            report.warnings.append(
+                "This server did not say which UIDs it gave the copies in "
+                + ", ".join(f"\u201c{name}\u201d" for name in sorted(missing_receipts))
+                + ", so those messages cannot be put back automatically. "
+                "Move them yourself if you need to.")
 
         # 3. EXPUNGE.
         if deleted_uids:
@@ -1238,6 +1259,55 @@ class IMAPEngine:
 # --------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------
+#: The UIDPLUS receipt for a COPY: the validity, the source set, and the
+#: destination set, in that order and in matching order within the sets.
+_COPYUID = re.compile(r"\[COPYUID\s+\d+\s+(\S+)\s+([^\]\s]+)\]", re.I)
+
+
+def _expand_uid_set(text: str) -> List[str]:
+    """Turn "5:7,9" into ["5", "6", "7", "9"].
+
+    RFC 4315 guarantees the two sets in a COPYUID line correspond position by
+    position once expanded, which is the whole reason to expand them.
+    """
+    out: List[str] = []
+    for part in (text or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if ":" in part:
+            low, _, high = part.partition(":")
+            try:
+                start, end = int(low), int(high)
+            except ValueError:
+                continue
+            if start > end:
+                start, end = end, start
+            out.extend(str(n) for n in range(start, end + 1))
+        else:
+            out.append(part)
+    return out
+
+
+def copied_uids(data) -> Dict[str, str]:
+    """Read a COPY response and say where each message landed.
+
+    Servers that advertise UIDPLUS answer a COPY with the UIDs they assigned.
+    Servers that do not answer with nothing useful, and the caller has to fall
+    back to looking the message up by its Message-ID.
+    """
+    for line in reversed(list(data or ())):
+        text = line.decode("utf-8", "replace") if isinstance(line, bytes) else str(line)
+        found = _COPYUID.search(text)
+        if not found:
+            continue
+        sources = _expand_uid_set(found.group(1))
+        targets = _expand_uid_set(found.group(2))
+        if sources and len(sources) == len(targets):
+            return dict(zip(sources, targets))
+    return {}
+
+
 def _chunks(items: Sequence[str], size: int) -> Iterator[List[str]]:
     for index in range(0, len(items), size):
         yield list(items[index:index + size])
