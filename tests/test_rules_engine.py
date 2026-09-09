@@ -356,15 +356,51 @@ class TestConfidence:
 
 
 class TestOutputContract:
+    #: What every backend produces, model or rules engine.
+    SCHEMA_KEYS = {"summary", "is_job_related", "category", "other_category",
+                   "confidence_score", "reasoning"}
+    #: What only the rules engine can produce, because only it knows which
+    #: phrases fired. A model asked for these would be inventing them.
+    EVIDENCE_KEYS = {"signals", "scores"}
+
     def test_the_payload_matches_the_model_schema(self, rules):
         payload = verdict(
             rules, "Update", "We have decided to move forward with other candidates.",
             "c@acme.example",
         ).to_payload()
-        assert set(payload) == {
-            "summary", "is_job_related", "category", "other_category",
-            "confidence_score", "reasoning",
-        }
+        assert set(payload) == self.SCHEMA_KEYS | self.EVIDENCE_KEYS
+
+    def test_the_evidence_survives_into_the_classification(self, rules):
+        from models import Classification
+        payload = verdict(
+            rules, "Update", "We have decided to move forward with other candidates.",
+            "c@acme.example",
+        ).to_payload()
+        result = Classification.from_payload(payload, model="local rules")
+        assert result.signals
+        assert result.scores
+
+    def test_a_model_payload_without_evidence_is_still_valid(self):
+        """The two extra keys are optional everywhere they are read."""
+        from models import Classification
+        result = Classification.from_payload({
+            "summary": "s", "is_job_related": True, "category": "INTERVIEW",
+            "other_category": "NOT_APPLICABLE", "confidence_score": 0.9,
+            "reasoning": "r"}, model="a-model")
+        assert result.signals == ()
+        assert result.scores == {}
+
+    def test_junk_evidence_is_dropped_rather_than_believed(self):
+        from models import Classification
+        result = Classification.from_payload({
+            "summary": "s", "is_job_related": True, "category": "INTERVIEW",
+            "other_category": "NOT_APPLICABLE", "confidence_score": 0.9,
+            "reasoning": "r",
+            "signals": "not a list",
+            "scores": {"INTERVIEW": "not a number", "OFFER": 2.0}},
+            model="a-model")
+        assert result.signals == ()
+        assert result.scores == {"OFFER": 2.0}
 
     def test_the_payload_survives_the_validation_layer_untouched(self, rules):
         from models import Classification

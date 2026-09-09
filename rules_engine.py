@@ -237,7 +237,11 @@ class Signal:
 class _Matcher:
     """Compiled exact, gapped and tight forms of a signal's phrase."""
 
-    __slots__ = ("signal", "loose", "gapped", "tight")
+    __slots__ = ("signal", "loose", "gapped", "tight", "anchor")
+
+    #: An anchor shorter than this appears in almost every message, so testing
+    #: for it costs a scan and saves nothing.
+    MIN_ANCHOR = 5
 
     def __init__(self, signal: Signal) -> None:
         self.signal = signal
@@ -246,9 +250,43 @@ class _Matcher:
         self.gapped = re.compile(pattern) if pattern else None
         tight = re.sub(r"[^a-z0-9]+", "", signal.phrase.lower())
         self.tight = tight if len(tight) >= 8 else ""
+        self.anchor = self._anchor(signal.phrase)
+
+    @staticmethod
+    def _anchor(phrase: str) -> str:
+        """The longest word of the phrase, as it appears in a tightened blob.
+
+        Both the loose and the gapped patterns join whole words with separator
+        classes, so every word of a matching phrase survives into the text
+        with its own letters adjacent - and ``tighten`` only removes what is
+        between them. So if the longest word is not in the tightened text, no
+        form of the phrase can match, and a substring test settles it in a
+        fraction of what running the regex would cost.
+
+        This is a filter, never a decision: it can only say "definitely not".
+        """
+        words = [re.sub(r"[^a-z0-9]+", "", word.lower())
+                 for word in phrase.split()]
+        longest = max(words, key=len, default="")
+        return longest if len(longest) >= _Matcher.MIN_ANCHOR else ""
 
     def hit(self, normalized: str, tightened: str) -> float:
         """Return a weight multiplier: 1.0 exact, 0.75 gapped, 0.0 no match."""
+        if self.anchor and self.anchor not in tightened:
+            return 0.0
+        return self._hit(normalized, tightened)
+
+    def sender_hit(self, sender: str) -> float:
+        """Match against a sender, which arrives untightened.
+
+        The prefilter is skipped rather than applied to the wrong blob: an
+        address is a hundred characters at most, so nothing is saved by
+        filtering it, and applying the test to text that was never tightened
+        would reject matches the loose pattern would have found.
+        """
+        return self._hit(sender, sender)
+
+    def _hit(self, normalized: str, tightened: str) -> float:
         if self.loose.search(normalized):
             return 1.0
         if self.tight and self.tight in tightened:
@@ -2048,7 +2086,13 @@ class RuleVerdict:
     matched: Tuple[str, ...] = ()
 
     def to_payload(self) -> Dict[str, object]:
-        """The same JSON shape the model backends produce."""
+        """The same JSON shape the model backends produce.
+
+        Plus two keys they do not fill in: the phrases that fired and what
+        each category scored. A model cannot produce these honestly - it
+        would be describing its own reasoning after the fact - so it leaves
+        them out and the panel that shows them stays empty.
+        """
         return {
             "summary": self.summary,
             "is_job_related": self.is_job_related,
@@ -2056,6 +2100,9 @@ class RuleVerdict:
             "other_category": self.other_category.value,
             "confidence_score": round(self.confidence, 3),
             "reasoning": self.reasoning,
+            "signals": list(self.matched),
+            "scores": {name: round(value, 3)
+                       for name, value in self.scores.items()},
         }
 
 
@@ -2131,7 +2178,7 @@ class RuleClassifier:
         if not sender:
             return False
         return any(
-            matcher.signal.field == "sender" and matcher.hit(sender, sender)
+            matcher.signal.field == "sender" and matcher.sender_hit(sender)
             for matcher in self._compiled[id(table)]
         )
 
@@ -2156,7 +2203,7 @@ class RuleClassifier:
             if signal.field == "sender":
                 # Who sent it is worth more than what it says: a courier's own
                 # domain settles the topic in a way prose never quite does.
-                if sender and matcher.hit(sender, sender):
+                if sender and matcher.sender_hit(sender):
                     total += signal.weight
                     strongest = max(strongest, signal.weight)
                     matched.append(signal.describe())

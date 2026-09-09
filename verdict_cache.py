@@ -141,6 +141,11 @@ def _classification_payload(classification: Classification) -> Dict[str, object]
         "confidence_score": classification.confidence_score,
         "reasoning": classification.reasoning,
         "adjustments": list(classification.adjustments),
+        # Kept so a reused verdict can still explain itself. A row that says
+        # nothing about why is worse than one the model was asked about
+        # again.
+        "signals": list(classification.signals),
+        "scores": dict(classification.scores),
     }
 
 
