@@ -37,7 +37,6 @@ from typing import Dict, Optional, Tuple
 #: below the threshold that would move anybody's mail.
 SECTOR_TOPICS: Dict[str, Tuple[str, float]] = {
     "airline": ("TRAVEL", 1.6),
-    "hotel": ("EVENT", 1.0),
     "bank": ("FINANCE", 1.4),
     "telecom": ("FINANCE", 1.2),
     "utility": ("FINANCE", 1.4),

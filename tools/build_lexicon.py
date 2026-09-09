@@ -61,8 +61,12 @@ SECTORS: Tuple[Tuple[str, str, str], ...] = (
     # than from a class that sounded right and returned nothing.
     ("courier",    "Q1529128", "postal services"),
     ("courier",    "Q1447463", "package delivery"),
-    ("hotel",      "Q11707",   "restaurants"),
-    ("hotel",      "Q27686",   "hotels"),
+    # Hotels and restaurants were dropped after measuring what they held: the
+    # chains anybody actually gets mail from - Marriott, Hilton, Hyatt,
+    # Novotel, Premier Inn - were already claimed as retail, so the class
+    # contributed 11,044 individual small hotels ("101starsmotel",
+    # "11thavenuehostel") that will never be a sender, and a third of the
+    # file's size along with them.
 )
 
 #: Nothing is taken from the "business" class: it has millions of members
