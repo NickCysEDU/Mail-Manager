@@ -797,6 +797,7 @@ class OnDeviceResult:
         if self.ok:
             return {"install": "Ollama is installed.",
                     "pull": "The model is downloaded and ready.",
+                    "remove": "The model has been removed.",
                     "start": "Ollama is running."}.get(self.step, "Done.")
         if self.explanation:
             return self.explanation
@@ -827,6 +828,27 @@ class OnDeviceProbeWorker(_BaseWorker):
         except Exception as exc:  # noqa: BLE001 - reported, never raised
             state = ondevice.Status(error=str(exc))
         self.finished_ok.emit(state)
+
+
+class InstalledModelsWorker(_BaseWorker):
+    """Lists what the local server holds, without holding up the window."""
+
+    finished_ok = Signal(object)
+    task_name = "listing models"
+
+    def __init__(self, endpoint: str = "", parent=None) -> None:
+        super().__init__(parent)
+        self.endpoint = endpoint
+
+    def run(self) -> None:
+        import ondevice
+
+        try:
+            found = ondevice.installed_models(
+                self.endpoint or ondevice.DEFAULT_ENDPOINT)
+        except Exception as exc:  # noqa: BLE001 - reported, never raised
+            found = ([], str(exc))
+        self.finished_ok.emit(found)
 
 
 class OnDeviceWorker(_BaseWorker):

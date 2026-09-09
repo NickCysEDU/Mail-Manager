@@ -130,6 +130,7 @@ class HttpSession:
         url: str,
         payload: Dict[str, Any],
         headers: Optional[Dict[str, str]] = None,
+        connect_timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         if self._closed:
             raise ProviderError("The connection was closed.")
@@ -160,24 +161,45 @@ class HttpSession:
         }
         request_headers.update(headers or {})
 
+        # Connecting and answering are different waits and deserve different
+        # patience. A server that is not there refuses at once, so waiting
+        # ninety seconds to discover that is pointless; a local model loading
+        # three gigabytes of weights needs far longer than the few seconds
+        # that discovery takes. One timeout for both meant whichever number
+        # was chosen was wrong for one of them - and it was: an on-device
+        # scan gave the model four seconds to answer and reported that Ollama
+        # was not installed when it did not.
+        opening = min(connect_timeout or self.timeout, self.timeout)
         if parsed.scheme == "https":
             connection = http.client.HTTPSConnection(
-                host, port, timeout=self.timeout, context=ssl.create_default_context()
+                host, port, timeout=opening, context=ssl.create_default_context()
             )
         else:
-            connection = http.client.HTTPConnection(host, port, timeout=self.timeout)
+            connection = http.client.HTTPConnection(host, port, timeout=opening)
 
         with self._lock:
             if self._closed:
                 raise ProviderError("The connection was closed.")
             self._live.append(connection)
+        connected = False
         try:
+            connection.connect()
+            connected = True
+            if connection.sock is not None:
+                # Connected. Now give it as long as answering is allowed.
+                connection.sock.settimeout(self.timeout)
             connection.request("POST", path, body=body, headers=request_headers)
             response = connection.getresponse()
             raw = response.read()
             status = response.status
         except (socket.timeout, TimeoutError) as exc:
-            raise ProviderError(f"{host} timed out after {self.timeout:.0f}s.") from exc
+            waited = self.timeout if connected else opening
+            raise ProviderError(
+                f"{host} timed out after {waited:.0f}s"
+                + (" while answering." if connected else " while connecting."),
+                # Knowing which half timed out is the difference between "it
+                # is not running" and "it is thinking".
+            ) from exc
         except (OSError, http.client.HTTPException) as exc:
             if self._closed:
                 raise ProviderError("Cancelled.") from exc
@@ -238,6 +260,10 @@ class HttpSession:
 # Base
 # ==========================================================================
 class Provider:
+    #: Longer than DEFAULT_TIMEOUT where this backend needs it. Only used
+    #: when the caller did not ask for a particular timeout.
+    request_timeout: Optional[float] = None
+
     """A model backend."""
 
     #: Stable identifier stored in settings.
@@ -274,6 +300,12 @@ class Provider:
         self.api_key = (api_key or "").strip()
         self.model = (model or "").strip() or self.default_model
         self.base_url = (base_url or "").strip().rstrip("/")
+        # A backend may need longer than the general default, and the general
+        # default is what it is given when nobody chose. Ninety seconds is a
+        # sensible wait for a data centre and far too short for a model
+        # running on the machine in front of you.
+        if timeout == DEFAULT_TIMEOUT and self.request_timeout:
+            timeout = self.request_timeout
         self.timeout = timeout
         self.effort = effort
         self._session = session or HttpSession(timeout)
@@ -713,9 +745,19 @@ class OllamaProvider(Provider):
         ModelChoice("llama3.1:8b", "Llama 3.1 8B", "~4.7 GB"),
         ModelChoice("gemma3:12b", "Gemma 3 12B", "best local accuracy, ~8 GB"),
     )
-    ENDPOINT = "http://localhost:11434"
-    #: A local server either answers immediately or is not running.
+    #: 127.0.0.1 rather than localhost: on macOS "localhost" resolves to ::1
+    #: as well, Ollama listens on IPv4 only, and the wasted attempt shows up
+    #: as a pause on every single request.
+    ENDPOINT = "http://127.0.0.1:11434"
+    #: A local server either accepts a connection at once or is not running.
+    #: This is the wait to *reach* it, never the wait for it to answer.
     CONNECT_TIMEOUT = 4.0
+    #: Generating is another matter entirely. A 3B model answering a long
+    #: prompt took 56 seconds on an Intel Mac, and the first message of a
+    #: scan pays twelve more to load the weights. There is no meter running
+    #: on a local model, and Stop always works, so the only thing a short
+    #: timeout buys is a failed scan.
+    request_timeout = 600.0
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
@@ -740,14 +782,24 @@ class OllamaProvider(Provider):
                 {"role": "user", "content": prompt},
             ],
         }
-        session = self._session
-        if session.timeout > self.CONNECT_TIMEOUT and not self._session._live:
-            # Nothing has connected yet: give the first attempt a short leash.
-            session = HttpSession(self.CONNECT_TIMEOUT)
         try:
-            data = session.post_json(f"{self.base()}/api/chat", payload)
+            # A short leash on reaching it, the full allowance on answering.
+            # Loading a three-gigabyte model takes twelve seconds before it
+            # writes a word, and the first message of every scan pays that.
+            data = self._session.post_json(
+                f"{self.base()}/api/chat", payload,
+                connect_timeout=self.CONNECT_TIMEOUT)
         except ProviderError as exc:
             text = str(exc)
+            if "while answering" in text:
+                # It is there and it is thinking - the opposite of missing.
+                # Saying "install Ollama" here sent people to reinstall
+                # software that was working.
+                raise ProviderError(
+                    f"“{self.model}” did not answer in time. A model this size "
+                    "can take a minute to load the first time. Try again, or "
+                    "pick a smaller model in Settings → Analysis.",
+                ) from exc
             if "Could not reach" in text or "timed out" in text:
                 self._unreachable = (
                     f"Could not reach Ollama at {self.base()}. Install it from "

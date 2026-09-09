@@ -392,6 +392,7 @@ def main(argv: Optional[list] = None) -> int:
     install_exception_hook(app)
 
     from config import CredentialStore, Settings
+    import gui
     from gui import MainWindow
 
     settings = Settings.load()
@@ -400,6 +401,10 @@ def main(argv: Optional[list] = None) -> int:
     # default palette and then repainted in front of the user.
     import theme
     theme.apply(app, settings.appearance_mode, settings.contrast, settings.readable)
+
+    # Every message box, including the ones Qt raises itself, gets text you
+    # can select and copy.
+    gui.install_selectable_messages(app)
 
     store = CredentialStore()
     window = MainWindow(settings, store, demo=args.demo, dry_run=args.dry_run)

@@ -198,11 +198,35 @@ class TestSettingsDialog:
         assert collected.base_url == "http://192.168.1.9:11434"
         assert collected.needs_api_key is False
 
-    def test_a_custom_model_name_survives(self, dialog):
-        """Typing a model the dropdown does not list must not be discarded."""
+    def test_a_typed_model_name_survives_on_a_hosted_backend(self, dialog):
+        """Hosted backends release models faster than a bundled list follows.
+
+        Gemini's pinned 2.x ids went stale during development and began
+        answering 404, so typing a name has to keep working there.
+        """
         subject, _ = dialog
-        subject.provider_combo.setCurrentIndex(subject.provider_combo.findData("ollama"))
-        subject.model_combo.setEditText("mistral:7b")
+        subject.provider_combo.setCurrentIndex(
+            subject.provider_combo.findData("gemini"))
+        assert subject.model_combo.isEditable() is True
+        subject.model_combo.setEditText("gemini-9.9-flash")
+        assert subject.collect().model == "gemini-9.9-flash"
+
+    def test_a_local_model_outside_the_list_is_still_offered(self, dialog):
+        """A model pulled by hand must be selectable even though the dropdown
+        cannot be typed into. It is added when it is found installed."""
+        subject, _ = dialog
+        subject.provider_combo.setCurrentIndex(
+            subject.provider_combo.findData("ollama"))
+        assert subject.model_combo.isEditable() is False
+
+        import ondevice
+        subject._ollama_state = ondevice.Status(
+            binary="/usr/local/bin/ollama", running=True,
+            models=["llama3.2:3b", "mistral:7b"])
+        subject._refresh_installed_models()
+        index = subject.model_combo.findData("mistral:7b")
+        assert index >= 0, "an installed model was not offered"
+        subject.model_combo.setCurrentIndex(index)
         assert subject.collect().model == "mistral:7b"
 
     def test_a_selected_model_uses_its_id_not_its_label(self, dialog):
