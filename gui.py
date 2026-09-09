@@ -10,7 +10,7 @@ import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import (
     QThread,
@@ -85,9 +85,11 @@ from widgets import (  # noqa: F401 - re-exported; gui was the home of these
     _compact_button, _confidence_rgb, _draw_wrapped, _format_duration, _html,
     _is_dark, _mono_font, _one_line, _paint_button, _scrollable, _separator,
     _shade, _stored_date, _swatch, _tint, _wrap, _wrap_lines,
-    install_selectable_messages, menu_text, remove_selectable_messages,
+    describe, install_selectable_messages, menu_text,
+    remove_selectable_messages,
     say, selectable, system_font,
-    EMPTY_STATE, SHOW_ALL, SHOW_JOB_ONLY, SHOW_SELECTED, _ABANDONED)
+    EMPTY_STATE, NOTHING_FOUND, SHOW_ALL, SHOW_JOB_ONLY, SHOW_SELECTED,
+    _ABANDONED, _one_of)
 import helpmode
 import theme
 from settings_dialog import (  # noqa: F401 - re-exported; gui was their home
@@ -239,6 +241,8 @@ class MainWindow(QMainWindow):
         self.table.verticalHeader().setDefaultSectionSize(34)
         self.table.selectionModel().selectionChanged.connect(self._selection_changed)
         self.table.sortByColumn(TriageTableModel.COL_DATE, Qt.SortOrder.DescendingOrder)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._table_menu)
 
         self._apply_density(self.settings.row_lines)
 
@@ -252,20 +256,45 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(TriageTableModel.COL_SUMMARY, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(TriageTableModel.COL_ACCOUNT, QHeaderView.ResizeMode.Fixed)
         header.setTextElideMode(Qt.TextElideMode.ElideRight)
+        header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        header.customContextMenuRequested.connect(self._header_menu)
         self._reset_columns()
         self._restore_hidden_columns()
         self._rebuild_columns_menu()
         self._rebuild_view_menu()
 
         # A blank grid on first launch tells the user nothing; this does.
+        #: Whether a scan has finished this session. Distinguishes "nothing
+        #: scanned yet" from "scanned, and there was nothing there".
+        self._has_scanned = False
         self.empty_label = QLabel(EMPTY_STATE)
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_label.setTextFormat(Qt.TextFormat.RichText)
         self.empty_label.setWordWrap(True)
+        self.clear_filters_button = QPushButton("Clear filters")
+        self.clear_filters_button.setVisible(False)
+        self.clear_filters_button.clicked.connect(self._clear_filters)
+
+        empty_page = QWidget()
+        empty_layout = QVBoxLayout(empty_page)
+        empty_layout.addStretch(1)
+        empty_layout.addWidget(self.empty_label)
+        empty_row = QHBoxLayout()
+        empty_row.addStretch(1)
+        empty_row.addWidget(self.clear_filters_button)
+        empty_row.addStretch(1)
+        empty_layout.addLayout(empty_row)
+        empty_layout.addStretch(1)
+
         self.table_stack = QStackedWidget()
-        self.table_stack.addWidget(self.empty_label)   # index 0
+        self.table_stack.addWidget(empty_page)         # index 0
         self.table_stack.addWidget(self.table)         # index 1
         self.model.modelReset.connect(self._sync_table_stack)
+        # A filter emptying the view is just as much a reason to swap pages as
+        # the model emptying, and only the proxy knows when that happens.
+        self.proxy.rowsInserted.connect(self._sync_table_stack)
+        self.proxy.rowsRemoved.connect(self._sync_table_stack)
+        self.proxy.layoutChanged.connect(self._sync_table_stack)
 
         self.preview = PreviewPane()
         self.preview.overrideChanged.connect(self._override_changed)
@@ -301,6 +330,46 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.usage_label)
         self.statusBar().addPermanentWidget(self.version_label)
         self.statusBar().setSizeGripEnabled(True)
+
+        self._name_controls()
+
+    def _name_controls(self) -> None:
+        """Name every control for a screen reader.
+
+        In one place rather than scattered through the layout code, because
+        the useful question about accessibility labels is "is anything
+        missing", and that is only answerable if they are all in a list.
+        """
+        described = {
+            self.table: ("Message triage table",
+                         "Every scanned message, one per row. Space ticks the "
+                         "selected row; right-click for bulk actions."),
+            self.search_edit: ("Search messages",
+                               "Filters the table by sender, subject, summary "
+                               "or folder."),
+            self.category_filter: ("Filter by category", ""),
+            self.show_combo: ("Filter by what to show", ""),
+            self.scan_button: ("Scan and analyze", ""),
+            self.apply_button: ("Apply approved folder moves", ""),
+            self.clear_filters_button: ("Clear every filter", ""),
+            self.progress: ("Scan progress", ""),
+            self.model_button: ("Analysis backend", ""),
+            self.account_button: ("Mailboxes to scan", ""),
+            self.start_date: ("Custom range: first day", ""),
+            self.end_date: ("Custom range: last day", ""),
+            self.log_view: ("Activity log", ""),
+            self.status_label: ("Status", ""),
+            self.usage_label: ("Model usage and cost", ""),
+            self.version_label: ("Build version",
+                                 "Click to copy the version and commit."),
+            self.preview: ("Message preview",
+                           "The selected message, its reasoning, and the "
+                           "folder it will go to."),
+        }
+        for widget, (name, hint) in described.items():
+            describe(widget, name, hint)
+        for button in self.window_buttons.values():
+            describe(button, f"Time window: {button.text()}")
 
     #: Default column widths, also used by View -> Reset column widths.
     COLUMN_WIDTHS = {
@@ -1996,6 +2065,7 @@ class MainWindow(QMainWindow):
     def _on_scan_done(self, outcome: ScanOutcome) -> None:
         if outcome.folder_plan is not None:
             self.folder_plan = outcome.folder_plan
+        self._has_scanned = True
         self.model.set_items(outcome.items)
         self._view_accounts = []
         self._view_all = True
@@ -2463,6 +2533,121 @@ class MainWindow(QMainWindow):
             return
         self.preview.show_item(row, item, self._prompt_for(item))
 
+    def _selected_rows(self) -> List[int]:
+        """Source rows for every selected line, in view order."""
+        return [self.proxy.mapToSource(index).row()
+                for index in self.table.selectionModel().selectedRows()]
+
+    @Slot(object)
+    def _table_menu(self, point) -> None:
+        menu = self.build_table_menu()
+        if menu is not None:
+            menu.exec(self.table.viewport().mapToGlobal(point))
+
+    def build_table_menu(self) -> Optional[QMenu]:
+        """Right-click on the grid: act on everything selected, not just one.
+
+        Re-filing forty rejections one at a time is the kind of thing that
+        makes people stop using a tool, and the table has always allowed a
+        multiple selection - there was simply nothing to do with one.
+
+        Built here and shown by the caller, so a test can read the menu
+        without a native modal loop that nothing can interrupt.
+        """
+        rows = self._selected_rows()
+        if not rows:
+            return None
+        items = [self.model.item_at(row) for row in rows]
+        items = [item for item in items if item is not None]
+        if not items:
+            return None
+
+        menu = QMenu(self)
+        many = len(items) > 1
+        count = f"{len(items)} messages" if many else "this message"
+
+        tick = menu.addAction(f"Tick {count}")
+        tick.triggered.connect(lambda: self._set_approved(rows, True))
+        untick = menu.addAction(f"Untick {count}")
+        untick.triggered.connect(lambda: self._set_approved(rows, False))
+        menu.addSeparator()
+
+        folders = menu.addMenu(f"File {count} in…")
+        for folder in self._folder_choices():
+            leaf = folder.rsplit(self.folder_plan.delimiter if self.folder_plan
+                                else "/", 1)[-1]
+            action = folders.addAction(leaf)
+            action.setToolTip(folder)
+            action.triggered.connect(
+                lambda _checked=False, target=folder: self._refile(rows, target))
+        if folders.isEmpty():
+            folders.setEnabled(False)
+
+        revert = menu.addAction("Use the suggested folder")
+        revert.setEnabled(any(item.override_folder for item in items))
+        revert.triggered.connect(lambda: self._refile(rows, None))
+
+        menu.addSeparator()
+        copy = menu.addAction("Copy sender address"
+                              if not many else "Copy sender addresses")
+        copy.triggered.connect(lambda: self._copy_senders(items))
+        return menu
+
+    def _folder_choices(self) -> List[str]:
+        plan = self.folder_plan or FolderPlan()
+        folders: List[str] = list(plan.leaf_folders)
+        if self.settings.routing is NonJobRouting.FILE:
+            folders += [plan.for_other_category(c) for c in OtherCategory
+                        if c is not OtherCategory.NOT_APPLICABLE]
+        return folders
+
+    def _set_approved(self, rows: Sequence[int], approved: bool) -> None:
+        self.model.set_approved(rows, approved)
+        self._update_status()
+
+    def _refile(self, rows: Sequence[int], folder: Optional[str]) -> None:
+        """Send every selected row to one folder, learning from each."""
+        for row in rows:
+            item = self.model.item_at(row)
+            self.model.set_override(row, folder)
+            if folder and item is not None:
+                self._learn_from(item, folder)
+        self._update_status()
+        self._selection_changed()
+
+    def _copy_senders(self, items) -> None:
+        addresses = []
+        for item in items:
+            address = item.email.sender_email
+            if address and address not in addresses:
+                addresses.append(address)
+        if not addresses:
+            return
+        QApplication.clipboard().setText("\n".join(addresses))
+        self._set_status(f"Copied {len(addresses)} address(es).")
+
+    @Slot(object)
+    def _header_menu(self, point) -> None:
+        self.build_header_menu().exec(
+            self.table.horizontalHeader().mapToGlobal(point))
+
+    def build_header_menu(self) -> QMenu:
+        """Right-click on the header: show, hide and reset the columns.
+
+        The reset is the one that matters. Dragging a column to nothing is a
+        single careless movement, and until now the only way back was to find
+        the same invisible edge again.
+        """
+        menu = QMenu(self)
+        for action in self.columns_menu.actions():
+            menu.addAction(action)
+        menu.addSeparator()
+        reset = menu.addAction("Reset column widths")
+        reset.triggered.connect(self._reset_columns)
+        show_all = menu.addAction("Show every column")
+        show_all.triggered.connect(self._show_all_columns)
+        return menu
+
     def _prompt_builder(self) -> llm_engine.LLMEngine:
         """A no-network engine reused purely to re-render prompts for the preview."""
         settings_key = (self.settings.model, self.settings.max_body_chars)
@@ -2595,7 +2780,31 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _sync_table_stack(self) -> None:
-        self.table_stack.setCurrentIndex(1 if self.model.rowCount() else 0)
+        """Show the grid, or the reason there is nothing in it.
+
+        Three different empty states look identical on screen and mean
+        completely different things: nothing scanned, nothing found, and
+        everything found but filtered away. Only the third one has a fix the
+        user can press, so it gets a button.
+        """
+        if self.proxy.rowCount():
+            self.table_stack.setCurrentIndex(1)
+            return
+        self.table_stack.setCurrentIndex(0)
+        if not self.model.rowCount():
+            self.empty_label.setText(
+                EMPTY_STATE if not self._has_scanned else NOTHING_FOUND)
+            self.clear_filters_button.setVisible(False)
+            return
+        filters = self.proxy.active_filters()
+        total = self.model.rowCount()
+        reason = _one_of(filters)
+        self.empty_label.setText(
+            "<div style='text-align:center;line-height:170%'>"
+            "<span style='font-size:15px'><b>Nothing matches</b></span><br>"
+            f"<span style='opacity:0.7'>All {total} message(s) are hidden by "
+            f"{reason}.</span></div>")
+        self.clear_filters_button.setVisible(True)
 
     def _set_status(self, message: str) -> None:
         """Show as much of `message` as fits; the rest lives in the tooltip."""
@@ -2659,9 +2868,20 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _clear_filters(self) -> None:
+        """Put every filter control back to "everything".
+
+        The combo boxes and the proxy are told separately because the mailbox
+        filter lives only in the proxy - it is set from the View menu, which
+        has no single control to reset.
+        """
         self.search_edit.clear()
         self.category_filter.setCurrentIndex(0)
         self.show_combo.setCurrentIndex(0)
+        self._view_accounts = []
+        self._view_all = True
+        self.proxy.clear_filters()
+        self._rebuild_view_menu()
+        self._sync_table_stack()
 
     def _select_window(self, window: TimeWindow) -> None:
         """Pick a time window from the keyboard, keeping the buttons in sync."""
