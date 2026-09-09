@@ -13,12 +13,12 @@ This module writes those facts down and reads them back on the next scan.
 Two rules govern when a memory is allowed to speak:
 
 **An exact address needs one correction.** If you filed a message from
-``jane@acme.com`` into Interviews, the next message from Jane goes to
+``jane@acme.example`` into Interviews, the next message from Jane goes to
 Interviews. One correction is enough because the address is specific: you
 cannot mean anyone else.
 
 **A domain needs two, from two different people.** One correction at
-``acme.com`` says something about that person; two, from two colleagues, say
+``acme.example`` says something about that person; two, from two colleagues, say
 something about the company. Shared mail hosts - Gmail, iCloud, Outlook and
 the rest - never learn at the domain level at all, because "the domain" there
 is four hundred million strangers.

@@ -17,16 +17,16 @@ def teach(memory: Memory, sender: str, folder: str, suggested: str = "") -> bool
 class TestAddressNormalising:
     def test_case_is_folded(self):
         memory = Memory()
-        teach(memory, "Jane@Acme.COM", "Job Search/Interviews")
-        assert memory.lookup("jane@acme.com").folder == "Job Search/Interviews"
+        teach(memory, "Jane@Acme.EXAMPLE", "Job Search/Interviews")
+        assert memory.lookup("jane@acme.example").folder == "Job Search/Interviews"
 
     def test_angle_brackets_are_stripped(self):
         memory = Memory()
-        teach(memory, "<jane@acme.com>", "Interviews")
-        assert memory.lookup("jane@acme.com") is not None
+        teach(memory, "<jane@acme.example>", "Interviews")
+        assert memory.lookup("jane@acme.example") is not None
 
     @pytest.mark.parametrize("bad", [
-        "", "   ", "not-an-address", "two@at@signs.com", "@acme.com",
+        "", "   ", "not-an-address", "two@at@signs.com", "@acme.example",
         "jane@", "jane@localhost",
     ])
     def test_nonsense_is_not_stored(self, bad):
@@ -41,49 +41,49 @@ class TestAddressNormalising:
 class TestWhenItSpeaks:
     def test_one_correction_settles_an_address(self):
         memory = Memory()
-        teach(memory, "jane@acme.com", "Job Search/Interviews")
-        hit = memory.lookup("jane@acme.com")
+        teach(memory, "jane@acme.example", "Job Search/Interviews")
+        hit = memory.lookup("jane@acme.example")
         assert hit.folder == "Job Search/Interviews"
         assert hit.scope == "address"
         assert hit.strength == 1
-        assert "jane@acme.com" in hit.because
+        assert "jane@acme.example" in hit.because
 
     def test_one_correction_does_not_settle_a_domain(self):
         memory = Memory()
-        teach(memory, "jane@acme.com", "Interviews")
-        assert memory.lookup("bob@acme.com") is None
+        teach(memory, "jane@acme.example", "Interviews")
+        assert memory.lookup("bob@acme.example") is None
 
     def test_two_people_at_a_domain_settle_it(self):
         memory = Memory()
-        teach(memory, "jane@acme.com", "Interviews")
-        teach(memory, "bob@acme.com", "Interviews")
-        hit = memory.lookup("carol@acme.com")
+        teach(memory, "jane@acme.example", "Interviews")
+        teach(memory, "bob@acme.example", "Interviews")
+        hit = memory.lookup("carol@acme.example")
         assert hit.folder == "Interviews"
         assert hit.scope == "domain"
-        assert "acme.com" in hit.because
+        assert "acme.example" in hit.because
 
     def test_one_person_twice_is_not_a_domain_rule(self):
         """Otherwise a chatty recruiter would speak for the whole company."""
         memory = Memory()
-        teach(memory, "jane@acme.com", "Interviews")
-        teach(memory, "jane@acme.com", "Interviews")
-        assert memory.lookup("bob@acme.com") is None
+        teach(memory, "jane@acme.example", "Interviews")
+        teach(memory, "jane@acme.example", "Interviews")
+        assert memory.lookup("bob@acme.example") is None
 
     def test_a_shared_host_never_becomes_a_domain_rule(self):
         memory = Memory()
-        for name in ("jane", "bob", "carol", "dave"):
+        for name in ("alice", "bob", "carol", "somebody"):
             teach(memory, f"{name}@gmail.com", "Interviews")
-        assert memory.lookup("stranger@gmail.com") is None
+        assert memory.lookup("nobody@gmail.com") is None
         # But the individuals are still remembered.
-        assert memory.lookup("jane@gmail.com").folder == "Interviews"
+        assert memory.lookup("alice@gmail.com").folder == "Interviews"
 
     def test_a_subdomain_of_a_shared_host_is_shared_too(self):
         assert is_shared_host("mail.gmail.com")
-        assert not is_shared_host("acme.com")
+        assert not is_shared_host("acme.example")
 
     def test_agreeing_with_the_app_teaches_nothing(self):
         memory = Memory()
-        assert teach(memory, "jane@acme.com", "Interviews", "Interviews") is False
+        assert teach(memory, "jane@acme.example", "Interviews", "Interviews") is False
         assert len(memory) == 0
 
 
@@ -91,86 +91,86 @@ class TestChangingItsMind:
     def test_the_newest_correction_wins_immediately(self):
         memory = Memory()
         for _ in range(3):
-            teach(memory, "jane@acme.com", "Applications")
-        assert memory.lookup("jane@acme.com").folder == "Applications"
+            teach(memory, "jane@acme.example", "Applications")
+        assert memory.lookup("jane@acme.example").folder == "Applications"
 
-        teach(memory, "jane@acme.com", "Interviews")
-        hit = memory.lookup("jane@acme.com")
+        teach(memory, "jane@acme.example", "Interviews")
+        hit = memory.lookup("jane@acme.example")
         assert hit.folder == "Interviews"
         assert hit.strength == 1
 
     def test_agreement_accumulates(self):
         memory = Memory()
         for _ in range(3):
-            teach(memory, "jane@acme.com", "Applications")
-        assert memory.lookup("jane@acme.com").strength == 3
+            teach(memory, "jane@acme.example", "Applications")
+        assert memory.lookup("jane@acme.example").strength == 3
 
     def test_a_reversed_domain_needs_two_people_again(self):
         memory = Memory()
-        teach(memory, "jane@acme.com", "Applications")
-        teach(memory, "bob@acme.com", "Applications")
-        assert memory.lookup("carol@acme.com").folder == "Applications"
+        teach(memory, "jane@acme.example", "Applications")
+        teach(memory, "bob@acme.example", "Applications")
+        assert memory.lookup("carol@acme.example").folder == "Applications"
 
-        teach(memory, "bob@acme.com", "Interviews")
+        teach(memory, "bob@acme.example", "Interviews")
         # One person changed their mind; that is not the company changing.
-        assert memory.lookup("carol@acme.com") is None
+        assert memory.lookup("carol@acme.example") is None
 
-        teach(memory, "jane@acme.com", "Interviews")
-        assert memory.lookup("carol@acme.com").folder == "Interviews"
+        teach(memory, "jane@acme.example", "Interviews")
+        assert memory.lookup("carol@acme.example").folder == "Interviews"
 
     def test_only_the_recent_ones_are_consulted(self):
         memory = Memory()
         for _ in range(corrections.RECENT_PER_KEY + 5):
-            teach(memory, "jane@acme.com", "Applications")
-        assert memory.lookup("jane@acme.com").strength == corrections.RECENT_PER_KEY
+            teach(memory, "jane@acme.example", "Applications")
+        assert memory.lookup("jane@acme.example").strength == corrections.RECENT_PER_KEY
 
 
 class TestForgetting:
     def test_forget_an_address(self):
         memory = Memory()
-        teach(memory, "jane@acme.com", "Interviews")
-        teach(memory, "bob@acme.com", "Interviews")
-        assert memory.forget("jane@acme.com") == 1
-        assert memory.lookup("jane@acme.com") is None
-        assert memory.lookup("bob@acme.com") is not None
+        teach(memory, "jane@acme.example", "Interviews")
+        teach(memory, "bob@acme.example", "Interviews")
+        assert memory.forget("jane@acme.example") == 1
+        assert memory.lookup("jane@acme.example") is None
+        assert memory.lookup("bob@acme.example") is not None
 
     def test_forget_a_domain_takes_everyone_at_it(self):
         memory = Memory()
-        teach(memory, "jane@acme.com", "Interviews")
-        teach(memory, "bob@acme.com", "Interviews")
-        teach(memory, "eve@other.com", "Interviews")
-        assert memory.forget("acme.com") == 2
-        assert memory.lookup("jane@acme.com") is None
-        assert memory.lookup("eve@other.com") is not None
+        teach(memory, "jane@acme.example", "Interviews")
+        teach(memory, "bob@acme.example", "Interviews")
+        teach(memory, "eve@other.example", "Interviews")
+        assert memory.forget("acme.example") == 2
+        assert memory.lookup("jane@acme.example") is None
+        assert memory.lookup("eve@other.example") is not None
 
     def test_clear_empties_it(self):
         memory = Memory()
-        teach(memory, "jane@acme.com", "Interviews")
+        teach(memory, "jane@acme.example", "Interviews")
         memory.clear()
         assert len(memory) == 0
         assert memory.summary() == []
 
     def test_forgetting_nothing_is_not_an_error(self):
         assert Memory().forget("") == 0
-        assert Memory().forget("nobody@nowhere.com") == 0
+        assert Memory().forget("nobody@nowhere.example") == 0
 
 
 class TestDisk:
     def test_round_trip(self, tmp_path):
         path = tmp_path / "corrections.json"
         memory = Memory(path=path)
-        teach(memory, "jane@acme.com", "Job Search/Interviews", "Job Search/Applications")
+        teach(memory, "jane@acme.example", "Job Search/Interviews", "Job Search/Applications")
         memory.save()
 
         again = Memory.load(path)
         assert len(again) == 1
-        hit = again.lookup("jane@acme.com")
+        hit = again.lookup("jane@acme.example")
         assert hit.folder == "Job Search/Interviews"
 
     def test_the_file_is_private(self, tmp_path):
         path = tmp_path / "corrections.json"
         memory = Memory(path=path)
-        teach(memory, "jane@acme.com", "Interviews")
+        teach(memory, "jane@acme.example", "Interviews")
         memory.save()
         assert oct(path.stat().st_mode)[-3:] == "600"
 
@@ -185,9 +185,9 @@ class TestDisk:
     def test_junk_rows_are_dropped_not_fatal(self, tmp_path):
         path = tmp_path / "corrections.json"
         path.write_text(json.dumps({"corrections": [
-            {"sender": "jane@acme.com", "folder": "Interviews"},
+            {"sender": "jane@acme.example", "folder": "Interviews"},
             {"sender": "", "folder": "Interviews"},
-            {"sender": "bob@acme.com", "folder": ""},
+            {"sender": "bob@acme.example", "folder": ""},
             "a string",
             None,
         ]}))
@@ -196,21 +196,21 @@ class TestDisk:
 
     def test_a_bare_list_is_accepted(self, tmp_path):
         path = tmp_path / "corrections.json"
-        path.write_text(json.dumps([{"sender": "jane@acme.com", "folder": "X"}]))
+        path.write_text(json.dumps([{"sender": "jane@acme.example", "folder": "X"}]))
         assert len(Memory.load(path)) == 1
 
     def test_the_file_is_capped(self, tmp_path):
         path = tmp_path / "corrections.json"
         memory = Memory(path=path)
         for index in range(corrections.MAX_ENTRIES + 50):
-            teach(memory, f"person{index}@acme.com", "Interviews")
+            teach(memory, f"person{index}@acme.example", "Interviews")
         assert len(memory) == corrections.MAX_ENTRIES
         memory.save()
         assert len(Memory.load(path)) == corrections.MAX_ENTRIES
 
     def test_saving_leaves_no_temp_files_behind(self, tmp_path):
         memory = Memory(path=tmp_path / "corrections.json")
-        teach(memory, "jane@acme.com", "Interviews")
+        teach(memory, "jane@acme.example", "Interviews")
         memory.save()
         assert [p.name for p in tmp_path.iterdir()] == ["corrections.json"]
 
@@ -218,20 +218,20 @@ class TestDisk:
 class TestSummary:
     def test_lists_what_it_would_act_on(self):
         memory = Memory()
-        teach(memory, "jane@acme.com", "Interviews")
-        teach(memory, "bob@other.com", "Applications")
-        teach(memory, "carol@other.com", "Applications")
+        teach(memory, "jane@acme.example", "Interviews")
+        teach(memory, "bob@other.example", "Applications")
+        teach(memory, "carol@other.example", "Applications")
         keys = {item.key for item in memory.summary()}
-        assert "jane@acme.com" in keys
-        assert "other.com" in keys
+        assert "jane@acme.example" in keys
+        assert "other.example" in keys
 
     def test_an_address_the_domain_already_covers_is_not_repeated(self):
         """Four lines saying the same thing is three lines of noise."""
         memory = Memory()
-        teach(memory, "bob@other.com", "Applications")
-        teach(memory, "carol@other.com", "Applications")
+        teach(memory, "bob@other.example", "Applications")
+        teach(memory, "carol@other.example", "Applications")
         keys = {item.key for item in memory.summary()}
-        assert keys == {"other.com"}
+        assert keys == {"other.example"}
 
     def test_one_dissenter_retires_the_domain_rule(self):
         """And everyone at it goes back to speaking for themselves.
@@ -242,62 +242,62 @@ class TestSummary:
         own answers.
         """
         memory = Memory()
-        teach(memory, "bob@other.com", "Applications")
-        teach(memory, "carol@other.com", "Applications")
-        assert memory.lookup("stranger@other.com").folder == "Applications"
+        teach(memory, "bob@other.example", "Applications")
+        teach(memory, "carol@other.example", "Applications")
+        assert memory.lookup("stranger@other.example").folder == "Applications"
 
-        teach(memory, "dave@other.com", "Interviews")
-        assert memory.lookup("stranger@other.com") is None
-        assert memory.lookup("bob@other.com").folder == "Applications"
-        assert memory.lookup("dave@other.com").folder == "Interviews"
+        teach(memory, "dave@other.example", "Interviews")
+        assert memory.lookup("stranger@other.example") is None
+        assert memory.lookup("bob@other.example").folder == "Applications"
+        assert memory.lookup("dave@other.example").folder == "Interviews"
         assert {item.key for item in memory.summary()} == {
-            "bob@other.com", "carol@other.com", "dave@other.com"}
+            "bob@other.example", "carol@other.example", "dave@other.example"}
 
     def test_strongest_first(self):
         memory = Memory()
-        teach(memory, "weak@acme.com", "Interviews")
+        teach(memory, "weak@acme.example", "Interviews")
         for _ in range(4):
-            teach(memory, "strong@acme.com", "Applications")
-        assert memory.summary()[0].key == "strong@acme.com"
+            teach(memory, "strong@acme.example", "Applications")
+        assert memory.summary()[0].key == "strong@acme.example"
 
     def test_describe_says_something_useful(self):
         memory = Memory()
         assert "Nothing learned" in memory.describe()
-        teach(memory, "jane@acme.com", "Interviews")
+        teach(memory, "jane@acme.example", "Interviews")
         assert "1 sender" in memory.describe()
 
 
 class TestApplyingIt:
     def test_a_learned_folder_replaces_the_suggestion(self, item_factory):
-        item = item_factory(email_kwargs={"sender_email": "jane@acme.com"})
+        item = item_factory(email_kwargs={"sender_email": "jane@acme.example"})
         item.override_folder = None
         memory = Memory()
-        teach(memory, "jane@acme.com", "Job Search/Interviews")
+        teach(memory, "jane@acme.example", "Job Search/Interviews")
 
         assert corrections.apply_to([item], memory) == 1
         assert item.target_folder == "Job Search/Interviews"
-        assert "jane@acme.com" in item.learned_because
+        assert "jane@acme.example" in item.learned_because
         assert item.override_note == "learned"
 
     def test_a_hand_made_choice_is_never_overwritten(self, item_factory):
-        item = item_factory(email_kwargs={"sender_email": "jane@acme.com"})
+        item = item_factory(email_kwargs={"sender_email": "jane@acme.example"})
         item.override_folder = "Somewhere I Chose"
         memory = Memory()
-        teach(memory, "jane@acme.com", "Job Search/Interviews")
+        teach(memory, "jane@acme.example", "Job Search/Interviews")
 
         assert corrections.apply_to([item], memory) == 0
         assert item.target_folder == "Somewhere I Chose"
 
     def test_agreeing_with_the_sorter_changes_nothing(self, item_factory):
-        item = item_factory(email_kwargs={"sender_email": "jane@acme.com"})
+        item = item_factory(email_kwargs={"sender_email": "jane@acme.example"})
         memory = Memory()
-        teach(memory, "jane@acme.com", item.suggested_folder or "X")
+        teach(memory, "jane@acme.example", item.suggested_folder or "X")
         if item.suggested_folder:
             assert corrections.apply_to([item], memory) == 0
             assert item.learned_from is None
 
     def test_an_unknown_sender_is_left_alone(self, item_factory):
-        item = item_factory(email_kwargs={"sender_email": "stranger@nowhere.com"})
+        item = item_factory(email_kwargs={"sender_email": "stranger@nowhere.example"})
         before = item.target_folder
         assert corrections.apply_to([item], Memory()) == 0
         assert item.target_folder == before
@@ -312,9 +312,9 @@ class TestTheSettingsPane:
         from settings_dialog import SettingsDialog
         monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
         memory = Memory(path=tmp_path / corrections.FILENAME)
-        teach(memory, "jane@acme.com", "Job Search/Interviews")
-        teach(memory, "bob@other.com", "Job Search/Applications")
-        teach(memory, "carol@other.com", "Job Search/Applications")
+        teach(memory, "jane@acme.example", "Job Search/Interviews")
+        teach(memory, "bob@other.example", "Job Search/Applications")
+        teach(memory, "carol@other.example", "Job Search/Applications")
         memory.save()
 
         widget = SettingsDialog(Settings(icloud_email="you@icloud.example"),
@@ -325,8 +325,8 @@ class TestTheSettingsPane:
     def test_it_lists_what_it_would_act_on(self, dialog):
         rows = [dialog.learned_list.item(i).text()
                 for i in range(dialog.learned_list.count())]
-        assert any("jane@acme.com" in row for row in rows)
-        assert any("other.com" in row for row in rows)
+        assert any("jane@acme.example" in row for row in rows)
+        assert any("other.example" in row for row in rows)
 
     def test_each_row_says_why(self, dialog):
         tips = [dialog.learned_list.item(i).toolTip()

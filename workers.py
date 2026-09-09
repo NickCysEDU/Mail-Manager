@@ -19,6 +19,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from PySide6.QtCore import QThread, Signal
 
 import corrections
+import verdict_cache
 from config import Settings
 import time
 
@@ -155,9 +156,14 @@ class ScanWorker(_BaseWorker):
         window_start: datetime,
         window_end: Optional[datetime],
         parent=None,
+        reuse_verdicts: Optional[bool] = None,
     ) -> None:
         super().__init__(parent)
         self.settings = settings
+        #: Whether verdicts kept from earlier scans may be reused. Defaults to
+        #: the setting; a "Re-analyze everything" scan passes False.
+        self.reuse_verdicts = (settings.reuse_verdicts
+                               if reuse_verdicts is None else reuse_verdicts)
         #: A password per account id, or one string for a single mailbox.
         self.mailbox_password = mailbox_password
         self.api_key = api_key
@@ -346,6 +352,27 @@ class ScanWorker(_BaseWorker):
             return
 
         # ---- 2. Classification ------------------------------------------
+        # Anything answered on a previous scan under the same settings is
+        # answered already. On an overlapping window - which is most of them,
+        # because "the last seven days" run daily overlaps six - this is the
+        # difference between paying for the whole week and paying for a day.
+        cache = (verdict_cache.VerdictCache.load() if self.reuse_verdicts
+                 else verdict_cache.VerdictCache())
+        recipe = verdict_cache.recipe_for(self.settings)
+        pending, known = (cache.split(messages, recipe) if self.reuse_verdicts
+                          else (list(messages), {}))
+        if known:
+            self._log(f"{len(known)} message(s) were analyzed on an earlier "
+                      "scan and did not need to be again.")
+        if not pending:
+            self._emit_progress(len(messages) * 2, len(messages) * 2,
+                                "Every message was already analyzed.")
+            outcome.usage_text = (f"{len(known)} verdict(s) reused, "
+                                  "nothing sent to the model.")
+            self._finish_routing(outcome, messages, list(known[i] for i in
+                                                         sorted(known)), plan)
+            return
+
         classifier = LLMEngine(
             provider=self.settings.provider,
             api_key=self.api_key,
@@ -383,13 +410,18 @@ class ScanWorker(_BaseWorker):
                     else:
                         tally["review"] += 1
 
+            # The bar counts every message fetched, including the ones the
+            # cache answered - otherwise reusing a verdict would look like
+            # progress going backwards.
             fetched = len(messages)
+            already = len(known)
 
             def report(done: int, total: int, text: str) -> None:
                 # Continuing the fetch phase's scale rather than starting a new
                 # one: a bar that fills, empties and fills again reads as the
                 # scan having restarted.
-                self._emit_progress(fetched + done, fetched + max(total, done), text)
+                self._emit_progress(fetched + already + done,
+                                    fetched + already + max(total, done), text)
                 elapsed = max(1e-6, time.monotonic() - started)
                 rate = done / elapsed
                 self._emit_metrics(
@@ -410,13 +442,22 @@ class ScanWorker(_BaseWorker):
                     model=f"{self.settings.provider_label} · {classifier.model}",
                 )
 
-            classifications = classifier.classify_many(
-                messages,
+            fresh = classifier.classify_many(
+                pending,
                 progress=report,
                 cancel=self.cancel_event,
                 observer=observe,
             )
+            classifications = verdict_cache.VerdictCache.merge(
+                messages, pending, fresh, known)
+            if self.reuse_verdicts:
+                for message, verdict in zip(pending, fresh):
+                    cache.put(message, recipe, verdict)
+                cache.save()
             outcome.usage_text = classifier.usage.describe()
+            if known:
+                outcome.usage_text += (f" · {len(known)} verdict(s) reused "
+                                       "from an earlier scan")
             for note in classifier.degradations:
                 outcome.warnings.append(f"{self.settings.provider_label} request adjusted: {note}")
             if classifier.fallback_count:
@@ -438,6 +479,15 @@ class ScanWorker(_BaseWorker):
             self._classifier = None
 
         # ---- 3. Routing --------------------------------------------------
+        self._finish_routing(outcome, messages, classifications, plan)
+
+    def _finish_routing(self, outcome, messages, classifications, plan) -> None:
+        """Turn verdicts into rows, apply what was learned, and hand it over.
+
+        Its own method because there are two ways to get here: the ordinary
+        one, and the one where every message was already answered and the
+        model was never called at all.
+        """
         routing = self.settings.routing
         outcome.items = [
             TriageItem(

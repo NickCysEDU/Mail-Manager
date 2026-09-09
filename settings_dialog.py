@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 import accounts
 import autoreply
 import corrections
+import verdict_cache
 import helpmode
 import ondevice
 import profiles
@@ -2320,7 +2321,7 @@ class SettingsDialog(QDialog):
         form.addRow(_separator())
         form.addRow("Will use", self.folders_preview)
         form.addRow(_separator())
-        form.addRow("Learned", self._build_learned_box())
+        form.addRow("Repeat scans", self._build_learned_box())
         return page
 
     def _build_learned_box(self) -> QWidget:
@@ -2334,6 +2335,29 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(box)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
+
+        self.reuse_check = QCheckBox("Reuse verdicts from earlier scans")
+        self.reuse_check.setToolTip(
+            "A message cannot change once it is sent, so re-scanning an "
+            "overlapping window need not pay to analyze it twice. Turning "
+            "this off analyzes everything, every time.")
+        layout.addWidget(self.reuse_check)
+
+        self.cache_summary = QLabel("")
+        self.cache_summary.setWordWrap(True)
+        self.cache_summary.setStyleSheet("opacity:0.75")
+        layout.addWidget(self.cache_summary)
+
+        clear_row = QHBoxLayout()
+        clear_row.setSpacing(6)
+        self.clear_cache_button = QPushButton("Discard kept verdicts")
+        self.clear_cache_button.setToolTip(
+            "Throw them away. The next scan analyzes everything again.")
+        self.clear_cache_button.clicked.connect(self._clear_verdicts)
+        clear_row.addWidget(self.clear_cache_button)
+        clear_row.addStretch(1)
+        layout.addLayout(clear_row)
+        layout.addWidget(_separator())
 
         self.learn_check = QCheckBox(
             "File mail the way I corrected it last time")
@@ -2372,7 +2396,34 @@ class SettingsDialog(QDialog):
 
         self.learned_list.itemSelectionChanged.connect(self._learned_selection)
         self._reload_learned()
+        self._reload_cache_summary()
         return box
+
+    def _reload_cache_summary(self) -> None:
+        try:
+            cache = verdict_cache.VerdictCache.load()
+        except Exception:  # noqa: BLE001 - a cache is never worth an error
+            cache = verdict_cache.VerdictCache()
+        self._verdicts = cache
+        self.cache_summary.setText(cache.describe())
+        self.clear_cache_button.setEnabled(len(cache) > 0)
+
+    def _clear_verdicts(self) -> None:
+        cache = getattr(self, "_verdicts", None)
+        if cache is None or not len(cache):
+            return
+        confirmed = QMessageBox.question(
+            self, "Discard kept verdicts?",
+            f"This throws away {len(cache):,} verdict(s). Nothing is lost "
+            "except the time it took to produce them - the next scan will "
+            "analyze every message again.",
+            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
+            QMessageBox.StandardButton.Cancel)
+        if confirmed is not QMessageBox.StandardButton.Yes:
+            return
+        cache.clear()
+        cache.save()
+        self._reload_cache_summary()
 
     def _memory(self):
         """The corrections file, loaded once per dialog."""
@@ -2463,6 +2514,7 @@ class SettingsDialog(QDialog):
         self.auto_non_job_check.setChecked(settings.auto_approve_non_job)
         self.subscribe_check.setChecked(settings.subscribe_new_folders)
         self.learn_check.setChecked(settings.learn_from_corrections)
+        self.reuse_check.setChecked(settings.reuse_verdicts)
 
         self.mode_combo.setCurrentIndex(
             max(0, self.mode_combo.findData(settings.appearance_mode)))
@@ -2564,6 +2616,7 @@ class SettingsDialog(QDialog):
             auto_approve_non_job=self.auto_non_job_check.isChecked(),
             subscribe_new_folders=self.subscribe_check.isChecked(),
             learn_from_corrections=self.learn_check.isChecked(),
+            reuse_verdicts=self.reuse_check.isChecked(),
         )
         return Settings(**data).normalized()
 
