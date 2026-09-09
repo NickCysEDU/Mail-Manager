@@ -850,8 +850,16 @@ class IMAPEngine:
         cancel: Optional[threading.Event] = None,
         connections: int = DEFAULT_CONNECTIONS,
         max_bytes: int = DEFAULT_FETCH_BYTES,
+        on_batch: Optional[Callable[[List[EmailMessage]], None]] = None,
     ) -> ScanResult:
-        """Fetch every message in the window, newest first, without marking read."""
+        """Fetch every message in the window, newest first, without marking read.
+
+        ``on_batch``, if given, is called with each group of messages as it
+        arrives, so a caller can start work on them rather than waiting for
+        the whole window. It is called from whichever thread did the fetching,
+        which on a parallel scan is not the caller's, and the messages it is
+        handed are the same objects that end up in the result.
+        """
         result = ScanResult()
         self.select(mailbox, readonly=True)
 
@@ -888,10 +896,12 @@ class IMAPEngine:
 
         if workers > 1:
             messages = self._fetch_parallel(
-                ordered, mailbox, workers, max_bytes, progress, cancel, result
+                ordered, mailbox, workers, max_bytes, progress, cancel, result,
+                on_batch,
             )
         else:
-            messages = self._fetch_serial(ordered, mailbox, max_bytes, progress, cancel)
+            messages = self._fetch_serial(ordered, mailbox, max_bytes, progress,
+                                          cancel, on_batch)
 
         for message in messages:
             if message.date is not None:
@@ -909,13 +919,17 @@ class IMAPEngine:
     def _fetch_serial(
         self, uids: Sequence[str], mailbox: str, max_bytes: int,
         progress: Optional[ProgressCallback], cancel: Optional[threading.Event],
+        on_batch: Optional[Callable[[List[EmailMessage]], None]] = None,
     ) -> List[EmailMessage]:
         messages: List[EmailMessage] = []
         total = len(uids)
         fetched = 0
         for batch in _chunks(list(uids), FETCH_BATCH):
             _check_cancel(cancel)
-            messages.extend(self._fetch_batch(batch, mailbox, max_bytes))
+            arrived = self._fetch_batch(batch, mailbox, max_bytes)
+            messages.extend(arrived)
+            if on_batch and arrived:
+                on_batch(arrived)
             fetched += len(batch)
             if progress:
                 progress(min(fetched, total), total,
@@ -926,6 +940,7 @@ class IMAPEngine:
         self, uids: Sequence[str], mailbox: str, workers: int, max_bytes: int,
         progress: Optional[ProgressCallback], cancel: Optional[threading.Event],
         result: ScanResult,
+        on_batch: Optional[Callable[[List[EmailMessage]], None]] = None,
     ) -> List[EmailMessage]:
         """Fetch across several connections at once.
 
@@ -948,10 +963,16 @@ class IMAPEngine:
                 out: List[EmailMessage] = []
                 for batch in _chunks(shard, FETCH_BATCH):
                     _check_cancel(cancel)
-                    out.extend(engine._fetch_batch(batch, mailbox, max_bytes))
+                    arrived = engine._fetch_batch(batch, mailbox, max_bytes)
+                    out.extend(arrived)
                     with lock:
                         done += len(batch)
                         current = done
+                        # Inside the lock: several connections finish at once,
+                        # and the consumer is not expecting to be called from
+                        # two of them at the same moment.
+                        if on_batch and arrived:
+                            on_batch(arrived)
                     if progress:
                         progress(min(current, total), total,
                                  f"Fetched {min(current, total)} of {total} messages "

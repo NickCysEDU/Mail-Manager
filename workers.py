@@ -20,13 +20,15 @@ from PySide6.QtCore import QThread, Signal
 
 import autoreply
 import corrections
+import pipeline
 import verdict_cache
 from config import Settings
 import time
 
 from imap_engine import IMAPEngine, IMAPError, MovePlan, MoveReport, ScanCancelled
 from llm_engine import ClassificationCancelled, LLMEngine, LLMError
-from models import Category, EmailMessage, FolderPlan, OtherCategory, TriageItem
+from models import (Category, Classification, EmailMessage, FolderPlan,
+                    OtherCategory, TriageItem)
 
 log = logging.getLogger(__name__)
 
@@ -231,7 +233,29 @@ class ScanWorker(_BaseWorker):
         # Progress runs across every mailbox rather than restarting at each
         # one, so the bar means the same thing whether one is selected or six.
         fetched_before = 0
-        expected_total = 0
+
+        # The classifier is built before a single message has been downloaded,
+        # because the whole point is that it starts working on the first fifty
+        # while the mailbox is still handing over the next fifty. Two machines
+        # waiting for each other in turn is what this replaces.
+        classifier = self._build_classifier()
+        self._classifier = classifier
+        cache = (verdict_cache.VerdictCache.load() if self.reuse_verdicts
+                 else verdict_cache.VerdictCache())
+        recipe = verdict_cache.recipe_for(self.settings)
+        tally = {"job": 0, "file": 0, "review": 0, "failed": 0, "known": 0}
+        started = time.monotonic()
+        self._fetched_running = 0
+        #: Messages already handed to the classifier, so the sweep below never
+        #: hands one over twice.
+        offered: set = set()
+        pump = pipeline.ClassifyPump(
+            lambda chunk: self._classify_chunk(chunk, classifier, cache, recipe,
+                                               tally, started),
+            batch_size=max(1, self.settings.batch_size),
+            cancel=self.cancel_event,
+            on_done=self._analysis_progress,
+        ).start()
 
         try:
             for index, account in enumerate(targets, start=1):
@@ -304,6 +328,22 @@ class ScanWorker(_BaseWorker):
                             eta=(overall - seen) / (seen / elapsed) if seen else 0.0,
                         )
 
+                    def hand_over(arrived, account=account) -> None:
+                        """Tag a batch and give it straight to the classifier.
+
+                        Tagging happens here rather than after the whole fetch
+                        because the verdict cache is keyed on the mailbox: a
+                        message handed over untagged would be looked up under
+                        the wrong key and always miss.
+                        """
+                        for message in arrived:
+                            message.account_id = account.id
+                            message.account_label = account.label
+                            message.account_address = account.address
+                            offered.add(id(message))
+                        self._fetched_running += len(arrived)
+                        pump.offer(arrived)
+
                     scan = engine.fetch_window(
                         start=self.window_start,
                         end=self.window_end,
@@ -313,17 +353,19 @@ class ScanWorker(_BaseWorker):
                         cancel=self.cancel_event,
                         connections=account.connections,
                         max_bytes=self.settings.fetch_bytes,
+                        on_batch=hand_over,
                     )
                     warnings_seen.extend(scan.warnings)
-                    # Tag every message so the table can say where it came from
-                    # and the move phase knows which server to talk to.
+                    # Anything the window filter dropped after the fetch was
+                    # still handed over above; its verdict is simply never
+                    # asked for. Re-tagging is harmless and covers a fetch
+                    # path that emitted nothing.
                     for message in scan.messages:
                         message.account_id = account.id
                         message.account_label = account.label
                         message.account_address = account.address
                     messages.extend(scan.messages)
                     fetched_before += len(scan.messages)
-                    expected_total = fetched_before
                     self._log(
                         f"{account.label}: fetched {len(scan.messages)} message(s) from "
                         f"{account.source_mailbox} ({len(scan.candidate_uids)} matched "
@@ -339,9 +381,11 @@ class ScanWorker(_BaseWorker):
                 raise ScanCancelled("Cancelled.")
         except ScanCancelled:
             self._log("Scan cancelled.")
+            self._abandon(pump, classifier)
             self.finished_ok.emit(outcome)
             return
         except Exception as exc:  # noqa: BLE001
+            self._abandon(pump, classifier)
             self._report_exception("Could not read your mailbox", exc)
             return
 
@@ -351,125 +395,25 @@ class ScanWorker(_BaseWorker):
             outcome.folder_plan = plan
 
         if not messages:
+            self._abandon(pump, classifier)
             self._emit_progress(1, 1, "No messages found in this window.")
             self.finished_ok.emit(outcome)
             return
 
         # ---- 2. Classification ------------------------------------------
-        # Anything answered on a previous scan under the same settings is
-        # answered already. On an overlapping window - which is most of them,
-        # because "the last seven days" run daily overlaps six - this is the
-        # difference between paying for the whole week and paying for a day.
-        cache = (verdict_cache.VerdictCache.load() if self.reuse_verdicts
-                 else verdict_cache.VerdictCache())
-        recipe = verdict_cache.recipe_for(self.settings)
-        pending, known = (cache.split(messages, recipe) if self.reuse_verdicts
-                          else (list(messages), {}))
-        if known:
-            self._log(f"{len(known)} message(s) were analyzed on an earlier "
-                      "scan and did not need to be again.")
-        if not pending:
-            self._emit_progress(len(messages) * 2, len(messages) * 2,
-                                "Every message was already analyzed.")
-            outcome.usage_text = (f"{len(known)} verdict(s) reused, "
-                                  "nothing sent to the model.")
-            self._finish_routing(outcome, messages, list(known[i] for i in
-                                                         sorted(known)), plan)
-            return
-
-        classifier = LLMEngine(
-            provider=self.settings.provider,
-            api_key=self.api_key,
-            model=self.settings.model,
-            base_url=self.settings.base_url,
-            effort=self.settings.effort,
-            max_body_chars=self.settings.max_body_chars,
-            concurrency=self.settings.concurrency,
-            fallback_to_rules=self.settings.fallback_to_rules,
-            batch_size=self.settings.batch_size,
-            ruleset=self.settings.ruleset,
-        )
-        self._classifier = classifier
+        # Most of this already happened, on the classifier's own thread, while
+        # the mailbox was still being read. What is left is the tail.
+        #
+        # Anything the fetch did not stream is swept up here. Overlapping is a
+        # way of going faster, and it must never be the reason a message went
+        # unclassified - so correctness does not depend on the streaming hook
+        # having fired at all.
+        missed = [m for m in messages if id(m) not in offered]
+        if missed:
+            self._fetched_running = max(self._fetched_running, len(messages))
+            pump.offer(missed)
         try:
-            if self.cancel_event.is_set():
-                raise ClassificationCancelled("Cancelled.")
-            self._emit_progress(
-                len(messages), len(messages) * 2,
-                f"Analyzing with {self.settings.provider_label}…",
-            )
-            started = time.monotonic()
-            tally = {"job": 0, "file": 0, "review": 0, "failed": 0}
-
-            def observe(batch) -> None:
-                for classification in batch:
-                    if classification.error:
-                        tally["failed"] += 1
-                    if classification.is_job_related:
-                        tally["job"] += 1
-                    if (classification.confidence_score >= self.settings.confidence_threshold
-                            and classification.is_job_related
-                            and classification.category is not Category.UNCLASSIFIED_OTHER
-                            and not classification.error):
-                        tally["file"] += 1
-                    else:
-                        tally["review"] += 1
-
-            # The bar counts every message fetched, including the ones the
-            # cache answered - otherwise reusing a verdict would look like
-            # progress going backwards.
-            fetched = len(messages)
-            already = len(known)
-
-            def report(done: int, total: int, text: str) -> None:
-                # Continuing the fetch phase's scale rather than starting a new
-                # one: a bar that fills, empties and fills again reads as the
-                # scan having restarted.
-                self._emit_progress(fetched + already + done,
-                                    fetched + already + max(total, done), text)
-                elapsed = max(1e-6, time.monotonic() - started)
-                rate = done / elapsed
-                self._emit_metrics(
-                    phase="analyze",
-                    done=done, total=total,
-                    job_related=tally["job"], to_file=tally["file"],
-                    needs_review=tally["review"], failed=tally["failed"],
-                    requests=classifier.usage.requests,
-                    batched=classifier.batched_requests,
-                    input_tokens=classifier.usage.input_tokens,
-                    output_tokens=classifier.usage.output_tokens,
-                    cost=classifier.usage.estimated_cost_usd,
-                    on_device=classifier.usage.on_device,
-                    fallbacks=classifier.fallback_count,
-                    elapsed=elapsed,
-                    rate=rate,
-                    eta=(total - done) / rate if rate > 0 and done else 0.0,
-                    model=f"{self.settings.provider_label} · {classifier.model}",
-                )
-
-            fresh = classifier.classify_many(
-                pending,
-                progress=report,
-                cancel=self.cancel_event,
-                observer=observe,
-            )
-            classifications = verdict_cache.VerdictCache.merge(
-                messages, pending, fresh, known)
-            if self.reuse_verdicts:
-                for message, verdict in zip(pending, fresh):
-                    cache.put(message, recipe, verdict)
-                cache.save()
-            outcome.usage_text = classifier.usage.describe()
-            if known:
-                outcome.usage_text += (f" · {len(known)} verdict(s) reused "
-                                       "from an earlier scan")
-            for note in classifier.degradations:
-                outcome.warnings.append(f"{self.settings.provider_label} request adjusted: {note}")
-            if classifier.fallback_count:
-                outcome.warnings.append(
-                    f"{classifier.fallback_count} message(s) could not reach "
-                    f"{self.settings.provider_label} and were classified by the local "
-                    "rules engine instead. Those rows say so in their reasoning."
-                )
+            verdicts = pump.finish()
         except ClassificationCancelled:
             self._log("Analysis cancelled.")
             self.finished_ok.emit(outcome)
@@ -482,8 +426,129 @@ class ScanWorker(_BaseWorker):
             classifier.close()
             self._classifier = None
 
+        classifications = [
+            verdict if verdict is not None else Classification(
+                error="No verdict was produced for this message.")
+            for verdict in pipeline.in_original_order(messages, verdicts)
+        ]
+        # The last word on the bar comes from this thread rather than the
+        # classifying one. Everything it said arrives by queued delivery and
+        # therefore in its own time; this is the update that has to be last.
+        total = len(messages)
+        self._emit_progress(total * 2, total * 2,
+                            f"Analyzed {total} message(s).")
+        if self.reuse_verdicts:
+            cache.save()
+
+        outcome.usage_text = classifier.usage.describe()
+        if tally["known"]:
+            outcome.usage_text += (f" \u00b7 {tally['known']} verdict(s) reused "
+                                   "from an earlier scan")
+        for note in classifier.degradations:
+            outcome.warnings.append(
+                f"{self.settings.provider_label} request adjusted: {note}")
+        if classifier.fallback_count:
+            outcome.warnings.append(
+                f"{classifier.fallback_count} message(s) could not reach "
+                f"{self.settings.provider_label} and were classified by the local "
+                "rules engine instead. Those rows say so in their reasoning."
+            )
+
         # ---- 3. Routing --------------------------------------------------
         self._finish_routing(outcome, messages, classifications, plan)
+
+    # -- the classifying half, which runs beside the fetch ----------------
+    def _build_classifier(self) -> LLMEngine:
+        return LLMEngine(
+            provider=self.settings.provider,
+            api_key=self.api_key,
+            model=self.settings.model,
+            base_url=self.settings.base_url,
+            effort=self.settings.effort,
+            max_body_chars=self.settings.max_body_chars,
+            concurrency=self.settings.concurrency,
+            fallback_to_rules=self.settings.fallback_to_rules,
+            batch_size=self.settings.batch_size,
+            ruleset=self.settings.ruleset,
+        )
+
+    def _abandon(self, pump, classifier) -> None:
+        """Shut the second thread down when the first half gave up."""
+        try:
+            pump.finish()
+        except Exception:  # noqa: BLE001 - already failing; do not pile on
+            pass
+        try:
+            classifier.close()
+        except Exception:  # noqa: BLE001
+            pass
+        self._classifier = None
+
+    def _classify_chunk(self, chunk, classifier, cache, recipe, tally, started):
+        """One group of freshly fetched messages, start to finish.
+
+        The cache is consulted per group rather than once for the whole scan,
+        because there is no "whole scan" any more - messages arrive while
+        earlier ones are still being classified.
+        """
+        pending, known = (cache.split(chunk, recipe) if self.reuse_verdicts
+                          else (list(chunk), {}))
+        tally["known"] += len(known)
+
+        def observe(batch) -> None:
+            for verdict in batch:
+                if verdict.error:
+                    tally["failed"] += 1
+                if verdict.is_job_related:
+                    tally["job"] += 1
+                if (verdict.confidence_score >= self.settings.confidence_threshold
+                        and verdict.is_job_related
+                        and verdict.category is not Category.UNCLASSIFIED_OTHER
+                        and not verdict.error):
+                    tally["file"] += 1
+                else:
+                    tally["review"] += 1
+            self._emit_analysis_metrics(classifier, tally, started)
+
+        fresh = classifier.classify_many(
+            pending, cancel=self.cancel_event, observer=observe) if pending else []
+        if self.reuse_verdicts:
+            for message, verdict in zip(pending, fresh):
+                cache.put(message, recipe, verdict)
+        return verdict_cache.VerdictCache.merge(chunk, pending, fresh, known)
+
+    def _analysis_progress(self, analyzed: int) -> None:
+        """The bar, now that both halves are running at once.
+
+        Still two units per message - one for fetching it, one for sorting it
+        - so it means what it always meant. The difference is that the second
+        half starts filling before the first has finished.
+        """
+        fetched = self._fetched_running
+        expected = max(fetched, analyzed, 1)
+        self._emit_progress(fetched + analyzed, expected * 2,
+                            f"Analyzed {analyzed} of {fetched} fetched so far…")
+
+    def _emit_analysis_metrics(self, classifier, tally, started) -> None:
+        elapsed = max(1e-6, time.monotonic() - started)
+        done = tally["job"] + tally["review"]
+        rate = done / elapsed
+        self._emit_metrics(
+            phase="analyze",
+            done=done, total=max(self._fetched_running, done),
+            job_related=tally["job"], to_file=tally["file"],
+            needs_review=tally["review"], failed=tally["failed"],
+            requests=classifier.usage.requests,
+            batched=classifier.batched_requests,
+            input_tokens=classifier.usage.input_tokens,
+            output_tokens=classifier.usage.output_tokens,
+            cost=classifier.usage.estimated_cost_usd,
+            on_device=classifier.usage.on_device,
+            fallbacks=classifier.fallback_count,
+            elapsed=elapsed, rate=rate,
+            eta=(self._fetched_running - done) / rate if rate > 0 and done else 0.0,
+            model=f"{self.settings.provider_label} \u00b7 {classifier.model}",
+        )
 
     def _apply_sorting_rules(self, items) -> None:
         """Run the rules that only file and tick. Never fatal."""

@@ -275,10 +275,15 @@ class FakeIMAP:
     def ensure_folders(self, *_a, **_k):
         return []
 
-    def fetch_window(self, **_kwargs):
+    def fetch_window(self, on_batch=None, **_kwargs):
+        """Hand messages over in twos, the way a real fetch does."""
         from types import SimpleNamespace
-        return SimpleNamespace(messages=list(self._messages), warnings=[],
-                               candidate_uids=[m.uid for m in self._messages])
+        messages = list(self._messages)
+        if on_batch is not None:
+            for start in range(0, len(messages), 2):
+                on_batch(messages[start:start + 2])
+        return SimpleNamespace(messages=messages, warnings=[],
+                               candidate_uids=[m.uid for m in messages])
 
     def logout(self):
         return None
@@ -298,7 +303,10 @@ class CountingLLM:
 
     def classify_many(self, messages, progress=None, cancel=None, observer=None):
         self._seen.extend(m.uid for m in messages)
-        return [verdict(summary=f"fresh {m.uid}") for m in messages]
+        answers = [verdict(summary=f"fresh {m.uid}") for m in messages]
+        if observer is not None:
+            observer(answers)
+        return answers
 
     def close(self):
         return None
@@ -392,3 +400,137 @@ class TestTheWholeScan:
         worker2, done2, _ = scan_env()
         worker2.run()
         assert "reused" in done2[0].usage_text
+
+
+class TestOverlappingTheTwoHalves:
+    """The classifier must be working before the fetch has finished."""
+
+    def test_messages_reach_the_classifier_while_the_fetch_runs(self, tmp_path,
+                                                                monkeypatch, qapp):
+        import threading
+        import workers
+        from config import Settings
+
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        mail = [message(uid=str(i)) for i in range(20)]
+        classified_early = threading.Event()
+        still_fetching = threading.Event()
+        still_fetching.set()
+
+        class SlowIMAP(FakeIMAP):
+            def fetch_window(self, on_batch=None, **_kwargs):
+                from types import SimpleNamespace
+                for start in range(0, len(self._messages), 4):
+                    if on_batch is not None:
+                        on_batch(self._messages[start:start + 4])
+                    # Give the classifier a moment to get going.
+                    if classified_early.wait(0.5):
+                        break
+                still_fetching.clear()
+                return SimpleNamespace(messages=list(self._messages), warnings=[],
+                                       candidate_uids=[])
+
+        class WatchingLLM(CountingLLM):
+            def classify_many(self, messages, progress=None, cancel=None,
+                              observer=None):
+                if still_fetching.is_set():
+                    classified_early.set()
+                return super().classify_many(messages, progress, cancel, observer)
+
+        seen = []
+        monkeypatch.setattr(workers, "IMAPEngine", lambda **kw: SlowIMAP(mail, **kw))
+        monkeypatch.setattr(workers, "LLMEngine", lambda **kw: WatchingLLM(seen, **kw))
+
+        worker = workers.ScanWorker(
+            settings=Settings(icloud_email="you@icloud.example", provider="rules",
+                              batch_size=4),
+            mailbox_password="pw", api_key="", window_start=None, window_end=None)
+        done = []
+        worker.finished_ok.connect(done.append)
+        worker.run()
+
+        assert classified_early.is_set(), \
+            "classification should start before the fetch has finished"
+        assert len(done[0].items) == 20
+        assert sorted(int(u) for u in seen) == list(range(20))
+
+    def test_every_message_still_gets_a_verdict_in_order(self, scan_env):
+        worker, done, _ = scan_env()
+        worker.run()
+        items = done[0].items
+        assert [i.email.uid for i in items] == list("012345")
+        assert [i.classification.summary for i in items] == [
+            f"fresh {u}" for u in "012345"]
+
+    def test_a_fetch_that_streams_nothing_is_still_classified(self, tmp_path,
+                                                              monkeypatch, qapp):
+        """Overlap is a way of going faster, never a reason to lose a message."""
+        import workers
+        from config import Settings
+
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        mail = [message(uid=str(i)) for i in range(5)]
+
+        class SilentIMAP(FakeIMAP):
+            def fetch_window(self, on_batch=None, **_kwargs):
+                from types import SimpleNamespace
+                return SimpleNamespace(messages=list(self._messages),
+                                       warnings=[], candidate_uids=[])
+
+        seen = []
+        monkeypatch.setattr(workers, "IMAPEngine", lambda **kw: SilentIMAP(mail, **kw))
+        monkeypatch.setattr(workers, "LLMEngine", lambda **kw: CountingLLM(seen, **kw))
+        worker = workers.ScanWorker(
+            settings=Settings(icloud_email="you@icloud.example", provider="rules"),
+            mailbox_password="pw", api_key="", window_start=None, window_end=None)
+        done = []
+        worker.finished_ok.connect(done.append)
+        worker.run()
+
+        assert sorted(seen) == ["0", "1", "2", "3", "4"]
+        assert len(done[0].items) == 5
+
+    def test_a_classifier_that_raises_fails_the_scan_rather_than_hanging(
+            self, tmp_path, monkeypatch, qapp):
+        import workers
+        from config import Settings
+
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        mail = [message(uid=str(i)) for i in range(4)]
+
+        class BrokenLLM(CountingLLM):
+            def classify_many(self, *_a, **_k):
+                raise RuntimeError("the provider fell over")
+
+        monkeypatch.setattr(workers, "IMAPEngine", lambda **kw: FakeIMAP(mail, **kw))
+        monkeypatch.setattr(workers, "LLMEngine", lambda **kw: BrokenLLM([], **kw))
+        worker = workers.ScanWorker(
+            settings=Settings(icloud_email="you@icloud.example", provider="rules"),
+            mailbox_password="pw", api_key="", window_start=None, window_end=None)
+        failures = []
+        worker.failed.connect(lambda *a: failures.append(a))
+        worker.run()
+        assert failures, "the scan should report the failure, not hang"
+
+    def test_a_fetch_that_fails_shuts_the_classifier_down(self, tmp_path,
+                                                          monkeypatch, qapp):
+        import workers
+        from config import Settings
+
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+
+        class BrokenIMAP(FakeIMAP):
+            def fetch_window(self, **_kwargs):
+                raise OSError("the connection dropped")
+
+        monkeypatch.setattr(workers, "IMAPEngine",
+                            lambda **kw: BrokenIMAP([], **kw))
+        monkeypatch.setattr(workers, "LLMEngine", lambda **kw: CountingLLM([], **kw))
+        worker = workers.ScanWorker(
+            settings=Settings(icloud_email="you@icloud.example", provider="rules"),
+            mailbox_password="pw", api_key="", window_start=None, window_end=None)
+        failures = []
+        worker.failed.connect(lambda *a: failures.append(a))
+        worker.run()
+        assert failures
+        assert worker._classifier is None
