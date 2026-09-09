@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 import logging
 import os
 import subprocess
@@ -3997,7 +3998,6 @@ class MainWindow(QMainWindow):
 
         self.window_label = QLabel()
         self.window_label.setToolTip("The period the next scan will cover.")
-        row.addWidget(self.window_label)
 
         # The calendar popup is not built here: setCalendarPopup constructs a
         # full QCalendarWidget, which is about a tenth of a second per field.
@@ -4011,9 +4011,29 @@ class MainWindow(QMainWindow):
         self.end_date.setDate(_stored_date(self.settings.custom_end, today))
         self.start_date.dateChanged.connect(self._refresh_window_label)
         self.end_date.dateChanged.connect(self._refresh_window_label)
-        self.range_widgets = [QLabel("from"), self.start_date, QLabel("to"), self.end_date]
-        for widget in self.range_widgets:
-            row.addWidget(widget)
+
+        # The dates take the label's place rather than being added beside it.
+        # Shown alongside, they put another 367 points into a row that is
+        # already full, so picking "Custom" wrapped the toolbar onto a second
+        # line and everything after it jumped.
+        dates = QWidget()
+        dates_row = QHBoxLayout(dates)
+        dates_row.setContentsMargins(0, 0, 0, 0)
+        dates_row.setSpacing(4)
+        separator = QLabel("–")
+        separator.setProperty("dim", "true")
+        dates_row.addWidget(self.start_date)
+        dates_row.addWidget(separator)
+        dates_row.addWidget(self.end_date)
+        self.range_widgets = [self.start_date, separator, self.end_date]
+
+        self.range_stack = QStackedWidget()
+        self.range_stack.addWidget(self.window_label)
+        self.range_stack.addWidget(dates)
+        # One width for both, so switching moves nothing either way.
+        self.range_stack.setSizePolicy(QSizePolicy.Policy.Preferred,
+                                       QSizePolicy.Policy.Fixed)
+        row.addWidget(self.range_stack)
 
         row.addWidget(Spacer(16))
 
@@ -5333,8 +5353,7 @@ class MainWindow(QMainWindow):
         if custom and not self.start_date.calendarPopup():
             for field in (self.start_date, self.end_date):
                 field.setCalendarPopup(True)
-        for widget in self.range_widgets:
-            widget.setVisible(custom)
+        self.range_stack.setCurrentIndex(1 if custom else 0)
         self._refresh_window_label()
 
     def _refresh_window_label(self) -> None:
@@ -5383,7 +5402,10 @@ class MainWindow(QMainWindow):
         for index in range(self.action_bar_layout.count()):
             item = self.action_bar_layout.itemAt(index)
             widget = item.widget()
-            if widget is None or widget.isHidden() or widget is self.window_label:
+            # The slot the label lives in is what we are measuring for, so
+            # it must not also count as something to fit around.
+            if (widget is None or widget.isHidden()
+                    or widget is getattr(self, "range_stack", self.window_label)):
                 continue
             others += item.sizeHint().width() + self.action_bar_layout.spacing()
         room = bar - others

@@ -17,6 +17,7 @@ Nothing is ever moved without an explicit tick in the table.
 - [Choosing a model backend](#choosing-a-model-backend)
 - [Is it a job at all](#is-it-a-job-at-all)
 - [Acknowledgements](#acknowledgements)
+- [Shape, when there are no words](#shape-when-there-are-no-words)
 - [Categories](#categories)
 - [Folders it creates](#folders-it-creates)
 - [Quick start](#quick-start)
@@ -345,6 +346,50 @@ Two rules keep it from swallowing things that matter:
   in the inbox into a to-do. `steps_are_only_promised` checks whether every
   mention sits behind a future or conditional; one mention addressed to the
   reader is enough to keep it.
+
+## Shape, when there are no words
+
+A phrase list reads what a message says. A person reads what it *is*. Three
+messages from a held-out set the sorter scored 16.7% on:
+
+| Subject | Body | It is |
+| --- | --- | --- |
+| It's here | Collection point 4, Stockport. Bring the QR code or the order number. | a parcel |
+| Seat 14C | FR7712 STN to DUB, Tuesday. Bags close 40 minutes before. | a flight |
+| that thing on Thursday | Can we push it to half four? School run has moved. | a friend |
+
+Not one contains "delivery", "flight" or any other word a list could hold, and
+no list can be long enough, because there is no phrase to list. Three layers
+read the shape instead:
+
+| Layer | What it reads |
+| --- | --- |
+| `sender_purpose` | The part before the @. A company that sends several kinds of mail uses a different mailbox for each — `offers@`, `billing@`, `bookings@`, `security@` — and it was going entirely unread |
+| `entity_scores` | Structured things: a flight number beside an airport pair, a booking reference, a tracking number, a direct debit, a meter reading, a table for four. Run on the **raw** text, because normalising folds case and case is half of what makes `FR7712 STN to DUB` a flight |
+| `personal_register` | Whether two people are talking: a person's own address, no unsubscribe, a question, contractions, an apology, arranging something, and short |
+
+### They rank, they never decide
+
+Every one of these is capped at `SOFT_EVIDENCE_CEILING` — **0.90**, deliberately
+below the filing threshold. A mailbox called `offers@` and an amount of money
+are good reasons to put promotions first and no reason at all to move
+somebody's mail unasked. Without that cap the new layers doubled the held-out
+score and started filing wrong answers, which costs far more than an extra row
+to look at.
+
+Two gates keep them honest:
+
+- **A recruiter is a human too.** The register says a person wrote this, not
+  what it is about, so it is silent whenever another topic has real evidence
+  from actual words. Without that it pulled interviews, offers and rejections
+  into "personal" purely for being friendly.
+- **Warmth from a seller is not warmth.** "Re: our conversation" is the oldest
+  trick in unsolicited mail, so the register is switched off entirely when the
+  message reads as a solicitation or an impersonation.
+
+Measured: held-out exact **16.7% → 33.3%**, with the labelled set unchanged at
+87.3% and 98.3% precision, nothing wrongly filed anywhere, and the corpus
+still at 0.00% of ham filed as job mail.
 
 ## Categories
 

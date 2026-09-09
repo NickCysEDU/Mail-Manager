@@ -60,6 +60,13 @@ GAPPED_PENALTY = 0.75
 #: every mention of it turns out to be a promise rather than a request.
 PROMISED_STEPS_WEIGHT = 1.6
 
+#: The most a reading can be trusted when it rests mainly on shape - the
+#: mailbox it came from, a flight number, the way two people write - rather
+#: than on words that say what the message is. Deliberately below the filing
+#: threshold: these signals are right often enough to sort by and not often
+#: enough to move somebody's mail unasked.
+SOFT_EVIDENCE_CEILING = 0.90
+
 #: How much of a message the rules look at. What a message is gets settled in
 #: its opening; past this it is quoted threads, footers and legal boilerplate.
 #: Five hundred signals against a hundred and sixty thousand characters costs
@@ -1450,6 +1457,206 @@ def acknowledgement_score(subject: str, body: str) -> Tuple[float, List[str]]:
     return score, reasons
 
 
+# ==========================================================================
+# What a message *is*, when it contains no word that says so
+# ==========================================================================
+# The three layers below exist because of mail like this, taken from a
+# held-out set the sorter scored 16.7% on:
+#
+#   "It's here" - Collection point 4, Stockport. Bring the QR code or the
+#   order number. We'll hold it for seven days.        -> a parcel
+#
+#   "Seat 14C" - FR7712 STN to DUB, Tuesday. Bags close 40 minutes before.
+#   Your reference is J4KP2W.                          -> a flight
+#
+#   "that thing on Thursday" - Can we push it to half four? School run has
+#   moved.                                             -> a friend
+#
+# None contains "delivery", "flight" or any other keyword. A person reads the
+# shape of the thing: a flight number, an airport pair, a booking reference; a
+# mailbox called bookings@; two people talking. A phrase list cannot, however
+# long it gets, because there is no phrase to list.
+
+#: Who the sender is, from the part before the @. A company that sends several
+#: kinds of mail uses a different mailbox for each, and the name says which:
+#: offers@, billing@, bookings@, security@. It is nearly free to read and it
+#: is right far more often than it is wrong.
+_SENDER_PURPOSE: Tuple[Tuple[str, "OtherCategory", float], ...] = (
+    (r"offers?|deals?|promo\w*|marketing|savings?|voucher|sale", OtherCategory.PROMOTION, 1.8),
+    (r"news(letter)?|digest|weekly|monthly|bulletin|update[sz]?", OtherCategory.NEWSLETTER, 1.6),
+    (r"billing|invoices?|payments?|accounts?|statements?|finance|creditcontrol",
+     OtherCategory.FINANCE, 1.8),
+    (r"receipts?|orders?|purchase\w*", OtherCategory.RECEIPT, 1.6),
+    (r"shipping|delivery|deliveries|dispatch|tracking|parcels?|courier",
+     OtherCategory.SHIPPING, 2.0),
+    (r"security|auth\w*|verify|verification|2fa|otp|login|signin",
+     OtherCategory.SECURITY, 2.0),
+    (r"bookings?|reservations?|tickets?|events?|rsvp", OtherCategory.EVENT, 1.8),
+    (r"travel|flights?|trips?|itinerary|checkin|check-in", OtherCategory.TRAVEL, 1.8),
+    (r"social|notifications?|friends?|community", OtherCategory.SOCIAL, 1.2),
+)
+_SENDER_PURPOSE_COMPILED = tuple(
+    (re.compile(rf"(?:^|[._-])(?:{pattern})(?:$|[._-])", re.I), topic, weight)
+    for pattern, topic, weight in _SENDER_PURPOSE)
+
+#: A local part shaped like somebody's name rather than a department:
+#: "r.mccarthy", "jane.doe", "sam_hale". Two name-ish pieces, no digits worth
+#: speaking of, and not one of the role words above.
+_PERSON_LOCAL = re.compile(
+    r"^[a-z]{1,20}[._-][a-z]{2,20}\d{0,2}$|^[a-z]{2,20}\d{0,2}$", re.I)
+_ROLE_WORDS = re.compile(
+    r"no.?reply|do.?not.?reply|donotreply|mailer|bounce|postmaster|admin|"
+    r"info|hello|hi|contact|support|help|service|team|care|customer|"
+    r"notification|alerts?|news|mail|robot|auto|system|daemon", re.I)
+
+
+def sender_purpose(sender: str) -> Tuple[Dict["OtherCategory", float], List[str]]:
+    """What the mailbox this came from is *for*.
+
+    Reading the local part is the cheapest useful signal there is and nothing
+    was using it. "offers@boots" is a promotion before a single word of the
+    body has been read.
+    """
+    local = (sender or "").split("@")[0]
+    local = local.split("<")[-1].strip().lower()
+    if not local:
+        return {}, []
+    found: Dict[OtherCategory, float] = {}
+    why: List[str] = []
+    for pattern, topic, weight in _SENDER_PURPOSE_COMPILED:
+        if pattern.search(local):
+            found[topic] = max(found.get(topic, 0.0), weight)
+            why.append(f"it came from “{local}@”")
+            break
+    return found, why
+
+
+def looks_like_a_person(sender: str) -> bool:
+    """Whether the address belongs to a person rather than a department."""
+    local = (sender or "").split("@")[0].split("<")[-1].strip().lower()
+    if not local or _ROLE_WORDS.search(local):
+        return False
+    return bool(_PERSON_LOCAL.match(local))
+
+
+#: Structured things a person recognises on sight. Each is a shape, not a
+#: word, which is exactly what a phrase list cannot hold.
+_ENTITIES: Tuple[Tuple[str, "re.Pattern", "OtherCategory", float], ...] = (
+    ("a flight number", re.compile(
+        r"\b(?:[A-Z]{2}|[A-Z]\d|\d[A-Z])\s?\d{2,4}\b(?!\s*(?:%|mb|gb|kb))"), 
+     OtherCategory.TRAVEL, 1.4),
+    ("an airport pair", re.compile(
+        r"\b([A-Z]{3})\s*(?:to|-|–|>|/)\s*([A-Z]{3})\b"), OtherCategory.TRAVEL, 2.4),
+    ("a seat or gate", re.compile(
+        r"\bseat\s*\d{1,3}[A-K]\b|\bgate\s*[A-Z]?\d{1,3}\b|"
+        r"\bboarding\b|\bbags? close\b|\bcheck.?in closes\b", re.I),
+     OtherCategory.TRAVEL, 2.2),
+    ("a booking reference", re.compile(
+        r"\b(?:reference|ref|booking|confirmation|pnr|record locator)\s*"
+        r"(?:is|:|number|no\.?|#)?\s*([A-Z0-9]{5,8})\b", re.I),
+     OtherCategory.TRAVEL, 1.2),
+    ("a collection point", re.compile(
+        r"\bcollection point\b|\bpick.?up point\b|\bparcel\b|"
+        r"\block(?:er)?\s*\d|\bqr code\b|\bwe'?ll hold it\b|"
+        r"\bready to collect\b|\bout for delivery\b", re.I),
+     OtherCategory.SHIPPING, 2.4),
+    ("a tracking number", re.compile(
+        r"\b(?:tracking|consignment|waybill)\s*(?:number|no\.?|#|:)?\s*"
+        r"[A-Z0-9]{8,}\b", re.I), OtherCategory.SHIPPING, 2.6),
+    ("an amount of money", re.compile(
+        r"[£$€]\s?\d[\d,]*(?:\.\d{2})?\b|\b\d[\d,]*\.\d{2}\b"),
+     OtherCategory.FINANCE, 0.8),
+    ("a direct debit or standing order", re.compile(
+        r"\bdirect debit\b|\bstanding order\b|\bdd\b(?= *(?:of|for))|"
+        r"\bcould not be collected\b|\bwe'?ll try again\b", re.I),
+     OtherCategory.FINANCE, 2.6),
+    ("a meter or usage reading", re.compile(
+        r"\bmeter reading\b|\bkwh\b|\bunits used\b|\bestimated? bills?\b|"
+        r"\bactual reading\b|\btrue it up\b", re.I), OtherCategory.FINANCE, 2.6),
+    ("a table or covers", re.compile(
+        r"\btable for \d\b|\bcovers?\b(?= *(?:at|for)? *\d)|"
+        r"\bwe hold tables\b|\bconfirmed under\b|\bparty of \d\b|"
+        r"\bdoors (?:open|at)\b", re.I), OtherCategory.EVENT, 2.4),
+)
+
+
+def entity_scores(subject: str, body: str,
+                  raw_subject: str = "", raw_body: str = "") -> Tuple[
+                      Dict["OtherCategory", float], List[str]]:
+    """Topics implied by the shapes in a message rather than its words.
+
+    Runs on the *raw* text, because normalising folds case, and case is half
+    of what makes a flight number look like a flight number.
+    """
+    blob = f"{raw_subject or subject}\n{raw_body or body}"[:MAX_SCANNED_CHARS]
+    found: Dict[OtherCategory, float] = {}
+    why: List[str] = []
+    for describes, pattern, topic, weight in _ENTITIES:
+        if pattern.search(blob):
+            found[topic] = found.get(topic, 0.0) + weight
+            why.append(describes)
+    # Several shapes agreeing is worth more than the sum suggests, but one on
+    # its own should never decide anything.
+    for topic in list(found):
+        found[topic] = min(3.4, found[topic])
+    return found, why
+
+
+#: How two people write to each other, as opposed to how a company writes to
+#: a customer. None of it is decisive; together it is unmistakable.
+_CONVERSATIONAL = (
+    ("a question", re.compile(r"\?")),
+    ("first and second person", re.compile(
+        r"\b(?:i|i'?m|i'?ll|i'?ve|we|you|your|you'?re|me|my|us)\b", re.I)),
+    ("contractions", re.compile(
+        r"\b\w+'(?:s|t|re|ll|ve|d|m)\b", re.I)),
+    ("an apology or thanks", re.compile(
+        r"\b(?:sorry|thanks|thank you|cheers|no worries|apolog\w+)\b", re.I)),
+    ("arranging something between two people", re.compile(
+        r"\b(?:can we|shall we|are you|could you|do you|let me know|"
+        r"push it|move it|swap|instead|either way|works for me)\b", re.I)),
+)
+
+
+def personal_register(subject: str, body: str, sender: str,
+                      list_unsubscribe: str = "", links: Sequence[str] = ()) -> Tuple[
+                          float, List[str]]:
+    """How strongly this reads as one person writing to another.
+
+    "that thing on Thursday - can we push it to half four? School run has
+    moved." has no topic word in it at all. What marks it out is everything
+    around the words: a person's address, no unsubscribe, no links, a short
+    body, and two people arranging something.
+    """
+    if list_unsubscribe.strip():
+        return 0.0, []                      # a list is not a person
+    # Sounding like a friend is the oldest trick in unsolicited mail - "Re:
+    # our conversation", "sorry for the delay, here is that link". Warmth is
+    # evidence of a person only when nothing is being sold.
+    selling, _why = solicitation_score(normalize(subject), normalize(body), subject)
+    if selling >= 2.6:
+        return 0.0, []
+    fake, _fake_why = impersonation_score(sender, normalize(subject), normalize(body))
+    if fake:
+        return 0.0, []
+    text = f"{subject}\n{body}"
+    reasons = [describes for describes, pattern in _CONVERSATIONAL
+               if pattern.search(text)]
+    score = {0: 0.0, 1: 0.0, 2: 0.8, 3: 1.6}.get(len(reasons), 2.2)
+    if not score:
+        return 0.0, []
+    if looks_like_a_person(sender):
+        score += 1.2
+        reasons.insert(0, "a person's own address")
+    if len(body) <= 320:
+        score += 0.6
+        reasons.append("short, the way a note is")
+    if len(links) > 2:
+        score = max(0.0, score - 1.4)
+        reasons.append("(discounted: it is full of links)")
+    return min(3.4, score), reasons
+
+
 def other_world_context(subject: str, body: str) -> Tuple[float, str]:
     """How strongly the message is about something other than a job search."""
     hits = set(_OTHER_WORLD.findall(f"{subject} {body}"))
@@ -2171,6 +2378,9 @@ class RuleClassifier:
                 subject_n, subject_t, body_n, body_t, sender_n,
                 non_job_score, non_job_matches, job_evidence, truncated,
                 list_unsubscribe, links,
+                # The raw text as well: normalising folds case, and case is
+                # half of what makes "FR7712 STN to DUB" a flight.
+                raw_subject=subject, raw_body=body, raw_sender=sender,
             )
 
         if best_score < MIN_SCORE:
@@ -2209,6 +2419,7 @@ class RuleClassifier:
         self, subject_n, subject_t, body_n, body_t, sender_n,
         non_job_score, non_job_matches, job_evidence, truncated, list_unsubscribe,
         links: Sequence[str] = (),
+        raw_subject: str = "", raw_body: str = "", raw_sender: str = "",
     ) -> RuleVerdict:
         topic_scores: Dict[OtherCategory, float] = {}
         topic_matches: Dict[OtherCategory, List[str]] = {}
@@ -2229,6 +2440,46 @@ class RuleClassifier:
             topic_scores[topic] = topic_scores.get(topic, 0.0) + weight
             topic_matches.setdefault(topic, []).extend(shape_notes.get(topic, ()))
             topic_peak[topic] = max(topic_peak.get(topic, 0.0), weight)
+
+        # Three more ways to recognise a message that contains no word saying
+        # what it is: which mailbox it came from, the shapes in it, and
+        # whether it reads like one person writing to another.
+        #: How much of each topic's score came from shape rather than words.
+        #: These layers are allowed to decide *which* topic wins and never how
+        #: certain that is: a mailbox called offers@ and an amount of money
+        #: are good reasons to rank promotions first, and no reason at all to
+        #: move somebody's mail without asking.
+        soft: Dict[OtherCategory, float] = {}
+        for source, notes in (
+            sender_purpose(raw_sender or sender_n),
+            entity_scores(subject_n, body_n, raw_subject, raw_body),
+        ):
+            for topic, weight in source.items():
+                topic_scores[topic] = topic_scores.get(topic, 0.0) + weight
+                soft[topic] = soft.get(topic, 0.0) + weight
+                topic_matches.setdefault(topic, []).extend(notes[:2])
+
+        chatty, chatty_why = personal_register(
+            raw_subject or subject_n, raw_body or body_n,
+            raw_sender or sender_n, list_unsubscribe, links)
+        # A recruiter is a human too. The register tells you a person wrote
+        # this, not what it is about, so it only speaks where nothing else
+        # has anything to say. Without this gate it pulled interviews, offers
+        # and rejections into "personal" purely because they were friendly.
+        hard_elsewhere = max(
+            (score - soft.get(topic, 0.0)
+             for topic, score in topic_scores.items()
+             if topic is not OtherCategory.PERSONAL),
+            default=0.0)
+        if chatty and hard_elsewhere >= MIN_SCORE:
+            chatty, chatty_why = 0.0, []
+        if chatty:
+            topic_scores[OtherCategory.PERSONAL] = (
+                topic_scores.get(OtherCategory.PERSONAL, 0.0) + chatty)
+            soft[OtherCategory.PERSONAL] = (
+                soft.get(OtherCategory.PERSONAL, 0.0) + chatty)
+            topic_matches.setdefault(OtherCategory.PERSONAL, []).extend(
+                chatty_why[:3])
 
         if list_unsubscribe:
             for topic in (OtherCategory.NEWSLETTER, OtherCategory.PROMOTION, OtherCategory.SOCIAL):
@@ -2261,6 +2512,12 @@ class RuleClassifier:
         )
         if best_topic is OtherCategory.OTHER:
             confidence = min(confidence, 0.70)
+        # A reading held up mostly by shape is a good guess, not a certainty.
+        # Without this the new layers pushed wrong answers past the filing
+        # threshold, which costs far more than an extra row to look at.
+        gentle = soft.get(best_topic, 0.0)
+        if best > 0 and gentle >= best * 0.5:
+            confidence = min(confidence, SOFT_EVIDENCE_CEILING)
 
         matched = topic_matches.get(best_topic, [])
         return RuleVerdict(

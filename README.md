@@ -227,6 +227,20 @@ Both are checked against what the meeting is *for*. A booking link proves a
 meeting and never that it is about a job, so a dentist's reminder, a
 parent-teacher conference and a sales demo stay where they are.
 
+## Reading shape, not just words
+
+*"Seat 14C — FR7712 STN to DUB, Tuesday. Bags close 40 minutes before."* is a
+flight, and contains no word that says so. So alongside the phrase tables the
+sorter reads the shape of a message: which mailbox it came from (`offers@`,
+`billing@`, `bookings@`), the structured things in it (a flight number beside
+an airport pair, a tracking number, a direct debit, a table for four), and
+whether it reads like two people talking rather than a company writing to a
+customer.
+
+These rank; they never decide. Anything resting mainly on shape is capped
+below the filing threshold — good enough to sort by, not good enough to move
+your mail unasked.
+
 ## Acknowledgements
 
 "We got your application, we'll be in touch" is the commonest mail in a job

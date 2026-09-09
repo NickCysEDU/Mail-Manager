@@ -534,3 +534,82 @@ class TestMainWindow:
         window.close()
         assert window.settings.window_geometry
         assert Settings.load().window_geometry == window.settings.window_geometry
+
+
+class TestTheToolbarDoesNotJump:
+    """Picking "Custom" used to rearrange the whole top of the window.
+
+    The two date fields were added beside the "covering …" label rather than
+    in its place: another 367 points into a row that was already full, so the
+    toolbar wrapped onto a second line and every control after it moved.
+    """
+
+    @pytest.fixture
+    def window(self, qapp, tmp_path, monkeypatch):
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        subject = MainWindow(Settings(icloud_email="you@icloud.example"),
+                             InMemoryCredentialStore())
+        yield subject
+        subject.close()
+
+    def _positions(self, window):
+        return {
+            "slot": window.range_stack.width(),
+            "scan": (window.scan_button.x(), window.scan_button.y()),
+            "apply": (window.apply_button.x(), window.apply_button.y()),
+            "model": (window.model_button.x(), window.model_button.y()),
+        }
+
+    def test_switching_to_custom_moves_nothing_else(self, window):
+        from models import TimeWindow
+
+        window.resize(1200, 700)
+        window.show()
+        QApplication.processEvents()
+
+        window.window_buttons[TimeWindow.LAST_24_HOURS].setChecked(True)
+        window._window_selected(TimeWindow.LAST_24_HOURS)
+        QApplication.processEvents()
+        before = self._positions(window)
+
+        window.window_buttons[TimeWindow.CUSTOM].setChecked(True)
+        window._window_selected(TimeWindow.CUSTOM)
+        QApplication.processEvents()
+        after = self._positions(window)
+
+        assert before == after, f"the toolbar moved: {before} -> {after}"
+
+    def test_the_dates_take_the_label_s_place(self, window):
+        from models import TimeWindow
+
+        window.show()
+        QApplication.processEvents()
+        window._window_selected(TimeWindow.LAST_7_DAYS)
+        assert window.range_stack.currentWidget() is window.window_label
+        window.window_buttons[TimeWindow.CUSTOM].setChecked(True)
+        window._window_selected(TimeWindow.CUSTOM)
+        assert window.range_stack.currentWidget() is not window.window_label
+        assert window.start_date.isVisibleTo(window.range_stack)
+
+    def test_going_back_to_a_preset_restores_the_label(self, window):
+        from models import TimeWindow
+
+        window.show()
+        QApplication.processEvents()
+        window._window_selected(TimeWindow.CUSTOM)
+        window._window_selected(TimeWindow.LAST_3_DAYS)
+        assert window.range_stack.currentWidget() is window.window_label
+        assert "covering" in window.window_label.text() or window.window_label.text()
+
+    def test_fitting_the_label_does_not_raise(self, window):
+        """It calls re.sub, and gui did not import re — it only ever escaped
+        notice because the layout width was zero at the moments it ran."""
+        from models import TimeWindow
+
+        window.resize(900, 600)
+        window.show()
+        QApplication.processEvents()
+        for choice in (TimeWindow.CUSTOM, TimeWindow.LAST_24_HOURS):
+            window._window_selected(choice)
+            window._fit_window_label()
+            QApplication.processEvents()
