@@ -247,9 +247,12 @@ class ScanWorker(_BaseWorker):
                         f"(hierarchy delimiter \u201c{engine.delimiter}\u201d)."
                     )
 
-                    account_plan = engine.folder_plan(
-                        self.settings.folder_root, self.settings.other_folder_root
-                    )
+                    # Each mailbox may put its folders somewhere of its own;
+                    # most do not, and fall back to the shared roots.
+                    job_root, other_root = account.roots(
+                        self.settings.folder_root,
+                        self.settings.other_folder_root)
+                    account_plan = engine.folder_plan(job_root, other_root)
                     account_plan = replace(
                         account_plan,
                         detailed_job_folders=self.settings.profile.detailed_job_folders,
@@ -577,8 +580,9 @@ class ApplyWorker(_BaseWorker):
                 self._emit_progress(done_so_far, total, f"Connecting to {account.label}…")
                 engine.connect(account.address, passwords.get(account.id, ""))
 
-                plan = engine.folder_plan(
+                job_root, other_root = account.roots(
                     self.settings.folder_root, self.settings.other_folder_root)
+                plan = engine.folder_plan(job_root, other_root)
                 plan = replace(
                     plan,
                     detailed_job_folders=self.settings.profile.detailed_job_folders,
