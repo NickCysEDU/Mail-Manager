@@ -9,7 +9,10 @@ readme = "README.md"
 testpaths = ["tests"]
 pythonpath = ["."]
 # A hung test must never wedge the build; the suite runs in ~12s.
-addopts = "-q --strict-markers --strict-config --timeout=60 --timeout-method=thread"
+# -n 4 --dist loadfile: four workers, each taking whole files. Whole files
+# matters because the Qt tests share one QApplication per process, and it is
+# the difference between six minutes and two and a half.
+addopts = "-q --strict-markers --strict-config --timeout=60 --timeout-method=thread -n 4 --dist loadfile"
 filterwarnings = [
     "error::DeprecationWarning:gui",
     "error::DeprecationWarning:models",
