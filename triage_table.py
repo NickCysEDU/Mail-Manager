@@ -836,6 +836,9 @@ def _reasoning_html(item: TriageItem) -> str:
     runners = _runners_up(classification)
     if runners:
         rows.append(("Runners-up", runners))
+    if item.rule_name:
+        rows.append(("Rule", f"<span style='color:{ACCENT_BLUE}'>"
+                             f"{_html(item.rule_name)}</span>"))
     if item.learned_because:
         # Directly under the decision, because it is the reason for it.
         rows.append(("Learned",

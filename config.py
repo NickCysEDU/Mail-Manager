@@ -191,6 +191,9 @@ class Settings:
     #: the settings behind them have not changed. On by default: re-reading
     #: the same six days every morning is the common case, not the exception.
     reuse_verdicts: bool = True
+    #: Whether rules that only file and tick run at the end of every scan.
+    #: They change nothing on the server, so there is nothing to arm.
+    apply_sorting_rules: bool = True
 
     last_window: str = TimeWindow.LAST_24_HOURS.name
     custom_start: str = ""
@@ -330,7 +333,7 @@ class Settings:
                     "background_agent", "menu_bar_icon", "close_to_menu_bar",
                     "start_in_menu_bar", "readable", "help_mode", "auto_reply",
                     "row_lines_auto", "learn_from_corrections",
-                    "reuse_verdicts"):
+                    "reuse_verdicts", "apply_sorting_rules"):
             data[key] = bool(data[key])
         settled = Settings(**data)
         settled._sync_mailboxes()
@@ -467,6 +470,19 @@ class Settings:
         """Whether any rule would actually do something."""
         return self.auto_reply and any(
             r.enabled and r.ready for r in self.rules)
+
+    @property
+    def sorting_rules(self) -> list:
+        """Enabled rules that only rearrange the table.
+
+        Separate from replies_armed because these are a different promise. A
+        rule that drafts mail should not run without being asked; a rule that
+        points a row at a folder has not done anything to anybody's mailbox
+        and can run at the end of every scan.
+        """
+        if not self.apply_sorting_rules:
+            return []
+        return [r for r in self.rules if r.enabled and r.ready and r.sorts_only]
 
     @property
     def chosen_topics(self) -> tuple:

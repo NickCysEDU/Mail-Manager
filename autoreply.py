@@ -590,10 +590,26 @@ class Rule:
             ) if action.kind
         ]
 
+    #: Actions that only rearrange the table. They need no network, write
+    #: nothing to the server, and can therefore run at the end of every scan
+    #: rather than waiting for somebody to ask for replies.
+    SORTING_ACTIONS = frozenset({"file_into", "tick", "untick", "leave", "stop"})
+
     # -- what it is -------------------------------------------------------
     @property
     def drafts_a_reply(self) -> bool:
         return any(a.kind in ("draft", "draft_ai") for a in self.actions)
+
+    @property
+    def sorts_only(self) -> bool:
+        """Whether this rule just files and ticks.
+
+        A rule that flags a message or marks it read has to open the mailbox,
+        and a rule that drafts has to talk to a model; neither belongs in the
+        tail of a scan. One that only points a row at a folder does.
+        """
+        return bool(self.actions) and all(
+            a.kind in self.SORTING_ACTIONS for a in self.actions)
 
     @property
     def uses_the_model(self) -> bool:

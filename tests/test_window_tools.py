@@ -228,7 +228,8 @@ class TestTheAutoReplyTab:
         dialog = SettingsDialog(window.settings, InMemoryCredentialStore(), window)
         try:
             titles = [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())]
-            assert "Auto Reply" in titles
+            # Named for everything rules do, not just the drafting half.
+            assert "Rules" in titles
             assert dialog.auto_reply_check.isChecked() is False
         finally:
             dialog.deleteLater()

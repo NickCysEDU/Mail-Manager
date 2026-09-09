@@ -548,7 +548,7 @@ class SettingsDialog(QDialog):
         self.tabs.addTab(_scrollable(self._build_account_tab()), "Mailboxes")
         self.tabs.addTab(_scrollable(self._build_ai_tab()), "Analysis")
         self.tabs.addTab(_scrollable(self._build_folders_tab()), "Folders")
-        self.tabs.addTab(_scrollable(self._build_reply_tab()), "Auto Reply")
+        self.tabs.addTab(_scrollable(self._build_reply_tab()), "Rules")
         self.tabs.addTab(_scrollable(self._build_appearance_tab()), "Appearance")
 
         self.buttons = QDialogButtonBox(
@@ -1627,7 +1627,19 @@ class SettingsDialog(QDialog):
         outer.addWidget(headline)
 
         top = QHBoxLayout()
-        self.auto_reply_check = QCheckBox("Run these rules after a scan")
+        # Two switches, because they are two different promises. A rule that
+        # only files and ticks has touched nobody's mailbox and runs at the
+        # end of every scan; one that writes a draft waits to be asked.
+        self.sorting_rules_check = QCheckBox("Apply filing rules after a scan")
+        self.sorting_rules_check.setToolTip(
+            "Rules whose only actions are filing, ticking or leaving a "
+            "message alone. They change nothing on the server, so they run "
+            "with every scan.")
+        top.addWidget(self.sorting_rules_check)
+        self.auto_reply_check = QCheckBox("Draft replies after a scan")
+        self.auto_reply_check.setToolTip(
+            "Rules that write a reply into your Drafts mailbox. Nothing is "
+            "ever sent.")
         top.addWidget(self.auto_reply_check)
         top.addStretch(1)
         top.addWidget(QLabel("Sign as"))
@@ -1646,7 +1658,9 @@ class SettingsDialog(QDialog):
         # -- left: the rules, in the order they run ------------------------
         left = QVBoxLayout()
         left.setSpacing(4)
-        order_note = QLabel("Rules run top to bottom.")
+        order_note = QLabel(
+            "Rules run top to bottom, after the sorter and after anything "
+            "learned from your corrections — so a rule always wins.")
         order_note.setProperty("dim", "true")
         order_note.setWordWrap(True)
         left.addWidget(order_note)
@@ -1789,6 +1803,7 @@ class SettingsDialog(QDialog):
         self._condition_rows: List[ConditionRow] = []
         self._action_rows: List[ActionRow] = []
         self.auto_reply_check.setChecked(settings.auto_reply)
+        self.sorting_rules_check.setChecked(settings.apply_sorting_rules)
         self.signature_edit.setText(settings.reply_signature)
         self._refresh_rule_list()
 
@@ -2634,6 +2649,7 @@ class SettingsDialog(QDialog):
             row_lines=self.rows_spin.value(),
             row_lines_auto=self._settings.row_lines_auto and not self._row_lines_touched,
             auto_reply=self.auto_reply_check.isChecked(),
+            apply_sorting_rules=self.sorting_rules_check.isChecked(),
             reply_signature=self.signature_edit.text().strip(),
             reply_rules=[r.to_dict() for r in self._rules],
             confidence_threshold=self.threshold_slider.value() / 100.0,
