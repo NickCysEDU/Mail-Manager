@@ -71,6 +71,35 @@ class Profile:
     def sorts_everything(self) -> bool:
         return self.non_job_routing is NonJobRouting.FILE
 
+    @property
+    def makes_job_folders(self) -> bool:
+        """Whether a job-search tree gets built at all.
+
+        Every profile files job mail somewhere; only some give it a folder
+        per stage rather than a single one.
+        """
+        return self.detailed_job_folders
+
+    def creates(self) -> str:
+        """Which folder trees this profile builds, in one line.
+
+        Written from the profile rather than typed out per option, so it
+        cannot drift from what actually happens.
+        """
+        trees = []
+        if self.detailed_job_folders:
+            trees.append(f"a “{self.folder_root}” folder for each stage of an "
+                         "application")
+        else:
+            trees.append(f"one “{self.folder_root}” folder for anything "
+                         "job related")
+        if self.topics:
+            trees.append(f"“{self.other_root}” with {len(self.topics)} "
+                         "everyday topics")
+        if not self.sorts_everything:
+            trees.append("nothing else — the rest of your inbox is left alone")
+        return "; ".join(trees)
+
 
 PROFILES: Tuple[Profile, ...] = (
     Profile(
