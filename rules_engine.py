@@ -37,6 +37,7 @@ import urllib.parse
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+import lexicon
 from models import Category, OtherCategory
 
 #: Confidence this engine will never exceed. It is a rule set, not a reader:
@@ -884,6 +885,17 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("squareup.com", 2.2, field="sender", label="a payment processor"),
     ),
     OtherCategory.SHIPPING: (
+        # Collecting a parcel, in the words the notice actually uses. These
+        # were briefly filed as "shapes"; they are nothing of the sort, they
+        # are phrases, and as evidence they are worth as much as any other.
+        Signal("collection point", 2.8),
+        Signal("pick up point", 2.4),
+        Signal("ready to collect", 2.8),
+        Signal("out for delivery", 3.0),
+        Signal("we will hold it", 2.0),
+        Signal("bring the qr code", 2.4),
+        Signal("your parcel", 2.8),
+        Signal("parcel is", 2.4),
         Signal("has shipped", 3.0), Signal("out for delivery", 3.0),
         Signal("your package", 2.8), Signal("tracking number", 3.0),
         Signal("track your", 2.4), Signal("delivered today", 2.6),
@@ -1510,6 +1522,36 @@ _ROLE_WORDS = re.compile(
     r"notification|alerts?|news|mail|robot|auto|system|daemon", re.I)
 
 
+def sender_sector(sender: str) -> Tuple[Dict["OtherCategory", float], List[str]]:
+    """What the company sending this does for a living.
+
+    A phrase table cannot know that ryanair.com is an airline or that
+    argos.co.uk sells things. Forty-four thousand company domains can, and
+    that is most of what is left between a rule set and a reader on mail that
+    never says what it is.
+
+    A sector describes the sender, never the message - a bank sends security
+    codes and marketing alike - so it is weighed as a hint and capped with
+    the rest of the soft evidence.
+    """
+    sector, matched = lexicon.sector_of(sender)
+    if not sector:
+        return {}, []
+    topic_name, weight = lexicon.SECTOR_TOPICS.get(sector, ("", 0.0))
+    if not topic_name:
+        return {}, []
+    try:
+        topic = OtherCategory(topic_name)
+    except ValueError:                      # pragma: no cover - data mismatch
+        return {}, []
+    said = {"airline": "an airline", "bank": "a bank or insurer",
+            "telecom": "a phone or broadband company", "utility": "a utility",
+            "retail": "a shop", "courier": "a courier",
+            "social": "a social network", "news": "a news publisher",
+            "hotel": "a hotel or restaurant"}.get(sector, f"a {sector} company")
+    return {topic: weight}, [f"“{matched}” is {said}"]
+
+
 def sender_purpose(sender: str) -> Tuple[Dict["OtherCategory", float], List[str]]:
     """What the mailbox this came from is *for*.
 
@@ -1545,8 +1587,8 @@ _ENTITIES: Tuple[Tuple[str, "re.Pattern", "OtherCategory", float], ...] = (
     ("a flight number", re.compile(
         r"\b(?:[A-Z]{2}|[A-Z]\d|\d[A-Z])\s?\d{2,4}\b(?!\s*(?:%|mb|gb|kb))"), 
      OtherCategory.TRAVEL, 1.4),
-    ("an airport pair", re.compile(
-        r"\b([A-Z]{3})\s*(?:to|-|–|>|/)\s*([A-Z]{3})\b"), OtherCategory.TRAVEL, 2.4),
+    # The airport pair is handled separately, against the real list: three
+    # capitals either side of "to" is also "PDF to DOC".
     ("a seat or gate", re.compile(
         r"\bseat\s*\d{1,3}[A-K]\b|\bgate\s*[A-Z]?\d{1,3}\b|"
         r"\bboarding\b|\bbags? close\b|\bcheck.?in closes\b", re.I),
@@ -1555,11 +1597,7 @@ _ENTITIES: Tuple[Tuple[str, "re.Pattern", "OtherCategory", float], ...] = (
         r"\b(?:reference|ref|booking|confirmation|pnr|record locator)\s*"
         r"(?:is|:|number|no\.?|#)?\s*([A-Z0-9]{5,8})\b", re.I),
      OtherCategory.TRAVEL, 1.2),
-    ("a collection point", re.compile(
-        r"\bcollection point\b|\bpick.?up point\b|\bparcel\b|"
-        r"\block(?:er)?\s*\d|\bqr code\b|\bwe'?ll hold it\b|"
-        r"\bready to collect\b|\bout for delivery\b", re.I),
-     OtherCategory.SHIPPING, 2.4),
+
     ("a tracking number", re.compile(
         r"\b(?:tracking|consignment|waybill)\s*(?:number|no\.?|#|:)?\s*"
         r"[A-Z0-9]{8,}\b", re.I), OtherCategory.SHIPPING, 2.6),
@@ -1595,6 +1633,13 @@ def entity_scores(subject: str, body: str,
         if pattern.search(blob):
             found[topic] = found.get(topic, 0.0) + weight
             why.append(describes)
+    # Two real airports either side of "to" is a flight. Two arbitrary
+    # capitals are "PDF to DOC", which is why this is checked against four
+    # and a half thousand codes rather than a regular expression.
+    pair = lexicon.airport_pair(blob)
+    if pair:
+        found[OtherCategory.TRAVEL] = found.get(OtherCategory.TRAVEL, 0.0) + 2.4
+        why.append(f"a flight between {pair[0]} and {pair[1]}")
     # Several shapes agreeing is worth more than the sum suggests, but one on
     # its own should never decide anything.
     for topic in list(found):
@@ -2452,6 +2497,7 @@ class RuleClassifier:
         soft: Dict[OtherCategory, float] = {}
         for source, notes in (
             sender_purpose(raw_sender or sender_n),
+            sender_sector(raw_sender or sender_n),
             entity_scores(subject_n, body_n, raw_subject, raw_body),
         ):
             for topic, weight in source.items():
@@ -2498,7 +2544,18 @@ class RuleClassifier:
                     else TRANSACTIONAL_IN_BULK_UNVOUCHED
                 )
 
-        best_topic = max(topic_scores, key=lambda t: topic_scores[t])
+        # Words decide when there are words; shape decides when there are
+        # none. A one-time code from a bank is a security notice, and the
+        # sender being a bank is not a reason to call it a bank statement -
+        # but that is exactly what happened, because "halifax is a bank" plus
+        # an amount of money outscored the code itself.
+        hard = {topic: score - soft.get(topic, 0.0)
+                for topic, score in topic_scores.items()}
+        spoken_for = [topic for topic, score in hard.items() if score >= MIN_SCORE]
+        if spoken_for:
+            best_topic = max(spoken_for, key=lambda t: topic_scores[t])
+        else:
+            best_topic = max(topic_scores, key=lambda t: topic_scores[t])
         best = topic_scores[best_topic]
         ranked = sorted(topic_scores.values(), reverse=True)
         runner_up = ranked[1] if len(ranked) > 1 else 0.0

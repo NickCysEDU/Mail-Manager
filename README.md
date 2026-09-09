@@ -237,9 +237,16 @@ an airport pair, a tracking number, a direct debit, a table for four), and
 whether it reads like two people talking rather than a company writing to a
 customer.
 
-These rank; they never decide. Anything resting mainly on shape is capped
-below the filing threshold — good enough to sort by, not good enough to move
-your mail unasked.
+It also carries what it knows about the world: 35,150 company brand names with
+the sector each belongs to, and every airport's IATA code — 330 KB of public
+data, bundled, no network. That is the difference between `STN to DUB` and
+`PDF to DOC`, and it is how the sorter knows ryanair.com is an airline and
+argos.co.uk is a shop.
+
+These rank; they never decide. Words always come first — a security code from
+a bank is a security notice, not a bank statement — and anything resting
+mainly on shape is capped below the filing threshold: good enough to sort by,
+not good enough to move your mail unasked.
 
 ## Acknowledgements
 

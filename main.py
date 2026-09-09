@@ -193,6 +193,9 @@ def self_test() -> int:
     import certs
     check("certificate bundle", certs.describe)
 
+    import lexicon as _lexicon
+    check("world lexicon", _lexicon.describe)
+
     def _tls_probe() -> str:
         """A real handshake, because a path that exists is not proof."""
         import socket

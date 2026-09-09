@@ -79,14 +79,17 @@ class TestShapesRatherThanWords:
             "XX0000 XXX xx XXX, Xxxxxxx. Xxxx xxxxx 00 xxxxxxx xxxxxx. "
             "Xxxx xxxxxxxxx xx X0XX0X.")
         assert OtherCategory.TRAVEL in found
-        assert "an airport pair" in why
+        assert any("STN" in reason for reason in why), why
 
-    def test_a_parcel(self):
-        found, why = entity_scores(
-            "", "", "It's here",
-            "Collection point 4, Xxxxxxxxx. Xxxxx xxx XX xxxx xx xxx xxxxx "
-            "xxxxxx. Xx'xx xxxx xx xxx xxxxx xxxx.")
-        assert OtherCategory.SHIPPING in found
+    def test_a_parcel(self, sorter):
+        """"Collection point" is a phrase, so it lives with the words now —
+        what matters is that the message still reads as a parcel."""
+        got = sorter.classify(
+            subject="It's here",
+            body="Collection point 4, Xxxxxxxxx. Xxxxx xxx XX xxxx xx xxx "
+                 "xxxxx xxxxxx. Xx'xx xxxx xx xxx xxxxx xxxx.",
+            sender="noreply@argos.example")
+        assert got.other_category is OtherCategory.SHIPPING
 
     def test_a_direct_debit(self):
         found, _why = entity_scores(

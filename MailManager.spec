@@ -71,6 +71,15 @@ except Exception as _exc:      # never fail a build over a label
     print(f"==> No build stamp ({_exc})")
 
 datas = [(str(_stamp), ".")] if _stamp.exists() else []
+# The world-knowledge lexicon: 44,000 company domains and 4,570 airports in
+# 330 KB, so the app can tell that ryanair.com is an airline without asking
+# anybody at run time.
+_lexicon = ROOT / "data" / "lexicon.json.gz"
+if _lexicon.exists():
+    datas.append((str(_lexicon), "data"))
+    print(f"==> Lexicon: {_lexicon.stat().st_size // 1024} KB")
+else:
+    print("==> No lexicon bundled (run tools/build_lexicon.py)")
 for asset in ("icon.png", "icon.icns"):
     path = ROOT / "assets" / asset
     if path.exists():
