@@ -256,6 +256,26 @@ class TriageTableModel(QAbstractTableModel):
         return True
 
     # -- bulk operations -------------------------------------------------
+    def set_approved(self, rows: Sequence[int], approved: bool) -> int:
+        """Tick or untick a set of rows. Returns how many actually changed.
+
+        Rows that cannot be actioned - nothing to move them to, or already
+        moved - are skipped rather than refused, so a selection that mixes
+        the two does the sensible thing with the half that can.
+        """
+        changed = 0
+        for row in rows:
+            item = self.item_at(row)
+            if item is None or not item.is_actionable:
+                continue
+            if item.approved != approved:
+                item.approved = approved
+                changed += 1
+        if changed:
+            self._refresh_column(self.COL_SELECT)
+            self.selectionChanged.emit()
+        return changed
+
     def set_all_approved(self, approved: bool, only_high_confidence: bool = False) -> None:
         if not self._items:
             return
@@ -352,6 +372,35 @@ class TriageFilterProxy(QSortFilterProxyModel):
 
     def set_only_selected(self, only: bool) -> None:
         self._only_selected = bool(only)
+        self.invalidate()
+
+    def active_filters(self) -> List[str]:
+        """Which filters are hiding rows, phrased for a person.
+
+        An empty grid with a filter on looks exactly like an empty grid with
+        nothing in it, and the difference matters enormously: one means "no
+        such mail", the other means "you have a search box filled in".
+        """
+        names = []
+        if self._text:
+            names.append(f"the search for \u201c{self._text}\u201d")
+        if self._category:
+            names.append(f"the {self._category} category")
+        if self._hide_non_job:
+            names.append("showing job mail only")
+        if self._only_selected:
+            names.append("showing ticked rows only")
+        if self._accounts:
+            names.append("the mailbox filter")
+        return names
+
+    def clear_filters(self) -> None:
+        """Undo every one of them at once."""
+        self._text = ""
+        self._category = None
+        self._hide_non_job = False
+        self._only_selected = False
+        self._accounts = set()
         self.invalidate()
 
     def filterAcceptsRow(self, source_row: int, parent: QModelIndex) -> bool:  # noqa: N802

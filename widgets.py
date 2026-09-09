@@ -14,7 +14,7 @@ import html as html_module
 import re
 import textwrap
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 from PySide6.QtCore import QDate, QEvent, QObject, QRect, QSize, Qt
 from PySide6.QtGui import (QColor, QFont, QFontDatabase, QFontMetrics, QIcon,
@@ -61,6 +61,40 @@ EMPTY_STATE = (
     "Messages are read without being marked as read, and nothing moves "
     "until you tick it.</span></div>"
 )
+
+#: Shown after a scan that found nothing, which is not the same thing as
+#: never having scanned - and the advice for it is different.
+NOTHING_FOUND = (
+    "<div style='text-align:center;line-height:170%'>"
+    "<span style='font-size:15px'><b>No messages in this window</b></span><br>"
+    "<span style='opacity:0.7'>Nothing arrived in the time range you picked. "
+    "Try a wider one,<br>or check that the right mailbox is selected."
+    "</span></div>"
+)
+
+
+def describe(widget, name: str, hint: str = "") -> None:
+    """Give a control a name a screen reader can read out.
+
+    VoiceOver falls back to the visible text, which is fine for a button
+    labelled "Scan & Analyze" and useless for a magnifying-glass icon, a bare
+    combo box, or a table nobody has labelled. Where a tooltip already says
+    the right thing it doubles as the description, so the two cannot drift.
+    """
+    widget.setAccessibleName(name)
+    hint = hint or widget.toolTip()
+    if hint:
+        widget.setAccessibleDescription(hint)
+
+
+def _one_of(names: Sequence[str]) -> str:
+    """Join a list the way a person would say it out loud."""
+    names = [n for n in names if n]
+    if not names:
+        return "a filter"
+    if len(names) == 1:
+        return names[0]
+    return ", ".join(names[:-1]) + " and " + names[-1]
 
 
 # ==========================================================================
