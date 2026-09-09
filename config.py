@@ -187,6 +187,10 @@ class Settings:
     #: On by default: a sorter that keeps making the same mistake after being
     #: told is the single most annoying thing one can do.
     learn_from_corrections: bool = True
+    #: Whether verdicts from earlier scans may be reused when the message and
+    #: the settings behind them have not changed. On by default: re-reading
+    #: the same six days every morning is the common case, not the exception.
+    reuse_verdicts: bool = True
 
     last_window: str = TimeWindow.LAST_24_HOURS.name
     custom_start: str = ""
@@ -320,7 +324,8 @@ class Settings:
                     "hide_non_job", "fallback_to_rules", "auto_file_background",
                     "background_agent", "menu_bar_icon", "close_to_menu_bar",
                     "start_in_menu_bar", "readable", "help_mode", "auto_reply",
-                    "row_lines_auto", "learn_from_corrections"):
+                    "row_lines_auto", "learn_from_corrections",
+                    "reuse_verdicts"):
             data[key] = bool(data[key])
         settled = Settings(**data)
         settled._sync_mailboxes()

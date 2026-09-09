@@ -1190,6 +1190,15 @@ class MainWindow(QMainWindow):
         scan_action.triggered.connect(self.start_scan)
         file_menu.addAction(scan_action)
 
+        rescan_action = QAction("Scan && &Re-analyze Everything", self)
+        # Not Ctrl+Shift+R, which is Reply. Qt resolves a duplicate shortcut
+        # by firing neither, so a clash here would silently break both.
+        rescan_action.setShortcut(QKeySequence("Ctrl+Alt+R"))
+        rescan_action.setToolTip(
+            "Scan without reusing any verdict kept from an earlier run.")
+        rescan_action.triggered.connect(self.rescan_everything)
+        file_menu.addAction(rescan_action)
+
         apply_action = QAction("&Apply Approved Folder Moves", self)
         apply_action.setShortcut(QKeySequence("Ctrl+Return"))
         apply_action.triggered.connect(self.apply_moves)
@@ -1882,7 +1891,23 @@ class MainWindow(QMainWindow):
 
     # -- scanning --------------------------------------------------------
     @Slot()
+    def rescan_everything(self) -> None:
+        """Scan without reusing anything kept from a previous run.
+
+        The escape hatch for the case the cache cannot detect on its own:
+        something changed on the provider's side that the recipe hash has no
+        way of seeing.
+        """
+        self._begin_scan(reuse_verdicts=False)
+
+    @Slot()
     def start_scan(self) -> None:
+        # No parameters, deliberately. This is connected to clicked and to
+        # triggered, both of which emit a bool - which would arrive as the
+        # first positional argument and quietly turn the cache off.
+        self._begin_scan()
+
+    def _begin_scan(self, reuse_verdicts: Optional[bool] = None) -> None:
         if self._busy():
             return
         if self.demo:
@@ -1934,6 +1959,7 @@ class MainWindow(QMainWindow):
             window_start=start,
             window_end=end,
             parent=self,
+            reuse_verdicts=reuse_verdicts,
         )
         self._register(self.scan_worker)
         self.scan_worker.progress.connect(self._on_progress)
