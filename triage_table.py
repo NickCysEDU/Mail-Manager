@@ -626,6 +626,10 @@ class PreviewPane(QWidget):
         self.reasoning_view.setOpenExternalLinks(True)
 
         self.folder_combo = QComboBox()
+        self.folder_combo.setToolTip(
+            "Where this message will go when you press Apply. Change it to "
+            "override the suggestion - the app remembers, and files the next "
+            "message from this sender the same way.")
         self.folder_combo.setEditable(True)
         self.folder_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.folder_combo.setMinimumWidth(280)
@@ -633,6 +637,9 @@ class PreviewPane(QWidget):
 
         self.reset_button = QToolButton()
         self.reset_button.setText("Use AI suggestion")
+        self.reset_button.setToolTip(
+            "Undo your override for this message and go back to where the "
+            "analysis wanted to put it.")
         self.reset_button.clicked.connect(self._reset_override)
 
         # Why a row cannot be ticked, and the button that changes it. A row

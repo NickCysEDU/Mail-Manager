@@ -306,6 +306,9 @@ class MainWindow(QMainWindow):
         self.empty_label.setTextFormat(Qt.TextFormat.RichText)
         self.empty_label.setWordWrap(True)
         self.clear_filters_button = QPushButton("Clear filters")
+        self.clear_filters_button.setToolTip(
+            "Show every message again: clear the search box, the category "
+            "filter and the mailbox filter.")
         self.clear_filters_button.setVisible(False)
         self.clear_filters_button.clicked.connect(self._clear_filters)
 
@@ -549,6 +552,9 @@ class MainWindow(QMainWindow):
             button.setCheckable(True)
             button.setAutoExclusive(True)
             button.clicked.connect(lambda checked, w=window: self._window_selected(w))
+            button.setToolTip(
+                f"Read mail from the last {window.label.lower()}. Nothing is "
+                "marked as read, and nothing moves until you tick it.")
             self.window_buttons[window] = button
             row.addWidget(button)
         self.window_buttons[self.settings.window].setChecked(True)
@@ -561,8 +567,10 @@ class MainWindow(QMainWindow):
         # _sync_range_visibility turns it on the first time the fields show.
         self.start_date = QDateEdit()
         self.start_date.setDisplayFormat("d MMM yy")
+        self.start_date.setToolTip("The first day to read, included.")
         self.end_date = QDateEdit()
         self.end_date.setDisplayFormat("d MMM yy")
+        self.end_date.setToolTip("The last day to read, included.")
         today = QDate.currentDate()
         self.start_date.setDate(_stored_date(self.settings.custom_start, today.addDays(-7)))
         self.end_date.setDate(_stored_date(self.settings.custom_end, today))
@@ -629,6 +637,9 @@ class MainWindow(QMainWindow):
 
         # Only worth the space once there is more than one mailbox.
         self.account_button = QToolButton()
+        self.account_button.setToolTip(
+            "Which mailboxes the next scan reads. Only shown when you have "
+            "more than one.")
         self.account_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.account_menu = QMenu(self)
         self.account_button.setMenu(self.account_menu)
@@ -1185,6 +1196,9 @@ class MainWindow(QMainWindow):
         row.addWidget(self.search_edit)
 
         self.category_filter = QComboBox()
+        self.category_filter.setToolTip(
+            "Show only one category at a time. The list is built from what "
+            "this scan actually found.")
         self.category_filter.addItem("All categories", None)
         self.category_filter.currentIndexChanged.connect(
             lambda: self.proxy.set_category_filter(self.category_filter.currentData())
@@ -1193,6 +1207,8 @@ class MainWindow(QMainWindow):
 
         # One "Show" menu instead of a row of competing checkboxes.
         self.show_combo = QComboBox()
+        self.show_combo.setToolTip(
+            "Narrow the table to job mail, or to the rows you have ticked.")
         self.show_combo.addItem("Show: everything", SHOW_ALL)
         self.show_combo.addItem("Show: job mail only", SHOW_JOB_ONLY)
         self.show_combo.addItem("Show: ticked only", SHOW_SELECTED)
@@ -1205,6 +1221,8 @@ class MainWindow(QMainWindow):
         # one at a time, so it gets its own control rather than reusing the
         # scan picker.
         self.view_button = QToolButton()
+        self.view_button.setToolTip(
+            "Which mailboxes' messages are shown in the table.")
         self.view_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.view_menu = QMenu(self)
         self.view_button.setMenu(self.view_menu)
@@ -1212,7 +1230,9 @@ class MainWindow(QMainWindow):
 
         self.columns_button = QToolButton()
         self.columns_button.setText("Columns")
-        self.columns_button.setToolTip("Show or hide columns in the table")
+        self.columns_button.setToolTip(
+            "Show or hide columns. Right-clicking the table header does this "
+            "too, and can reset the widths.")
         self.columns_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.columns_menu = QMenu(self)
         self.columns_button.setMenu(self.columns_menu)
@@ -1229,6 +1249,9 @@ class MainWindow(QMainWindow):
         row.addWidget(self.select_high_button)
 
         self.deselect_button = QPushButton("Clear ticks")
+        self.deselect_button.setToolTip(
+            "Untick every message. Nothing has moved, so this only changes "
+            "what Apply would do.")
         self.deselect_button.clicked.connect(lambda: self.model.set_all_approved(False))
         row.addWidget(self.deselect_button)
 
