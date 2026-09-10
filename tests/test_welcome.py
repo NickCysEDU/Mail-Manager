@@ -165,7 +165,9 @@ class TestChoosingWhichFoldersToBuild:
         for button in page.choice.buttons():
             if button.property("profile") == "everything":
                 button.setChecked(True)
-        assert len(page.chosen_topics()) == 12
+        # From the list rather than a number, so adding a topic
+        # never breaks this again.
+        assert len(page.chosen_topics()) == len(profiles.ALL_TOPICS)
 
 
 class TestWhatSetupWritesDown:
@@ -183,7 +185,7 @@ class TestWhatSetupWritesDown:
         assert [a.address for a in saved.mailboxes] == ["a@gmail.com",
                                                         "b@outlook.com"]
         assert saved.sort_profile == "everything"
-        assert len(saved.topics) == 12
+        assert len(saved.topics) == len(profiles.ALL_TOPICS)
         assert store.get_icloud_password("a@gmail.com") == "gmail-secret"
         assert store.get_icloud_password("b@outlook.com") == "outlook-secret"
 

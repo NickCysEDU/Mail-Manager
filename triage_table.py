@@ -595,6 +595,8 @@ class PreviewPane(QWidget):
     """Side-by-side message text and the backend's reasoning."""
 
     overrideChanged = Signal(int, object)  # source row, folder or None
+    #: "Sort this mail too" - the window turns non-job routing on.
+    sortNonJobRequested = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -633,6 +635,28 @@ class PreviewPane(QWidget):
         self.reset_button.setText("Use AI suggestion")
         self.reset_button.clicked.connect(self._reset_override)
 
+        # Why a row cannot be ticked, and the button that changes it. A row
+        # that sits there inert with no explanation is the single most
+        # confusing thing the window can show, and it is the default state
+        # for every message that is not job mail.
+        self.inert_note = QLabel("")
+        self.inert_note.setWordWrap(True)
+        self.inert_note.setTextFormat(Qt.TextFormat.RichText)
+        self.inert_note.setProperty("dim", "true")
+        self.sort_these_button = QToolButton()
+        self.sort_these_button.setText("Sort this mail too")
+        self.sort_these_button.setToolTip(
+            "File non-job mail by topic into Sorted Mail, instead of leaving "
+            "it in the inbox.")
+        self.sort_these_button.clicked.connect(self.sortNonJobRequested)
+        self.inert_row = QWidget()
+        inert_layout = QHBoxLayout(self.inert_row)
+        inert_layout.setContentsMargins(0, 0, 0, 0)
+        inert_layout.setSpacing(8)
+        inert_layout.addWidget(self.inert_note, 1)
+        inert_layout.addWidget(self.sort_these_button)
+        self.inert_row.setVisible(False)
+
         left = QWidget()
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
@@ -662,6 +686,7 @@ class PreviewPane(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 8, 10, 8)
         layout.addWidget(self.header)
+        layout.addWidget(self.inert_row)
         layout.addLayout(folder_row)
         layout.addWidget(self.splitter, 1)
 
@@ -694,6 +719,7 @@ class PreviewPane(QWidget):
         self._row = None
         self._item = None
         self._prompt_text = ""
+        self.inert_row.setVisible(False)
         self.header.setText(
             "<i>Select a message above to compare its text against the analysis.</i>"
         )
@@ -707,6 +733,13 @@ class PreviewPane(QWidget):
         self._item = item
         self._prompt_text = prompt_text
         message = item.email
+
+        reason = item.why_not_actionable
+        self.inert_row.setVisible(bool(reason))
+        if reason:
+            self.inert_note.setText(_html(reason))
+            # The button only helps for the one cause it can actually fix.
+            self.sort_these_button.setVisible(item.left_because_not_job)
 
         badge = _disposition_badge(item)
         self.header.setText(

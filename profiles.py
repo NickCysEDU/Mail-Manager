@@ -32,6 +32,7 @@ ALL_TOPICS: Tuple[OtherCategory, ...] = (
     OtherCategory.SHIPPING,
     OtherCategory.TRAVEL,
     OtherCategory.EVENT,
+    OtherCategory.CHURCH,
     OtherCategory.WORK,
     OtherCategory.PERSONAL,
     OtherCategory.SOCIAL,

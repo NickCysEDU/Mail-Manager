@@ -162,6 +162,10 @@ class OtherCategory(str, Enum):
     SOCIAL = "SOCIAL"
     EVENT = "EVENT"
     TRAVEL = "TRAVEL"
+    #: Mail from a church or place of worship: services, rotas, small groups,
+    #: giving, prayer. It overlaps Events, Newsletters and Personal by shape
+    #: and is none of them by subject, which is exactly why it earns its own.
+    CHURCH = "CHURCH"
     SPAM = "SPAM"
     OTHER = "OTHER"
 
@@ -199,6 +203,7 @@ _OTHER_LABELS: Dict["OtherCategory", str] = {
     OtherCategory.SOCIAL: "Social",
     OtherCategory.EVENT: "Events",
     OtherCategory.TRAVEL: "Travel",
+    OtherCategory.CHURCH: "Church",
     OtherCategory.SPAM: "Spam & Phishing",
     OtherCategory.OTHER: "Other",
 }
@@ -216,6 +221,7 @@ _OTHER_LEAF: Dict["OtherCategory", str] = {
     OtherCategory.SOCIAL: "Social",
     OtherCategory.EVENT: "Events",
     OtherCategory.TRAVEL: "Travel",
+    OtherCategory.CHURCH: "Church",
     OtherCategory.SPAM: "Junk",
     OtherCategory.OTHER: "Other",
 }
@@ -911,7 +917,57 @@ class TriageItem:
             return "Moved"
         if self.classification.error:
             return "Analysis failed"
+        if self.left_because_not_job:
+            # "Leave in place" reads as a fact about the message. It is a
+            # setting, and somebody staring at a row that will not tick
+            # deserves to be told which one.
+            return "Not job mail - not sorted"
+        if self.held_back_by_confidence:
+            return "Not sure enough to file"
         return self.disposition.label
+
+    @property
+    def left_because_not_job(self) -> bool:
+        """Whether this row is inert only because non-job mail is left alone.
+
+        The distinction that matters to a person: there is nothing wrong with
+        this message and nothing wrong with the analysis. It is sitting still
+        because of a choice, and the choice can be changed in one click.
+        """
+        return (self.disposition is Disposition.LEAVE
+                and not self.classification.is_job_related
+                and self.classification.error is None
+                and self.non_job_routing is NonJobRouting.LEAVE)
+
+    @property
+    def held_back_by_confidence(self) -> bool:
+        """Non-job mail that would be filed if the sorter were surer.
+
+        The second reason a row sits still, and the one that looks most like
+        a bug: the setting says file it, and it is not being filed.
+        """
+        return (self.disposition is Disposition.LEAVE
+                and not self.classification.is_job_related
+                and self.classification.error is None
+                and self.non_job_routing is NonJobRouting.FILE
+                and self.classification.confidence_score < self.threshold)
+
+    @property
+    def why_not_actionable(self) -> str:
+        """One sentence on why this row cannot be ticked, or empty."""
+        if self.is_actionable or self.moved:
+            return ""
+        # A failed analysis is not one of these: it routes to Needs Review,
+        # which is a folder, so such a row can be ticked like any other.
+        if self.left_because_not_job:
+            return ("This is not job mail, and non-job mail is being left "
+                    "where it is. Change that under Sorting.")
+        if self.held_back_by_confidence:
+            return (f"The sorter was {self.classification.confidence_percent:.0f}% "
+                    f"sure and files non-job mail at "
+                    f"{self.threshold * 100:.0f}%. Move it by hand below, or "
+                    "lower the threshold in Settings.")
+        return "There is no folder for this message."
 
 
 @dataclass(frozen=True)
