@@ -7,6 +7,47 @@ future session should pick up.
 
 ---
 
+## Round two: non-job mail, church, and going public
+
+**Non-job mail had no menu.** Job mail could be ticked and filed in one
+click; everything else sat in the table doing nothing, could not be ticked,
+and said "Leave in place" without any hint that this was a setting rather
+than a fact. The setting lived in two places, one of them a submenu inside
+the button for choosing which AI to use. There is now a **Sorting** button in
+the toolbar holding all three questions - what to sort, what happens to the
+rest, which topics earn a folder - and the third of those had no interface at
+all before. A row that will not tick says which of the two reasons applies and
+offers to change it.
+
+**Church is a topic.** 160 signals, and the gap that made it work was
+denominations - the word in the masthead and the footer of every parish
+mailing, and the most portable vocabulary in the whole table. Four rows in the
+labelled set were parish mail labelled Newsletter and Personal because Church
+did not exist when they were labelled; all four now classify correctly, and
+real mail wrongly sent to Junk fell from 0.10% to 0.07%.
+
+**Form loses to subject.** Newsletter, Promotion and Personal describe how a
+message is written; every other topic describes what it is about. A parish
+bulletin is a newsletter in form and church mail in substance. So a subject
+topic with real evidence now beats a form topic, and that is the rule that
+made the church newsletters land correctly.
+
+**The repository can be published.** The labelled set was built from a real
+inbox and named the people who wrote to it, the companies that interviewed
+them, the church they attend, and two people who had died. tools/anonymise.py
+replaces the names and keeps the language, verified by re-scoring rather than
+by reading: 87.3% exact, unchanged. Four wrong versions were caught that way.
+It refuses to guess at names in running prose and flags those rows instead;
+the two it flagged were rewritten by hand.
+
+**Everything that can explain itself does.** Nineteen of twenty-nine controls
+in the main window had no tooltip, which in help mode means no explanation at
+all. tests/test_first_run.py walks every clickable, typeable and draggable
+widget in the window, the preview and the settings dialog, and fails on any
+that cannot explain itself.
+
+---
+
 ## What changed, in one paragraph each
 
 **The window is four files instead of one.** `gui.py` had reached 6,541 lines.
@@ -62,19 +103,19 @@ these.
 
 | Set | Job vs not | Exact category | Of those it filed |
 |---|---|---|---|
-| labelled (102) | 98.0% | 87.3% | 58/59 — 98.3% |
+| labelled (102) | 99.0% | 87.3% | 54/55 — 98.2% |
 | adversarial (39) | 87.2% | 59.0% | nothing filed; all held for review |
 | held out (24) | 70.8% | 37.5% | nothing filed |
 | meetings (15) | 100% | 80.0% | 2/2 |
 | acknowledgements (11) | 100% | 100% | 7/7 |
 
-**SpamAssassin corpus**, 6,046 real messages: 0 unreadable, 145 messages a
-second, **0 of 4,150 ham messages filed as job mail**, 4 sent to Junk (0.10%).
-That last row is the one that matters and it must stay at zero.
+**SpamAssassin corpus**, 6,046 real messages: 0 unreadable, ~140 messages a
+second, **0 of 4,150 ham messages filed as job mail**, 3 sent to Junk (0.07%).
+That first figure is the one that matters and it must stay at zero.
 
 **Speed.** Rules engine 10.1 ms per message. Lexicon opens in 38 ms using
 1.95 MB, down from 70 ms and 10.5 MB, and neither number now grows with the
-table. Test suite 2,212 tests in about three minutes on four workers.
+table. Test suite 2,291 tests in about three minutes on four workers.
 
 ---
 
@@ -97,6 +138,17 @@ table. Test suite 2,212 tests in about three minutes on four workers.
   conditional phrases first written for the adversarial set were shaped too
   closely to it; removing them changed none of the four numbers above. The
   general ones did all the work.
+- **`tools/anonymise.py` protects what the sorter reads, taken from the
+  engine.** Rewriting a host the rules engine has a signal for changes the
+  verdict and the fixture then measures a different app. That list is derived
+  from `SCHEDULING_LINK_DOMAINS`, `ASSESSMENT_LINK_DOMAINS` and every
+  sender-field signal, never typed out beside it.
+- **Anonymising is verified by re-scoring, not by reading.** Four wrong
+  versions were caught that way, including one that took the set from 87% to
+  57%. If a score moves, a signal was keyed on somebody's name.
+- **The eval fixtures are the only place `.example` is not required.** Public
+  vendor names - Workday, iCIMS, Calendly, Instagram - stay, because the
+  sorter names them. `tests/test_privacy.py` knows the difference.
 
 ---
 
@@ -141,6 +193,28 @@ table. Test suite 2,212 tests in about three minutes on four workers.
 - [x] **23.** `personal_register` no longer fires on mail from a careers
   mailbox.
 
+### Done in round two
+
+- [x] **Non-job mail has a menu.** The Sorting button, holding what to sort,
+  what happens to the rest, and which topics get a folder.
+- [x] **A row that will not tick says why**, and offers the one-click fix.
+- [x] **Church is a topic**, with 160 signals, trained against a real parish
+  mailing list.
+- [x] **Form loses to subject** when the subject has real evidence.
+- [x] **Every control can explain itself**, with a test that keeps it that way.
+- [x] **The fixtures carry no real identities**, with a test on every run.
+- [x] **CI**: tests, eval scores and a self-test on macOS; pyflakes on Linux.
+- [x] **The log is `0600`** and no longer records a subject line anywhere.
+- [x] **The README says what is true** - test count, accuracy, topic count,
+  and where the sorting control actually is.
+- [x] **The screenshot is drawn by `./dev screenshot`**, from the app, on any
+  machine, in two seconds.
+- [x] **The two lexicon forms are checked to be the same build**, so a
+  rebuilt JSON with a stale blob cannot ship silently.
+- [x] **The DMG was built, mounted, installed and run** - the installed copy
+  reports itself frozen, finds its own certificates, and loads the mapped
+  lexicon.
+
 ### Worth doing next
 
 Ordered by what they would be worth, not by effort.
@@ -163,6 +237,15 @@ Ordered by what they would be worth, not by effort.
   `forget_mailbox` exists and nothing calls it.
 - [ ] **No test opens the built `.app`.** Every failure mode of PyInstaller
   hidden imports is invisible until somebody runs the bundle by hand.
-- [ ] **`rules_engine.py` is 2,700 lines** and the signal tables are most of it.
+- [ ] **`rules_engine.py` is 2,900 lines** and the signal tables are most of it.
   They would read better as data than as literals — but only if something needs
   to edit them at run time, which nothing does yet.
+- [ ] **The corrections memory could learn a topic, not just a folder.** It
+  already knows a church sender files to Church; it does not yet conclude that
+  the *next* message from that sender is church mail. That is the mechanism
+  that would have caught the two parish notices with no church vocabulary in
+  them at all.
+- [ ] **The app is signed ad-hoc**, so Gatekeeper refuses it until somebody
+  right-clicks and chooses Open. A paid Apple Developer certificate and
+  notarisation would remove that, and it is the single biggest thing standing
+  between this and "double-click to install".
