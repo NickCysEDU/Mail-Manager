@@ -37,6 +37,7 @@ Nothing is ever moved without an explicit tick in the table.
 - [Setup, and running natively](#setup-and-running-natively)
 - [Which build is this](#which-build-is-this)
 - [Troubleshooting](#troubleshooting)
+- [Handoff, and what is next](HANDOFF.md)
 
 ---
 
@@ -1029,7 +1030,10 @@ Efficiency, in the places it actually shows:
 | File | Responsibility |
 |---|---|
 | `main.py` | Entry point, logging, crash dialog, `--self-test` |
-| `gui.py` | Table model, filter proxy, confidence delegate, preview pane, settings dialog, main window |
+| `gui.py` | The main window: toolbar, menus, workers, and everything that co-ordinates the rest |
+| `widgets.py` | Small shared pieces — colours, fonts, selectable message boxes, helpers |
+| `triage_table.py` | The table model, the filter proxy, the three delegates, the preview pane |
+| `settings_dialog.py` | Everything a person configures, plus the local-model manager |
 | `imap_engine.py` | iCloud IMAP: modified UTF-7, `LIST` parsing, fetch, folder creation, the move pipeline |
 | `llm_engine.py` | System prompt, JSON schema, retries, concurrency, cost — backend independent |
 | `providers.py` | The five backends and the abortable HTTP transport |
@@ -1040,9 +1044,17 @@ Efficiency, in the places it actually shows:
 | `html_utils.py` | HTML → text, hidden-preheader removal, link recovery, truncation |
 | `config.py` | Settings file (atomic, `0600`) and Keychain credential store |
 | `workers.py` | QThread wrappers with cooperative cancellation, move planning |
+| `pipeline.py` | The producer/consumer pair that lets fetching and classifying overlap |
+| `verdict_cache.py` | Verdicts kept between scans, keyed on mailbox, UID and a settings hash |
+| `corrections.py` | What the app has learned from being corrected, and when it may act on it |
+| `conversations.py` | Threading: which messages are the same conversation |
+| `lexicon.py` | World knowledge — sectors, brands, airports — behind a lookup |
+| `lexicon_blob.py` | The memory-mapped form of that, so opening it costs nothing |
 | `demo_data.py` | The bundled sample inbox, shared by demo mode, devscan and the tests |
 | `dev` | One entry point for every development task |
 | `tools/devscan.py` | The read-only terminal pipeline runner |
+| `tools/tune.py` | Scores the sorter against your own inbox, writing nothing into the repo |
+| `tools/build_lexicon.py` | Rebuilds `data/lexicon.json.gz` and `data/lexicon.bin` |
 | `tools/make_icon.py` | Draws `assets/icon.icns` with QPainter |
 
 `models.py` deliberately imports nothing from Qt, `imaplib`, or `anthropic`, so
