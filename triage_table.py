@@ -800,24 +800,38 @@ def _disposition_badge(item: TriageItem) -> str:
 
 
 def _runners_up(classification) -> str:
-    """The categories that nearly won, and by how little.
+    """The categories that did not win, and how close they came.
 
     A verdict that beat its nearest rival by a tenth of a point is a
     different thing from one that beat it by five, and the confidence number
-    alone does not distinguish them. Shown only when there is a contest.
+    alone does not distinguish them.
+
+    The winner is excluded by name rather than by being the top score,
+    because it is not always the top score: precedence can hand the decision
+    to a lower-scoring category, and listing the winner as its own runner-up
+    is how that bug read on screen.
     """
     scores = {name: value for name, value in (classification.scores or {}).items()
               if value > 0}
-    if len(scores) < 2:
+    won = (classification.category.value if classification.is_job_related
+           else classification.other_category.value)
+    rivals = {name: value for name, value in scores.items() if name != won}
+    if not rivals:
         return ""
-    ranked = sorted(scores.items(), key=lambda pair: -pair[1])
-    winner = ranked[0][1] or 1.0
+    top = max(scores.values()) or 1.0
+    ranked = sorted(rivals.items(), key=lambda pair: -pair[1])
     parts = []
-    for name, value in ranked[1:4]:
-        share = value / winner
-        parts.append(f"{_html(name.replace('_', ' ').title())} "
-                     f"<span style='opacity:0.7'>({share * 100:.0f}% of the "
-                     "winner)</span>")
+    for name, value in ranked[:3]:
+        share = value / top
+        label = _html(name.replace("_", " ").title())
+        if value > scores.get(won, 0.0):
+            # It outscored the winner and lost on precedence. Saying so is
+            # the difference between an explanation and a puzzle.
+            parts.append(f"{label} <span style='opacity:0.7'>(scored higher; "
+                         "outranked)</span>")
+        else:
+            parts.append(f"{label} <span style='opacity:0.7'>"
+                         f"({share * 100:.0f}% of the winner)</span>")
     return "<br>".join(parts)
 
 
