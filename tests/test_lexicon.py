@@ -37,7 +37,7 @@ class TestTheFileItself:
         assert len(data["airports"]) > 3_000
 
     def test_it_is_read_once(self):
-        lexicon._data.cache_clear()
+        lexicon.reset()
         first = lexicon._data()
         assert lexicon._data() is first
 
@@ -134,7 +134,7 @@ class TestWordsBeatShape:
 
 class TestItDegradesRatherThanBreaking:
     def test_a_missing_file_leaves_the_sorter_working(self, monkeypatch, tmp_path):
-        lexicon._data.cache_clear()
+        lexicon.reset()
         monkeypatch.setattr(lexicon, "_root", lambda: tmp_path)
         monkeypatch.setattr(lexicon, "__file__", str(tmp_path / "lexicon.py"))
         try:
@@ -148,15 +148,15 @@ class TestItDegradesRatherThanBreaking:
                 sender="no-reply@bank.example")
             assert got.other_category is OtherCategory.SECURITY
         finally:
-            lexicon._data.cache_clear()
+            lexicon.reset()
 
     def test_a_damaged_file_is_ignored(self, monkeypatch, tmp_path):
         (tmp_path / "data").mkdir()
         (tmp_path / "data" / "lexicon.json.gz").write_bytes(b"not a gzip file")
-        lexicon._data.cache_clear()
+        lexicon.reset()
         monkeypatch.setattr(lexicon, "_root", lambda: tmp_path)
         monkeypatch.setattr(lexicon, "__file__", str(tmp_path / "lexicon.py"))
         try:
             assert lexicon.available() is False
         finally:
-            lexicon._data.cache_clear()
+            lexicon.reset()
