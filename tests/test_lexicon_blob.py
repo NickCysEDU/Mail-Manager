@@ -162,6 +162,37 @@ class TestTheRealOne:
             for code in list(payload["airports"])[:2000]:
                 assert code in airports
 
+    def test_the_two_forms_are_the_same_build(self):
+        """A rebuilt JSON with a stale blob would ship the wrong tables.
+
+        tools/build_lexicon.py writes both and nothing else does, so the only
+        way they diverge is somebody rebuilding one by hand. The app prefers
+        the blob, so a stale one is silent: the same app, quietly a release
+        behind on what it knows about the world.
+        """
+        import gzip
+        import json
+        from pathlib import Path
+
+        import lexicon
+        root = Path(lexicon.__file__).resolve().parent
+        blob_path = root / "data" / "lexicon.bin"
+        json_path = root / "data" / "lexicon.json.gz"
+        if not (blob_path.exists() and json_path.exists()):
+            pytest.skip("both forms are needed for this comparison")
+
+        with gzip.open(json_path, "rt", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        with open_blob(blob_path) as blob:
+            meta = blob.table("meta")
+            assert meta.get("built") == payload.get("built"), (
+                "data/lexicon.bin and data/lexicon.json.gz were built at "
+                "different times - run tools/build_lexicon.py")
+            for section, expected in (("brands", payload["brands"]),
+                                      ("domains", payload["domains"]),
+                                      ("airports", payload["airports"])):
+                assert len(blob.table(section)) == len(expected), section
+
     def test_it_is_smaller_in_memory_than_the_parsed_form(self):
         """The whole reason it exists."""
         import lexicon
