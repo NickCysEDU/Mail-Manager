@@ -118,6 +118,21 @@ log = logging.getLogger(__name__)
 #: since been touched elsewhere.
 UNDO_DEPTH = 10
 
+#: What each choice actually means, said plainly. The enum labels are short
+#: enough to fit in a menu; these are what somebody needs to choose between
+#: them, and they are the difference between a setting and a decision.
+_ROUTING_HELP = {
+    NonJobRouting.LEAVE:
+        "Nothing that is not job mail is touched. It stays in your inbox and "
+        "cannot be ticked - which is why those rows look inert.",
+    NonJobRouting.REVIEW:
+        "Non-job mail is gathered into Job Search / Needs Review so you can "
+        "look through it in one place.",
+    NonJobRouting.FILE:
+        "Non-job mail is filed by topic into Sorted Mail - receipts with "
+        "receipts, travel with travel - and can be ticked like anything else.",
+}
+
 
 @dataclass
 class UndoBatch:
@@ -317,6 +332,8 @@ class MainWindow(QMainWindow):
 
         self.preview = PreviewPane()
         self.preview.overrideChanged.connect(self._override_changed)
+        self.preview.sortNonJobRequested.connect(
+            lambda: self._switch_routing(NonJobRouting.FILE))
 
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
@@ -599,6 +616,17 @@ class MainWindow(QMainWindow):
         self.model_button.setMenu(self.model_menu)
         row.addWidget(self.model_button)
 
+        # What gets sorted, and what happens to everything else. This used
+        # to be a submenu inside the model button - a menu about which AI to
+        # use - and a combo box on the Folders tab of Settings. Neither is
+        # where somebody looks when they are staring at a row that will not
+        # tick and wondering why.
+        self.sorting_button = QToolButton()
+        self.sorting_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.sorting_menu = QMenu(self)
+        self.sorting_button.setMenu(self.sorting_menu)
+        row.addWidget(self.sorting_button)
+
         # Only worth the space once there is more than one mailbox.
         self.account_button = QToolButton()
         self.account_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -622,6 +650,7 @@ class MainWindow(QMainWindow):
 
         self._sync_range_visibility()
         self._rebuild_account_menu()
+        self._rebuild_sorting_menu()
         return frame
 
     # -- model switcher --------------------------------------------------
@@ -651,17 +680,6 @@ class MainWindow(QMainWindow):
                 missing.triggered.connect(self.open_settings)
                 section.addAction(missing)
         self.model_menu.addSeparator()
-        profile_menu = self.model_menu.addMenu("What to sort")
-        for name, label, blurb in profiles.choices():
-            action = QAction(menu_text(label), self)
-            action.setCheckable(True)
-            action.setChecked(name == self.settings.sort_profile)
-            action.setStatusTip(blurb)
-            action.setToolTip(blurb)
-            action.triggered.connect(
-                lambda checked=False, p=name: self._switch_profile(p))
-            profile_menu.addAction(action)
-
         rules_menu = self.model_menu.addMenu("Local rule set (field)")
         for name, label, blurb in rulesets.choices():
             action = QAction(menu_text(label), self)
@@ -677,6 +695,135 @@ class MainWindow(QMainWindow):
         more.triggered.connect(lambda: self.open_settings(tab=1))
         self.model_menu.addAction(more)
         self._refresh_model_button()
+
+    # -- what gets sorted -------------------------------------------------
+    def _rebuild_sorting_menu(self) -> None:
+        """Everything that decides where mail goes, in one menu.
+
+        Three questions, in the order somebody actually asks them: what am I
+        sorting, what happens to the rest, and which of "the rest" is worth a
+        folder. They were previously in three different places, one of them a
+        submenu of the model picker, and the third had no interface at all.
+        """
+        self.sorting_menu.clear()
+
+        heading = self.sorting_menu.addAction("What to sort")
+        heading.setEnabled(False)
+        for name, label, blurb in profiles.choices():
+            action = QAction(menu_text(label), self)
+            action.setCheckable(True)
+            action.setChecked(name == self.settings.sort_profile)
+            action.setStatusTip(blurb)
+            action.setToolTip(blurb)
+            action.triggered.connect(
+                lambda checked=False, p=name: self._switch_profile(p))
+            self.sorting_menu.addAction(action)
+
+        self.sorting_menu.addSeparator()
+        heading = self.sorting_menu.addAction("Everything that is not job mail")
+        heading.setEnabled(False)
+        for member in NonJobRouting:
+            action = QAction(menu_text(member.label), self)
+            action.setCheckable(True)
+            action.setChecked(member is self.settings.routing)
+            action.setToolTip(_ROUTING_HELP.get(member, ""))
+            action.setStatusTip(_ROUTING_HELP.get(member, ""))
+            action.triggered.connect(
+                lambda checked=False, r=member: self._switch_routing(r))
+            self.sorting_menu.addAction(action)
+
+        # The topic list only means anything when non-job mail is being
+        # filed, so it is only offered then. An empty submenu that does
+        # nothing is worse than no submenu.
+        if self.settings.routing is NonJobRouting.FILE:
+            self.sorting_menu.addSeparator()
+            topics_menu = self.sorting_menu.addMenu("Which topics get a folder")
+            chosen = {t for t in self.settings.chosen_topics}
+            for topic in profiles.ALL_TOPICS:
+                action = QAction(menu_text(topic.label), self)
+                action.setCheckable(True)
+                action.setChecked(topic in chosen)
+                action.setToolTip(
+                    f"Mail about {topic.label.lower()} gets a "
+                    f"\u201c{topic.leaf}\u201d folder of its own. Unticked, it "
+                    "goes to Other.")
+                action.triggered.connect(
+                    lambda checked, t=topic: self._toggle_topic(t, checked))
+                topics_menu.addAction(action)
+            topics_menu.addSeparator()
+            every = topics_menu.addAction("Tick every topic")
+            every.triggered.connect(lambda: self._set_topics(profiles.ALL_TOPICS))
+            essentials = topics_menu.addAction("Just the essentials")
+            essentials.triggered.connect(
+                lambda: self._set_topics(profiles.ESSENTIAL_TOPICS))
+
+        self.sorting_menu.addSeparator()
+        more = QAction("Folder settings\u2026", self)
+        more.triggered.connect(lambda: self.open_settings(tab=2))
+        self.sorting_menu.addAction(more)
+        self._refresh_sorting_button()
+
+    def _refresh_sorting_button(self) -> None:
+        """Say what the current arrangement is, on the button itself."""
+        if not hasattr(self, "sorting_button"):
+            return
+        profile = self.settings.profile
+        routing = self.settings.routing
+        self.sorting_button.setText(menu_text(f"Sorting: {profile.label}"))
+        rest = {
+            NonJobRouting.LEAVE: "everything else is left where it is",
+            NonJobRouting.REVIEW: "everything else goes to Needs Review",
+            NonJobRouting.FILE: "everything else is filed by topic",
+        }[routing]
+        self.sorting_button.setToolTip(
+            f"<b>{_html(profile.label)}</b><br>{_html(profile.blurb)}"
+            f"<br><br>Right now, {rest}.<br><br>"
+            "Click to change what gets sorted and where the rest goes.")
+
+    @Slot(object)
+    def _switch_routing(self, routing) -> None:
+        """Change what happens to mail that is not job related."""
+        if routing is self.settings.routing:
+            return
+        self.settings.non_job_routing = routing.value
+        self._reroute_rows()
+        self._rebuild_sorting_menu()
+        self._append_log(f"Non-job mail: {routing.label}.")
+        self._set_status(f"Non-job mail: {routing.label.lower()}.")
+
+    def _toggle_topic(self, topic, wanted: bool) -> None:
+        chosen = [t for t in self.settings.chosen_topics]
+        if wanted and topic not in chosen:
+            chosen.append(topic)
+        elif not wanted and topic in chosen:
+            chosen.remove(topic)
+        self._set_topics(chosen)
+
+    def _set_topics(self, topics) -> None:
+        """Which topics earn a folder. Empty means the profile decides."""
+        wanted = [t for t in profiles.ALL_TOPICS if t in set(topics)]
+        self.settings.topics = [t.value for t in wanted]
+        self._reroute_rows()
+        self._rebuild_sorting_menu()
+
+    def _reroute_rows(self) -> None:
+        """Re-point every row without re-analyzing anything.
+
+        Where a message goes is a routing decision, not a classification one,
+        so changing it is instant: no mailbox, no model, no waiting. Making
+        that obvious is half the point of putting the control in the window.
+        """
+        self.settings = self.settings.normalized()
+        try:
+            self.settings.save()
+        except OSError as exc:
+            log.warning("Could not save settings: %s", exc)
+        self.folder_plan = self.settings.folder_plan(
+            self.folder_plan.delimiter if self.folder_plan else "/")
+        self._retarget_items()
+        self._refresh_folder_choices()
+        self._refresh_category_filter()
+        self._selection_changed()
 
     # -- mailbox switcher ------------------------------------------------
     def _set_scan_button(self, busy: bool) -> None:
@@ -941,7 +1088,9 @@ class MainWindow(QMainWindow):
             self.folder_plan.delimiter if self.folder_plan else "/")
         self._append_log(f"Sorting profile: {chosen.label}. {chosen.blurb}")
         self._retarget_items()
+        self._refresh_folder_choices()
         self._rebuild_model_menu()
+        self._rebuild_sorting_menu()
 
     def _retarget_items(self) -> None:
         """Re-file the rows already on screen under the new folder plan."""

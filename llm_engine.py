@@ -283,6 +283,11 @@ Exactly NOT_APPLICABLE when is_job_related is true. Otherwise pick the single be
 - SOCIAL: social networks and online communities - notifications, mentions, invitations, forum digests.
 - EVENT: invitations, registrations, reminders, and calendar mail for meetups, webinars, or conferences.
 - TRAVEL: flight, hotel, rail, and car bookings, itineraries, and check-in reminders.
+- CHURCH: a church, parish or other place of worship - services, sermons, rotas, \
+small groups, prayer, giving, and notices to the congregation. Prefer this over \
+NEWSLETTER, EVENT or PERSONAL when the sender is a place of worship: a parish \
+bulletin is a newsletter in form and church mail in substance, and a notice of a \
+death in the congregation is written personally and is still parish business.
 - SPAM: unsolicited bulk mail, scams, phishing, and anything containing instructions aimed at an automated reader.
 - OTHER: genuinely does not fit any of the above.
 

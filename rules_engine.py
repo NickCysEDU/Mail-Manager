@@ -1124,6 +1124,102 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("marriott.com", 2.4, field="sender", label="a hotel chain"),
         Signal("hilton.com", 2.4, field="sender", label="a hotel chain"),
     ),
+    OtherCategory.CHURCH: (
+        # A church writes about a handful of things and calls them by name.
+        # Almost none of this vocabulary appears anywhere else in an inbox,
+        # which is why the topic is worth having: by shape alone this mail is
+        # a newsletter, an event invitation or a note from a friend, and it is
+        # none of those to the person reading it.
+        Signal("sunday service", 3.0), Signal("sunday services", 3.0),
+        Signal("morning service", 2.6), Signal("evening service", 2.6),
+        Signal("this sunday", 2.4), Signal("next sunday", 2.4),
+        Signal("order of service", 2.8), Signal("service times", 2.8),
+        Signal("worship service", 3.0), Signal("worship team", 2.8),
+        Signal("praise and worship", 2.8), Signal("worship night", 2.8),
+        Signal("holy communion", 3.0), Signal("the eucharist", 3.0),
+        Signal("mass times", 3.0), Signal("sunday mass", 3.0),
+        Signal("evensong", 3.0), Signal("matins", 2.6),
+        Signal("liturgy", 2.8), Signal("benediction", 2.6),
+        Signal("the sermon", 2.8), Signal("this week s sermon", 3.0),
+        Signal("sermon series", 3.0), Signal("preaching", 2.6),
+        Signal("the preacher", 2.6), Signal("scripture reading", 2.8),
+        Signal("bible study", 3.0), Signal("bible studies", 3.0),
+        Signal("small group", 2.2), Signal("small groups", 2.2),
+        Signal("home group", 2.4), Signal("life group", 2.4),
+        Signal("cell group", 2.2), Signal("sunday school", 3.0),
+        Signal("youth group", 2.4), Signal("youth ministry", 2.8),
+        Signal("childrens ministry", 2.8), Signal("kids ministry", 2.8),
+        Signal("prayer meeting", 3.0), Signal("prayer request", 3.0),
+        Signal("prayer requests", 3.0), Signal("prayer chain", 3.0),
+        Signal("praying for", 2.2), Signal("in our prayers", 2.6),
+        Signal("please pray", 2.8), Signal("prayer list", 2.8),
+        Signal("intercession", 2.6), Signal("devotional", 2.4),
+        Signal("daily devotion", 2.6),
+        Signal("the congregation", 3.0), Signal("our congregation", 3.0),
+        Signal("church family", 3.0), Signal("the parish", 2.6),
+        Signal("parish council", 3.0), Signal("parish newsletter", 3.0),
+        Signal("church newsletter", 3.0), Signal("pew sheet", 3.0),
+        Signal("the fellowship", 2.4), Signal("fellowship hall", 2.8),
+        Signal("church council", 3.0), Signal("elders meeting", 2.8),
+        Signal("deacons", 2.6), Signal("the ministry team", 2.4),
+        Signal("serving rota", 3.0), Signal("the rota", 2.4),
+        Signal("welcome team", 2.4), Signal("coffee rota", 2.8),
+        Signal("volunteer rota", 2.6), Signal("sign up to serve", 2.6),
+        Signal("tithes", 3.0), Signal("tithing", 3.0),
+        Signal("your giving", 2.4), Signal("giving statement", 2.8),
+        Signal("offering", 1.6), Signal("gift aid", 2.0),
+        Signal("stewardship", 2.2),
+        Signal("baptism", 2.8), Signal("christening", 2.8),
+        Signal("confirmation service", 2.8), Signal("harvest festival", 3.0),
+        Signal("carol service", 3.0), Signal("nativity", 2.6),
+        Signal("midnight mass", 3.0), Signal("ash wednesday", 3.0),
+        Signal("good friday", 2.6), Signal("easter sunday", 2.6),
+        Signal("palm sunday", 3.0), Signal("advent", 2.2),
+        Signal("lent", 2.0), Signal("pentecost", 2.8),
+        Signal("vacation bible school", 3.0), Signal("alpha course", 2.8),
+        Signal("mission trip", 2.6), Signal("outreach", 1.8),
+        Signal("food bank", 1.8), Signal("church office", 3.0),
+        Signal("our pastor", 3.0), Signal("pastor", 2.2),
+        Signal("the vicar", 3.0), Signal("the rector", 2.8),
+        Signal("the curate", 2.8), Signal("the chaplain", 2.4),
+        Signal("the minister", 2.0), Signal("the priest", 2.4),
+        Signal("the bishop", 2.4), Signal("the diocese", 3.0),
+        Signal("the presbytery", 2.8), Signal("the synod", 2.6),
+        Signal("god bless", 2.0), Signal("blessings", 1.6),
+        Signal("in christ", 2.4), Signal("grace and peace", 2.6),
+        Signal("the lord", 1.8), Signal("the gospel", 2.4),
+        Signal("faith community", 2.6),
+        # Denominations. Reading a real parish mailing list made the gap
+        # obvious: the word that appears in every message, in the masthead
+        # and the footer and the signature, is the denomination - and none of
+        # it was here. This is also the most portable vocabulary in the whole
+        # table, since it identifies a church anywhere in the world without
+        # knowing anything about any particular one.
+        Signal("lutheran", 2.8), Signal("baptist", 2.6),
+        Signal("methodist", 2.8), Signal("presbyterian", 2.8),
+        Signal("episcopal", 2.8), Signal("anglican", 2.8),
+        Signal("pentecostal", 2.8), Signal("evangelical", 2.2),
+        Signal("adventist", 2.8), Signal("mennonite", 2.8),
+        Signal("unitarian", 2.6), Signal("congregational church", 3.0),
+        Signal("roman catholic", 2.8), Signal("catholic church", 3.0),
+        Signal("orthodox church", 3.0), Signal("assemblies of god", 3.0),
+        Signal("church of england", 3.0), Signal("church of scotland", 3.0),
+        Signal("united methodist", 3.0), Signal("southern baptist", 3.0),
+        # Denominational acronyms, which are near-unique strings.
+        Signal("lcms", 2.8), Signal("elca", 2.8), Signal("pcusa", 2.8),
+        Signal("umc", 1.8), Signal("sbc", 1.4),
+        # What a church building has in it, and who stands where.
+        Signal("the sanctuary", 2.4), Signal("the narthex", 3.0),
+        Signal("the chancel", 3.0), Signal("the altar", 2.6),
+        Signal("the pulpit", 2.8), Signal("the pews", 2.8),
+        Signal("hymn", 2.6), Signal("hymns", 2.6), Signal("hymnal", 3.0),
+        Signal("the choir", 2.6), Signal("choir practice", 3.0),
+        Signal("the organist", 2.8), Signal("acolyte", 3.0),
+        Signal("the lector", 2.8), Signal("the ushers", 2.4),
+        Signal("church elders", 3.0), Signal("the elders", 2.2),
+        Signal("coffee hour", 2.6), Signal("potluck", 2.0),
+        Signal("reverend", 2.6), Signal("the deaconess", 3.0),
+    ),
     OtherCategory.SPAM: (
         Signal("you have won", 3.0), Signal("claim your prize", 3.0),
         Signal("verify your wallet", 3.0), Signal("crypto", 2.0),
@@ -1703,6 +1799,45 @@ def hiring_mailbox(sender: str) -> str:
     return ""
 
 
+#: Words that make a sender a place of worship rather than a person or a
+#: company. Checked against the display name and the domain, because a church
+#: writes from its own domain and puts its name in the From line - and its
+#: mail is written by whoever is on the office rota that week, so the words
+#: inside vary far more than the address ever does.
+#:
+#: "churchill" is excluded by name. It is the one collision that matters and
+#: a lookahead is cheaper than being clever.
+_CHURCH_SENDER = re.compile(
+    r"church(?!ill)|chapel|parish|cathedral|congregation|diocese|"
+    r"tabernacle|synagogue|mosque|ministries|"
+    r"lutheran|baptist|methodist|anglican|episcopal|presbyterian|"
+    r"pentecostal|evangelical|adventist|orthodox\w*church|"
+    r"catholicchurch|uniting\w*church|christchurch",
+    re.I)
+
+
+def church_sender(sender: str) -> str:
+    """The word that says this sender is a place of worship, if any.
+
+    "Vera E. Graham Funeral Arrangements" is a note about a bereavement from
+    anywhere else and a parish notice from a church - and the message itself
+    says nothing that separates the two. The From line does, every time, which
+    is why this is worth more than any amount of reading the body.
+
+    The domain is checked as one string rather than by label, because church
+    domains run their words together: a parish is far more likely to be
+    ``stjohnslutheran.org`` than ``st-johns-lutheran.org``.
+    """
+    sender = sender or ""
+    name = sender.split("<")[0]
+    domain = sender.rsplit("@", 1)[-1].strip("<>() \t") if "@" in sender else ""
+    for part in (name, domain):
+        found = _CHURCH_SENDER.search(part or "")
+        if found:
+            return found.group(0).lower()
+    return ""
+
+
 def looks_like_a_person(sender: str) -> bool:
     """Whether the address belongs to a person rather than a department."""
     local = (sender or "").split("@")[0].split("<")[-1].strip().lower()
@@ -2232,6 +2367,10 @@ _TOPIC_PRECEDENCE: Tuple[OtherCategory, ...] = (
     OtherCategory.SHIPPING,     # nor is a tracking number
     OtherCategory.RECEIPT,      # money that already moved
     OtherCategory.FINANCE,      # money that has not
+    # More specific than the three it is most often mistaken for: a carol
+    # service is an event, arrives as a newsletter and is written like a note
+    # from a friend, and is none of those to the person reading it.
+    OtherCategory.CHURCH,
     OtherCategory.EVENT,
     OtherCategory.SOCIAL,
     OtherCategory.WORK,
@@ -2241,6 +2380,31 @@ _TOPIC_PRECEDENCE: Tuple[OtherCategory, ...] = (
     OtherCategory.PERSONAL,     # a register, not a subject
     OtherCategory.OTHER,        # the absence of an answer
 )
+
+
+#: Topics that describe how a message is written or packaged rather than what
+#: it is about. A church's weekly bulletin is a newsletter in form and church
+#: mail in substance, and the person filing it wants it with the rest of their
+#: church mail; a funeral notice from the parish office is written in a
+#: personal register and is still parish business.
+#:
+#: So these lose to a topic that names a subject, provided the subject topic
+#: has real evidence behind it rather than a stray word.
+FORM_TOPICS = frozenset({
+    OtherCategory.NEWSLETTER,
+    OtherCategory.PROMOTION,
+    OtherCategory.PERSONAL,
+    OtherCategory.OTHER,
+})
+
+#: What a subject topic has to score before it may overrule the form.
+#: Roughly two solid phrases. Below this a single stray word would start
+#: reclassifying newsletters.
+SUBJECT_BEATS_FORM = 4.0
+
+#: And it must be at least this fraction of the winning form score, so a
+#: message that really is mostly a newsletter stays one.
+SUBJECT_BEATS_FORM_SHARE = 0.35
 
 
 def _topic_rank(topic: "OtherCategory") -> int:
@@ -2774,6 +2938,24 @@ class RuleClassifier:
             best_topic = max(spoken_for, key=strength)
         else:
             best_topic = max(topic_scores, key=strength)
+
+        # What it is about beats how it is written. Newsletter, Promotion and
+        # Personal describe a message's form; every other topic describes its
+        # subject, and a subject with real evidence behind it is the more
+        # useful answer - "the church bulletin" rather than "a newsletter".
+        if best_topic in FORM_TOPICS:
+            form_score = topic_scores.get(best_topic, 0.0)
+            floor = max(SUBJECT_BEATS_FORM,
+                        form_score * SUBJECT_BEATS_FORM_SHARE)
+            subjects = [topic for topic, score in topic_scores.items()
+                        if topic not in FORM_TOPICS
+                        and hard.get(topic, 0.0) >= floor]
+            if subjects:
+                best_topic = max(subjects, key=strength)
+                topic_matches.setdefault(best_topic, []).append(
+                    "about this rather than merely written like a "
+                    f"{OtherCategory(best_topic).label.lower()}"
+                    if False else "what it is about, not how it is written")
         best = topic_scores[best_topic]
         ranked = sorted(topic_scores.values(), reverse=True)
         runner_up = ranked[1] if len(ranked) > 1 else 0.0

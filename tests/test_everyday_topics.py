@@ -115,6 +115,24 @@ CASES = [
         "barrister@free.example", "",
         OtherCategory.SPAM,
     ),
+    (
+        "This Sunday at St Alban's",
+        "Morning worship is at 10, with Holy Communion. The sermon series on "
+        "Romans continues, and the coffee rota for October is on the "
+        "noticeboard. Please pray for the Hendersons.",
+        "office@stalbans-parish.example", "",
+        OtherCategory.CHURCH,
+    ),
+    (
+        # The one that made the category worth having: in form this is a
+        # newsletter, and to the person reading it, it is not.
+        "eNews from the parish - 4 September",
+        "Greetings in the name of our Lord. Inside this week's bulletin: "
+        "Sunday school restarts, the choir needs two more singers, and our "
+        "Lutheran neighbours have invited us to their harvest festival.",
+        "office@parish.example", "",
+        OtherCategory.CHURCH,
+    ),
 ]
 
 
