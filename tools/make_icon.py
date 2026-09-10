@@ -253,7 +253,11 @@ def draw_social_preview(width: int = 1280, height: int = 640) -> QImage:
 
 
 def build() -> int:
-    app = QApplication.instance() or QApplication(sys.argv[:1])  # noqa: F841
+    # Named and then used, because QPainter and QPixmap need a live
+    # application object and letting this one be collected takes the process
+    # down with it. Setting the name is the cheapest way to say so out loud.
+    app = QApplication.instance() or QApplication(sys.argv[:1])
+    app.setApplicationName("Mail Manager icon builder")
     ASSETS.mkdir(parents=True, exist_ok=True)
     DOCS_ASSETS.mkdir(parents=True, exist_ok=True)
 
