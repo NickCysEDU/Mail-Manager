@@ -13,7 +13,7 @@
 
 ![macOS 13+](https://img.shields.io/badge/macOS-13%2B-black)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue)
-![Tests](https://img.shields.io/badge/tests-1%2C334%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-2%2C287%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
 <img src="docs/screenshot.png" width="900" alt="The approval table, with a summary, category, destination folder and confidence score for every message">
@@ -154,9 +154,9 @@ case-insensitive. You can rename the parent folder in Settings.
 ## Sorting more than a job search
 
 The sorter was always scoring two things: which job-search category a message
-belongs to, and which of twelve everyday topics it is. Only the first got
-folders. Under **⚙︎ → What to sort** you choose which distinctions are worth a
-folder of their own:
+belongs to, and which of thirteen everyday topics it is. Only the first got
+folders. The **Sorting** button in the toolbar is where you choose which
+distinctions are worth a folder of their own:
 
 | Profile | Job folders | Everything else |
 | --- | --- | --- |
@@ -166,11 +166,18 @@ folder of their own:
 | **Essentials only** | one | six folders: security, finance, receipts, travel, newsletters, promotions |
 
 The everyday topics are Security, Finance, Receipts, Shipping, Travel, Events,
-Work, Personal, Social, Newsletters, Promotions and Junk. All of it runs on the
-same offline rules, so none of it needs an API key.
+Church, Work, Personal, Social, Newsletters, Promotions and Junk. All of it
+runs on the same offline rules, so none of it needs an API key.
 
-Changing profile refiles the rows already on screen. Nothing moves until you
-press Apply, as ever.
+The same menu decides what happens to everything that is not job mail - left
+where it is, gathered into `Needs Review`, or filed by topic - and which of
+the thirteen topics earn a folder. A row that cannot be ticked says which of
+those choices is the reason, and offers to change it.
+
+Changing any of this refiles the rows already on screen, immediately: where a
+message goes is a decision about a verdict rather than a new verdict, so there
+is no mailbox to reopen and no model to ask. Nothing moves until you press
+Apply, as ever.
 
 ## More than one mailbox
 
@@ -388,14 +395,14 @@ Changes apply as you make them rather than when you press OK.
 Two numbers, and the gap between them is worth understanding before trusting
 it with a mailbox.
 
-Against **real collected mail** - 102 labelled messages from a live inbox - it
-gets 98.0% right on job versus not-job, 83.3% on the exact category, and 98.1%
-of what it files goes to the right folder. That is the number that describes
-ordinary use, because ordinary transactional mail comes out of templates and
-templates are what a rules engine is good at.
+Against **real collected mail** - 102 labelled messages from a live inbox, with
+every name replaced - it gets 99.0% right on job versus not-job, 87.3% on the
+exact category, and 98.2% of what it files goes to the right folder. That is
+the number that describes ordinary use, because ordinary transactional mail
+comes out of templates and templates are what a rules engine is good at.
 
 Against **mail written by hand to be awkward** - a held-out set that
-deliberately avoids every phrase the engine knows - it gets 16.7%. That is not
+deliberately avoids every phrase the engine knows - it gets 37.5%. That is not
 a bug being hidden; it is what a phrase-and-structure matcher does with prose
 it has never seen.
 
@@ -419,7 +426,7 @@ real defects: a message beginning with seventy underscores took **43 seconds**
 to classify, and work-from-home spam was being read as an interview next step.
 
 The number worth watching there is not how much spam reaches Junk. It is how
-much ordinary post does: **0.1%**, and none of it filed as job mail.
+much ordinary post does: **0.07%**, and **none** of it filed as job mail.
 
 If you want the harder cases sorted rather than queued, that is what the model
 backends are for. Point it at Gemini or Claude and the same messages get read
@@ -428,14 +435,18 @@ properly.
 ## Privacy
 
 With the default sorter, no message text leaves your Mac. Credentials live in
-the macOS Keychain, never in a file. Message bodies are never written to the
-log. [Full details in SECURITY.md](SECURITY.md).
+the macOS Keychain, never in a file, and never appear in a log line, an error
+message or a traceback - there is a test that goes looking for them. Message
+bodies are never written to the log; a subject line can be, so the log and its
+rotated backups are written `0600`, owner-only, like the settings file.
+
+[Full details in SECURITY.md](SECURITY.md).
 
 ## Development
 
 ```bash
 ./dev demo      # the app with sample mail, no setup
-./dev test      # 1,334 tests, about two and a half minutes
+./dev test      # 2,287 tests, about three minutes on four workers
 ./dev eval      # sorter accuracy against the labelled fixture
 ./dev fake      # the whole pipeline in the terminal, offline
 ```
