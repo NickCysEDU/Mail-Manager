@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QLabel,
                                QStyledItemDelegate, QStyleOptionViewItem,
                                QTextBrowser, QToolButton, QVBoxLayout, QWidget)
 
+import conversations
 from imap_engine import MoveReport
 from models import (CATEGORY_COLORS, OTHER_COLOR, Category, Disposition,
                     TriageItem, TriageSummary)
@@ -256,6 +257,14 @@ class TriageTableModel(QAbstractTableModel):
         return True
 
     # -- bulk operations -------------------------------------------------
+    def conversation_of(self, row: int) -> List[int]:
+        """Every row in the same conversation as this one, including it."""
+        item = self.item_at(row)
+        if item is None or not item.thread_key:
+            return [row] if item is not None else []
+        return [index for index, other in enumerate(self._items)
+                if other.thread_key == item.thread_key]
+
     def set_approved(self, rows: Sequence[int], approved: bool) -> int:
         """Tick or untick a set of rows. Returns how many actually changed.
 
@@ -836,6 +845,9 @@ def _reasoning_html(item: TriageItem) -> str:
     runners = _runners_up(classification)
     if runners:
         rows.append(("Runners-up", runners))
+    if item.in_a_conversation:
+        rows.append(("Conversation",
+                     _html(conversations.describe(item.thread_size).capitalize())))
     if item.rule_name:
         rows.append(("Rule", f"<span style='color:{ACCENT_BLUE}'>"
                              f"{_html(item.rule_name)}</span>"))
