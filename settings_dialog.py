@@ -2329,9 +2329,19 @@ class SettingsDialog(QDialog):
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
         self.root_edit = QLineEdit()
+        self.root_edit.setToolTip(
+            "The folder job-search mail is filed under. Subfolders are "
+            "created inside it as they are needed.")
         self.other_root_edit = QLineEdit()
+        self.other_root_edit.setToolTip(
+            "The folder everything else is filed under, when non-job mail is "
+            "being sorted by topic.")
 
         self.routing_combo = QComboBox()
+        self.routing_combo.setToolTip(
+            "What happens to mail that is not job related. The same choice is "
+            "in the Sorting menu in the toolbar, where it can be changed "
+            "without opening Settings.")
         for member in NonJobRouting:
             self.routing_combo.addItem(member.label, member.value)
         self.routing_combo.currentIndexChanged.connect(self._routing_changed)
@@ -2339,7 +2349,14 @@ class SettingsDialog(QDialog):
         self.auto_non_job_check = QCheckBox(
             "Pre-tick confidently classified non-job mail as well"
         )
+        self.auto_non_job_check.setToolTip(
+            "Off by default: misfiling a bank alert is a worse outcome than "
+            "leaving it in the inbox, so non-job mail is not pre-ticked "
+            "unless you ask for it.")
         self.subscribe_check = QCheckBox("Subscribe to folders this app creates")
+        self.subscribe_check.setToolTip(
+            "Subscribed folders show up in Mail and on your phone without "
+            "having to be found and turned on there.")
 
         self.folders_preview = QLabel("")
         self.folders_preview.setWordWrap(True)
