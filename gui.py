@@ -2665,10 +2665,48 @@ class MainWindow(QMainWindow):
         revert.triggered.connect(lambda: self._refile(rows, None))
 
         menu.addSeparator()
+        thread = sorted({index for row in rows
+                         for index in self.model.conversation_of(row)})
+        if len(thread) > len(rows):
+            select = menu.addAction(
+                f"Select the whole conversation ({len(thread)} messages)")
+            select.triggered.connect(lambda: self._select_rows(thread))
+            file_thread = menu.addAction(
+                "File the whole conversation together")
+            folders = self._folder_choices()
+            sub = QMenu(menu)
+            for folder in folders:
+                leaf = folder.rsplit(self.folder_plan.delimiter
+                                     if self.folder_plan else "/", 1)[-1]
+                action = sub.addAction(leaf)
+                action.setToolTip(folder)
+                action.triggered.connect(
+                    lambda _c=False, t=folder: self._refile(thread, t))
+            file_thread.setMenu(sub)
+            file_thread.setEnabled(bool(folders))
+            menu.addSeparator()
+
         copy = menu.addAction("Copy sender address"
                               if not many else "Copy sender addresses")
         copy.triggered.connect(lambda: self._copy_senders(items))
         return menu
+
+    def _select_rows(self, rows: Sequence[int]) -> None:
+        """Select these source rows, ignoring any the filter is hiding."""
+        from PySide6.QtCore import QItemSelection, QItemSelectionModel
+        last = self.model.columnCount() - 1
+        selection = QItemSelection()
+        for row in rows:
+            top = self.proxy.mapFromSource(self.model.index(row, 0))
+            end = self.proxy.mapFromSource(self.model.index(row, last))
+            if top.isValid() and end.isValid():
+                selection.select(top, end)
+        if selection.isEmpty():
+            return
+        self.table.selectionModel().select(
+            selection,
+            QItemSelectionModel.SelectionFlag.ClearAndSelect
+            | QItemSelectionModel.SelectionFlag.Rows)
 
     def _folder_choices(self) -> List[str]:
         plan = self.folder_plan or FolderPlan()

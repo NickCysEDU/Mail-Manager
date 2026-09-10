@@ -425,6 +425,10 @@ class EmailMessage:
     date: Optional[datetime] = None
     body_text: str = ""
     message_id: str = ""
+    #: What this message is answering. Kept because threading is exact when
+    #: these are present and guesswork when they are not.
+    in_reply_to: str = ""
+    references: str = ""
     to: str = ""
     reply_to: str = ""
     list_unsubscribe: str = ""
@@ -773,6 +777,13 @@ class TriageItem:
     learned_from: Optional[object] = None
     #: Set when a rule the user wrote decided where this goes.
     rule_name: str = ""
+    #: Which conversation this belongs to, and how many messages are in it.
+    thread_key: str = ""
+    thread_size: int = 1
+
+    @property
+    def in_a_conversation(self) -> bool:
+        return self.thread_size > 1
 
     def __post_init__(self) -> None:
         if self.approved is None:

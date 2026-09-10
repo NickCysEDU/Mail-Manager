@@ -19,6 +19,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from PySide6.QtCore import QThread, Signal
 
 import autoreply
+import conversations
 import corrections
 import pipeline
 import verdict_cache
@@ -610,6 +611,18 @@ class ScanWorker(_BaseWorker):
                 if taught:
                     self._log(f"{taught} message(s) filed the way you corrected "
                               "them before.")
+
+        # ---- 4b. Which of these are the same conversation -----------------
+        # Before the rules, so a rule can act on a whole thread, and after the
+        # sorter, because threading groups messages rather than judging them.
+        try:
+            in_threads = conversations.apply_to(outcome.items)
+        except Exception as exc:  # noqa: BLE001 - grouping is never fatal
+            log.warning("Could not group conversations (%s).", exc)
+        else:
+            if in_threads:
+                self._log(f"{in_threads} message(s) are part of a conversation "
+                          "with others in this scan.")
 
         # ---- 5. Rules the user wrote --------------------------------------
         # Last, so a rule can override both the sorter and the memory - it is

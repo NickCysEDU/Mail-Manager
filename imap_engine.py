@@ -423,6 +423,8 @@ def parse_message(
         date=date,
         body_text=extracted.text,
         message_id=_decode_header_value(message.get("Message-ID")),
+        in_reply_to=_decode_header_value(message.get("In-Reply-To")),
+        references=_decode_header_value(message.get("References")),
         to=_decode_header_value(message.get("To")),
         reply_to=_decode_header_value(message.get("Reply-To")),
         list_unsubscribe=_decode_header_value(message.get("List-Unsubscribe")),
