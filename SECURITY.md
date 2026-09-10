@@ -18,7 +18,7 @@ Please do not include real credentials or real message content in a report.
 | iCloud app-specific password | macOS Keychain, service `iCloud Job Triage` |
 | Model API keys | macOS Keychain, one entry per backend |
 | Settings | `~/Library/Application Support/Mail Manager/settings.json`, mode `0600` |
-| Logs | `~/Library/Logs/Mail Manager/`, rotated at 2 MB |
+| Logs | `~/Library/Logs/Mail Manager/`, mode `0600`, rotated at 2 MB |
 | Your mail | Read over TLS, held in memory for the length of a scan, never written to disk |
 
 With the default sorter, **no message text leaves your Mac at all**. If you
@@ -35,7 +35,11 @@ their filenames are mentioned.
   carries the text of an email.
 - **Nothing sensitive is logged.** Message bodies, subjects, passwords and keys
   never reach the log file, and the HTTP libraries are pinned to `WARNING` so
-  they cannot log URLs.
+  they cannot log URLs. There is a test for the credentials half of that: it
+  fails a login and a provider call on purpose and searches the error text,
+  the traceback and every log line for the password and the key that caused
+  them. The log is written `0600` regardless, because it does name your
+  mailboxes.
 - **Errors are trimmed.** A server response quoted in an error message is
   shortened to a single short line, so an endpoint cannot echo your mail back
   into a dialog.
