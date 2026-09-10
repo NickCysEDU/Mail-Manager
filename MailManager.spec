@@ -74,11 +74,16 @@ datas = [(str(_stamp), ".")] if _stamp.exists() else []
 # The world-knowledge lexicon: 44,000 company domains and 4,570 airports in
 # 330 KB, so the app can tell that ryanair.com is an airline without asking
 # anybody at run time.
-_lexicon = ROOT / "data" / "lexicon.json.gz"
-if _lexicon.exists():
-    datas.append((str(_lexicon), "data"))
-    print(f"==> Lexicon: {_lexicon.stat().st_size // 1024} KB")
-else:
+# The blob is what the app reads; the JSON is the fallback for a checkout
+# that has not rebuilt it, and the form a person can actually diff.
+_bundled_lexicon = False
+for _name in ("lexicon.bin", "lexicon.json.gz"):
+    _lexicon = ROOT / "data" / _name
+    if _lexicon.exists():
+        datas.append((str(_lexicon), "data"))
+        print(f"==> Lexicon: {_name}, {_lexicon.stat().st_size // 1024} KB")
+        _bundled_lexicon = True
+if not _bundled_lexicon:
     print("==> No lexicon bundled (run tools/build_lexicon.py)")
 for asset in ("icon.png", "icon.icns"):
     path = ROOT / "assets" / asset
@@ -90,7 +95,9 @@ for asset in ("icon.png", "icon.icns"):
 hiddenimports = ["demo_data", "providers", "rules_engine", "rulesets",
                  "scheduler", "menubar", "welcome", "flowlayout",
                  "accounts", "autoreply", "certs", "helpmode", "ondevice",
-                 "profiles", "theme", "macname"]
+                 "profiles", "theme", "macname", "conversations",
+                 "corrections", "verdict_cache", "pipeline", "lexicon",
+                 "lexicon_blob", "widgets", "triage_table", "settings_dialog"]
 
 # The CA bundle. Without it a frozen app has no certificates at all, because
 # the path Python was compiled with points at a framework the user does not

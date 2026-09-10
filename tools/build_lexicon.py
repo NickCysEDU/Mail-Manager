@@ -41,6 +41,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 OUT = ROOT / "data" / "lexicon.json.gz"
+BLOB = ROOT / "data" / "lexicon.bin"
 AGENT = "MailManager/1.0 (offline mail sorter; dataset build)"
 AIRPORTS = "https://davidmegginson.github.io/ourairports-data/airports.csv"
 WIKIDATA = "https://query.wikidata.org/sparql"
@@ -252,7 +253,28 @@ def main(argv=None) -> int:
     with gzip.open(OUT, "wt", encoding="utf-8") as handle:
         json.dump(data, handle, separators=(",", ":"), sort_keys=True)
     print(f"==> Wrote {OUT} ({OUT.stat().st_size / 1024:.0f} KB)")
+    write_blob(data)
     return report()
+
+
+def write_blob(data: dict) -> None:
+    """Also write the memory-mapped form, which is what the app reads.
+
+    The JSON stays as the readable one - it is what a person diffs when a
+    brand looks wrong - and as the fallback for a build that has not run
+    this. The blob is the same content, sorted, so the app never parses it.
+    """
+    import sys
+    sys.path.insert(0, str(ROOT))
+    import lexicon_blob
+
+    lexicon_blob.build({
+        "airports": {code: "" for code in data.get("airports", {})},
+        "brands": data.get("brands", {}),
+        "domains": data.get("domains", {}),
+        "meta": {"built": data.get("built", "")},
+    }, BLOB)
+    print(f"==> Wrote {BLOB} ({BLOB.stat().st_size / 1024:.0f} KB)")
 
 
 if __name__ == "__main__":
