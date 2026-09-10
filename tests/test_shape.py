@@ -390,3 +390,69 @@ class TestTieBreaking:
             again = engine.classify(**args)
             assert again.other_category is first.other_category
             assert again.confidence == first.confidence
+
+
+class TestTheRunnersUpLine:
+    """What nearly won, and why it did not."""
+
+    def item(self, classification):
+        from models import EmailMessage, FolderPlan, TriageItem
+        return TriageItem(email=EmailMessage(uid="1", subject="x"),
+                          classification=classification, folders=FolderPlan())
+
+    def verdict(self, **overrides):
+        from models import Category, Classification, OtherCategory
+        defaults = dict(summary="s", is_job_related=True,
+                        category=Category.INTERVIEW,
+                        other_category=OtherCategory.NOT_APPLICABLE,
+                        confidence_score=0.9, reasoning="r", model="local rules")
+        defaults.update(overrides)
+        return Classification(**defaults)
+
+    def test_the_winner_is_never_its_own_runner_up(self):
+        """It is not always the top score - precedence can overrule one."""
+        from triage_table import _runners_up
+        line = _runners_up(self.verdict(scores={
+            "INTERVIEW": 3.0, "APPLICATION_RECEIVED": 6.5}))
+        assert "Interview" not in line
+        assert "Application Received" in line
+
+    def test_a_rival_that_outscored_the_winner_says_so(self):
+        from triage_table import _runners_up
+        line = _runners_up(self.verdict(scores={
+            "INTERVIEW": 3.0, "APPLICATION_RECEIVED": 6.5}))
+        assert "outranked" in line
+
+    def test_an_ordinary_runner_up_is_given_as_a_share(self):
+        from triage_table import _runners_up
+        line = _runners_up(self.verdict(scores={
+            "INTERVIEW": 10.0, "OFFER": 5.0}))
+        assert "50% of the winner" in line
+        assert "outranked" not in line
+
+    def test_nothing_to_say_when_there_was_no_contest(self):
+        from triage_table import _runners_up
+        assert _runners_up(self.verdict(scores={"INTERVIEW": 4.0})) == ""
+        assert _runners_up(self.verdict(scores={})) == ""
+
+    def test_the_non_job_side_uses_its_own_winner(self):
+        from models import Category, OtherCategory
+        from triage_table import _runners_up
+        line = _runners_up(self.verdict(
+            is_job_related=False, category=Category.UNCLASSIFIED_OTHER,
+            other_category=OtherCategory.SECURITY,
+            scores={"SECURITY": 4.0, "FINANCE": 2.0}))
+        assert "Security" not in line
+        assert "Finance" in line
+
+    def test_at_most_three_are_listed(self):
+        from triage_table import _runners_up
+        line = _runners_up(self.verdict(scores={
+            "INTERVIEW": 9.0, "OFFER": 5.0, "NEXT_STEPS": 4.0,
+            "NETWORKING": 3.0, "APPLICATION_RECEIVED": 2.0}))
+        assert line.count("<br>") == 2
+
+    def test_a_zero_score_is_not_a_runner_up(self):
+        from triage_table import _runners_up
+        assert _runners_up(self.verdict(scores={
+            "INTERVIEW": 4.0, "OFFER": 0.0})) == ""
