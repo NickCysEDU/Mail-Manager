@@ -861,7 +861,10 @@ class ReplyWorker(_BaseWorker):
                     rules, item.email, item.classification, signature,
                     self._classifier)
             except Exception as exc:  # noqa: BLE001 - one bad rule, not a crash
-                self._log(f"A rule failed on “{item.email.subject_display[:40]}”: {exc}")
+                # Named by position rather than by subject: this line goes
+                # to the log file, and the promise made in SECURITY.md is
+                # that a message's subject never does.
+                self._log(f"A rule failed on message {index} of {total}: {exc}")
                 continue
             if outcome is not None:
                 result.add(item, outcome)
