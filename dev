@@ -107,6 +107,7 @@ ${B}iCloud Mail Job Triage — dev commands${N}
 
   ${B}./dev test${N} [args]       run the test suite  ${D}(args pass through to pytest)${N}
   ${B}./dev eval${N} [args]       score the offline sorter against the labelled set
+  ${B}./dev tune${N} [args]       score it against your own inbox  ${D}(nothing is written)${N}
   ${B}./dev cov${N}               test suite with a coverage report
   ${B}./dev watch${N}             re-run the tests whenever a file changes
 
@@ -153,6 +154,7 @@ case "$command" in
   test|t)              ensure_venv; QT_QPA_PLATFORM=offscreen exec "$PY" -m pytest "$@" ;;
   eval)                ensure_venv; QT_QPA_PLATFORM=offscreen exec "$PY" tools/evaluate.py "$@" ;;
   eval-llm)            ensure_venv; QT_QPA_PLATFORM=offscreen exec "$PY" tools/eval_llm.py "$@" ;;
+  tune)                ensure_venv; QT_QPA_PLATFORM=offscreen exec "$PY" tools/tune.py "$@" ;;
   cov|coverage)
     ensure_venv
     QT_QPA_PLATFORM=offscreen "$PY" -m pytest --cov --cov-report=term-missing "$@"
