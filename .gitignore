@@ -34,3 +34,7 @@ secrets*
 .toolchain/
 .venv-universal/
 BUILD_STAMP
+
+# Anything the tuning tool writes out of a real inbox
+*-set.json
+tuning/
