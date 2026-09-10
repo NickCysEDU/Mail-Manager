@@ -189,7 +189,7 @@ class TestFullPipeline:
         """Every original is either still in INBOX or copied exactly once."""
         server, imap, llm = pipeline
         _, _, items = run_scan(imap, llm)
-        report = imap.move_messages(build_move_plans(items))
+        imap.move_messages(build_move_plans(items))
 
         copied = [uid for uid, _ in server.copies]
         remaining = set(server.messages)

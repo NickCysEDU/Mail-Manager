@@ -272,7 +272,6 @@ class FakeIMAP:
 
     # -- UID commands ----------------------------------------------------
     def _uid_search(self, *args):
-        cleaned = [a for a in args if a is not None]
         if self.search_results is not None:
             uids = self.search_results
         else:

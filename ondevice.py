@@ -245,7 +245,6 @@ def homebrew() -> Optional[str]:
 
 def install_command() -> Optional[List[str]]:
     """The command that would install Ollama, if one is available."""
-    brew = homebrew()
     candidates = install_commands()
     return candidates[0] if candidates else None
 

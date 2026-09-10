@@ -563,7 +563,6 @@ class TestScanWiring:
 
     def test_the_scan_button_builds_a_real_worker(self, window, monkeypatch):
         """Constructs the actual ScanWorker: a renamed argument fails here."""
-        import gui as gui_module
         import workers
 
         captured = {}
@@ -589,8 +588,6 @@ class TestScanWiring:
 
     def test_the_key_check_follows_the_selected_backend(self, window, monkeypatch, dialog_calls):
         """An Anthropic-shaped check used to block a Gemini scan."""
-        import gui as gui_module
-
         subject, store = window
         assert store.get_provider_key("anthropic") == ""     # deliberately absent
         import workers
@@ -629,7 +626,6 @@ class TestScanWiring:
 
     def test_a_keyless_backend_scans_without_a_key(self, qapp, tmp_path, monkeypatch):
         """Ollama and the rule set need no key, so nothing may block on one."""
-        import gui as gui_module
         import workers
 
         monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))

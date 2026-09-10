@@ -275,7 +275,6 @@ def stylesheet(colours: Palette, readable: bool = False,
     # away and the control ends up with a single arrow.
     stepper_half = max(8, (control_height - 6) // 2)
     scroll = 14 if readable else 12
-    arrow = 5 if readable else 4
     drop_width = 30 if readable else 26
     arrow_px = 14 if readable else 12
     up_arrow = arrow_image(colours.text, "up", arrow_px)

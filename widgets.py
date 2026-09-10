@@ -353,7 +353,7 @@ def _chip(label: str, value: str, color: str = "") -> str:
 
 def _swatch(color: str, size: int = 12) -> "QIcon":
     """A small round colour chip, used in the category dropdown."""
-    from PySide6.QtGui import QIcon, QPixmap
+    from PySide6.QtGui import QIcon
 
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)
@@ -420,8 +420,6 @@ def _one_line(text: str, limit: int = 300) -> str:
 
 
 def _wrap(text: str, width: int = 96) -> str:
-    import textwrap
-
     return "\n".join(textwrap.wrap(" ".join((text or "").split()), width=width)) or ""
 
 

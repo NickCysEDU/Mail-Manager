@@ -25,6 +25,15 @@ from models import APP_DISPLAY_NAME, APP_NAME, APP_VERSION  # noqa: E402
 LOG_FORMAT = "%(asctime)s  %(levelname)-7s %(name)-14s %(message)s"
 
 
+def _restrict(path: Path) -> None:
+    """Owner-only, best effort. A log nobody can read is worse than none."""
+    try:
+        if path.exists():
+            os.chmod(path, 0o600)
+    except OSError:  # pragma: no cover - platform or filesystem says no
+        pass
+
+
 def configure_logging(level: str = "INFO", echo: bool = False) -> Path:
     """Log to a rotating file in ~/Library/Logs and to stderr when attached."""
     from config import log_dir
@@ -47,6 +56,12 @@ def configure_logging(level: str = "INFO", echo: bool = False) -> Path:
         )
         file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
         root.addHandler(file_handler)
+        # Readable by its owner and nobody else. The log names mailboxes and
+        # the subjects of messages as they are sorted, which is the same
+        # class of thing as the settings file and is stored the same way.
+        _restrict(path)
+        for index in range(1, file_handler.backupCount + 1):
+            _restrict(path.with_name(f"{path.name}.{index}"))
     except OSError:  # pragma: no cover - read-only home
         pass
 
@@ -114,6 +129,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Check that every runtime dependency resolves, then exit. "
              "Useful for verifying a freshly built .app bundle.",
     )
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="With --self-test, skip the check that needs a network.",
+    )
 
     develop = parser.add_argument_group("development")
     parser.add_argument(
@@ -161,8 +181,12 @@ def _clean_argv(argv: Optional[list]) -> list:
     return [arg for arg in source if not arg.startswith("-psn_")]
 
 
-def self_test() -> int:
-    """Verify the runtime the app is actually running inside."""
+def self_test(offline: bool = False) -> int:
+    """Verify the runtime the app is actually running inside.
+
+    ``offline`` skips the one check that needs a network, so this can be run
+    on a build machine, in CI, or on a train.
+    """
     import config
 
     ok = True
@@ -206,7 +230,10 @@ def self_test() -> int:
             with context.wrap_socket(raw, server_hostname=host) as secure:
                 return f"{secure.version()} to {host}"
 
-    check("TLS handshake", _tls_probe)
+    if offline:
+        print(f"  {'TLS handshake':.<34} skipped (--offline)")
+    else:
+        check("TLS handshake", _tls_probe)
 
     print("\n  " + ("All checks passed." if ok else "Some checks FAILED."))
     return 0 if ok else 1
@@ -332,7 +359,7 @@ def main(argv: Optional[list] = None) -> int:
     import config
 
     if args.self_test:
-        return self_test()
+        return self_test(offline=args.offline)
     if args.scan_once:
         import scheduler
 
