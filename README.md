@@ -449,7 +449,7 @@ rotated backups are written `0600`, owner-only, like the settings file.
 
 ```bash
 ./dev demo      # the app with sample mail, no setup
-./dev test      # 2,485 tests, about three minutes on four workers
+./dev test      # 2,515 tests, about three minutes on four workers
 ./dev eval      # sorter accuracy against the labelled fixture
 ./dev fake      # the whole pipeline in the terminal, offline
 ```
