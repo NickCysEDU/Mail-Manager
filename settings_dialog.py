@@ -1620,7 +1620,7 @@ class SettingsDialog(QDialog):
         headline = QLabel(
             "<b>Replies are drafted, never sent.</b> A rule can write a reply "
             "into your Drafts mailbox, file a message, tick it, flag it or mark "
-            "it read — but nothing leaves your account without you pressing send "
+            "it read, but nothing leaves your account without you pressing send "
             "in your mail app."
         )
         headline.setWordWrap(True)
@@ -1660,7 +1660,7 @@ class SettingsDialog(QDialog):
         left.setSpacing(4)
         order_note = QLabel(
             "Rules run top to bottom, after the sorter and after anything "
-            "learned from your corrections — so a rule always wins.")
+            "learned from your corrections, so a rule always wins.")
         order_note.setProperty("dim", "true")
         order_note.setWordWrap(True)
         left.addWidget(order_note)

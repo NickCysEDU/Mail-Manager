@@ -2457,7 +2457,7 @@ class MainWindow(QMainWindow):
                          f"saved to your Drafts mailbox. Nothing has been sent.")
         if filed:
             lines.append(f"{filed} pointed at a different folder. Nothing has "
-                         "moved yet — press Apply when you are happy.")
+                         "moved yet. Press Apply when you are happy.")
         if ticked:
             lines.append(f"{ticked} ticked or unticked.")
         if run.marked_read:

@@ -624,7 +624,7 @@ class TestLocalFallback:
 
 
 # ==========================================================================
-# Batching — the token-efficiency mechanism
+# Batching, the token-efficiency mechanism
 # ==========================================================================
 def batch_payload(ids):
     return json.dumps({
@@ -767,7 +767,7 @@ class TestAuthFailsFast:
         )
         with pytest.raises(LLMAuthError, match="rejected the API key"):
             subject.classify_many(self.messages(6))
-        # One beta probe plus at most one stable retry — not one per email.
+        # One beta probe plus at most one stable retry, not one per email.
         assert calls["n"] <= 2
 
     def test_the_message_names_the_backend_and_the_key_format(self):
@@ -796,7 +796,7 @@ class TestTheSystemPromptCoversWhatWasMissed:
 
     Found on real mail: a call proposed with no role named, and a job
     description mailed to oneself. Both sat outside "a referral or networking
-    thread about a specific role", so the model said no — confidently, at 0.95
+    thread about a specific role", so the model said no, confidently, at 0.95
     and above. These assert the instructions still say otherwise; what the
     model then does with them is measured by ``./dev eval-llm``, not here.
     """

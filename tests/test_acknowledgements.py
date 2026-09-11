@@ -7,8 +7,8 @@ three moves, and counting moves catches the family.
 
 Three real failures this fixes, all from one mailbox:
 
-  * iCIMS mail — "Thank you very much for your recent application to the X
-    position" — matched nothing and sat in Needs Review at 0.55.
+  * iCIMS mail, "Thank you very much for your recent application to the X
+    position", matched nothing and sat in Needs Review at 0.55.
   * "We have received your application. If your experience aligns, we will
     reach out to discuss next steps" was read as an action item at 0.70,
     because every acknowledgement ends that way.
@@ -102,8 +102,8 @@ class TestAcknowledgementScore:
         "Thank you for your interest in our newsletter.",
     ])
     def test_it_does_not_fire_on_mail_that_is_not_about_a_job(self, body):
-        """Firing here would be harmless on its own — job-relatedness is a
-        separate question — but it should not be fabricating evidence."""
+        """Firing here would be harmless on its own, job-relatedness is a
+        separate question, but it should not be fabricating evidence."""
         sorter = RuleClassifier()
         got = sorter.classify(subject="", body=body, sender="x@y.example")
         assert got.is_job_related is False

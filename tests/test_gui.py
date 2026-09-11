@@ -606,7 +606,7 @@ class TestTheToolbarDoesNotJump:
         assert "covering" in window.window_label.text() or window.window_label.text()
 
     def test_fitting_the_label_does_not_raise(self, window):
-        """It calls re.sub, and gui did not import re — it only ever escaped
+        """It calls re.sub, and gui did not import re, it only ever escaped
         notice because the layout width was zero at the moments it ran."""
         from models import TimeWindow
 

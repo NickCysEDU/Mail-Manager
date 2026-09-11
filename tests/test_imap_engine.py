@@ -264,7 +264,7 @@ class TestConnection:
         """iCloud advertises 8 capabilities before login and 21 after.
 
         Trusting the greeting made the app believe UIDPLUS was unavailable and
-        fall back to a full EXPUNGE of the source mailbox — the destructive
+        fall back to a full EXPUNGE of the source mailbox, the destructive
         path this engine exists to avoid.
         """
         engine, server = engine_factory(

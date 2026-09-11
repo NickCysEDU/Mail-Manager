@@ -886,7 +886,7 @@ class TestTheOnDevicePanelNeverFreezes:
         """Pump the event loop until the worker finishes; report the worst stall.
 
         The queue is flushed first. Every test before this one leaves deferred
-        deletions behind, and the first processEvents pays for all of them —
+        deletions behind, and the first processEvents pays for all of them,
         measured at 0.7s under the full suite and 0ms on every iteration
         after. Timing that backlog says nothing about whether this worker
         blocks the window.
@@ -1134,7 +1134,7 @@ class TestTheModelsDialog:
 class TestTheModelFieldIsADropdownForLocalModels:
     """Typing a name is right for a hosted backend and wrong for a local one.
 
-    A hosted backend releases models faster than a bundled list can follow —
+    A hosted backend releases models faster than a bundled list can follow,
     Gemini's pinned ids went stale and started answering 404. A local backend's
     valid names are exactly the models on this Mac, so a typo there is a scan
     that fails on every single message.

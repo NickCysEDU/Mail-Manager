@@ -421,7 +421,7 @@ class TestPatternsThatWouldHangTheApp:
     """A rule's pattern is typed by a person, and `re` cannot be interrupted.
 
     Python's regular expressions backtrack and hold the interpreter while they
-    do it, so a pattern with the wrong shape does not slow the app down — it
+    do it, so a pattern with the wrong shape does not slow the app down, it
     stops it, and the Stop button cannot help. These are refused before they
     run.
     """

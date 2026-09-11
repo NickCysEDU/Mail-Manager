@@ -1,7 +1,7 @@
 """What the sorter knows about the world outside the message.
 
 A phrase list can tell you a message says "your flight". It cannot tell you
-ryanair.com is an airline, STN is an airport, or argos.co.uk sells things —
+ryanair.com is an airline, STN is an airport, or argos.co.uk sells things,
 and those are what a person uses to read a message that never says what it
 is. Two public datasets, 330 KB, no network at run time.
 """

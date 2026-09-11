@@ -19,7 +19,7 @@ def verdict(rules, subject="", body="", sender="", links=(), **kwargs):
 
 
 # ==========================================================================
-# Normalisation — real mail is not clean text
+# Normalisation, real mail is not clean text
 # ==========================================================================
 class TestNormalize:
     @pytest.mark.parametrize(
@@ -113,7 +113,7 @@ class TestJobCategories:
             "Please complete the coding assessment within 5 days.",
             "The next step is a short questionnaire; please fill out the form.",
             "Could you provide three professional references?",
-            "We need to run a background check — please give your consent.",
+            "We need to run a background check, please give your consent.",
         ],
     )
     def test_next_steps(self, rules, body):
@@ -146,7 +146,7 @@ class TestJobCategories:
     @pytest.mark.parametrize(
         "body",
         [
-            "I am happy to refer you internally — send me a CV and I will put in a referral.",
+            "I am happy to refer you internally, send me a CV and I will put in a referral.",
             "Would you like an informational chat with our platform lead? No formal opening yet.",
             "I can introduce you to the hiring manager and put in a good word.",
         ],
@@ -263,7 +263,7 @@ class TestTopics:
              OtherCategory.SHIPPING),
             ("This week", "In this week's issue we look at platform teams. You subscribed.",
              OtherCategory.NEWSLETTER),
-            ("50% off", "Limited time offer — save up to 50%. Shop now with this discount code.",
+            ("50% off", "Limited time offer, save up to 50%. Shop now with this discount code.",
              OtherCategory.PROMOTION),
             ("Anna viewed your profile", "People you may know and new followers this week.",
              OtherCategory.SOCIAL),
@@ -298,7 +298,7 @@ class TestTopics:
 
 
 # ==========================================================================
-# Calibration — the part that keeps it safe
+# Calibration, the part that keeps it safe
 # ==========================================================================
 class TestConfidence:
     def test_it_never_exceeds_its_ceiling(self, rules):

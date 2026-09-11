@@ -2,7 +2,7 @@
 
 Two shapes the sorter used to score at exactly zero, both found in real mail:
 
-  * "Please use this link to schedule a 20-minute Google Meet call" — a call
+  * "Please use this link to schedule a 20-minute Google Meet call", a call
     is being proposed, and every fixed phrase for that ("schedule a call")
     breaks the moment somebody says how long it will take.
   * A job description mailed to yourself. It contains not one word a hiring

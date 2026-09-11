@@ -533,7 +533,7 @@ class TestReplyWorker:
 class TestKeychainReadWorker:
     """Reading a secret must never be done on the thread drawing the window.
 
-    macOS asks permission whenever an app's signature changes — every rebuild —
+    macOS asks permission whenever an app's signature changes, every rebuild,
     and the call blocks until somebody answers. Made from the UI thread, the
     window freezes behind the very dialog it is asking about. That happened
     during development: three processes ended up wedged in uninterruptible

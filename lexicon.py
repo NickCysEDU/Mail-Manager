@@ -2,7 +2,7 @@
 
 A phrase list can tell you a message says "your flight". It cannot tell you
 that ryanair.com is an airline, that STN is an airport, or that argos.co.uk
-sells things — and those are exactly what a person uses to read a message
+sells things, and those are exactly what a person uses to read a message
 that never says what it is:
 
     "Seat 14C — FR7712 STN to DUB, Tuesday. Bags close 40 minutes before."

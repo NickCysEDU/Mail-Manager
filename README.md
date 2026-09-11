@@ -225,7 +225,7 @@ Whether a message is part of your job search is asked before which part. Two
 things it now recognises that it used to score at zero:
 
 - **A call being proposed, with no role named.** "Please use this link to
-  schedule a 20-minute Google Meet call" — the fixed phrase "schedule a call"
+  schedule a 20-minute Google Meet call". The fixed phrase "schedule a call"
   breaks the moment somebody says how long it will take.
 - **A job description you saved or mailed to yourself.** It contains not one
   word a hiring process uses. It is all headings.
@@ -245,23 +245,24 @@ whether it reads like two people talking rather than a company writing to a
 customer.
 
 It also carries what it knows about the world: 35,150 company brand names with
-the sector each belongs to, and every airport's IATA code — 330 KB of public
-data, bundled, no network. That is the difference between `STN to DUB` and
+the sector each belongs to, and every airport's IATA code. That is 330 KB of
+public data, bundled, with no network call. It is the difference between
+`STN to DUB` and
 `PDF to DOC`, and it is how the sorter knows ryanair.com is an airline and
 argos.co.uk is a shop.
 
-These rank; they never decide. Words always come first — a security code from
-a bank is a security notice, not a bank statement — and anything resting
-mainly on shape is capped below the filing threshold: good enough to sort by,
-not good enough to move your mail unasked.
+These rank; they never decide. Words always come first, so a security code
+from a bank is a security notice rather than a bank statement. Anything
+resting mainly on shape is capped below the filing threshold: good enough to
+sort by, not good enough to move your mail unasked.
 
 ## Acknowledgements
 
 "We got your application, we'll be in touch" is the commonest mail in a job
 search and the one you least need to read. Every tracking system words it
-differently, so the sorter counts what the message *does* — says it arrived,
-promises to read it, promises to be in touch if it fits — rather than matching
-phrases. Two of those is enough.
+differently, so instead of matching phrases the sorter counts what the message
+*does*: says it arrived, promises to read it, promises to be in touch if it
+fits. Two of those is enough.
 
 A rejection does the same three things and then delivers a decision, so a
 decision always wins. And "if your experience aligns, we will reach out to
@@ -277,12 +278,12 @@ to do, so it is whatever you need it to be rather than one of a fixed set.
 Five rules ship, all switched off: acknowledging an interview invitation,
 answering a request for documents or times, declining a recruiter politely,
 filing security notices, and leaving anything from a colleague alone. They are
-worked examples as much as defaults — open one, see how it is built, change it.
+worked examples as much as defaults. Open one, see how it is built, change it.
 
 **Conditions** test the job category, the everyday topic, the sender, the
 sender's domain, the subject, the message text, either of those, the
 confidence, which mailbox it arrived in, how old it is, and whether it is bulk
-mail, carries an attachment or is a reply. Operators are the obvious ones —
+mail, carries an attachment or is a reply. The operators are the obvious ones:
 is, is not, contains, does not contain, starts with, ends with, is exactly,
 matches a pattern, is at least, is at most. A rule matches on **all** of its
 conditions or on **any** of them.
@@ -310,7 +311,7 @@ messages already on screen and tells you what would happen, without touching
 the mailbox or the model. Reading a rule and knowing what it does are different
 things.
 
-A rule that is half-written is never run — the editor lists what is missing
+A rule that is half-written is never run. The editor lists what is missing
 rather than refusing to save it, because half-written is a normal state to
 leave a rule in overnight. The same list catches a pattern that would hang the
 app: `(a+)+` and `.*.*x` are refused before they run, because a regular
@@ -328,8 +329,8 @@ draft lists those at the bottom. Bulk mail is skipped by default, per rule.
 ## Running a model on this Mac
 
 **Settings → Analysis.** If Ollama is missing and Homebrew is there, the panel
-installs it; **Manage models…** shows what you have — size, parameters, and
-whether it is loaded — and removes what you do not want.
+installs it. **Manage models…** lists what you have, with the size, the
+parameter count and whether it is loaded, and removes what you do not want.
 
 Be realistic about speed. Measured on an Intel Mac with a 3B model: twelve
 seconds to load the weights and about a minute for one message. The Test
@@ -338,8 +339,8 @@ built-in rule set is instant and needs nothing installed.
 
 ## Setting up
 
-The first run opens a wizard. Link as many mailboxes as you like — iCloud,
-Gmail, Outlook and seven others — and choose which folders to create:
+The first run opens a wizard. Link as many mailboxes as you like (iCloud,
+Gmail, Outlook and seven others) and choose which folders to create:
 job-search folders, everyday folders, or both. Each option says what it will
 build before you pick it, and nothing is created until your first scan.
 
@@ -349,9 +350,9 @@ account later.
 ## Which build is this
 
 Bottom right: `1.0.0 · a1b2c3d`. A version number alone does not identify a
-build between releases; the commit does. Hover for the full line — Python
-version, and whether it is running the Intel or the Apple silicon slice — and
-click to copy it into a bug report.
+build between releases; the commit does. Hover for the full line, including
+the Python version and whether it is running the Intel or the Apple silicon
+slice, and click to copy it into a bug report.
 
 ## Undo
 
@@ -361,12 +362,12 @@ being careful with it.
 
 ## Getting around
 
-- **Scan:** — which mailboxes the next scan reads. Any combination.
-- **Show:** — which mailboxes appear in the table, with Select all and Select
+- **Scan:** which mailboxes the next scan reads. Any combination.
+- **Show:** which mailboxes appear in the table, with Select all and Select
   none. A separate question from scanning: pull six in and read them one at a
   time. The Mailbox column shows each message's full address.
-- **Columns** — turn any column off. Remembered between launches.
-- **?** — a circled question mark in the corner. Switch it on and hovering
+- **Columns:** turn any column off. Remembered between launches.
+- **?** is a circled question mark in the corner. Switch it on and hovering
   anything explains it; switch it off and tooltips stay out of your way.
 
 Settings can be **exported to a text file** and imported again, from Settings →

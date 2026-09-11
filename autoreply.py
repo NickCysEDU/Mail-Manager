@@ -62,7 +62,7 @@ FIELD_HELP: Dict[str, str] = {
                 "so a job rule cannot fire on a receipt.",
     "topic": "What kind of everyday mail this is. Empty for job mail, for the "
              "same reason.",
-    "sender": "The display name and the address together — “Dana Reyes "
+    "sender": "The display name and the address together: “Dana Reyes "
               "dana@northwind.example”.",
     "sender_domain": "Everything after the last @. Use “ends with” to catch a "
                      "company and all its subdomains.",
@@ -76,7 +76,7 @@ FIELD_HELP: Dict[str, str] = {
                "or the internal id.",
     "age_days": "How long ago it arrived, counted from now rather than from "
                 "the start of the scan.",
-    "is_bulk": "Whether it carries an unsubscribe header — a newsletter, a "
+    "is_bulk": "Whether it carries an unsubscribe header: a newsletter, a "
                "mailing list, a marketing send.",
     "has_attachment": "Whether anything was attached.",
     "is_reply": "Whether the subject starts with Re:.",
