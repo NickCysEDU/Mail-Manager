@@ -40,6 +40,19 @@ by reading: 87.3% exact, unchanged. Four wrong versions were caught that way.
 It refuses to guess at names in running prose and flags those rows instead;
 the two it flagged were rewritten by hand.
 
+**Two switches can only be thrown after the repository is public.** GitHub
+refuses both while it is private, and About links to the first of them:
+
+- **Private vulnerability reporting** - Settings → Code security. This is what
+  makes `/security/advisories/new` accept a report from somebody who is not a
+  maintainer, and that URL is the "Security concern…" button in About. Until
+  it is on, that button leads to a 404 for everyone but the owner.
+- **The DMG on the release** has to be rebuilt from the published commit, so
+  that the build stamp in About names a commit a reader can actually look up.
+
+Dependabot alerts and its automated security fixes are already on; those two
+GitHub does allow on a private repository.
+
 **Everything that can explain itself does.** Nineteen of twenty-nine controls
 in the main window had no tooltip, which in help mode means no explanation at
 all. tests/test_first_run.py walks every clickable, typeable and draggable
@@ -115,7 +128,7 @@ That first figure is the one that matters and it must stay at zero.
 
 **Speed.** Rules engine 10.1 ms per message. Lexicon opens in 38 ms using
 1.95 MB, down from 70 ms and 10.5 MB, and neither number now grows with the
-table. Test suite 2,532 tests in about three minutes on four workers.
+table. Test suite 2,536 tests in about three minutes on four workers.
 
 ---
 
