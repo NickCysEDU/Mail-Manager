@@ -220,6 +220,35 @@ def self_test(offline: bool = False) -> int:
     import lexicon as _lexicon
     check("world lexicon", _lexicon.describe)
 
+    def _encryption() -> str:
+        """Seal and open a scrap, so the answer is demonstrated not asserted.
+
+        A security property nobody can check is one nobody should believe.
+        This does the whole round trip - make a key, encrypt, decrypt, and
+        confirm the plaintext really is absent from the file - in a temporary
+        directory it then removes.
+        """
+        import tempfile
+        import vault
+
+        if not vault.cipher_available():
+            return "no cipher library; summaries are not written to disk"
+        box = vault.shared()
+        if not box.sealing:
+            return "Keychain unavailable; summaries are not written to disk"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "verdicts.json"
+            secret = "self-test-canary-9f2a"
+            box.write(path, {"summary": secret})
+            raw = path.read_bytes()
+            if secret.encode() in raw:
+                raise RuntimeError("the plaintext is still in the file")
+            if box.read(path) != {"summary": secret}:
+                raise RuntimeError("it did not decrypt back")
+        return "AES-GCM, key in the Keychain, verified round trip"
+
+    check("encryption at rest", _encryption)
+
     def _tls_probe() -> str:
         """A real handshake, because a path that exists is not proof."""
         import socket

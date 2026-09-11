@@ -18,6 +18,8 @@ Please do not include real credentials or real message content in a report.
 | iCloud app-specific password | macOS Keychain, service `iCloud Job Triage` |
 | Model API keys | macOS Keychain, one entry per backend |
 | Settings | `~/Library/Application Support/Mail Manager/settings.json`, mode `0600` |
+| What it learned from your corrections | `corrections.json`, **encrypted**, mode `0600` |
+| Verdicts kept between scans | `verdicts.json`, **encrypted**, mode `0600` |
 | Logs | `~/Library/Logs/Mail Manager/`, mode `0600`, rotated at 2 MB |
 | Your mail | Read over TLS, held in memory for the length of a scan, never written to disk |
 
@@ -30,9 +32,19 @@ their filenames are mentioned.
 
 - **TLS everywhere.** IMAP uses `ssl.create_default_context()`, which verifies
   certificates and hostnames. So does every HTTP backend.
+- **The two files that describe your mail are encrypted.** `verdicts.json`
+  holds a summary and a line of reasoning for every message classified, and
+  `corrections.json` holds every sender you have filed by hand. Both are
+  AES-GCM with a key kept in the Keychain, so another program running as you
+  can read neither, and neither ends up readable in a Time Machine snapshot.
+  `--self-test` proves the round trip rather than asserting it.
+  When it cannot encrypt, it leaves the summaries out rather than writing
+  them in the clear.
 - **No plaintext to a remote host.** A custom endpoint on `http://` is refused
   unless it is on this machine or your local network, because every request
-  carries the text of an email.
+  carries the text of an email. The host is parsed as an address rather than
+  matched as a string, so `127.0.0.1.evil.com` is a remote host and is
+  refused.
 - **Nothing sensitive is logged.** Message bodies, subjects, passwords and keys
   never reach the log file, and the HTTP libraries are pinned to `WARNING` so
   they cannot log URLs. There is a test for the credentials half of that: it
@@ -60,7 +72,9 @@ their filenames are mentioned.
   yourself from source if that matters to you.
 - Whatever your chosen model provider does with the text you send it. Read
   their policy, or use the default sorter and send nothing.
-- Anyone with access to your unlocked Mac and Keychain.
+- Anyone with access to your unlocked Mac and Keychain. Encryption at rest
+  keeps the two sensitive files away from *other programs* running as you; it
+  cannot protect anything from somebody who can run this one.
 
 ## Supported versions
 

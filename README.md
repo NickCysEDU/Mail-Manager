@@ -13,7 +13,7 @@
 
 ![macOS 13+](https://img.shields.io/badge/macOS-13%2B-black)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue)
-![Tests](https://img.shields.io/badge/tests-2%2C481%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-2%2C485%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
 <img src="docs/screenshot.png" width="900" alt="The approval table, with a summary, category, destination folder and confidence score for every message">
@@ -449,7 +449,7 @@ rotated backups are written `0600`, owner-only, like the settings file.
 
 ```bash
 ./dev demo      # the app with sample mail, no setup
-./dev test      # 2,481 tests, about three minutes on four workers
+./dev test      # 2,485 tests, about three minutes on four workers
 ./dev eval      # sorter accuracy against the labelled fixture
 ./dev fake      # the whole pipeline in the terminal, offline
 ```

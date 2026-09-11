@@ -5,5 +5,10 @@ PySide6>=6.6.0          # tested with 6.11.2, native macOS GUI
 anthropic>=1.0.0        # tested with 1.3.0, structured outputs and beta fallbacks
 keyring>=24.0.0         # tested with 25.7.0, macOS Keychain credential storage
 certifi>=2024.0.0     # CA bundle, so a frozen app can verify TLS anywhere
-cryptography>=44.0.0  # tested with 48.0.1, AES-GCM for the two files that
-                      # describe your mail. Ships a universal2 wheel.
+# AES-GCM for the two files that describe your mail. Capped at 48.x, not for
+# any fault in 49 or 50 but because they stopped publishing a universal2
+# wheel: the app ships one binary that runs natively on Apple silicon and on
+# Intel, and a dependency that exists for only one of those quietly makes
+# half of it unusable. tools/make_universal_deps.py checks every compiled
+# module, and the build refuses rather than shipping a half-universal app.
+cryptography>=44.0.0,<49    # tested with 48.0.1
