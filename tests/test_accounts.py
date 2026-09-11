@@ -133,10 +133,16 @@ class TestSortingProfiles:
             == profiles.DEFAULT_PROFILE
 
     def test_everyday_files_job_mail_in_one_place(self):
+        """One folder rather than seven - and still the job folder.
+
+        It used to move the whole tree under Sorted Mail, which put a second
+        "Job Search" beside the topics and left the first one stranded.
+        """
         settled = Settings.from_dict({"sort_profile": "everyday"})
         folders = settled.folder_plan().all_folders
-        assert "Sorted Mail/Job Search" in folders
-        assert "Sorted Mail/Interview" not in folders
+        assert folders[0] == "Job Search"
+        assert "Job Search/Interview" not in folders
+        assert not any(f.startswith("Sorted Mail") for f in folders)
 
     def test_essentials_leaves_the_rest_alone(self):
         plan = Settings.from_dict({"sort_profile": "essentials"}).folder_plan()
