@@ -39,6 +39,7 @@ from accounts import Account
 import config
 from config import CredentialError, CredentialStore, Settings
 from models import APP_DISPLAY_NAME, FolderPlan
+from widgets import _attr_url
 
 
 def _watermark() -> Optional[QPixmap]:
@@ -226,7 +227,7 @@ class AccountsPage(QWizardPage):
             f"you@{host.domains[0]}" if host.domains else "you@example.com")
         note = f"<p><b>{host.secret_label}.</b> {host.note}"
         if host.help_url:
-            note += f" <a href='{host.help_url}'>Generate one</a>."
+            note += f' <a href="{_attr_url(host.help_url)}">Generate one</a>.'
         self.hint.setText(note + "</p>")
         if not getattr(self, "_loading", False):
             # Switching provider while an address from the old one is still in

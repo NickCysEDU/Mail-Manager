@@ -424,13 +424,43 @@ def _wrap(text: str, width: int = 96) -> str:
 
 
 def _html(text: str) -> str:
-    return (
-        (text or "")
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-    )
+    """Escape text for rich text, including both kinds of quote.
+
+    Both, because the callers interpolate into attributes as well as into
+    element content, and an unescaped apostrophe inside href='...' ends the
+    attribute early. A link is allowed to contain one, so a message could
+    close the href and append a second one - Qt keeps the last, which pointed
+    the click somewhere the displayed text never mentioned.
+    """
+    return html_module.escape(text or "", quote=True)
+
+
+#: Characters that cannot sit literally inside href="..." - the quote that
+#: would close it, the brackets that would end the tag. None of them is legal
+#: unencoded in a URL either, so encoding them corrects the link rather than
+#: altering it.
+_UNSAFE_IN_ATTRIBUTE = {'"': "%22", "<": "%3C", ">": "%3E"}
+
+
+def _attr_url(url: str) -> str:
+    """A URL safe to interpolate into href="...".
+
+    Qt's rich text parser does not expand entities inside attribute values,
+    so escaping a URL the way _html does puts a literal "&amp;" in the link
+    and corrupts every query string with more than one parameter. The fix is
+    to leave the characters a URL needs alone and percent-encode the few that
+    would break out of the attribute - which is what a browser would send for
+    them anyway.
+    """
+    out = []
+    for character in url or "":
+        if character in _UNSAFE_IN_ATTRIBUTE:
+            out.append(_UNSAFE_IN_ATTRIBUTE[character])
+        elif ord(character) <= 0x20 or ord(character) == 0x7F:
+            out.append("%%%02X" % ord(character))
+        else:
+            out.append(character)
+    return "".join(out)
 
 
 def system_font() -> QFont:

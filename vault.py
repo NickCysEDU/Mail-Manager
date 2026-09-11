@@ -78,10 +78,17 @@ class Vault:
         self._looked = False
 
     # -- the key ---------------------------------------------------------
+    #: Long enough for somebody to click Allow, short enough that a run with
+    #: nobody watching ends. macOS identifies an app by its code signature, so
+    #: a rebuilt or re-signed copy is asked about again - and a prompt no one
+    #: can answer is a process that never returns.
+    KEYCHAIN_TIMEOUT = 20.0
+
     def _credential_store(self):
         if self._store is None:
             import config
-            self._store = config.CredentialStore()
+            self._store = config.CredentialStore(
+                read_timeout=self.KEYCHAIN_TIMEOUT)
         return self._store
 
     def key(self) -> Optional[bytes]:
