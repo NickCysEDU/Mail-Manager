@@ -18,7 +18,10 @@ permissions:
 jobs:
   test:
     runs-on: macos-14
-    timeout-minutes: 20
+    # Headroom, not an expectation. The suite is minutes; installing PySide6
+    # and building the universal wheels is the slow part, and a hosted runner
+    # having a bad day should not read as a broken commit.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
 

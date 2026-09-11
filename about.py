@@ -174,8 +174,11 @@ class AboutDialog(QDialog):
         """What happens to the two files that describe your mail."""
         try:
             import vault
+            # Only the first letter: lowercasing the whole sentence turns
+            # Keychain, which is a product name, into keychain.
+            said = vault.shared().describe()
             return (f"What it remembers between scans: "
-                    f"{vault.shared().describe().lower()}")
+                    f"{said[:1].lower()}{said[1:]}")
         except Exception:      # noqa: BLE001 - a label, never worth an error
             return ""
 
