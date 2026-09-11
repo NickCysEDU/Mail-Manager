@@ -36,15 +36,14 @@ empty and only ever contains what the person using it put there.
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-import tempfile
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+
+import vault
 
 log = logging.getLogger(__name__)
 
@@ -220,13 +219,8 @@ class Memory:
         what it was taught, which is recoverable by teaching it again.
         """
         path = path or cls.default_path()
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return cls(path=path)
-        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
-            log.warning("Could not read corrections at %s (%s); starting empty.",
-                        path, exc)
+        raw = vault.shared().read(path)
+        if raw is None:
             return cls(path=path)
         rows = raw.get("corrections") if isinstance(raw, dict) else raw
         if not isinstance(rows, list):
@@ -238,30 +232,10 @@ class Memory:
         """Atomically write the file, 0600, newest last."""
         path = path or self._path or self.default_path()
         self._path = path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps(
-            {"version": 1,
-             "corrections": [c.to_dict() for c in self._entries[-MAX_ENTRIES:]]},
-            indent=2)
-        fd, tmp_name = tempfile.mkstemp(dir=str(path.parent),
-                                        prefix=".corrections-", suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(payload)
-                handle.write("\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(tmp_name, path)
-        except BaseException:
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                pass
-            raise
-        try:
-            os.chmod(path, 0o600)
-        except OSError:  # pragma: no cover - best effort
-            pass
+        kept = self._entries[-MAX_ENTRIES:]
+        if not vault.shared().write(
+                path, {"version": 1, "corrections": [c.to_dict() for c in kept]}):
+            raise OSError(f"could not write {path}")
         return path
 
     # -- writing ---------------------------------------------------------

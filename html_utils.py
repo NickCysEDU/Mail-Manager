@@ -400,10 +400,63 @@ _ALSO_HIDDEN = re.compile(
 )
 
 
+#: How many unmatched "<" a document may carry before it is treated as
+#: malformed rather than merely untidy. Real mail, however badly generated,
+#: does not reach this; the value is well above anything in the six thousand
+#: messages of the SpamAssassin corpus.
+_STRAY_BRACKET_LIMIT = 200
+
+#: How far after a "<" a ">" may be and still plausibly close a tag. Longer
+#: than any real tag, short enough that the search stays cheap.
+_TAG_WINDOW = 2048
+
+
+def defuse_stray_brackets(html: str) -> str:
+    """Escape "<" characters that no ">" ever closes.
+
+    Python's HTMLParser rescans the rest of the buffer every time it meets a
+    "<" it cannot complete, which is quadratic: 40,000 unclosed tags in a
+    156 KB body took 22 seconds, and 50,000 took 35. A handful of such
+    messages in an inbox would stall a scan for minutes, and anyone can send
+    one.
+
+    A "<" with no ">" after it is not a tag by any reading, so turning it into
+    the entity it should have been costs nothing and removes the quadratic.
+    Documents that are merely untidy are left exactly as they are.
+    """
+    opens = html.count("<")
+    if opens - html.count(">") <= _STRAY_BRACKET_LIMIT:
+        return html
+    out = []
+    index = 0
+    length = len(html)
+    while index < length:
+        nxt = html.find("<", index)
+        if nxt < 0:
+            out.append(html[index:])
+            break
+        out.append(html[index:nxt])
+        closing = html.find(">", nxt + 1, nxt + 1 + _TAG_WINDOW)
+        following = html.find("<", nxt + 1)
+        # A "<" only opens a tag if its ">" arrives before the next "<" does.
+        # Without that second test, the first of four hundred stray brackets
+        # claimed the ">" belonging to a real anchor tag a thousand
+        # characters later and swallowed the link whole.
+        stray = closing < 0 or (0 <= following < closing)
+        if stray:
+            out.append("&lt;")
+            index = nxt + 1
+        else:
+            out.append(html[nxt:closing + 1])
+            index = closing + 1
+    return "".join(out)
+
+
 def html_to_text(html: str) -> ExtractedText:
     """Reduce an HTML email part to readable text plus its links."""
     if not html:
         return ExtractedText("")
+    html = defuse_stray_brackets(html)
     parser = _TextExtractor()
     try:
         parser.feed(html)

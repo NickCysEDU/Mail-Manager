@@ -695,3 +695,62 @@ class TestPlainHttpOnlyEverGoesNowhere:
         with pytest.raises(providers.ProviderError) as caught:
             session.post_json("http://127.0.0.1:1/v1/chat/completions", {})
         assert "plain HTTP" not in str(caught.value)
+
+
+class TestUnclosedTagsCannotStallAScan:
+    """Python's HTMLParser is quadratic on "<" it cannot close.
+
+    It rescans the rest of the buffer every time, so 40,000 unclosed tags in
+    a 156 KB body took 22 seconds and 50,000 took 35. Anyone can send that,
+    and a handful of them in one inbox would stall a scan for minutes.
+    """
+
+    def test_it_is_fast_now(self):
+        import time
+        import html_utils
+        document = "<div" * 50_000
+        began = time.perf_counter()
+        html_utils.html_to_text(document)
+        took = time.perf_counter() - began
+        assert took < 2.0, f"took {took:.1f}s; it used to take 35"
+
+    def test_it_stays_linear(self):
+        """Four times the input should not be sixteen times the work."""
+        import time
+        import html_utils
+
+        def timed(count):
+            began = time.perf_counter()
+            html_utils.html_to_text("<div" * count)
+            return time.perf_counter() - began
+
+        timed(5_000)                      # warm
+        small, large = timed(10_000), timed(40_000)
+        assert large < max(small * 12, 0.5), (small, large)
+
+    def test_a_stray_bracket_becomes_text(self):
+        import html_utils
+        text = html_utils.html_to_text("<p>5 < 6 and a < b</p>" + "<div" * 500).text
+        assert "5 < 6" in text
+        assert "a < b" in text
+
+    def test_ordinary_html_is_untouched(self):
+        import html_utils
+        source = '<p>Hello <b>there</b>, see <a href="http://x.example">this</a>.</p>'
+        assert html_utils.defuse_stray_brackets(source) == source
+        result = html_utils.html_to_text(source)
+        assert result.text == "Hello there, see this."
+        assert result.links == ("http://x.example",)
+
+    def test_a_merely_untidy_document_is_left_alone(self):
+        """Below the threshold nothing is rewritten at all."""
+        import html_utils
+        source = "<p>a < b" * 20
+        assert html_utils.defuse_stray_brackets(source) == source
+
+    def test_a_real_tag_after_a_stray_one_still_parses(self):
+        import html_utils
+        source = ("<div" * 400) + '<a href="http://y.example">link</a>'
+        result = html_utils.html_to_text(source)
+        assert "link" in result.text
+        assert "http://y.example" in result.links

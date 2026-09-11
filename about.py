@@ -166,7 +166,17 @@ class AboutDialog(QDialog):
             f"<b>Where your mail goes.</b> {where}<br>"
             "Passwords and API keys are stored in the macOS Keychain, never "
             "in a file. Messages are fetched without being marked as read."
+            f"<br>{self._at_rest()}"
         )
+
+    def _at_rest(self) -> str:
+        """What happens to the two files that describe your mail."""
+        try:
+            import vault
+            return (f"What it remembers between scans: "
+                    f"{vault.shared().describe().lower()}")
+        except Exception:      # noqa: BLE001 - a label, never worth an error
+            return ""
 
     def _on_device(self) -> bool:
         try:
