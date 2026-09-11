@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -69,8 +70,10 @@ class TestTheNumbersAreCurrent:
         assert words[len(profiles.ALL_TOPICS)] in everything().lower()
 
     def test_the_test_count(self):
+        # sys.executable, not the checkout's virtualenv: CI installs into
+        # the runner's own Python and there is no .venv there at all.
         out = subprocess.run(
-            [".venv/bin/python", "-m", "pytest", "-p", "no:randomly",
+            [sys.executable, "-m", "pytest", "-p", "no:randomly",
              "-n", "0", "--collect-only", "-q"],
             cwd=ROOT, capture_output=True, text=True)
         if out.returncode != 0:
