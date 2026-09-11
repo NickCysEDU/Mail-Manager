@@ -6,22 +6,15 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
-    groups:
-      python-packages:
-        patterns: ["*"]
+    # Zero, which is the documented way to say "security updates only".
+    #
     # The requirements files state a deliberately loose floor with the exact
     # version it was tested against in a comment beside it. Raising the floor
-    # to whatever happens to be installed narrows what can install the app and
-    # gains nothing, so only a security fix is worth a pull request here.
-    #
-    # GitHub raises security updates regardless of this.
-    ignore:
-      - dependency-name: "*"
-        update-types:
-          - version-update:semver-major
-          - version-update:semver-minor
-          - version-update:semver-patch
+    # to whatever happens to be installed narrows what can install the app,
+    # gains nothing, and leaves every line contradicting its own comment.
+    # Security advisories are unaffected by this setting and still open a
+    # pull request.
+    open-pull-requests-limit: 0
 
   - package-ecosystem: github-actions
     directory: "/"
