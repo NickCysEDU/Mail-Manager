@@ -35,6 +35,7 @@ Nothing is ever moved without an explicit tick in the table.
 - [Reply rules](#reply-rules)
 - [How a scan works](#how-a-scan-works)
 - [Stopping, and process hygiene](#stopping-and-process-hygiene)
+- [Use of AI-assisted tools](#use-of-ai-assisted-tools)
 - [Architecture](#architecture)
 - [Tests](#tests)
 - [Measuring a model](#measuring-a-model)
@@ -744,7 +745,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 2,360 tests
+QT_QPA_PLATFORM=offscreen python -m pytest               # 2,438 tests
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1033,6 +1034,15 @@ Efficiency, in the places it actually shows:
 
 ---
 
+## Use of AI-assisted tools
+
+During development and campaign preparation, the Mail Manager team used AI-assisted tools in a limited supporting role, including coding assistance, copy editing, and the preparation of some sample display content.
+
+It is also shown in the app itself, under **Help → About Mail Manager**, and
+in the [README](../README.md).
+
+---
+
 ## Architecture
 
 | File | Responsibility |
@@ -1089,7 +1099,7 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 2,360 tests, ~25s
+./dev test        # 2,438 tests, ~25s
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

@@ -17,13 +17,29 @@ dist/
 *.dmg
 assets/icon.iconset/
 
-# Anything that could hold a credential or personal mail
+# Anything that could hold a credential or personal mail.
+#
+# The app writes these into ~/Library/Application Support and never into the
+# checkout, but ICLOUD_TRIAGE_HOME can point anywhere, and a developer who
+# points it at "." should not be one `git add .` away from publishing their
+# own inbox.
+# gitignore has no trailing comments: a "#" after a pattern is part of the
+# pattern, and these two matched nothing at all until that was noticed.
+#   settings.json     what is configured
+#   corrections.json  every sender you have corrected, and where to
+#   verdicts.json     a verdict per message, keyed by mailbox and UID
 settings.json
+corrections.json
+verdicts.json
 agent-status.json
+Logs/
 *.log
 secrets*
 *.pem
 *.key
+*.p12
+*.cer
+*.mobileprovision
 .env
 .env.*
 
@@ -35,6 +51,8 @@ secrets*
 .venv-universal/
 BUILD_STAMP
 
-# Anything the tuning tool writes out of a real inbox
+# Anything the tuning tool writes out of a real inbox. It refuses to write
+# inside the repository at all; this is the second lock on that door.
 *-set.json
 tuning/
+inbox-*.json

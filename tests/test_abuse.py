@@ -634,3 +634,64 @@ class TestUnsolicitedMailIsNotJobMail:
             "time. To be removed from this list, click here to unsubscribe.",
             "CONGRATULATIONS YOU HAVE BEEN SELECTED!!")
         assert score >= 2.6 and len(reasons) >= 3
+
+
+class TestPlainHttpOnlyEverGoesNowhere:
+    """Every request to a model backend carries the text of somebody's email.
+
+    Plain HTTP is allowed to this machine and to a box on the same network,
+    because that is where a local model runs and the traffic never leaves the
+    building. It is refused everywhere else.
+
+    The check used to be a string prefix, so `127.0.0.1.evil.com` began with
+    "127." and passed. Setting that as the endpoint would have sent every
+    message body to somebody else's server in the clear.
+    """
+
+    @pytest.mark.parametrize("host", [
+        "127.0.0.1.evil.com",
+        "10.0.0.1.attacker.net",
+        "192.168.1.1.example.com",
+        "172.16.0.1.evil.co.uk",
+        "localhost.evil.com",
+        "127.0.0.1evil.com",
+        "evil.com",
+        "8.8.8.8",
+        "169.254.169.254",          # the cloud metadata endpoint
+        "fe80::1",                  # link-local
+        ".local",
+        "local",
+        "a.b.local",                # only one label may precede .local
+        "",
+    ])
+    def test_these_are_not_local(self, host):
+        from providers import _is_local
+        assert _is_local(host) is False, host
+
+    @pytest.mark.parametrize("host", [
+        "127.0.0.1", "localhost", "::1", "[::1]", "0.0.0.0",
+        "192.168.1.5", "10.0.0.3", "172.16.5.1", "172.31.255.254",
+        "fd00::1", "my-nas.local", "host.docker.internal",
+    ])
+    def test_these_are(self, host):
+        from providers import _is_local
+        assert _is_local(host) is True, host
+
+    def test_the_transport_refuses_it_before_connecting(self):
+        """The guard is in post_json, so every backend inherits it."""
+        import providers
+        session = providers.HttpSession()
+        with pytest.raises(providers.ProviderError) as caught:
+            session.post_json("http://127.0.0.1.evil.com/v1/chat/completions",
+                              {"messages": [{"content": "a message body"}]})
+        assert "plain HTTP" in str(caught.value)
+        assert caught.value.permanent is True
+
+    def test_plain_http_to_this_machine_is_still_allowed(self):
+        """A local model is the reason the exception exists at all."""
+        import providers
+        session = providers.HttpSession()
+        # Refused for being unreachable, never for the scheme.
+        with pytest.raises(providers.ProviderError) as caught:
+            session.post_json("http://127.0.0.1:1/v1/chat/completions", {})
+        assert "plain HTTP" not in str(caught.value)

@@ -68,7 +68,6 @@ from config import (
 from imap_engine import MovePlan, MoveReport
 from models import (
     APP_DISPLAY_NAME,
-    APP_VERSION,
     OTHER_COLOR,
     Disposition,
     FolderPlan,
@@ -3233,17 +3232,12 @@ class MainWindow(QMainWindow):
         box.exec()
 
     def _about(self) -> None:
-        QMessageBox.about(
-            self,
-            f"About {APP_DISPLAY_NAME}",
-            f"<h3>{APP_DISPLAY_NAME} {APP_VERSION}</h3>"
-            "<p>Scans iCloud Mail over IMAP, summarises and categorises job-search email "
-            "with your chosen model backend, and files it only after you approve each move.</p>"
-            f"<p>Backend: <code>{_html(self.settings.provider_label)}</code><br>"
-            f"Model: <code>{_html(self.settings.model)}</code><br>"
-            f"Confidence threshold: {self.settings.confidence_threshold * 100:.0f}%<br>"
-            f"Keychain: <code>{_html(self.store.backend_name())}</code></p>",
-        )
+        """What this is, where the mail goes, and who to tell when it breaks."""
+        from about import AboutDialog
+
+        dialog = AboutDialog(self.settings, self.store, self)
+        dialog.exec()
+        dialog.deleteLater()
 
 
 

@@ -25,6 +25,7 @@ from __future__ import annotations
 import http.client
 import json
 import logging
+import ipaddress
 import re
 import socket
 import ssl
@@ -952,11 +953,35 @@ _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0", "host.dock
 
 
 def _is_local(host: str) -> bool:
-    host = (host or "").strip().strip("[]").lower()
-    if host in _LOCAL_HOSTS or host.endswith(".local"):
+    """Whether plain HTTP to this host is safe, because it never leaves here.
+
+    Parsed as an address rather than matched as a string. The prefix match
+    this replaces treated ``127.0.0.1.evil.com`` as loopback, because it
+    begins with "127." - which would have sent the text of every email to
+    somebody else's server in the clear.
+
+    Anything that does not parse as an address has to be an exact hostname
+    from the list, or an mDNS name under ``.local``, which is reserved and
+    not resolvable on the public internet.
+    """
+    host = (host or "").strip().strip("[]").lower().rstrip(".")
+    if not host:
+        return False
+    if host in _LOCAL_HOSTS:
         return True
-    # Private ranges, for an Ollama box on the same network.
-    return bool(re.match(r"^(?:10\.|127\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)", host))
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        # A name, not an address. Only mDNS, and only with a real label in
+        # front of it: ".local" on its own is not a host.
+        label, _, suffix = host.rpartition(".")
+        return suffix == "local" and bool(label) and "." not in label
+    if address.is_loopback:
+        return True
+    # A private range, for an Ollama box on the same network. Link-local is
+    # excluded: 169.254.169.254 is the cloud metadata endpoint on every major
+    # provider and is not somewhere anybody runs a model.
+    return bool(address.is_private and not address.is_link_local)
 
 
 def _status(exc: BaseException) -> Optional[int]:
@@ -967,8 +992,6 @@ def _status(exc: BaseException) -> Optional[int]:
     code = getattr(response, "status_code", None)
     if isinstance(code, int):
         return code
-    import re
-
     match = re.search(r"HTTP (\d{3})", str(exc))
     return int(match.group(1)) if match else None
 
