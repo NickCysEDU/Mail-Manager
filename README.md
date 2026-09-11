@@ -4,7 +4,7 @@
 
 # Mail Manager
 
-**Sort your job-search email in iCloud. On your Mac, in seconds, without an API key.**
+**Sort your mail on your Mac, in seconds, without an API key.**
 
 [Download](https://github.com/NickCysEDU/Mail-Manager/releases/latest) ·
 [Handbook](docs/HANDBOOK.md) ·
@@ -31,6 +31,10 @@ have not spotted yet.
 Mail Manager reads the window you choose, works out what each message is, and
 shows you a list. You tick the ones you want filed. It files them.
 
+It starts on the job search, because that is the inbox that gets worst fastest.
+It will sort the rest of your mail too, into as many or as few topics as you
+want, and it does the whole job on your Mac unless you tell it otherwise.
+
 - **Nothing moves without you.** Every message gets a tick box. Only ticked ones
   are filed.
 - **Uncertainty goes to a folder, not a guess.** Anything below the confidence
@@ -43,8 +47,6 @@ shows you a list. You tick the ones you want filed. It files them.
 
 The download is a **universal** app: one file that runs natively on Apple
 silicon and on Intel, with no Rosetta and no choosing between two downloads.
-
-
 
 **[Download the latest `.dmg`](https://github.com/NickCysEDU/Mail-Manager/releases/latest)**,
 open it, and drag Mail Manager onto Applications.
