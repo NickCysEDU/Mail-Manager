@@ -1,0 +1,46 @@
+name: A message was sorted wrongly
+description: The sorter put something in the wrong place, or would not sort it at all.
+labels: [sorting]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is the most useful kind of report, and the one that needs the
+        most care with privacy. **Do not paste the message.** Describe the
+        shape of it: what kind of mail it was, roughly what it said, and which
+        phrases you would expect a sorter to notice.
+
+  - type: input
+    id: expected
+    attributes:
+      label: Where it should have gone
+      placeholder: Job Search/Interview, or Sorted Mail/Church
+    validations:
+      required: true
+
+  - type: input
+    id: actual
+    attributes:
+      label: Where it went
+      placeholder: Needs Review, or left in the inbox
+    validations:
+      required: true
+
+  - type: textarea
+    id: reasoning
+    attributes:
+      label: What the preview pane said
+      description: >
+        Select the row and copy the Reasoning, Matched and Runners-up lines.
+        Those name the phrases that fired, which is usually the whole answer.
+      render: text
+
+  - type: textarea
+    id: shape
+    attributes:
+      label: What kind of message it was
+      description: >
+        Who it was from (a person, a careers mailbox, a mailing list), roughly
+        what it said, and any phrase you think should have been recognised.
+    validations:
+      required: true
