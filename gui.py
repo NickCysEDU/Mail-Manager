@@ -465,8 +465,8 @@ class MainWindow(QMainWindow):
             header.moveSection(current, wanted)
         if multi:
             # Wide enough for the longest address on screen. A column that
-            # elides to "firstname.lastname@ic…" has dropped the one part that says
-            # which mailbox it is.
+            # elides to "firstname.lastname@ic…" has dropped the one part
+            # that says which mailbox it is.
             metrics = QFontMetrics(self.table.font())
             longest = max(
                 (metrics.horizontalAdvance(i.email.mailbox_display)
