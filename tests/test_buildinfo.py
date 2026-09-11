@@ -47,13 +47,36 @@ class TestAFrozenApp:
         buildinfo._baked.cache_clear()
         buildinfo._from_git.cache_clear()
         monkeypatch.setattr(buildinfo, "_root", lambda: tmp_path)
+        monkeypatch.setattr(buildinfo.sys, "frozen", True, raising=False)
         try:
             assert buildinfo.commit() == "abc1234"
             assert buildinfo.built_on()
             assert "built " in buildinfo.full()
         finally:
+            monkeypatch.delattr(buildinfo.sys, "frozen", raising=False)
             buildinfo._baked.cache_clear()
             buildinfo._from_git.cache_clear()
+
+    def test_a_stamp_left_in_a_checkout_is_ignored(self, tmp_path, monkeypatch):
+        """Building leaves one behind, and it goes stale immediately.
+
+        Without this, anyone who has ever built the app reports the commit
+        they built rather than the one they are running - in the About box,
+        and in every bug report made from that checkout afterwards.
+        """
+        buildinfo.write_stamp(tmp_path / buildinfo.STAMP_FILE, "0000000")
+        buildinfo._baked.cache_clear()
+        buildinfo._from_git.cache_clear()
+        original = buildinfo._from_git
+        monkeypatch.setattr(buildinfo, "_root", lambda: tmp_path)
+        monkeypatch.setattr(buildinfo, "_from_git", lambda: "live123")
+        try:
+            assert buildinfo._baked() == ""
+            assert buildinfo.commit() == "live123"
+            assert "built " not in buildinfo.full()
+        finally:
+            buildinfo._baked.cache_clear()
+            original.cache_clear()
 
     def test_no_stamp_and_no_git_still_gives_a_version(self, tmp_path, monkeypatch):
         buildinfo._baked.cache_clear()
