@@ -1,4 +1,4 @@
-# Runtime dependencies for iCloud Mail Job Triage.
+# Runtime dependencies for Mail Manager.
 # Verified against the exact versions listed in the comments.
 
 PySide6>=6.6.0          # tested with 6.11.2, native macOS GUI
