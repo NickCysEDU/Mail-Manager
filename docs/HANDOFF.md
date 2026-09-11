@@ -19,7 +19,7 @@ rest, which topics earn a folder - and the third of those had no interface at
 all before. A row that will not tick says which of the two reasons applies and
 offers to change it.
 
-**Church is a topic.** 160 signals, and the gap that made it work was
+**Church is a topic.** 161 signals, and the gap that made it work was
 denominations - the word in the masthead and the footer of every parish
 mailing, and the most portable vocabulary in the whole table. Four rows in the
 labelled set were parish mail labelled Newsletter and Personal because Church
@@ -115,7 +115,7 @@ That first figure is the one that matters and it must stay at zero.
 
 **Speed.** Rules engine 10.1 ms per message. Lexicon opens in 38 ms using
 1.95 MB, down from 70 ms and 10.5 MB, and neither number now grows with the
-table. Test suite 2,291 tests in about three minutes on four workers.
+table. Test suite 2,360 tests in about three minutes on four workers.
 
 ---
 
@@ -198,7 +198,7 @@ table. Test suite 2,291 tests in about three minutes on four workers.
 - [x] **Non-job mail has a menu.** The Sorting button, holding what to sort,
   what happens to the rest, and which topics get a folder.
 - [x] **A row that will not tick says why**, and offers the one-click fix.
-- [x] **Church is a topic**, with 160 signals, trained against a real parish
+- [x] **Church is a topic**, with 161 signals, trained against a real parish
   mailing list.
 - [x] **Form loses to subject** when the subject has real evidence.
 - [x] **Every control can explain itself**, with a test that keeps it that way.

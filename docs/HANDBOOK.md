@@ -1,8 +1,14 @@
-# iCloud Mail Job Triage
+# Mail Manager
 
-A standalone macOS desktop app that reads your iCloud inbox over IMAP, summarises
-and categorises every message with Claude, shows you exactly why it decided what
-it decided, and files the ones you approve into `Job Search/…` folders.
+A standalone macOS desktop app that reads your inbox over IMAP, works out what
+each message is, shows you exactly why it decided what it decided, and files
+the ones you approve into folders.
+
+Out of the box it sorts on your Mac, with a rule set rather than a model: no
+account, no key, no bill, and no message text leaving the machine. If you want
+a language model to read the harder cases instead, add a key for Claude,
+Gemini or an OpenAI-compatible endpoint, or point it at Ollama running
+locally. The choice is one click in the toolbar and changes nothing else.
 
 Nothing is ever moved without an explicit tick in the table.
 
@@ -50,11 +56,13 @@ Nothing is ever moved without an explicit tick in the table.
    scripts, styles and the invisible "preheader" spam marketers hide at the top
    all go. Link *targets* are kept, because the strongest interview signal in
    real mail is a `calendly.com` URL hiding behind the words "pick a time".
-3. **Analyze**: sends each message to Claude with a strict JSON schema and gets
-   back a two-sentence summary, a category, a confidence score and the reasoning.
+3. **Analyze**: scores each message against the offline rule set, or sends it
+   to whichever model backend you have chosen under a strict JSON schema.
+   Either way what comes back is a two-sentence summary, a category, a
+   confidence score and the reasoning behind it.
 4. **Review**: everything lands in a sortable, filterable table. Click any row
-   to see the message text and Claude's reasoning side by side, and to override
-   the destination folder.
+   to see the message text and the reasoning side by side, and to override the
+   destination folder.
 5. **Apply**: the messages you ticked are copied to their folders, flagged
    `\Deleted`, and expunged. A message is **never** flagged for deletion until
    its copy has been confirmed.
@@ -153,7 +161,7 @@ whichever trade-off suits you in **Settings → Analysis**:
 | **Gemini (Google AI Studio)** | yes | Flash-Lite ≈ $0.10/$0.40 per Mtok | The cheapest cloud option by a wide margin, and fast. |
 | **OpenAI-compatible** | usually | GPT-4o mini ≈ $0.15/$0.60 per Mtok | Also OpenRouter, Groq, Together, **LM Studio** and vLLM: anything with a `/chat/completions` endpoint. Set **Endpoint** to point at it. |
 | **On this Mac (Ollama)** | **no** | **free** | Runs locally. No key, no bill, and no email leaves the machine. |
-| **Local rules (no AI)** | **no** | **free** | No model at all: 402 weighted signals, plus a field overlay. Instant, offline, deterministic. Also the automatic fallback when a backend is down. |
+| **Local rules (no AI)** | **no** | **free** | **The default.** No model at all: 1,071 weighted signals, plus a field overlay. Instant, offline, deterministic. Also the automatic fallback when a backend is down. |
 
 A typical email is 1–2 K input tokens. A 100-message scan is therefore roughly
 **$0.15 on Haiku, $0.02 on Gemini Flash-Lite, or nothing at all on Ollama**,
@@ -212,7 +220,7 @@ rule set (field)** picks an overlay:
 | Teaching & Education | demo lesson, teaching certificate, step and lane |
 
 Overlays are purely additive, 275 extra signals across the ten fields on top
-of the 402 in the base set, so picking the wrong one costs recall rather than
+of the 1,071 in the base set, so picking the wrong one costs recall rather than
 correctness. They matter: "The next step is a system design interview" is
 unclassifiable under the general set and lands on **Interview** under Software.
 
@@ -220,7 +228,7 @@ unclassifiable under the general set and lands on **Interview** under Software.
 
 `rules_engine.py` is a hand-built expert system. It is not a trained model and
 makes no pretence of being one. It encodes the same domain knowledge the system
-prompt describes (≈380 weighted phrase, sender, link and structure signals)
+prompt describes, in 1,071 weighted phrase, sender, link and structure signals,
 in a form you can read, argue with, and unit test.
 
 It is used in two ways:
@@ -382,10 +390,10 @@ run time:
 | Source | What it gives | Licence |
 | --- | --- | --- |
 | [OurAirports](https://ourairports.com/data/) | 4,570 IATA codes for every large and medium airport | Public domain |
-| [Wikidata](https://www.wikidata.org/) | 44,170 company domains, resolved to 35,150 brand names, with the sector each belongs to | CC0 |
+| [Wikidata](https://www.wikidata.org/) | 30,231 company domains, resolved to 24,127 brand names, with the sector each belongs to | CC0 |
 
-Sectors are airline, bank, telecom, utility, retail, courier, social, news and
-hotel. The match is on the **brand name**, not the whole domain, because one
+Sectors are airline, bank, telecom, utility, retail, courier, social and
+news. The match is on the **brand name**, not the whole domain, because one
 shop writes from `argos.co.uk`, `email.argos.co.uk` and `argos-mail.com` and
 all three are Argos. Where a name is claimed twice the canonical suffix wins:
 `amazon.com` is a shop and `amazon.jobs` had been filed under airlines;
@@ -736,7 +744,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 1,005 tests
+QT_QPA_PLATFORM=offscreen python -m pytest               # 2,360 tests
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1081,7 +1089,7 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 1,005 tests, ~25s
+./dev test        # 2,360 tests, ~25s
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

@@ -13,7 +13,7 @@
 
 ![macOS 13+](https://img.shields.io/badge/macOS-13%2B-black)
 ![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue)
-![Tests](https://img.shields.io/badge/tests-2%2C287%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-2%2C360%20passing-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
 <img src="docs/screenshot.png" width="900" alt="The approval table, with a summary, category, destination folder and confidence score for every message">
@@ -80,7 +80,7 @@ Then press **Scan & Analyze**.
 
 ## Sorting without an API key
 
-The built-in sorter is a rule set, not a model: about 530 weighted signals
+The built-in sorter is a rule set, not a model: 1,071 weighted signals
 covering the language hiring mail actually uses, plus structural features like
 subject shape, sender domain, and whether an instruction is a real request or a
 hypothetical one.
@@ -244,9 +244,9 @@ an airport pair, a tracking number, a direct debit, a table for four), and
 whether it reads like two people talking rather than a company writing to a
 customer.
 
-It also carries what it knows about the world: 35,150 company brand names with
-the sector each belongs to, and every airport's IATA code. That is 330 KB of
-public data, bundled, with no network call. It is the difference between
+It also carries what it knows about the world: 24,127 company brand names with
+the sector each belongs to, 30,231 domains, and 4,570 airport codes. That is
+350 KB of public data, bundled, with no network call. It is the difference between
 `STN to DUB` and
 `PDF to DOC`, and it is how the sorter knows ryanair.com is an airline and
 argos.co.uk is a shop.
@@ -447,7 +447,7 @@ rotated backups are written `0600`, owner-only, like the settings file.
 
 ```bash
 ./dev demo      # the app with sample mail, no setup
-./dev test      # 2,287 tests, about three minutes on four workers
+./dev test      # 2,360 tests, about three minutes on four workers
 ./dev eval      # sorter accuracy against the labelled fixture
 ./dev fake      # the whole pipeline in the terminal, offline
 ```

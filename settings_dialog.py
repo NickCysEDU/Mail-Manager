@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 
 import accounts
 import autoreply
+import config
 import corrections
 import verdict_cache
 import helpmode
@@ -2654,7 +2655,7 @@ class SettingsDialog(QDialog):
             mailboxes=kept,
             icloud_email=kept[0].address if kept else "",
             fetch_bytes=self.fetch_kb_spin.value() * 1024,
-            provider=self.provider_combo.currentData() or providers.DEFAULT_PROVIDER,
+            provider=self._chosen_provider(),
             model=self._chosen_model(),
             base_url=self.base_url_edit.text().strip(),
             effort=self.effort_combo.currentText(),
@@ -2684,6 +2685,26 @@ class SettingsDialog(QDialog):
             reuse_verdicts=self.reuse_check.isChecked(),
         )
         return Settings(**data).normalized()
+
+    def _chosen_provider(self) -> str:
+        """The backend to use, given what is in the key field.
+
+        Picking a cloud backend and leaving the key box empty would fail on
+        the first scan with an authentication error, which is a poor way to
+        find out. The offline sorter takes over instead; it needs nothing,
+        and the backend is one click away in the toolbar once a key exists.
+        """
+        wanted = self.provider_combo.currentData() or providers.DEFAULT_PROVIDER
+        spec = providers.provider_class(wanted)
+        if not spec.needs_api_key:
+            return wanted
+        key = self.api_key_edit.text().strip()
+        if not key:
+            try:
+                key = self._store.get_provider_key(wanted)
+            except CredentialError:
+                key = ""
+        return config.backend_for_key(wanted, wanted, key)
 
     def persist_credentials(self, settings: Settings) -> None:
         self._capture_account()
