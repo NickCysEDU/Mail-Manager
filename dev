@@ -109,6 +109,7 @@ ${B}iCloud Mail Job Triage — dev commands${N}
   ${B}./dev eval${N} [args]       score the offline sorter against the labelled set
   ${B}./dev tune${N} [args]       score it against your own inbox  ${D}(nothing is written)${N}
   ${B}./dev screenshot${N}        redraw the README screenshot from the demo window
+  ${B}./dev version${N} [part]     show the version, or bump it  ${D}(major|minor|patch)${N}
   ${B}./dev cov${N}               test suite with a coverage report
   ${B}./dev watch${N}             re-run the tests whenever a file changes
 
@@ -175,6 +176,7 @@ case "$command" in
   dmg)                 ensure_venv; ensure_icon; exec ./build_dmg.sh "$@" ;;
   icon)                ensure_venv; QT_QPA_PLATFORM=offscreen exec "$PY" tools/make_icon.py ;;
   screenshot)          ensure_venv; QT_QPA_PLATFORM=offscreen exec "$PY" tools/make_screenshot.py "$@" ;;
+  version)             ensure_venv; exec "$PY" tools/version.py "$@" ;;
   app|open)
     [[ -d "$APP" ]] || die "$APP not built yet. Run: ./dev build"
     exec open "$APP" ;;

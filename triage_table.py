@@ -24,8 +24,8 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QLabel,
 
 import conversations
 from imap_engine import MoveReport
-from models import (CATEGORY_COLORS, OTHER_COLOR, Category, Disposition,
-                    TriageItem, TriageSummary)
+from models import (CATEGORY_COLORS, OTHER_COLOR, TOPIC_COLORS, Category,
+                    Disposition, TriageItem, TriageSummary)
 from widgets import (ACCENT_BLUE, ACCENT_RED, _confidence_rgb, _draw_wrapped, _html,
                      _is_dark, _mono_font, _one_line, _tint, _wrap,
                      system_font)
@@ -34,11 +34,21 @@ from widgets import (ACCENT_BLUE, ACCENT_RED, _confidence_rgb, _draw_wrapped, _h
 #: What the folder box shows when a message is to stay where it is.
 LEAVE_IN_PLACE = "- leave in place -"
 
-def category_color(classification) -> str:
-    """The accent colour for a row: its job category, or the neutral 'other'."""
-    if not classification.is_job_related:
-        return OTHER_COLOR
-    return CATEGORY_COLORS.get(classification.category, OTHER_COLOR)
+def category_color(classification, item=None) -> str:
+    """The accent colour for a row.
+
+    A job category always has one. An everyday topic gets one only when the
+    current settings actually file that topic somewhere; otherwise it stays
+    grey, which is the honest signal that the app is not going to act on it.
+
+    ``item`` carries the routing and the topic list. Without it - which is how
+    the older callers ask - every non-job topic is grey, as before.
+    """
+    if classification.is_job_related:
+        return CATEGORY_COLORS.get(classification.category, OTHER_COLOR)
+    if item is not None and item.topic_is_sorted:
+        return TOPIC_COLORS.get(classification.other_category, OTHER_COLOR)
+    return OTHER_COLOR
 
 
 class TriageTableModel(QAbstractTableModel):
@@ -171,7 +181,7 @@ class TriageTableModel(QAbstractTableModel):
             return None
 
         if role == Qt.ItemDataRole.UserRole + 1:  # accent colour for this row
-            return category_color(classification)
+            return category_color(classification, item)
 
         if role == Qt.ItemDataRole.UserRole:  # sort key
             if column == self.COL_SELECT:
@@ -214,7 +224,7 @@ class TriageTableModel(QAbstractTableModel):
             if item.moved:
                 return None
             if item.disposition is Disposition.MOVE:
-                return _tint(category_color(classification), 26)
+                return _tint(category_color(classification, item), 26)
             if item.disposition is Disposition.REVIEW:
                 return _tint(CATEGORY_COLORS[Category.UNCLASSIFIED_OTHER], 22)
             return None
@@ -228,7 +238,7 @@ class TriageTableModel(QAbstractTableModel):
                 if item.disposition is Disposition.LEAVE:
                     return QColor(140, 140, 140)
                 if not item.override_folder:
-                    return QColor(category_color(classification))
+                    return QColor(category_color(classification, item))
             return None
 
         if role == Qt.ItemDataRole.FontRole and column == self.COL_SUBJECT:
@@ -286,12 +296,22 @@ class TriageTableModel(QAbstractTableModel):
         return changed
 
     def set_all_approved(self, approved: bool, only_high_confidence: bool = False) -> None:
+        """Tick or untick everything, optionally only what the sorter is sure of.
+
+        "Sure of" means the confidence bar, not ``default_approved``. Those
+        are two different questions and conflating them made the button lie:
+        non-job mail is deliberately never *pre*-ticked, because misfiling a
+        bank alert is worse than leaving it alone - but somebody pressing a
+        button labelled "tick every message the analysis was confident about"
+        has asked for it, and a 99%-confident receipt that is on its way to a
+        folder is exactly what they meant.
+        """
         if not self._items:
             return
         for item in self._items:
             if not item.is_actionable:
                 continue
-            if only_high_confidence and not item.default_approved:
+            if only_high_confidence and not item.is_high_confidence:
                 continue
             item.approved = approved
         self._refresh_column(self.COL_SELECT)

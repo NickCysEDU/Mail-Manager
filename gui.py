@@ -718,8 +718,10 @@ class MainWindow(QMainWindow):
         """
         self.sorting_menu.clear()
 
-        heading = self.sorting_menu.addAction("What to sort")
-        heading.setEnabled(False)
+        # addSection rather than a disabled action. A disabled action is
+        # drawn exactly like a greyed-out option, so the heading read as a
+        # choice nobody was allowed to make.
+        self.sorting_menu.addSection("What to sort")
         for name, label, blurb in profiles.choices():
             action = QAction(menu_text(label), self)
             action.setCheckable(True)
@@ -730,9 +732,7 @@ class MainWindow(QMainWindow):
                 lambda checked=False, p=name: self._switch_profile(p))
             self.sorting_menu.addAction(action)
 
-        self.sorting_menu.addSeparator()
-        heading = self.sorting_menu.addAction("Everything that is not job mail")
-        heading.setEnabled(False)
+        self.sorting_menu.addSection("Everything that is not job mail")
         for member in NonJobRouting:
             action = QAction(menu_text(member.label), self)
             action.setCheckable(True)
@@ -3002,7 +3002,8 @@ class MainWindow(QMainWindow):
         current = self.category_filter.currentData()
         labels = sorted({item.classification.category_label for item in self.model.items})
         colors = {
-            item.classification.category_label: category_color(item.classification)
+            item.classification.category_label: category_color(
+                item.classification, item)
             for item in self.model.items
         }
         self.category_filter.blockSignals(True)

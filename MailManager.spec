@@ -11,13 +11,19 @@ own Python and Qt. No terminal, no virtualenv, and no daily redeploy.
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_submodules
 
 APP_NAME = "Mail Manager"
 BUNDLE_ID = "com.mailmanager.icloudjobtriage"
-VERSION = "1.0.0"
+
+# Read rather than repeated. Three copies of a version number is three
+# chances to ship a disk image whose Get Info panel disagrees with the
+# corner of the window it installs.
+sys.path.insert(0, str(Path(SPECPATH).resolve()))
+from models import APP_VERSION as VERSION  # noqa: E402
 
 def _target_arch() -> str:
     """What to build for: a single architecture, or both.

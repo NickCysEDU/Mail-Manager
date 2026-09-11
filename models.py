@@ -130,8 +130,20 @@ CATEGORY_COLORS: Dict[Category, str] = {
     Category.UNCLASSIFIED_OTHER: "#D08A1E", # amber - needs a human
 }
 
-#: One neutral colour for every non-job topic; the label carries the detail.
+#: The neutral, for a topic this configuration is not sorting. It is meant to
+#: recede: a grey chip says "the app is not doing anything with this".
 OTHER_COLOR = "#6B7A8F"
+
+#: A colour per everyday topic, used only when that topic is one the current
+#: settings actually file into.
+#:
+#: Colouring all of them all the time would be thirteen more things to learn
+#: for no gain, since with non-job mail left alone none of them lead anywhere.
+#: Colouring none of them - which is what happened before - made a mailbox
+#: being sorted into thirteen folders look like a wall of identical grey.
+#: The rule is the honest one: a chip is coloured when the app is going to
+#: act on it.
+TOPIC_COLORS: Dict["OtherCategory", str] = {}      # filled in below
 
 REVIEW_LEAF = "Needs Review"
 
@@ -207,6 +219,27 @@ _OTHER_LABELS: Dict["OtherCategory", str] = {
     OtherCategory.SPAM: "Spam & Phishing",
     OtherCategory.OTHER: "Other",
 }
+
+TOPIC_COLORS.update({
+    OtherCategory.SECURITY: "#C0453B",     # red - an alert, read it now
+    OtherCategory.FINANCE: "#2F7D4F",      # green - money owed or moving
+    # A deeper teal than Application Received's, which is the same family and
+    # was for a while the same value: two meanings sharing a colour in the
+    # one column that shows both.
+    OtherCategory.RECEIPT: "#0B6E66",      # deep teal - money already spent
+    OtherCategory.SHIPPING: "#B5701F",     # brown - a parcel
+    OtherCategory.TRAVEL: "#2D8FC4",       # sky - somewhere to be
+    OtherCategory.EVENT: "#8A5BD6",        # purple - a date in a diary
+    OtherCategory.CHURCH: "#5B63C4",       # indigo
+    OtherCategory.WORK: "#4A6FA5",         # slate - the job you have
+    OtherCategory.PERSONAL: "#C25E8A",     # warm pink - a person
+    OtherCategory.SOCIAL: "#9A4FD0",       # violet - a network
+    OtherCategory.NEWSLETTER: "#7A8C3A",   # olive - subscribed to
+    OtherCategory.PROMOTION: "#C98A14",    # amber - sold to
+    OtherCategory.SPAM: "#8A4A4A",         # dull red - unwanted
+    OtherCategory.OTHER: OTHER_COLOR,      # the absence of an answer
+    OtherCategory.NOT_APPLICABLE: OTHER_COLOR,
+})
 
 _OTHER_LEAF: Dict["OtherCategory", str] = {
     OtherCategory.NOT_APPLICABLE: "Other",
@@ -292,13 +325,17 @@ class FolderPlan:
 
     @property
     def job_root(self) -> str:
-        """Where job mail is filed.
+        """Where job mail is filed. Always the job root.
 
-        With the detailed folders switched off, job search is one topic among
-        many rather than the point of the exercise, so it belongs beside the
-        others instead of owning a tree with a single branch.
+        This used to move the whole tree under the non-job root when the
+        detailed folders were switched off, on the reasoning that job search
+        was then one topic among many. In a mailbox it read as a mistake:
+        "Sorted Mail/Job Search" and "Sorted Mail/Needs Review" sitting beside
+        a "Job Search" tree left over from the previous setting, with no way
+        to tell which was meant. Collapsing changes the shape of the tree, not
+        where it lives.
         """
-        return self.root if self.detailed_job_folders else self.other_root
+        return self.root
 
     def path(self, leaf: str) -> str:
         return f"{self.job_root}{self.delimiter}{sanitize_folder_component(leaf)}"
@@ -308,7 +345,9 @@ class FolderPlan:
 
     def for_category(self, category: Category) -> str:
         if not self.detailed_job_folders and category is not Category.UNCLASSIFIED_OTHER:
-            return self.path(COLLAPSED_JOB_LEAF)
+            # The root itself, rather than a folder of the same name inside
+            # it: "Job Search/Job Search" is nobody's idea of a tidy mailbox.
+            return self.job_root
         return self.path(CATEGORY_LEAF[category])
 
     def for_other_category(self, category: "OtherCategory") -> str:
@@ -331,8 +370,17 @@ class FolderPlan:
 
     @property
     def all_folders(self) -> Tuple[str, ...]:
-        """Root first, so parents are created before children."""
-        return (self.job_root,) + self.leaf_folders
+        """Root first, so parents are created before children.
+
+        Deduplicated, because with the detailed folders collapsed the root is
+        also where job mail is filed, and asking a server to create the same
+        mailbox twice is a needless round trip and a needless warning.
+        """
+        ordered = [self.job_root]
+        for folder in self.leaf_folders:
+            if folder not in ordered:
+                ordered.append(folder)
+        return tuple(ordered)
 
     def other_folders(self, categories: Iterable["OtherCategory"] = ()) -> Tuple[str, ...]:
         """Root plus one leaf per supplied category, parents first.
@@ -925,6 +973,21 @@ class TriageItem:
         if self.held_back_by_confidence:
             return "Not sure enough to file"
         return self.disposition.label
+
+    @property
+    def topic_is_sorted(self) -> bool:
+        """Whether this configuration files mail on this topic anywhere.
+
+        Job mail always is. An everyday topic is only when non-job mail is
+        being filed *and* that topic has a folder of its own - a topic left
+        out of the list goes to Other, and the app is not really acting on it.
+        """
+        if self.classification.is_job_related:
+            return True
+        if self.non_job_routing is not NonJobRouting.FILE:
+            return False
+        topics = self.folders.topics
+        return not topics or self.classification.other_category in topics
 
     @property
     def left_because_not_job(self) -> bool:

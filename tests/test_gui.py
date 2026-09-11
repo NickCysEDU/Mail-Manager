@@ -441,8 +441,9 @@ class TestMainWindow:
         assert window.folder_plan.all_folders[0] == "Job Search"
         window._switch_profile("everyday")
         folders = window.folder_plan.all_folders
-        assert folders[0] == "Sorted Mail"
-        assert "Sorted Mail/Job Search" in folders
+        # Collapsed to one folder, and still the job one: the tree does not
+        # move house when the shape of it changes.
+        assert folders == ("Job Search", "Job Search/Needs Review")
         # And non-job mail is now filed rather than left where it is.
         assert window.settings.routing.name == "FILE"
 
@@ -453,8 +454,11 @@ class TestMainWindow:
         before = window.model.items[0].target_folder
         window._switch_profile("everyday")
         after = window.model.items[0].target_folder
+        # Job mail collapses from its own category folder into the root.
         assert before != after
-        assert after.startswith("Sorted Mail")
+        assert after == "Job Search"
+        # And the non-job row now has somewhere to go.
+        assert window.model.items[1].target_folder.startswith("Sorted Mail/")
 
     def test_constructs_and_starts_empty(self, window):
         assert window.model.rowCount() == 0
