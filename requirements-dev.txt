@@ -1,9 +1,9 @@
 # Development and packaging dependencies.
 -r requirements.txt
 
-pyinstaller>=6.6.0      # tested with 6.22.2 — builds the standalone .app
+pyinstaller>=6.6.0      # tested with 6.22.2, builds the standalone .app
 pytest>=8.0.0           # tested with 9.1.1
 pytest-qt>=4.4.0        # tested with 4.5.0
 pytest-cov>=5.0.0       # tested with 7.1.0
-pytest-timeout>=2.3.0   # tested with 2.4.0 — no hung test can wedge a build
+pytest-timeout>=2.3.0   # tested with 2.4.0, no hung test can wedge a build
 pytest-xdist>=3.5

@@ -87,7 +87,7 @@ class TestShapesRatherThanWords:
         assert any("STN" in reason for reason in why), why
 
     def test_a_parcel(self, sorter):
-        """"Collection point" is a phrase, so it lives with the words now —
+        """"Collection point" is a phrase, so it lives with the words now,
         what matters is that the message still reads as a parcel."""
         got = sorter.classify(
             subject="It's here",

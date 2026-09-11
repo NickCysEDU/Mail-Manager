@@ -2,7 +2,7 @@
 
 The wizard used to ask for an iCloud address and an app-specific password and
 nothing else, so somebody whose mail is on Gmail could not finish it, and
-nobody could link a second mailbox without going to Settings afterwards — even
+nobody could link a second mailbox without going to Settings afterwards, even
 though the app has supported both for a long time.
 """
 

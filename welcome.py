@@ -193,7 +193,7 @@ class AccountsPage(QWizardPage):
 
     def _describe(self, account) -> str:
         if not account.address:
-            return "New mailbox — enter an address"
+            return "New mailbox, enter an address"
         host = accounts.host_for(account.preset)
         ready = bool(self._passwords.get(account.address, "").strip())
         return (f"{account.address}  ·  {host.label}"

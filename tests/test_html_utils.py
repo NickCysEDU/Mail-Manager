@@ -260,7 +260,7 @@ class TestRealisticEmails:
 
 
 # ==========================================================================
-# Condensing for the model — the token-efficiency layer
+# Condensing for the model, the token-efficiency layer
 # ==========================================================================
 from html_utils import (  # noqa: E402
     collapse_repeats,
@@ -409,7 +409,7 @@ class TestZeroFontSizeIsALayoutIdiom:
     Every responsive email builder puts it on the element holding the columns,
     to close the whitespace between inline-blocks, and each column sets its
     own size again. Reading it as "hidden" threw away the entire body of every
-    Workday message — seven of a hundred and fifty-six in one real mailbox,
+    Workday message, seven of a hundred and fifty-six in one real mailbox,
     none of which contained a `display:none` anywhere.
     """
 

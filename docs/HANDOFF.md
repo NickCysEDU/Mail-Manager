@@ -1,7 +1,7 @@
 # Handoff
 
 Where this round of work got to, what was measured, and what is worth doing
-next. The list at the bottom is meant to be ticked off — everything already
+next. The list at the bottom is meant to be ticked off, everything already
 ticked was done in this round, and the untinted boxes below it are what a
 future session should pick up.
 
@@ -72,13 +72,13 @@ fallbacks are deliberately never kept.
 
 **It sorts while it fetches.** The two halves of a scan ran end to end, each
 idle while the other worked. They now overlap. Correctness does not depend on
-it — anything the fetch does not stream is swept up and classified anyway, and
+it, anything the fetch does not stream is swept up and classified anyway, and
 there is a test for exactly that case.
 
 **The sorter reads the From line.** A careers mailbox is not a person writing
 to you however warmly it is written, which stopped eight adversarial rejections
 reading as personal notes. A second table of otherwise-too-generic phrases
-counts only once a hiring mailbox or a named process has licensed it — the
+counts only once a hiring mailbox or a named process has licensed it, the
 thing a language model does that a phrase table does not.
 
 **The sorter is four times faster.** Before running a signal's regex, check
@@ -86,7 +86,7 @@ that the longest word of its phrase is in the text at all. 43.5 ms per message
 to 10.1 ms, with every eval fixture scoring exactly what it scored before.
 
 **Undo works, and works more than once.** An IMAP `COPY` gives the message a
-new UID and the old undo used the old one — so it either did nothing or moved a
+new UID and the old undo used the old one, so it either did nothing or moved a
 stranger. It now reads the server's `COPYUID` receipt, and refuses to guess when
 there is not one. The stack is ten deep.
 
@@ -103,7 +103,7 @@ these.
 
 | Set | Job vs not | Exact category | Of those it filed |
 |---|---|---|---|
-| labelled (102) | 99.0% | 87.3% | 54/55 — 98.2% |
+| labelled (102) | 99.0% | 87.3% | 54/55, 98.2% |
 | adversarial (39) | 87.2% | 59.0% | nothing filed; all held for review |
 | held out (24) | 70.8% | 37.5% | nothing filed |
 | meetings (15) | 100% | 80.0% | 2/2 |
@@ -163,7 +163,7 @@ table. Test suite 2,291 tests in about three minutes on four workers.
   cost more than they earned.
 - [x] **4.** Learning from corrections, per address and per domain, with a way
   to see and forget it.
-- [x] **5.** User-defined sorting rules — a rule that only files and ticks now
+- [x] **5.** User-defined sorting rules, a rule that only files and ticks now
   runs after every scan, since it touches nobody's mailbox.
 - [x] **6.** Incremental scan: verdicts kept between runs, keyed on a settings
   hash so a changed model invalidates them.
@@ -183,13 +183,13 @@ table. Test suite 2,291 tests in about three minutes on four workers.
   context menu.
 - [x] **16.** Column widths and hidden columns reset from the header menu.
 - [x] **17.** Fetching and classifying overlap.
-- [x] **18.** A literal prefilter before every regex — 4.3× on the rules engine.
+- [x] **18.** A literal prefilter before every regex, 4.3× on the rules engine.
 - [x] **19.** The lexicon as a memory-mapped blob, with the JSON as fallback.
 - [x] **20.** The log view is capped at 2,000 blocks.
 - [x] **21.** `./dev tune` for training against a real inbox, plus the privacy
   test that stops anything from it reaching the repository.
 - [x] **22.** Topic ties are broken by score, then strongest phrase, then hard
-  evidence, then a written precedence — not by dict insertion order.
+  evidence, then a written precedence, not by dict insertion order.
 - [x] **23.** `personal_register` no longer fires on mail from a careers
   mailbox.
 
@@ -228,7 +228,7 @@ Ordered by what they would be worth, not by effort.
   is strong evidence about its siblings, and "Re: (no other context)" is exactly
   the message the sorter cannot read.
 - [ ] **The corrections memory only learns folders.** It could learn that a
-  sender is job-related at all, which is the more valuable half — a recruiter
+  sender is job-related at all, which is the more valuable half, a recruiter
   writing from a personal Gmail is the case the rules engine will never get.
 - [ ] **`_grouped()` in `workers.py` opens one connection per (account, folder)
   pair.** Undoing a batch that was filed into eight folders is eight logins.
@@ -238,7 +238,7 @@ Ordered by what they would be worth, not by effort.
 - [ ] **No test opens the built `.app`.** Every failure mode of PyInstaller
   hidden imports is invisible until somebody runs the bundle by hand.
 - [ ] **`rules_engine.py` is 2,900 lines** and the signal tables are most of it.
-  They would read better as data than as literals — but only if something needs
+  They would read better as data than as literals, but only if something needs
   to edit them at run time, which nothing does yet.
 - [ ] **The corrections memory could learn a topic, not just a folder.** It
   already knows a church sender files to Church; it does not yet conclude that

@@ -472,7 +472,7 @@ class TestEngineWithProviders:
 # The HTTP transport, against a real local server
 # ==========================================================================
 class TestHttpSession:
-    """Exercised against a throwaway localhost server rather than mocks —
+    """Exercised against a throwaway localhost server rather than mocks,
     this is the transport for three of the four backends."""
 
     @pytest.fixture
@@ -610,7 +610,7 @@ class TestHttpSession:
 
 
 # ==========================================================================
-# Live model discovery — a hard-coded catalogue goes stale
+# Live model discovery, a hard-coded catalogue goes stale
 # ==========================================================================
 class TestModelDiscovery:
     def test_which_backends_can_list_their_models(self):

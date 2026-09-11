@@ -162,7 +162,7 @@ fi
 # its own bundled Python and dies before it starts. The hardened runtime is
 # only needed for notarisation, which needs a paid Developer ID anyway.
 codesign --force --deep --sign "$IDENTITY" "$APP" 2>/dev/null || \
-  echo "    (codesign unavailable — right-click → Open on first launch)"
+  echo "    (codesign unavailable; right-click → Open on first launch)"
 
 if ! "$APP/Contents/MacOS/Mail Manager" --self-test >/dev/null 2>&1; then
   echo "    ! The signed bundle does not start. Re-signing ad-hoc." >&2
@@ -181,7 +181,7 @@ case "$ARCHS" in
     echo "    Apple silicon only. For a universal build:" 
     echo "      ./tools/fetch_universal_python.sh && ./build_app.sh" ;;
   *x86_64*)
-    echo "    Intel only — Apple silicon will run it under Rosetta. For both:"
+    echo "    Intel only. Apple silicon will run it under Rosetta. For both:"
     echo "      ./tools/fetch_universal_python.sh && ./build_app.sh" ;;
 esac
 echo "    open \"$APP\"                       # run it"

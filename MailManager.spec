@@ -5,7 +5,7 @@ Build with:
 
     pyinstaller --clean --noconfirm iCloudJobTriage.spec
 
-The result is dist/"iCloud Job Triage.app" — a self-contained bundle with its
+The result is dist/"iCloud Job Triage.app", a self-contained bundle with its
 own Python and Qt. No terminal, no virtualenv, and no daily redeploy.
 """
 

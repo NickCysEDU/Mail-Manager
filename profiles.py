@@ -98,7 +98,7 @@ class Profile:
             trees.append(f"“{self.other_root}” with {len(self.topics)} "
                          "everyday topics")
         if not self.sorts_everything:
-            trees.append("nothing else — the rest of your inbox is left alone")
+            trees.append("nothing else; the rest of your inbox is left alone")
         return "; ".join(trees)
 
 

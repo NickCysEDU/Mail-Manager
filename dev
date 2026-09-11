@@ -90,7 +90,7 @@ ensure_icon() {
 
 usage() {
   cat <<EOF
-${B}iCloud Mail Job Triage — dev commands${N}
+${B}iCloud Mail Job Triage: dev commands${N}
 
   ${B}./dev demo${N}              open the app filled with sample mail ${D}(no setup, no keys)${N}
   ${B}./dev run${N} [args]        open the app against your real inbox
@@ -164,7 +164,7 @@ case "$command" in
   watch)
     ensure_venv
     command -v fswatch >/dev/null 2>&1 || die "fswatch not installed. Try: brew install fswatch"
-    say "Watching for changes — ctrl-c to stop"
+    say "Watching for changes, ctrl-c to stop"
     QT_QPA_PLATFORM=offscreen "$PY" -m pytest "$@" || true
     fswatch -o -e "\\.venv" -e "build" -e "dist" -e "__pycache__" . | while read -r _; do
       printf '\033[2J\033[H'
@@ -189,7 +189,7 @@ case "$command" in
 
   logs|log)
     log_file="$HOME/Library/Logs/iCloud Job Triage/triage.log"
-    [[ -f "$log_file" ]] || die "No log yet at $log_file — run the app first."
+    [[ -f "$log_file" ]] || die "No log yet at $log_file. Run the app first."
     exec tail -f -n 40 "$log_file" ;;
 
   shell|repl)
