@@ -1,7 +1,7 @@
 [project]
-name = "icloud-job-triage"
+name = "mail-manager"
 version = "1.0.0"
-description = "Scan, summarise and categorise job-search email in iCloud Mail with Claude."
+description = "Sort your mail on your Mac. Offline by default; a language model if you want one."
 requires-python = ">=3.11"
 readme = "README.md"
 

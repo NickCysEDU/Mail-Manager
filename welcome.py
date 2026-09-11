@@ -36,6 +36,7 @@ import profiles
 import providers
 import rulesets
 from accounts import Account
+import config
 from config import CredentialError, CredentialStore, Settings
 from models import APP_DISPLAY_NAME, FolderPlan
 
@@ -519,14 +520,25 @@ class SetupWizard(QWizard):
         ).normalized()
 
     def save(self) -> Settings:
+        from dataclasses import replace as _replace
+
         settings = self.result_settings()
+        key = self.classifier.key.text() if settings.needs_api_key else ""
         try:
             for address, secret in self.mailbox.passwords().items():
                 if secret.strip():
                     self._store.set_icloud_password(address, secret)
-            if settings.needs_api_key and self.classifier.key.text():
-                self._store.set_provider_key(settings.provider, self.classifier.key.text())
+            if settings.needs_api_key and key:
+                self._store.set_provider_key(settings.provider, key)
         except CredentialError:
             pass
+        # A backend that needs a key and did not get one would fail on the
+        # first scan with an authentication error, which is a poor way to
+        # find out. Hand the work to the offline sorter instead: it needs
+        # nothing, and the backend is one click away in the toolbar.
+        if settings.needs_api_key and not key.strip():
+            chosen = config.backend_for_key(settings.provider, settings.provider, "")
+            settings = _replace(settings, provider=chosen,
+                                model=providers.default_model_for(chosen)).normalized()
         settings.save()
         return settings

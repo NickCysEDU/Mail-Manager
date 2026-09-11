@@ -620,6 +620,28 @@ class Settings:
         return path
 
 
+def backend_for_key(current: str, provider: str, key: str) -> str:
+    """Which backend to use once a key has been typed in, or cleared.
+
+    The app starts on the offline rules engine, which needs no account and
+    sends nothing anywhere. That is the right default precisely because it
+    asks nothing of anybody, but it should not be sticky: somebody who has
+    just gone and fetched an API key has said plainly what they want, and
+    leaving them on the rules engine would quietly ignore it.
+
+    So a key arriving adopts its backend, and a key being cleared hands the
+    work back to the rules engine rather than leaving a backend that can no
+    longer authenticate. A choice between two backends that both need a key
+    is left alone; that is a preference, not a default.
+    """
+    provider = (provider or "").strip()
+    if key and key.strip():
+        return provider or current
+    if provider == current:
+        return DEFAULT_PROVIDER
+    return current
+
+
 def _clamp_int(value: Any, low: int, high: int, default: int) -> int:
     try:
         number = int(value)
