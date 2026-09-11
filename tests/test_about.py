@@ -143,3 +143,50 @@ class TestItOpensFromTheWindow:
             window._about()      # must not raise
         finally:
             window.close()
+
+
+class TestItSaysWhatIsKeptAndHow:
+    """verdicts.json writes "see About for why" when it cannot seal.
+
+    That is a promise about this window, so the window has to keep it - in
+    both states, and without mangling the one proper noun in the sentence.
+    """
+
+    def test_the_sealed_case_names_the_keychain_properly(self, qtbot, monkeypatch):
+        import about
+        import vault
+
+        class Sealed:
+            def describe(self):
+                return "Encrypted with a key in your Keychain."
+
+        monkeypatch.setattr(vault, "shared", lambda: Sealed())
+        said = about.AboutDialog._at_rest(object())
+        assert "Keychain" in said, "lowercased a product name"
+        assert "keychain" not in said.replace("Keychain", "")
+
+    def test_the_degraded_case_explains_itself(self, qtbot, monkeypatch):
+        import about
+        import vault
+
+        class Unsealed:
+            def describe(self):
+                return ("Not encrypted: the Keychain is unavailable, so "
+                        "summaries are not written to disk at all.")
+
+        monkeypatch.setattr(vault, "shared", lambda: Unsealed())
+        said = about.AboutDialog._at_rest(object())
+        assert "not encrypted" in said
+        assert "not written to disk" in said
+        assert "Keychain" in said
+
+    def test_the_placeholder_points_somewhere_real(self):
+        """The string the cache writes has to match what About offers."""
+        import verdict_cache
+
+        entry = verdict_cache.Entry(key="k", recipe="r",
+                                    payload={"summary": "s", "reasoning": "r"},
+                                    model="m", when="2026-01-01T00:00:00")
+        blanked = entry.to_dict(with_text=False)
+        assert blanked["payload"]["summary"] == ""
+        assert "About" in blanked["payload"]["reasoning"]
