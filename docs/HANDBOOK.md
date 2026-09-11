@@ -158,7 +158,7 @@ whichever trade-off suits you in **Settings → Analysis**:
 
 | Backend | Key needed | Cost | Notes |
 |---|---|---|---|
-| **Claude (Anthropic)** | yes | Haiku 4.5 ≈ $1/$5 per Mtok | The default is **Haiku 4.5** rather than Opus, because routine triage does not need a frontier model. Sonnet 5 and Opus 5 are there if you want them. |
+| **Claude (Anthropic)** | yes | Haiku 4.5 ≈ $1/$5 per Mtok | Selecting it picks **Haiku 4.5** rather than Opus, because routine triage does not need a frontier model. Sonnet 5 and Opus 5 are there if you want them. |
 | **Gemini (Google AI Studio)** | yes | Flash-Lite ≈ $0.10/$0.40 per Mtok | The cheapest cloud option by a wide margin, and fast. |
 | **OpenAI-compatible** | usually | GPT-4o mini ≈ $0.15/$0.60 per Mtok | Also OpenRouter, Groq, Together, **LM Studio** and vLLM: anything with a `/chat/completions` endpoint. Set **Endpoint** to point at it. |
 | **On this Mac (Ollama)** | **no** | **free** | Runs locally. No key, no bill, and no email leaves the machine. |
@@ -819,8 +819,8 @@ when no key is stored in the Keychain.
 ### Analysis
 | Setting | Default | Notes |
 |---|---|---|
-| Model backend | Claude (Anthropic) | Claude, Gemini, any OpenAI-compatible endpoint, or Ollama on this Mac. |
-| Model | `claude-haiku-4-5` | Five choices per backend; you can also type a model it doesn't list. |
+| Model backend | Built-in rules | Switches itself to a model backend when you enter an API key, and back to the rules when you clear it. Claude, Gemini, any OpenAI-compatible endpoint, or Ollama on this Mac. |
+| Model | `rules-v1` | With a model backend selected: five choices per backend, and you can type one it doesn't list. |
 | API key | none | Per backend, Keychain only. Hidden entirely for Ollama. |
 | Endpoint | none | Override for LM Studio, OpenRouter, or a remote Ollama host. |
 | Reasoning effort | `medium` | Claude only; hidden for other backends. |
