@@ -1116,8 +1116,14 @@ class TestTheModelsDialog:
             dialog.done(0)
 
     def test_confirming_runs_the_remove(self, window, monkeypatch):
+        import ondevice
         monkeypatch.setattr(QMessageBox, "question",
                             lambda *a, **k: QMessageBox.StandardButton.Yes)
+        # Ollama is not installed on a CI runner, and without this the real
+        # remove_command returns None, nothing runs, and the test fails for a
+        # reason that has nothing to do with the dialog.
+        monkeypatch.setattr(ondevice, "remove_command",
+                            lambda name: ["ollama", "rm", name])
         started = []
         dialog = self._dialog(window, [self._model()])
         monkeypatch.setattr(dialog, "_run", lambda step, command, saying:
@@ -1127,6 +1133,24 @@ class TestTheModelsDialog:
             dialog._remove_selected()
             assert started and started[0][0] == "remove"
             assert started[0][1][-1] == "llama3.2:3b"
+        finally:
+            dialog.done(0)
+
+    def test_it_says_so_when_ollama_is_not_installed(self, window, monkeypatch):
+        """The branch a CI runner takes, which nothing had covered."""
+        import ondevice
+        monkeypatch.setattr(QMessageBox, "question",
+                            lambda *a, **k: QMessageBox.StandardButton.Yes)
+        monkeypatch.setattr(ondevice, "remove_command", lambda name: None)
+        started = []
+        dialog = self._dialog(window, [self._model()])
+        monkeypatch.setattr(dialog, "_run", lambda step, command, saying:
+                            started.append(step))
+        try:
+            dialog.listing.setCurrentRow(0)
+            dialog._remove_selected()
+            assert not started
+            assert "not installed" in dialog.status.text()
         finally:
             dialog.done(0)
 
