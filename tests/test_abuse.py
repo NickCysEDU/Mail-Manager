@@ -996,3 +996,40 @@ class TestSealingNeverWaitsForever:
         store = box._credential_store()
         assert store.read_timeout, "a vault with no leash can hang the app"
         assert store.read_timeout <= 60
+
+
+class TestOfflineMeansOffline:
+    """--offline is a claim about the network, so check it at the socket.
+
+    Run in a subprocess with connect, connect_ex and getaddrinfo replaced by
+    something that raises: asserting on a flag would only re-read the code
+    that sets it.
+    """
+
+    def test_the_self_test_opens_nothing(self):
+        import subprocess
+        import sys
+        import textwrap
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent
+        probe = textwrap.dedent('''
+            import runpy, socket, sys
+            def deny(self, address, *a, **k):
+                raise AssertionError("opened a socket to %r" % (address,))
+            def deny_dns(host, *a, **k):
+                raise AssertionError("resolved %r" % (host,))
+            socket.socket.connect = deny
+            socket.socket.connect_ex = deny
+            socket.getaddrinfo = deny_dns
+            sys.argv = ["main.py", "--self-test", "--offline"]
+            try:
+                runpy.run_path("main.py", run_name="__main__")
+            except SystemExit as leaving:
+                sys.exit(leaving.code or 0)
+        ''')
+        done = subprocess.run([sys.executable, "-c", probe], cwd=str(root),
+                              capture_output=True, text=True, timeout=300)
+        assert "opened a socket" not in done.stdout + done.stderr
+        assert "resolved" not in done.stderr
+        assert done.returncode == 0, done.stderr[-1500:]
