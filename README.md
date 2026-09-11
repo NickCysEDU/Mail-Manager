@@ -443,6 +443,11 @@ message or a traceback - there is a test that goes looking for them. Message
 bodies are never written to the log; a subject line can be, so the log and its
 rotated backups are written `0600`, owner-only, like the settings file.
 
+The two files that do describe your mail - the summaries kept between scans and
+what the app learned from your corrections - are **encrypted on disk** with
+AES-GCM under a key held in the Keychain. If the key cannot be reached, the
+summaries are left out rather than written in the clear.
+
 [Full details in SECURITY.md](SECURITY.md).
 
 ## Development
