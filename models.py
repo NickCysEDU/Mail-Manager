@@ -297,9 +297,14 @@ def sanitize_folder_component(name: str) -> str:
     """
     cleaned = re.sub(r'[\x00-\x1f\x7f"\\/]+', " ", str(name))
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    if set(cleaned) <= {"."} and cleaned:
+    if set(cleaned) <= {".", " "} and cleaned:
         return ""
-    return cleaned.lstrip(".").strip() or ""
+    # Leading dots go, and go repeatedly: "../../etc" arrives here as
+    # ".. .. etc" once the slashes are spaces, and stripping once left the
+    # second pair in place. A mailbox called ".." is nobody's mailbox.
+    while cleaned.startswith(".") or cleaned.startswith(" "):
+        cleaned = cleaned.lstrip(". ").strip()
+    return cleaned or ""
 
 
 @dataclass(frozen=True)

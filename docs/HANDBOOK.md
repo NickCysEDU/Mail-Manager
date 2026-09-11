@@ -745,7 +745,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 2,438 tests
+QT_QPA_PLATFORM=offscreen python -m pytest               # 2,481 tests
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1099,7 +1099,7 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 2,438 tests, ~25s
+./dev test        # 2,481 tests, ~25s
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

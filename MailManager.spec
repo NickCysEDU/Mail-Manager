@@ -103,7 +103,8 @@ hiddenimports = ["demo_data", "providers", "rules_engine", "rulesets",
                  "accounts", "autoreply", "certs", "helpmode", "ondevice",
                  "profiles", "theme", "macname", "conversations",
                  "corrections", "verdict_cache", "pipeline", "lexicon",
-                 "lexicon_blob", "widgets", "triage_table", "settings_dialog"]
+                 "lexicon_blob", "widgets", "triage_table", "settings_dialog",
+                 "vault", "about", "cryptography"]
 
 # The CA bundle. Without it a frozen app has no certificates at all, because
 # the path Python was compiled with points at a framework the user does not

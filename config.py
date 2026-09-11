@@ -517,8 +517,18 @@ class Settings:
             filtered[key] = value
         try:
             return cls(**filtered).normalized()
-        except TypeError:
-            log.warning("Settings file contained unusable values; falling back to defaults.")
+        except Exception as exc:      # noqa: BLE001 - see below
+            # Deliberately broad. This parses a file the user may have been
+            # sent by somebody else - Settings, Import is a button in the
+            # dialog - so it is untrusted input, and a parser of untrusted
+            # input has one job: return something usable, always.
+            #
+            # A narrower `except TypeError` was here, and fuzzing walked
+            # straight past it: infinity where an integer was expected raises
+            # OverflowError, and a dict where a string was expected raises
+            # AttributeError inside __post_init__. Both crashed the app.
+            log.warning("Settings file contained unusable values (%s); "
+                        "falling back to defaults.", type(exc).__name__)
             return cls()
 
     # -- sharing a configuration -----------------------------------------

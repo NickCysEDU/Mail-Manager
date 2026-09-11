@@ -28,15 +28,13 @@ its UIDs mean something else now, and every key for that mailbox is void.
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
-import os
-import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+import vault
 from models import Classification
 
 log = logging.getLogger(__name__)
@@ -104,8 +102,21 @@ class Entry:
     model: str
     when: str
 
-    def to_dict(self) -> Dict[str, object]:
-        return {"key": self.key, "recipe": self.recipe, "payload": self.payload,
+    def to_dict(self, with_text: bool = True) -> Dict[str, object]:
+        """The row as stored.
+
+        ``with_text`` false drops the summary and the reasoning, which are the
+        only fields that describe the message rather than categorise it. That
+        is what happens when the file cannot be encrypted: the cache still
+        saves the expensive part and stops being a readable index of somebody's
+        mail. The row is still a hit, and the preview says the summary came
+        from an earlier scan.
+        """
+        payload = dict(self.payload)
+        if not with_text:
+            payload["summary"] = ""
+            payload["reasoning"] = "(summary not stored: see About for why)"
+        return {"key": self.key, "recipe": self.recipe, "payload": payload,
                 "model": self.model, "when": self.when}
 
     @classmethod
@@ -175,12 +186,8 @@ class VerdictCache:
         file is one slow scan.
         """
         path = path or cls.default_path()
-        try:
-            raw = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return cls(path=path)
-        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
-            log.warning("Could not read the verdict cache at %s (%s).", path, exc)
+        raw = vault.shared().read(path)
+        if raw is None:
             return cls(path=path)
         rows = raw.get("verdicts") if isinstance(raw, dict) else raw
         if not isinstance(rows, list):
@@ -196,30 +203,9 @@ class VerdictCache:
         path = path or self._path or self.default_path()
         self._path = path
         kept = sorted(self._entries.values(), key=lambda e: e.when)[-MAX_ENTRIES:]
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            payload = json.dumps({"version": 1,
-                                  "verdicts": [e.to_dict() for e in kept]})
-            fd, tmp_name = tempfile.mkstemp(dir=str(path.parent),
-                                            prefix=".verdicts-", suffix=".tmp")
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                    handle.write(payload)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                os.replace(tmp_name, path)
-            except BaseException:
-                try:
-                    os.unlink(tmp_name)
-                except OSError:
-                    pass
-                raise
-            try:
-                os.chmod(path, 0o600)
-            except OSError:  # pragma: no cover - best effort
-                pass
-        except OSError as exc:
-            log.warning("Could not write the verdict cache (%s).", exc)
+        sealed = vault.shared().sealing
+        rows = [e.to_dict(with_text=sealed) for e in kept]
+        if not vault.shared().write(path, {"version": 1, "verdicts": rows}):
             return None
         self._dirty = False
         return path
