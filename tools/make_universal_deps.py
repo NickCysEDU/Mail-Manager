@@ -28,10 +28,19 @@ import tempfile
 import zipfile
 from typing import List, Optional, Tuple
 
-#: The two macOS platform tags a single-architecture wheel can carry.
+#: The macOS platform tags a single-architecture wheel can carry, newest
+#: first. More than one because a project picks a deployment target and
+#: sticks to it, and they do not all pick the same: cffi 2.1.1 publishes
+#: macosx_10_15_x86_64, which a lookup for macosx_10_12_x86_64 answers with
+#: cffi 1.17.1 instead, and lipo then joins two different versions.
 TAGS = {
-    "arm64": "macosx_11_0_arm64",
-    "x86_64": "macosx_10_12_x86_64",
+    "arm64": (
+        "macosx_14_0_arm64", "macosx_11_0_arm64", "macosx_10_9_universal2",
+    ),
+    "x86_64": (
+        "macosx_14_0_x86_64", "macosx_11_0_x86_64", "macosx_10_15_x86_64",
+        "macosx_10_12_x86_64", "macosx_10_9_universal2",
+    ),
 }
 
 
@@ -97,21 +106,26 @@ def fetch_other_half(name: str, want: str, into: pathlib.Path) -> Optional[pathl
     mismatched slice passes every test run on the build machine and breaks on
     everybody else's.
     """
-    tag = TAGS.get(want)
-    if not tag:
+    tags = TAGS.get(want)
+    if not tags:
         return None
     version = f"{sys.version_info.major}.{sys.version_info.minor}"
     exact = installed_version(name)
+    # Pinned to the installed version, always. An unpinned download of the
+    # other half is how two different versions get joined into one file.
     requirement = f"{name}=={exact}" if exact else name
-    command = [
-        sys.executable, "-m", "pip", "download", "--no-deps", "--quiet",
-        "--only-binary=:all:", "--platform", tag,
-        "--python-version", version, "--dest", str(into), requirement,
-    ]
-    if subprocess.run(command, capture_output=True, text=True).returncode != 0:
-        return None
-    wheels = sorted(into.glob("*.whl"))
-    return wheels[-1] if wheels else None
+    for tag in tags:
+        command = [
+            sys.executable, "-m", "pip", "download", "--no-deps", "--quiet",
+            "--only-binary=:all:", "--platform", tag,
+            "--python-version", version, "--dest", str(into), requirement,
+        ]
+        if subprocess.run(command, capture_output=True, text=True).returncode != 0:
+            continue
+        wheels = sorted(into.glob("*.whl"))
+        if wheels:
+            return wheels[-1]
+    return None
 
 
 def merge(target: pathlib.Path, other: pathlib.Path) -> bool:
