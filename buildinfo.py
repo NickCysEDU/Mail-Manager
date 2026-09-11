@@ -27,7 +27,15 @@ def _root() -> Path:
 
 @lru_cache(maxsize=1)
 def _baked() -> str:
-    """What the build script recorded, if this is a built app."""
+    """What the build script recorded, if this is a built app.
+
+    Only a frozen app is asked. Building leaves a stamp in the checkout, and
+    reading it from a development run would report whichever commit was last
+    built rather than the one actually running - wrong in the About box and
+    wrong in every bug report made from a checkout afterwards.
+    """
+    if not getattr(sys, "frozen", False):
+        return ""
     try:
         return (_root() / STAMP_FILE).read_text(encoding="utf-8").strip()
     except OSError:
