@@ -140,3 +140,59 @@ class TestTheSortingMenuIsDiscoverable:
                    if not a.isSeparator() and a.isEnabled()]
         assert len(visible) <= 9
         assert not any(a.menu() for a in window.sorting_menu.actions())
+
+
+class TestTheHelpToggleIsRound:
+    """It is a circled question mark, and it looked like an oval.
+
+    The widget asks for 26 by 26; the shared stylesheet gives every control a
+    minimum height and it arrives 26 by 28. Painting into the whole rect drew
+    an ellipse. The circle is derived from the geometry now, so no stylesheet
+    can squash it again.
+    """
+
+    def circle(self, width, height):
+        """The box the button draws its circle into at this size."""
+        from PySide6.QtCore import QRect
+        import helpmode
+        return helpmode.circle_in(QRect(0, 0, width, height))
+
+    @pytest.mark.parametrize("width,height", [
+        (26, 26), (26, 28), (26, 34), (40, 26), (18, 18), (8, 40)])
+    def test_the_circle_is_square_at_any_size(self, qapp, width, height):
+        box = self.circle(width, height)
+        assert box.width() == box.height(), (width, height, box)
+
+    def test_it_stays_inside_the_widget(self, qapp):
+        for width, height in ((26, 26), (26, 28), (40, 26)):
+            box = self.circle(width, height)
+            assert box.left() >= 0 and box.top() >= 0
+            assert box.right() <= width and box.bottom() <= height
+
+    def test_it_is_centred(self, qapp):
+        """Within a pixel: Qt centres an even-sided rect by rounding down."""
+        from PySide6.QtCore import QRect
+        for width, height in ((26, 26), (26, 28), (40, 26)):
+            box = self.circle(width, height)
+            middle = QRect(0, 0, width, height).center()
+            assert abs(box.center().x() - middle.x()) <= 1
+            assert abs(box.center().y() - middle.y()) <= 1
+
+    def test_the_button_actually_uses_it(self, qapp):
+        """So the test is about the drawing, not a copy of the arithmetic."""
+        import inspect
+        import helpmode
+        assert "circle_in(self.rect())" in inspect.getsource(
+            helpmode.HelpButton.paintEvent)
+
+    def test_both_toggles_explain_themselves(self, qapp, tmp_path, monkeypatch):
+        """The window's and the dialog's are the same control."""
+        from config import InMemoryCredentialStore, Settings
+        from settings_dialog import SettingsDialog
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        dialog = SettingsDialog(Settings(), InMemoryCredentialStore())
+        try:
+            assert dialog.help_button.toolTip()
+            assert dialog.help_button.accessibleName().startswith("Help")
+        finally:
+            dialog.deleteLater()

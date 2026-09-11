@@ -13,14 +13,29 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import QEvent, QObject, QPoint, Qt
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PySide6.QtCore import QEvent, QObject, QRect, Qt
+from PySide6.QtGui import QPainter, QPen
 from PySide6.QtWidgets import QToolButton, QToolTip, QWidget
 
 #: How long a hover has to last before an explanation appears, in milliseconds.
 HOVER_DELAY = 600
 #: How long it stays there. Long enough to finish a sentence twice.
 VISIBLE_FOR = 20000
+
+
+def circle_in(rect: QRect) -> QRect:
+    """The largest sensible circle inside a rect, centred.
+
+    Its own function because the button is not always the size it asks for:
+    it requests 26 by 26, the shared stylesheet gives every control a minimum
+    height, and it arrives 26 by 28. Painting into the whole rect drew an
+    oval. Taking a square off the shorter side means no stylesheet can
+    squash it, and it can be checked without a widget that refuses to resize.
+    """
+    side = max(8, min(rect.width(), rect.height()) - 6)
+    box = QRect(0, 0, side, side)
+    box.moveCenter(rect.center())
+    return box
 
 
 class HelpButton(QToolButton):
@@ -55,7 +70,7 @@ class HelpButton(QToolButton):
             self.palette().ColorRole.Highlight if self.isChecked()
             else self.palette().ColorRole.WindowText
         )
-        box = self.rect().adjusted(3, 3, -3, -3)
+        box = circle_in(self.rect())
 
         if self.isChecked():
             painter.setPen(Qt.PenStyle.NoPen)
