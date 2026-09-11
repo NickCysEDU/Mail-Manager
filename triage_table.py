@@ -26,9 +26,9 @@ import conversations
 from imap_engine import MoveReport
 from models import (CATEGORY_COLORS, OTHER_COLOR, TOPIC_COLORS, Category,
                     Disposition, TriageItem, TriageSummary)
-from widgets import (ACCENT_BLUE, ACCENT_RED, _confidence_rgb, _draw_wrapped, _html,
-                     _is_dark, _mono_font, _one_line, _tint, _wrap,
-                     system_font)
+from widgets import (ACCENT_BLUE, ACCENT_RED, _attr_url, _confidence_rgb,
+                     _draw_wrapped, _html, _is_dark, _mono_font, _one_line,
+                     _tint, _wrap, system_font)
 
 
 #: What the folder box shows when a message is to stay where it is.
@@ -943,7 +943,7 @@ def _reasoning_html(item: TriageItem) -> str:
         rows.append(("Error", f"<span style='color:#c65b4e'>{_html(classification.error)}</span>"))
     if item.email.links:
         links = "<br>".join(
-            f"• <a href='{_html(link)}'>{_html(link[:110])}</a>" for link in item.email.links[:12]
+            f'• <a href="{_attr_url(link)}">{_html(link[:110])}</a>' for link in item.email.links[:12]
         )
         rows.append(("Links found", links))
 

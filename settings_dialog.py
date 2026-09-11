@@ -40,8 +40,9 @@ from imap_engine import clean_secret
 from models import (Category, FolderPlan, NonJobRouting, OtherCategory,
                     TriageItem)
 from widgets import (ACCENT_GREEN, ACCENT_RED, AdaptiveLineEdit, WrappingList,
-                     _abandon, _compact_button, _html, _paint_button,
-                     _scrollable, _separator, menu_text, selectable)
+                     _abandon, _attr_url, _compact_button, _html,
+                     _paint_button, _scrollable, _separator, menu_text,
+                     selectable)
 from workers import ConnectionTestWorker
 
 
@@ -979,7 +980,8 @@ class SettingsDialog(QDialog):
         if spec.note:
             parts.append(_html(spec.note))
         if spec.help_url:
-            parts.append(f"<a href='{spec.help_url}'>{_html(spec.help_url)}</a>")
+            parts.append(
+                f'<a href="{_attr_url(spec.help_url)}">{_html(spec.help_url)}</a>')
         self.provider_note.setText("<br>".join(parts))
         self.provider_note.setVisible(bool(parts))
 
@@ -1237,8 +1239,9 @@ class SettingsDialog(QDialog):
                 self.ollama_note.setText(
                     "Ollama is not installed. It runs a model on this Mac, so "
                     "nothing leaves it and there is nothing to pay for. "
-                    f"Download it from <a href='{ondevice.DOWNLOAD_URL}'>"
-                    f"{ondevice.DOWNLOAD_URL}</a>, then come back here."
+                    "Download it from "
+                    f'<a href="{_attr_url(ondevice.DOWNLOAD_URL)}">'
+                    f"{_html(ondevice.DOWNLOAD_URL)}</a>, then come back here."
                 )
                 self.ollama_button.setText("Open the download page")
         elif step == "start":
@@ -1488,7 +1491,7 @@ class SettingsDialog(QDialog):
         self.key_label.setText("API key")
         self.api_key_edit.setPlaceholderText(spec.key_hint or "API key")
         self.key_link.setText(
-            f"<a href='{spec.key_url}'>get one</a>" if spec.key_url else ""
+            f'<a href="{_attr_url(spec.key_url)}">get one</a>' if spec.key_url else ""
         )
         if needs_key:
             try:

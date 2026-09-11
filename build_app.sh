@@ -8,6 +8,21 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+# A hard limit on the bundle's self-test below. macOS has no timeout(1), so
+# this is the portable form: run it in the background and kill it if it
+# outstays its welcome. Written outside the tree so a build leaves nothing.
+SELFTEST_LEASH="$(mktemp -t mm-leash)"
+cat > "$SELFTEST_LEASH" <<'LEASH'
+#!/bin/bash
+"$@" & pid=$!
+( sleep 120; kill -9 "$pid" 2>/dev/null ) & watcher=$!
+wait "$pid"; status=$?
+kill "$watcher" 2>/dev/null
+exit "$status"
+LEASH
+chmod +x "$SELFTEST_LEASH"
+trap 'rm -f "$SELFTEST_LEASH"' EXIT
+
 PYTHON_BIN="${PYTHON_BIN:-}"
 SKIP_TESTS=0
 for arg in "$@"; do
@@ -164,9 +179,20 @@ fi
 codesign --force --deep --sign "$IDENTITY" "$APP" 2>/dev/null || \
   echo "    (codesign unavailable; right-click → Open on first launch)"
 
-if ! "$APP/Contents/MacOS/Mail Manager" --self-test >/dev/null 2>&1; then
+# --offline, and on a leash. Signing changes the code signature, which is how
+# macOS identifies an app to the Keychain, so the fresh bundle is a stranger
+# and gets asked about - a dialog nobody is watching for during a build. The
+# app gives up on the Keychain by itself now; the leash is here so that a
+# future hang of any kind fails the build loudly instead of wedging it.
+echo "==> Checking the signed bundle starts"
+if ! "$SELFTEST_LEASH" "$APP/Contents/MacOS/Mail Manager" --self-test --offline \
+      >/dev/null 2>&1; then
   echo "    ! The signed bundle does not start. Re-signing ad-hoc." >&2
   codesign --force --deep --sign - "$APP" 2>/dev/null || true
+  if ! "$SELFTEST_LEASH" "$APP/Contents/MacOS/Mail Manager" --self-test --offline; then
+    echo "    ! It still does not start. Not shipping this." >&2
+    exit 1
+  fi
 fi
 xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
 

@@ -233,7 +233,10 @@ def self_test(offline: bool = False) -> int:
 
         if not vault.cipher_available():
             return "no cipher library; summaries are not written to disk"
-        box = vault.shared()
+        # Its own box with the same short timeout the other checks use: a
+        # self-test that waits on a Keychain prompt is a self-test that never
+        # finishes, and this one runs inside the build.
+        box = vault.Vault(config.CredentialStore(read_timeout=5.0))
         if not box.sealing:
             return "Keychain unavailable; summaries are not written to disk"
         with tempfile.TemporaryDirectory() as directory:

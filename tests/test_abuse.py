@@ -852,3 +852,147 @@ class TestInstructionsInsideAMessageAreNotFollowed:
         verdict = RuleClassifier().classify(
             subject=payload, body=payload, sender="stranger@nowhere.example")
         assert verdict.category is not Category.OFFER
+
+
+class TestALinkGoesWhereItSays:
+    """The links panel builds anchors from URLs the sender chose.
+
+    A URL may legally contain an apostrophe, and Qt's rich text parser does
+    not expand entities inside an attribute value. Escaping one the way body
+    text is escaped therefore did two wrong things at once: it corrupted
+    ordinary links, and it let a crafted one close the href and append a
+    second. Qt keeps the last href, so the click went somewhere the displayed
+    text never mentioned - phishing served by the app's own window.
+    """
+
+    SPOOF = ("https://careers.example/apply?x=' title='https://careers.example'"
+             " href='http://evil.example")
+
+    @staticmethod
+    def _anchor(qtbot, url):
+        from PySide6.QtWidgets import QTextBrowser
+        from widgets import _attr_url, _html
+
+        view = QTextBrowser()
+        qtbot.addWidget(view)
+        view.setHtml(f'<a href="{_attr_url(url)}">{_html(url[:110])}</a>')
+        block = view.document().begin()
+        while block.isValid():
+            iterator = block.begin()
+            while not iterator.atEnd():
+                fragment = iterator.fragment()
+                if fragment.isValid() and fragment.charFormat().isAnchor():
+                    fmt = fragment.charFormat()
+                    return fmt.anchorHref(), fragment.text(), fmt.toolTip()
+                iterator += 1
+            block = block.next()
+        raise AssertionError("no anchor was produced")
+
+    def test_a_crafted_link_cannot_redirect_the_click(self, qtbot):
+        href, _, tooltip = self._anchor(qtbot, self.SPOOF)
+        assert "evil.example" not in href.split("?")[0]
+        assert href.startswith("https://careers.example/apply")
+        assert not tooltip, "the message injected a tooltip"
+
+    @pytest.mark.parametrize("url", [
+        "https://x.example/?a=1&b=2",
+        "https://x.example/?a=1&b=2&c=3",
+        "https://x.example/path?q=it's",
+        "https://x.example/plain",
+        "https://x.example/~user/a-b_c.d",
+    ])
+    def test_an_ordinary_link_survives_intact(self, qtbot, url):
+        """&amp; in an href is not decoded by Qt, and breaks query strings."""
+        href, _, _ = self._anchor(qtbot, url)
+        assert href == url
+
+    @pytest.mark.parametrize("bad", ['"', "<", ">", " ", "\t", "\n"])
+    def test_what_cannot_sit_in_an_attribute_is_encoded(self, bad):
+        from widgets import _attr_url
+        encoded = _attr_url(f"https://x.example/{bad}end")
+        assert bad not in encoded
+        assert encoded.startswith("https://x.example/") and encoded.endswith("end")
+
+    def test_body_text_still_escapes_both_quotes(self):
+        from widgets import _html
+        escaped = _html("it's <b>\"bold\"</b> & more")
+        for raw in ("<", ">", '"', "'"):
+            assert raw not in escaped
+
+
+class TestSealingNeverWaitsForever:
+    """The Keychain prompt that stopped a build.
+
+    Signing changes an app's code signature, which is how macOS decides
+    whether it already has permission. The freshly signed bundle is therefore
+    a stranger, and macOS asks - a dialog with nobody watching for it during
+    a build. The vault built its credential store with no read timeout, so
+    the self-test that seals a canary blocked in SecItemCopyMatching and the
+    build sat there indefinitely with nothing on screen to explain it.
+    """
+
+    def test_the_vault_gives_up_on_a_keychain_that_never_answers(self):
+        import time
+
+        import vault
+        from config import CredentialStore
+
+        class Sleepy:
+            def get_password(self, service, account):
+                time.sleep(30)
+                raise AssertionError("should have been abandoned")
+
+        store = CredentialStore(backend=Sleepy())
+        store.read_timeout = 0.3
+        box = vault.Vault(store)
+        started = time.monotonic()
+        assert box.key() is None
+        assert time.monotonic() - started < 10, "it waited for the prompt"
+        assert not box.sealing
+
+    def test_and_the_cache_leaves_the_summary_out_rather_than_writing_it(
+            self, tmp_path, monkeypatch):
+        """Degrading has to mean less on disk, never more.
+
+        Vault.write seals whatever it is handed; deciding what is safe to
+        hand it belongs to the caller, and this is the caller that matters.
+        """
+        import time
+
+        import vault
+        import verdict_cache
+        from config import CredentialStore
+
+        class Sleepy:
+            def get_password(self, service, account):
+                time.sleep(30)
+                raise AssertionError("should have been abandoned")
+
+        store = CredentialStore(backend=Sleepy())
+        store.read_timeout = 0.3
+        unsealable = vault.Vault(store)
+        monkeypatch.setattr(vault, "shared", lambda: unsealable)
+        assert not unsealable.sealing
+
+        path = tmp_path / "verdicts.json"
+        entry = verdict_cache.Entry(
+            key="acct\x1fINBOX\x1f1", recipe="r",
+            payload={"summary": "a private thing",
+                     "reasoning": "because reasons"},
+            model="rules-v1", when="2026-01-01T00:00:00")
+        cache = verdict_cache.VerdictCache([entry], path=path)
+        cache._dirty = True
+        cache.save(path)
+
+        raw = path.read_bytes()
+        assert b"a private thing" not in raw
+        assert b"because reasons" not in raw
+
+    def test_the_default_store_carries_a_timeout(self):
+        """The one the app actually builds, not one a test handed it."""
+        import vault
+
+        box = vault.Vault()
+        store = box._credential_store()
+        assert store.read_timeout, "a vault with no leash can hang the app"
+        assert store.read_timeout <= 60

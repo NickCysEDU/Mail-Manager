@@ -40,6 +40,12 @@ their filenames are mentioned.
   `--self-test` proves the round trip rather than asserting it.
   When it cannot encrypt, it leaves the summaries out rather than writing
   them in the clear.
+- **A link goes where it says it goes.** The links panel builds each anchor
+  from a URL the sender chose, and Qt's rich text parser does not expand
+  entities inside an attribute. So the URL is percent-encoded for the few
+  characters that would end the attribute early rather than escaped as text -
+  otherwise a crafted link could close the `href`, append a second one, and
+  send the click somewhere the displayed text never mentioned.
 - **No plaintext to a remote host.** A custom endpoint on `http://` is refused
   unless it is on this machine or your local network, because every request
   carries the text of an email. The host is parsed as an address rather than

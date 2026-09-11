@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QHBoxLayout, QLabel,
 
 import buildinfo
 from models import APP_DISPLAY_NAME
+from widgets import _attr_url, _html
 
 #: Where the project lives. One constant, so the three links cannot drift.
 REPOSITORY = "https://github.com/NickCysEDU/Mail-Manager"
@@ -35,7 +36,7 @@ AI_DISCLOSURE = (
 
 
 def _link(url: str, text: str) -> str:
-    return f'<a href="{url}">{text}</a>'
+    return f'<a href="{_attr_url(url)}">{_html(text)}</a>'
 
 
 class AboutDialog(QDialog):
