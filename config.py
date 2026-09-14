@@ -755,8 +755,8 @@ class CredentialStore:
         except Exception as exc:
             raise CredentialError(f"Could not read '{account}' from the Keychain: {exc}") from exc
 
-    def _get_with_timeout(self, account: str, timeout: float) -> str:
-        """Read the Keychain, giving up rather than waiting forever.
+    def _with_timeout(self, what: str, account: str, timeout: float, call):
+        """Run one Keychain call, giving up rather than waiting forever.
 
         macOS asks permission the first time a particular build of an app
         touches an entry, and identifies the app by its code signature. A
@@ -764,17 +764,22 @@ class CredentialStore:
         concerned, so it asks again. With a window on screen that is a dialog;
         run from a launchd agent with nobody watching it is a process that
         never returns, which is how a nightly scan silently stops happening.
+
+        Writes need this as much as reads do, and for a reason that is easier
+        to hit: creating an entry in a keychain that is locked blocks in the
+        same place, and the app creates its data key on first use.
         """
         outcome: Dict[str, Any] = {}
 
-        def read() -> None:
+        def run() -> None:
             try:
-                outcome["value"] = self._keyring().get_password(self.service, account) or ""
+                outcome["value"] = call()
             except BaseException as exc:  # noqa: BLE001 - handed back below
                 outcome["error"] = exc
 
         import threading
-        worker = threading.Thread(target=read, daemon=True, name="keychain-read")
+        worker = threading.Thread(target=run, daemon=True,
+                                  name=f"keychain-{what}")
         worker.start()
         worker.join(timeout)
         if worker.is_alive():
@@ -787,17 +792,27 @@ class CredentialStore:
             )
         if "error" in outcome:
             raise CredentialError(
-                f"Could not read '{account}' from the Keychain: {outcome['error']}")
-        return outcome.get("value", "")
+                f"Could not {what} '{account}' in the Keychain: {outcome['error']}")
+        return outcome.get("value")
+
+    def _get_with_timeout(self, account: str, timeout: float) -> str:
+        return self._with_timeout(
+            "read", account, timeout,
+            lambda: self._keyring().get_password(self.service, account) or "") or ""
 
     def set(self, account: str, secret: str) -> None:
         if not account:
             raise CredentialError("A Keychain account name is required.")
         try:
-            if secret:
-                self._keyring().set_password(self.service, account, secret)
-            else:
+            if not secret:
                 self.delete(account)
+            elif self.read_timeout:
+                self._with_timeout(
+                    "write", account, self.read_timeout,
+                    lambda: self._keyring().set_password(
+                        self.service, account, secret))
+            else:
+                self._keyring().set_password(self.service, account, secret)
         except CredentialError:
             raise
         except Exception as exc:
