@@ -349,7 +349,10 @@ class TestTieBreaking:
         import rules_engine
         from tools import evaluate
 
-        fixture = ROOT / "tests" / "fixtures" / "labelled.json"
+        import private_fixtures
+        fixture = private_fixtures.path("labelled.json")
+        if fixture is None:
+            pytest.skip("labelled.json is " + private_fixtures.WHY)
         rows = json.loads(fixture.read_text())
         before = evaluate.score(rows)[1]
 

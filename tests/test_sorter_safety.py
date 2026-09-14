@@ -27,9 +27,11 @@ FILING_THRESHOLD = 0.95
 
 
 def load(name):
-    path = FIXTURES / name
-    if not path.is_file():
-        pytest.skip(f"{name} is not present")
+    import private_fixtures
+
+    path = private_fixtures.path(name)
+    if path is None:
+        pytest.skip(f"{name} is {private_fixtures.WHY}")
     return json.loads(path.read_text("utf-8"))
 
 

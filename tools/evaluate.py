@@ -22,14 +22,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from rules_engine import RuleClassifier  # noqa: E402
 
-FIXTURES = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "labelled.json"
+def _default_fixture():
+    """The labelled set, which a public checkout has not got."""
+    root = Path(__file__).resolve().parents[1]
+    import sys
+    sys.path.insert(0, str(root / "tests"))
+    import private_fixtures
+    return private_fixtures.path("labelled.json")
 
 
-def load(path: Path) -> list:
-    if not path.exists():
-        print(f"No labelled set at {path}", file=sys.stderr)
+FIXTURES = _default_fixture()
+
+
+def load(path) -> list:
+    if path is None or not Path(path).exists():
+        print("No labelled set in this checkout. It was built from a real "
+              "inbox and is kept out of the repository; tests/private_fixtures.py "
+              "says where it goes if you have one.", file=sys.stderr)
+        print("The sets that do ship are hand-written. Score one with:",
+              file=sys.stderr)
+        for name in ("adversarial", "holdout", "meetings"):
+            print(f"    ./dev eval --file tests/fixtures/{name}.json", file=sys.stderr)
         raise SystemExit(2)
-    return json.loads(path.read_text())
+    return json.loads(Path(path).read_text())
 
 
 def verdict_of(row: dict) -> str:

@@ -26,8 +26,13 @@ import pytest
 from rules_engine import (RuleClassifier, acknowledgement_score, normalize,
                           steps_are_only_promised)
 
-FIXTURE = Path(__file__).parent / "fixtures" / "acknowledgements.json"
-CASES = json.loads(FIXTURE.read_text())
+import private_fixtures
+
+FIXTURE = private_fixtures.path("acknowledgements.json")
+pytestmark = pytest.mark.skipif(
+    FIXTURE is None,
+    reason="acknowledgements.json is " + private_fixtures.WHY)
+CASES = json.loads(FIXTURE.read_text()) if FIXTURE else []
 
 
 @pytest.fixture(scope="module")

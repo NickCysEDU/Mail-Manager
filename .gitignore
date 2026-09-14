@@ -56,3 +56,9 @@ BUILD_STAMP
 *-set.json
 tuning/
 inbox-*.json
+
+# The two fixtures built from a real inbox. Everything in them has been
+# anonymised, but anonymising a hundred real messages is not a thing you can
+# prove finished - four passes each found something the previous one missed.
+# They stay on the machine that made them; the hand-written sets ship.
+tests/fixtures/private/
