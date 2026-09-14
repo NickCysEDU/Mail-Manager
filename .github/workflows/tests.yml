@@ -18,10 +18,10 @@ permissions:
 jobs:
   test:
     runs-on: macos-14
-    # Headroom, not an expectation. The suite is minutes; installing PySide6
-    # and building the universal wheels is the slow part, and a hosted runner
-    # having a bad day should not read as a broken commit.
-    timeout-minutes: 35
+    # A hosted macOS runner is several times slower than a developer's Mac:
+    # a suite that takes three minutes here takes most of half an hour there.
+    # This is sized for that, not for the local number.
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v7
 
@@ -36,16 +36,13 @@ jobs:
           pip install -r requirements-dev.txt
 
       - name: Tests
-        # Qt needs a platform plugin even with no screen attached.
-        # TEMPORARY: serial and verbose, with a step timeout shorter than the
-        # job's, so that a run which does not finish still hands back its log.
-        # A cancelled job discards it, which is why three runs in a row said
-        # nothing about where they stopped.
-        timeout-minutes: 12
+        # Qt needs a platform plugin even with no screen attached. A step
+        # timeout rather than only the job's, because a cancelled job throws
+        # its log away and a timed-out step keeps it.
+        timeout-minutes: 40
         env:
           QT_QPA_PLATFORM: offscreen
-          PYTHONFAULTHANDLER: "1"
-        run: python -m pytest -p no:randomly -n 0 -v --timeout=120 --timeout-method=thread 2>&1 | tail -120
+        run: python -m pytest
 
       - name: The offline sorter still scores what it should
         env:
