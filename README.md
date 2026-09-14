@@ -398,11 +398,21 @@ Changes apply as you make them rather than when you press OK.
 Two numbers, and the gap between them is worth understanding before trusting
 it with a mailbox.
 
-Against **real collected mail** - 102 labelled messages from a live inbox, with
-every name replaced - it gets 99.0% right on job versus not-job, 87.3% on the
-exact category, and 98.2% of what it files goes to the right folder. That is
-the number that describes ordinary use, because ordinary transactional mail
-comes out of templates and templates are what a rules engine is good at.
+Against **real collected mail** - 102 labelled messages from a live inbox - it
+gets 99.0% right on job versus not-job, 87.3% on the exact category, and 98.2%
+of what it files goes to the right folder. That is the number that describes
+ordinary use, because ordinary transactional mail comes out of templates and
+templates are what a rules engine is good at.
+
+That set is not in this repository, and neither is the smaller
+acknowledgements one. Both were built from somebody's actual mailbox. Every
+name in them was replaced, but replacing every name in a hundred real messages
+is not a job with a provable end - four separate passes each found something
+the pass before had missed - so the honest thing is to keep them off the
+internet rather than to keep asserting they are clean. What ships is the
+tooling, the guards that check a corpus, and the three sets that were written
+by hand. `tests/private_fixtures.py` says where the private ones go if you
+build your own.
 
 Against **mail written by hand to be awkward** - a held-out set that
 deliberately avoids every phrase the engine knows - it gets 37.5%. That is not
@@ -415,7 +425,7 @@ review instead of guessed at. Getting a message wrong and showing it to you
 costs you a moment. Getting it wrong and filing it costs you the message.
 
 ```bash
-./dev eval                       # against real collected mail
+./dev eval --file tests/fixtures/holdout.json   # a set that does ship
 python tools/adversarial.py      # against the two hand-written sets
 python tools/corpus.py --fetch   # six thousand real messages, once
 python tools/corpus.py           # then run against them
@@ -455,7 +465,7 @@ summaries are left out rather than written in the clear.
 ```bash
 ./dev demo      # the app with sample mail, no setup
 ./dev test      # 2,554 tests, about three minutes on four workers
-./dev eval      # sorter accuracy against the labelled fixture
+./dev eval      # sorter accuracy (needs a labelled set of your own)
 ./dev fake      # the whole pipeline in the terminal, offline
 ```
 

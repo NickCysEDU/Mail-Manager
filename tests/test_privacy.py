@@ -220,9 +220,18 @@ def test_nothing_the_user_teaches_the_app_is_committed():
 FIXTURES = ROOT / "tests" / "fixtures"
 
 
+def _all_fixtures():
+    """Public sets, plus the inbox-derived ones when this machine has them."""
+    import private_fixtures
+    return private_fixtures.every()
+
+
 def fixture_rows(name: str) -> list:
     import json
-    return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
+    import private_fixtures
+    found = private_fixtures.path(name)
+    assert found is not None, name
+    return json.loads(found.read_text(encoding="utf-8"))
 
 
 #: Platforms that appear in everybody's mail. The sorter recognises these by
@@ -303,7 +312,7 @@ REAL_PLACES = {
 }
 
 
-@pytest.mark.parametrize("name", sorted(p.name for p in FIXTURES.glob("*.json")))
+@pytest.mark.parametrize("name", sorted(p.name for p in _all_fixtures()))
 class TestNobodysAddressIsInAFixture:
     """A rejection letter is addressed to somebody, at their house.
 
@@ -344,7 +353,7 @@ class TestNobodysAddressIsInAFixture:
             "identifies a person. Invent the geography.")
 
 
-@pytest.mark.parametrize("name", sorted(p.name for p in FIXTURES.glob("*.json")))
+@pytest.mark.parametrize("name", sorted(p.name for p in _all_fixtures()))
 class TestNoRealOrganisationIsNamed:
     """Addresses were guarded; the links in the bodies were not.
 
@@ -374,7 +383,7 @@ class TestNoRealOrganisationIsNamed:
             f"it to INVENTED; if it is real, it does not belong in a fixture.")
 
 
-@pytest.mark.parametrize("name", sorted(p.name for p in FIXTURES.glob("*.json")))
+@pytest.mark.parametrize("name", sorted(p.name for p in _all_fixtures()))
 class TestNoRealMailIsCommitted:
     """The labelled set was built from one person's inbox.
 
@@ -615,7 +624,7 @@ class TestTheFixturesDoNotReadAsMachineOutput:
     was processed, and both were in the published fixtures.
     """
 
-    @pytest.mark.parametrize("name", sorted(p.name for p in FIXTURES.glob("*.json")))
+    @pytest.mark.parametrize("name", sorted(p.name for p in _all_fixtures()))
     def test_no_numbered_placeholder_companies(self, name):
         import json
         blob = json.dumps(fixture_rows(name))
@@ -628,7 +637,7 @@ class TestTheFixturesDoNotReadAsMachineOutput:
             blob, re.I)))
         assert not suspects, f"{name}: numbered placeholder names: {suspects}"
 
-    @pytest.mark.parametrize("name", sorted(p.name for p in FIXTURES.glob("*.json")))
+    @pytest.mark.parametrize("name", sorted(p.name for p in _all_fixtures()))
     def test_no_doubled_proper_nouns(self, name):
         """"Dear Alex Alex" and "St. St Alban's" both shipped."""
         import json
@@ -652,7 +661,9 @@ _CALENDAR_WORDS = {
 #: a denylist of real employers is a record of where somebody applied, which
 #: is the thing it exists to remove. Same reason the owner's handles above
 #: are hashed. Universal consumer platforms are deliberately not here: the
-#: sorter needs them and everybody's mail has them.
+#: sorter needs them and everybody's mail has them. Nor are the
+#: anonymiser's own stand-ins, which are invented and may legitimately
+#: come back the next time tools/anonymise.py runs.
 FORBIDDEN_ORGANISATIONS = {
     "ff74877a49f7202b4100be1464d6f191df378325192c3c5d61ea323b4da72e81",
     "d6db21ddecbbd0eeccb901c7fae837ca86cec4c289d7784e9a7016855f10859b",
@@ -663,14 +674,12 @@ FORBIDDEN_ORGANISATIONS = {
     "4f5d81bfe8c86d6d30f6e4f7f3d741bd7a33410212d25bd0ac470c5465007c0c",
     "3690e206cbe51b20ccb089d4deb34ae74e375f594e6a9c4a966f1dc8142f084f",
     "40dcf911c9c231b6cce3d14233a3c5684e4f916d9d33f69ec9eff03204e94ed3",
-    "45e2669f004dec8f826861f40d5faa1987bf1d08bee597c37bfe3ada0a8d0033",
     "f839701fa153ba45924dc3ae9bb0972bb126ad5387fc171bc09f985d257d66dc",
     "6b1b9e9b25fb34ff48d2bfe6f7ce90789335e29a17ae8d8ec5fb84016f3f41ae",
     "0aef941fe6c5b5dda1204940b273985277e511d1686631cff1ce4a169ca886df",
     "9a89de5d07fec2754fc2f7f3bda6da821f60d523d03d895de18dd97c8d618fc3",
     "9b89025ce7a6d932b28f6e15132a70d402f723874a425e9b4c7cc3b179fa66ce",
     "24cfb44d899764efd72b7f4ca9822f9f96d5c82d7811f4abd1a838b792ac4dbf",
-    "17840323ea59b5e1c1383d90f5e688fe7441b1de61ff8679d37f16591f261569",
     "784109ed21a6f7c669eaa3d404cb2cd6ce91f3334b836bc7021b0fee26af26ed",
     "d254fa846ea7252ec95bf229075e9ac6bda6f8944f5e445e589a4d54184c931d",
     "0a50c50f4e6ef1208e4508a0a84ecb98ec1bc2ce2bbbb1d96f5b1dcf834dab34",
@@ -696,7 +705,7 @@ def _phrases(blob: str):
 class TestNoRealEmployerSurvives:
     """Which companies somebody applied to is the shape of their year."""
 
-    @pytest.mark.parametrize("name", sorted(p.name for p in FIXTURES.glob("*.json")))
+    @pytest.mark.parametrize("name", sorted(p.name for p in _all_fixtures()))
     def test_no_real_organisation_is_named(self, name):
         import json
         blob = json.dumps(fixture_rows(name))

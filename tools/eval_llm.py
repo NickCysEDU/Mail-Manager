@@ -27,7 +27,10 @@ from config import CredentialStore  # noqa: E402
 from llm_engine import LLMEngine  # noqa: E402
 from models import EmailMessage  # noqa: E402
 
-FIXTURES = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "labelled.json"
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests"))
+import private_fixtures as _private
+FIXTURES = _private.path("labelled.json")
 
 
 def as_message(row: dict, index: int) -> EmailMessage:

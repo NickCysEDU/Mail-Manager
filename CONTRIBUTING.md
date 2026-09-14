@@ -14,7 +14,7 @@ cd Mail-Manager
 
 ```bash
 ./dev test          # the full suite, about 30 seconds
-./dev eval          # accuracy of the offline sorter against the labelled set
+./dev eval          # accuracy, if you have a labelled set (see below)
 ```
 
 Both must pass. If you change the sorter, `./dev eval` should not go down:
@@ -22,14 +22,12 @@ report the before and after numbers in the pull request.
 
 ## House rules
 
-- **No credentials or real mail in the repository.** The labelled fixture in
-  `tests/fixtures/` is anonymised; keep it that way.
-- **Tests do not touch the network or the Keychain.** `tests/conftest.py` has a
-  fake IMAP server and a fake API client to build on.
-- **Behaviour changes come with a test.** Especially anything that decides
-  where a message is filed.
-- Write comments that explain why, not what. Skip the ones that restate the
-  code.
+- **No credentials or real mail in the repository.** The two sets built from
+  a real inbox - `labelled.json` and `acknowledgements.json` - are not
+  committed; `tests/fixtures/private/` is ignored. The suite skips what needs
+  them and says why. If you build your own, put it there: the privacy guards
+  in `tests/test_privacy.py` run over anything found in that directory, which
+  is the point of them.
 
 ## Adding sorter signals
 
