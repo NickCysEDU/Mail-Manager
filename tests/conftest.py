@@ -35,6 +35,44 @@ def isolated_home(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_real_keychain(monkeypatch):
+    """Make the real Keychain unreachable, and give the vault its own.
+
+    This file has always said the suite does not touch the Keychain, and
+    until the cipher went in nothing did: vault.key() gave up at
+    cipher_available() before it ever asked. Once cryptography was installed
+    every save went looking for a data key, found none on a fresh machine,
+    and tried to create one - which on a locked or headless keychain blocks
+    in securityd with nobody to approve it. On a CI runner that is a suite
+    that never finishes.
+
+    A store built with an explicit backend still uses it; those are the fakes
+    tests hand in on purpose. It is only the fallback to the real thing that
+    is closed off, and it fails loudly rather than hanging, so a test that
+    starts reaching for it says so.
+    """
+    import config
+    import vault
+
+    real = config.CredentialStore._keyring
+
+    def refuse(self):
+        if self._backend is not None:
+            return real(self)
+        raise AssertionError(
+            "a test reached the real macOS Keychain. Pass a backend "
+            "(InMemoryCredentialStore, or CredentialStore(backend=...)) "
+            "instead - the suite must not depend on the machine it runs on.")
+
+    monkeypatch.setattr(config.CredentialStore, "_keyring", refuse)
+    monkeypatch.setattr(vault, "_SHARED",
+                        vault.Vault(config.InMemoryCredentialStore()),
+                        raising=False)
+    yield
+    vault.reset()
+
+
+@pytest.fixture(autouse=True)
 def dialog_calls(monkeypatch):
     """Neutralise every modal dialog so a test can never block on one.
 
