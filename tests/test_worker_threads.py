@@ -368,7 +368,7 @@ def reply_items(count: int = 2):
 
 def reply_settings(rules, **overrides) -> Settings:
     base = dict(icloud_email="you@icloud.example", auto_reply=True,
-                reply_signature="Nick",
+                reply_signature="Rowan",
                 reply_rules=[r.to_dict() for r in rules])
     base.update(overrides)
     return Settings(**base)
@@ -413,7 +413,7 @@ class TestReplyWorker:
         assert run.matched == 2 and run.saved == 2
         mailbox, flags, raw = server.appended[0]
         assert mailbox == "Drafts" and "Draft" in flags
-        assert b"Hello Dana" in raw and b"Nick" in raw
+        assert b"Hello Dana" in raw and b"Rowan" in raw
         assert b"In-Reply-To" not in raw or True   # threading headers are optional
 
     def test_nothing_is_ever_sent(self, qapp, wired):

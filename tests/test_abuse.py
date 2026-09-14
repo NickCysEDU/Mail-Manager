@@ -230,7 +230,7 @@ class TestAutoReplyIsHardToFireByAccident:
         rule.enabled = True
         draft = autoreply.draft_for(
             rule, self._message(sender_email="", reply_to=""),
-            self._classification(), me="Nick")
+            self._classification(), me="Rowan")
         assert draft.ok is False and draft.error
 
     def test_reply_to_wins_over_the_sender(self):
@@ -249,8 +249,8 @@ class TestAutoReplyIsHardToFireByAccident:
     def test_a_template_with_an_unknown_field_is_left_alone(self):
         rendered = autoreply.render_template(
             "Hi {first_name}, about {nonsense} and {me}",
-            self._message(), me="Nick")
-        assert "{nonsense}" in rendered and "Imogen" in rendered and "Nick" in rendered
+            self._message(), me="Rowan")
+        assert "{nonsense}" in rendered and "Imogen" in rendered and "Rowan" in rendered
 
     def test_a_template_cannot_be_used_to_read_attributes(self):
         """A format string is user input; it must not reach .format()."""

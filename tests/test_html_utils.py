@@ -415,8 +415,8 @@ class TestZeroFontSizeIsALayoutIdiom:
 
     def test_a_child_that_sets_a_size_is_visible_again(self):
         html = ('<div style="font-size:0px;text-align:left;display:table-cell;">'
-                '<div style="font-size:14px;">Hello Nick,</div></div>')
-        assert "Hello Nick," in html_to_text(html).text
+                '<div style="font-size:14px;">Hello Rowan,</div></div>')
+        assert "Hello Rowan," in html_to_text(html).text
 
     def test_text_directly_inside_a_zero_font_element_is_still_dropped(self):
         html = '<div style="font-size:0px">Secret preheader</div><p>Visible</p>'

@@ -266,7 +266,7 @@ class TestApplyRules:
                  actions=[Action("draft", "First reply from {me}")], name="one"),
             rule(Condition("sender", "contains", "dana"),
                  actions=[Action("draft", "Second reply")], name="two"),
-        ], message(), classification(), me="Nick")
+        ], message(), classification(), me="Rowan")
         assert outcome.draft.body.startswith("First reply")
 
     def test_a_model_action_with_no_model_falls_back_to_the_template(self):
@@ -274,7 +274,7 @@ class TestApplyRules:
         outcome = autoreply.apply_rules([
             rule(Condition("subject", "contains", "interview"),
                  actions=[Action("draft_ai", "be brief")]),
-        ], message(), classification(), me="Nick", engine=None)
+        ], message(), classification(), me="Rowan", engine=None)
         assert outcome.draft is not None
         assert outcome.draft.generated_by == "template"
 
@@ -286,7 +286,7 @@ class TestApplyRules:
         outcome = autoreply.apply_rules([
             rule(Condition("subject", "contains", "interview"),
                  actions=[Action("draft_ai", "be brief")]),
-        ], message(), classification(), me="Nick", engine=Exploding())
+        ], message(), classification(), me="Rowan", engine=Exploding())
         assert outcome.draft.ok is False and "could not draft" in outcome.draft.error
 
     def test_an_outcome_that_asks_for_nothing_is_none(self):
@@ -386,8 +386,8 @@ class TestShippedRules:
     def test_the_interview_rule_does_what_it_says_once_on(self):
         rules = autoreply.default_rules()
         rules[0].enabled = True
-        outcome = autoreply.apply_rules(rules, message(), classification(), me="Nick")
-        assert outcome.draft.ok and "Nick" in outcome.draft.body
+        outcome = autoreply.apply_rules(rules, message(), classification(), me="Rowan")
+        assert outcome.draft.ok and "Rowan" in outcome.draft.body
 
 
 class TestOperatorsThatDoNotFit:
@@ -532,7 +532,7 @@ class TestFuzzing:
             rules = [self._rule(rng) for _ in range(rng.randint(1, 5))]
             mail = self._message(rng, index)
             started = time.perf_counter()
-            outcome = autoreply.apply_rules(rules, mail, classification(), me="Nick")
+            outcome = autoreply.apply_rules(rules, mail, classification(), me="Rowan")
             worst = max(worst, time.perf_counter() - started)
             for one in rules:
                 one.problems()
