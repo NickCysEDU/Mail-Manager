@@ -1226,3 +1226,51 @@ class TestErrorTextCanBeCopied:
             # An application-wide filter must not outlive the test that
             # wanted it: it runs on every event of every test after this one.
             gui.remove_selectable_messages(app)
+
+
+class TestADialogDoesNotOutliveItsVisit:
+    """Settings is parented to the window, so nothing collected it.
+
+    Every visit left the whole dialog behind - about three hundred and
+    seventy widgets. That is not only memory. apply_appearance sets a
+    stylesheet on the QApplication, and Qt restyles every live widget when it
+    does, so each abandoned copy made every later repaint slower: open
+    Settings twenty times and the app is visibly slower than when it started.
+    """
+
+    @staticmethod
+    def _settle(qapp):
+        from PySide6.QtCore import QEvent
+        for _ in range(4):
+            qapp.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            qapp.processEvents()
+
+    def test_opening_settings_repeatedly_does_not_accumulate_widgets(
+            self, qtbot, qapp):
+        from PySide6.QtCore import QTimer
+
+        from config import InMemoryCredentialStore, Settings
+        from gui import MainWindow
+
+        main_window = MainWindow(Settings(icloud_email="you@icloud.example"),
+                                 InMemoryCredentialStore())
+        qtbot.addWidget(main_window)
+
+        def close_it():
+            modal = qapp.activeModalWidget()
+            if modal is not None:
+                modal.reject()
+
+        self._settle(qapp)
+        before = len(qapp.allWidgets())
+        rounds = 5
+        for _ in range(rounds):
+            QTimer.singleShot(10, close_it)
+            main_window.open_settings()
+            qapp.processEvents()
+            self._settle(qapp)
+        after = len(qapp.allWidgets())
+        # A handful of cached children is fine; a dialog's worth is not.
+        assert after - before < 50, (
+            f"{after - before} widgets left behind by {rounds} visits to "
+            "Settings - the dialog is not being released")
