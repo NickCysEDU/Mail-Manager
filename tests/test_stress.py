@@ -21,6 +21,13 @@ sys.path.insert(0, str(ROOT / "tools"))
 import stress  # noqa: E402
 
 
+# 120 rounds of the rules engine is 55 seconds on the machine this was
+# written on, against a suite-wide limit of 60. That is not a margin. A
+# hosted runner is several times slower, so the limit was reached there and
+# pytest-timeout killed the worker - which with xdist reads as a stuck job
+# rather than as this test saying it needed longer. The fuzzing is worth its
+# minute; the budget was simply wrong.
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize("suite", stress.SUITES)
 def test_nothing_raises_and_nothing_hangs(suite):
     """A fixed seed, so a failure here is reproducible exactly."""
