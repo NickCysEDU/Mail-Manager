@@ -37,9 +37,15 @@ jobs:
 
       - name: Tests
         # Qt needs a platform plugin even with no screen attached.
+        # TEMPORARY: serial and verbose, with a step timeout shorter than the
+        # job's, so that a run which does not finish still hands back its log.
+        # A cancelled job discards it, which is why three runs in a row said
+        # nothing about where they stopped.
+        timeout-minutes: 12
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest
+          PYTHONFAULTHANDLER: "1"
+        run: python -m pytest -p no:randomly -n 0 -v --timeout=120 --timeout-method=thread 2>&1 | tail -120
 
       - name: The offline sorter still scores what it should
         env:
