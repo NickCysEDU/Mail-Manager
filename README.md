@@ -454,7 +454,7 @@ summaries are left out rather than written in the clear.
 
 ```bash
 ./dev demo      # the app with sample mail, no setup
-./dev test      # 2,541 tests, about three minutes on four workers
+./dev test      # 2,554 tests, about three minutes on four workers
 ./dev eval      # sorter accuracy against the labelled fixture
 ./dev fake      # the whole pipeline in the terminal, offline
 ```

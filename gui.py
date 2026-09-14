@@ -2049,6 +2049,15 @@ class MainWindow(QMainWindow):
             outcome = dialog.exec()
         finally:
             self._settings_dialog = None
+            # The dialog is parented to the window, so without this it lives
+            # as long as the window does and every visit leaves another copy
+            # behind - about three hundred and seventy widgets a time. That
+            # is not only memory: apply_appearance sets a stylesheet on the
+            # application, and Qt restyles every live widget when it does, so
+            # each abandoned copy makes every later repaint slower.
+            # deleteLater only queues the deletion, so the code below can
+            # still read the dialog it just closed.
+            dialog.deleteLater()
         if outcome != QDialog.DialogCode.Accepted:
             self.apply_appearance()      # undo any live preview
             return

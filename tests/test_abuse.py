@@ -1033,3 +1033,50 @@ class TestOfflineMeansOffline:
         assert "opened a socket" not in done.stdout + done.stderr
         assert "resolved" not in done.stderr
         assert done.returncode == 0, done.stderr[-1500:]
+
+
+class TestTheCipherSurfaceStaysNarrow:
+    """Why the cryptography pin is safe, checked rather than asserted.
+
+    48.x is the last release with a universal2 macOS wheel; 49 and 50 publish
+    arm64 only, so moving up would quietly make the app Apple-silicon only.
+    48.0.1 carries three advisories - a Bleichenbacher oracle in PKCS#7
+    EnvelopedData decryption, and two in the X.509 path verifier. None is
+    reachable from here: the only thing this app asks cryptography for is
+    AES-GCM, and TLS is done by Python's own ssl module.
+
+    That is only true while it stays true. If someone starts verifying
+    certificates or decrypting PKCS#7 with this library, the pin stops being
+    safe, and this test is what says so.
+    """
+
+    ALLOWED = "cryptography.hazmat.primitives.ciphers.aead"
+
+    def test_only_aesgcm_is_imported_from_cryptography(self):
+        import re
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent
+        offenders = []
+        for path in sorted(root.glob("*.py")):
+            for number, line in enumerate(
+                    path.read_text(encoding="utf-8").splitlines(), 1):
+                if not re.search(r"\bcryptography\b", line):
+                    continue
+                if line.lstrip().startswith("#"):
+                    continue
+                if self.ALLOWED in line:
+                    continue
+                offenders.append(f"{path.name}:{number}: {line.strip()}")
+        assert not offenders, (
+            "cryptography is used outside AES-GCM, so the <49 pin no longer "
+            "avoids the advisories against 48.x:\n  " + "\n  ".join(offenders))
+
+    def test_the_pin_still_says_why(self):
+        from pathlib import Path
+
+        text = (Path(__file__).resolve().parent.parent
+                / "requirements.txt").read_text(encoding="utf-8")
+        assert "cryptography" in text
+        assert "<49" in text, "the cap is what keeps the build universal"
+        assert "universal2" in text, "the reason has to be next to the pin"

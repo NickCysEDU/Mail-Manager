@@ -82,6 +82,32 @@ their filenames are mentioned.
   keeps the two sensitive files away from *other programs* running as you; it
   cannot protect anything from somebody who can run this one.
 
+## Known advisories against a pinned dependency
+
+`cryptography` is pinned to `48.x`, and 48.0.1 has three advisories open
+against it. They are listed here rather than left for you to discover:
+
+| Advisory | What it affects |
+|---|---|
+| CVE-2026-69247 | A Bleichenbacher oracle in PKCS#7 `EnvelopedData` decryption |
+| CVE-2026-69248 | The X.509 verifier accepting a wildcard SAN outside `permittedSubtrees` |
+| CVE-2026-69249 | Exponential path-building on chains with duplicate self-signed intermediates |
+
+None is reachable from this app. The only thing it asks `cryptography` for is
+AES-GCM, from `cryptography.hazmat.primitives.ciphers.aead`; it does not
+decrypt PKCS#7 and does not use that library's certificate verifier. TLS is
+done by Python's own `ssl` module against the bundled CA file.
+
+The pin exists because 49 and 50 publish an arm64-only macOS wheel. Moving up
+would make the app Apple-silicon only, with no Intel build and no second wheel
+to merge, which is a certain loss for every Intel user against a risk that is
+not reachable.
+
+That reasoning holds only while the usage stays narrow, so it is a test rather
+than a promise: `tests/test_abuse.py` fails if `cryptography` is named
+anywhere outside the AES-GCM import. If someone adds certificate verification
+later, the test fails and the pin has to be revisited.
+
 ## Supported versions
 
 The latest release on `main` is the supported version.
