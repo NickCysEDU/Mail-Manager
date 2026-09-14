@@ -429,7 +429,7 @@ Two more gates keep them honest:
   message reads as a solicitation or an impersonation.
 
 Measured: held-out exact **16.7% → 33.3%**, with the labelled set unchanged at
-87.3% and 98.3% precision, nothing wrongly filed anywhere, and the corpus
+87.3% and 98.2% precision, nothing wrongly filed anywhere, and the corpus
 still at 0.00% of ham filed as job mail.
 
 ## Categories

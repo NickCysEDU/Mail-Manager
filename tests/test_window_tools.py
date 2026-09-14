@@ -1245,6 +1245,11 @@ class TestADialogDoesNotOutliveItsVisit:
             qapp.sendPostedEvents(None, QEvent.Type.DeferredDelete)
             qapp.processEvents()
 
+    # Three visits prove it as well as five: one leak is 370 widgets and the
+    # threshold is 50. The budget is explicit because opening a modal from a
+    # test costs far more than opening one from a window - the dialog itself
+    # builds in a fifth of a second.
+    @pytest.mark.timeout(300)
     def test_opening_settings_repeatedly_does_not_accumulate_widgets(
             self, qtbot, qapp):
         from PySide6.QtCore import QTimer
@@ -1263,7 +1268,7 @@ class TestADialogDoesNotOutliveItsVisit:
 
         self._settle(qapp)
         before = len(qapp.allWidgets())
-        rounds = 5
+        rounds = 3
         for _ in range(rounds):
             QTimer.singleShot(10, close_it)
             main_window.open_settings()
