@@ -191,6 +191,8 @@ class Spectrum(QWidget):
         self._reveal = 0.0
         self._idling = False
         self._drift = 0.0
+        #: Playing was asked for, whether or not there was anything to show.
+        self._wanted = False
         self.setMaximumHeight(0)
 
         self._flow = QVariantAnimation(self)
@@ -206,11 +208,19 @@ class Spectrum(QWidget):
 
     # -- input ------------------------------------------------------------
     def set_frames(self, frames: List, rate: int) -> None:
+        """The analysis, which finishes a moment after playback starts.
+
+        Whoever presses play does it before this arrives, so the request to
+        appear is remembered and acted on here. Without that the spectrum
+        waits for a second press that never comes.
+        """
         self._frames = frames or []
         self._rate = max(1, rate)
         width = len(self._frames[0]) if self._frames else 0
         self._level = [0.0] * width
         self._peak = [0.0] * width
+        if self._frames and self._wanted:
+            self.set_playing(True)
         self.update()
 
     def set_position(self, milliseconds: int) -> None:
@@ -218,6 +228,7 @@ class Spectrum(QWidget):
 
     def set_playing(self, playing: bool) -> None:
         """Arrive on play, idle on pause, leave after a while of neither."""
+        self._wanted = bool(playing)
         if playing and self._frames:
             self._idling = False
             self._away.stop()
@@ -269,6 +280,7 @@ class Spectrum(QWidget):
         self._level = []
         self._peak = []
         self._bass = self._mid = self._synth = self._high = 0.0
+        self._wanted = False
         for spark in self._sparks:
             spark[4] = 0.0
         self.update()

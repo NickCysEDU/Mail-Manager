@@ -585,8 +585,10 @@ class AttachmentViewer(QDialog):
         self._written: List[Path] = []
         self._last_dir = str(Path.home() / "Downloads")
         self._showing_metadata = False
-        #: row -> thread, so a part is never fetched twice at once.
-        self._fetching: dict = {}
+        #: One worker at a time, and what is waiting behind it.
+        self._worker = None
+        self._worker_row: Optional[int] = None
+        self._queue: List[int] = []
         #: the row whose arrival should switch the view.
         self._awaiting: Optional[int] = None
 
@@ -734,17 +736,46 @@ class AttachmentViewer(QDialog):
         return self._found[row] if 0 <= row < len(self._found) else None
 
     def _start_fetch(self, row: int, item, then_show: bool) -> None:
-        """Ask for one part on a thread, and keep the window responsive."""
-        if self._fetch is None or row in self._fetching:
+        """Queue one part. One request at a time, because one connection.
+
+        Two threads on the same IMAP socket do not race politely: they
+        interleave inside TLS and the server drops the connection with a bad
+        record MAC. So there is a single worker and a queue, and whatever the
+        person is actually looking at goes to the front of it.
+        """
+        if self._fetch is None:
             return
-        thread = _FetchThread(self._fetch, row, item, self)
-        self._fetching[row] = thread
-        thread.done.connect(self._fetched)
-        thread.failed.connect(self._fetch_failed)
-        thread.finished.connect(lambda r=row: self._fetching.pop(r, None))
         if then_show:
             self._awaiting = row
+        if row in self._queue or (self._worker is not None
+                                  and self._worker_row == row):
+            return
+        if then_show:
+            self._queue.insert(0, row)
+        else:
+            self._queue.append(row)
+        self._pump()
+
+    def _pump(self) -> None:
+        if self._worker is not None or not self._queue:
+            return
+        row = self._queue.pop(0)
+        if not 0 <= row < len(self._found) or self._found[row].data is not None:
+            self._pump()
+            return
+        thread = _FetchThread(self._fetch, row, self._found[row], self)
+        self._worker = thread
+        self._worker_row = row
+        thread.done.connect(self._fetched)
+        thread.failed.connect(self._fetch_failed)
+        thread.finished.connect(self._worker_done)
         thread.start()
+
+    @Slot()
+    def _worker_done(self) -> None:
+        self._worker = None
+        self._worker_row = None
+        self._pump()
 
     @Slot(int, object)
     def _fetched(self, row: int, data: bytes) -> None:
@@ -778,8 +809,7 @@ class AttachmentViewer(QDialog):
         for offset in (1, -1):
             other = row + offset
             if 0 <= other < len(self._found) and self._found[other].data is None:
-                if len(self._fetching) < 2:
-                    self._start_fetch(other, self._found[other], then_show=False)
+                self._start_fetch(other, self._found[other], then_show=False)
 
     @Slot(int)
     def _show(self, row: int) -> None:
