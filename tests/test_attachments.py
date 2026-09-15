@@ -415,3 +415,59 @@ class TestTheWindowOffersThem:
                             lambda *a, **k: told.setdefault("said", a[2] if len(a) > 2 else ""))
         window._open_attachments(rows[0])
         assert "not connected" in told.get("said", "").lower()
+
+
+class TestTheWorkerUsesTheRealAccountFields:
+    """It asked for account.imap_host, which Account has never had.
+
+    Nothing caught it: the GUI test covers the path where no password is
+    stored, which returns before the worker is built, and no test had ever
+    started one. On a configured mailbox the button raised AttributeError
+    inside the thread and the window showed nothing at all.
+    """
+
+    def test_account_has_the_fields_the_worker_reads(self):
+        import inspect
+
+        from accounts import Account
+        import workers
+
+        source = inspect.getsource(workers.AttachmentWorker)
+        assert "imap_host" not in source and "imap_port" not in source, (
+            "Account has host and port; imap_host is Settings' name for a "
+            "different thing")
+        for field in ("host", "port", "address", "source_mailbox"):
+            assert hasattr(Account(), field), field
+
+    def test_it_reaches_the_engine_with_the_account_host(self, monkeypatch):
+        """Run it far enough to prove the attributes resolve."""
+        import workers
+        from accounts import Account
+
+        asked = {}
+
+        class FakeEngine:
+            def __init__(self, host="", port=0):
+                asked["host"] = host
+                asked["port"] = port
+
+            def session(self, address, password):
+                asked["address"] = address
+                raise RuntimeError("stop here, the point is already made")
+
+        monkeypatch.setattr(workers, "IMAPEngine", FakeEngine)
+
+        class Message:
+            uid = "1"
+            source_folder = "INBOX"
+
+        account = Account(label="x", address="someone@example.example",
+                          host="imap.example.example", port=993)
+        worker = workers.AttachmentWorker(account, "secret", Message())
+        failures = []
+        worker.failed.connect(failures.append)
+        worker.run()
+        assert asked.get("host") == "imap.example.example"
+        assert asked.get("port") == 993
+        assert failures, "a failure should be reported, not swallowed"
+        assert "secret" not in failures[0], "the password must not be in the message"

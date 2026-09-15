@@ -491,7 +491,7 @@ notice, and contribution terms.
 
 ```bash
 ./dev demo      # the app with sample mail, no setup
-./dev test      # 2,642 tests, about three minutes on four workers
+./dev test      # 2,647 tests, about three minutes on four workers
 ./dev eval      # sorter accuracy (needs a labelled set of your own)
 ./dev fake      # the whole pipeline in the terminal, offline
 ```
