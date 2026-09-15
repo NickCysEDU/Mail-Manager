@@ -25,6 +25,7 @@ SECURITY_URL = f"{REPOSITORY}/security/advisories/new"
 ISSUES_URL = f"{REPOSITORY}/issues"
 LICENCE_URL = f"{REPOSITORY}/blob/main/LICENSE"
 THIRD_PARTY_URL = f"{REPOSITORY}/blob/main/THIRD-PARTY-LICENSES.md"
+LEGAL_URL = f"{REPOSITORY}/blob/main/LEGAL.md"
 HANDBOOK_URL = f"{REPOSITORY}/blob/main/docs/HANDBOOK.md"
 
 #: Required disclosure, shown in full rather than behind a link.
@@ -96,9 +97,11 @@ class AboutDialog(QDialog):
         version.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse)
         licence = QLabel(
-            f"MIT licensed. {_link(LICENCE_URL, 'Read the licence')}. "
+            f"MIT licensed, with no warranty. "
+            f"{_link(LICENCE_URL, 'Read the licence')}. "
             f"Qt is included under the LGPL v3; "
-            f"{_link(THIRD_PARTY_URL, 'third-party notices')}.")
+            f"{_link(THIRD_PARTY_URL, 'third-party notices')}, "
+            f"{_link(LEGAL_URL, 'legal notices')}.")
         licence.setOpenExternalLinks(True)
         licence.setProperty("dim", "true")
         titles.addWidget(name)

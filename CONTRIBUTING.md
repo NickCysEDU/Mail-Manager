@@ -90,3 +90,11 @@ work and now flatters it; the second was written afterwards and is scored once.
 it stops measuring anything and the next person needs a third set. One of the
 safety tests fails if the held-out set ever starts scoring like the dev set,
 which is what fitting to it looks like from the outside.
+
+## Licensing of contributions
+
+Contributions are accepted under the same MIT licence the project is
+published under. Opening a pull request confirms that you wrote it, or
+otherwise have the right to submit it, and that you licence it to the project
+and its users on those terms. There is no CLA to sign. [LEGAL.md](LEGAL.md)
+says the same thing in one place with the other notices.

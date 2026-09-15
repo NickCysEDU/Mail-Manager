@@ -82,7 +82,7 @@ datas = [(str(_stamp), ".")] if _stamp.exists() else []
 # LGPL v3 and the disk image carries twenty of its libraries; clause 4 wants
 # the notice to reach whoever received the program, and a link on a web page
 # somewhere is not that. Both files land next to the executable.
-for _legal in ("LICENSE", "THIRD-PARTY-LICENSES.md"):
+for _legal in ("LICENSE", "THIRD-PARTY-LICENSES.md", "LEGAL.md"):
     _path = ROOT / _legal
     if _path.exists():
         datas.append((str(_path), "."))
