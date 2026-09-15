@@ -1080,3 +1080,95 @@ class TestTheCipherSurfaceStaysNarrow:
         assert "cryptography" in text
         assert "<49" in text, "the cap is what keeps the build universal"
         assert "universal2" in text, "the reason has to be next to the pin"
+
+
+class TestADownloadedArchiveCannotEscape:
+    """tarfile writes whatever path a member claims. CVE-2007-4559.
+
+    Both archives this project unpacks arrive over the network: a corpus
+    from a public mirror and a wheel from an index. Neither is a file
+    somebody chose to trust.
+    """
+
+    @staticmethod
+    def _hostile(path, name):
+        import io
+        import tarfile
+
+        with tarfile.open(path, "w") as archive:
+            payload = b"owned"
+            info = tarfile.TarInfo(name)
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
+
+    @pytest.mark.parametrize("name", [
+        "../escaped.txt",
+        "../../escaped.txt",
+        "a/../../escaped.txt",
+        "/tmp/escaped-absolute.txt",
+    ])
+    def test_a_traversing_member_is_refused(self, tmp_path, name):
+        import sys
+        import tarfile
+
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+        from corpus import safe_extract
+
+        archive_path = tmp_path / "hostile.tar"
+        self._hostile(archive_path, name)
+        target = tmp_path / "unpack"
+        target.mkdir()
+        with tarfile.open(archive_path) as archive:
+            try:
+                safe_extract(archive, str(target))
+            except Exception:
+                pass
+        escaped = tmp_path / "escaped.txt"
+        assert not escaped.exists(), f"{name} wrote outside the target"
+        assert not (tmp_path.parent / "escaped.txt").exists()
+
+    def test_a_symlink_member_is_refused(self, tmp_path):
+        import sys
+        import tarfile
+
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+        from corpus import safe_extract
+
+        archive_path = tmp_path / "link.tar"
+        with tarfile.open(archive_path, "w") as archive:
+            info = tarfile.TarInfo("link")
+            info.type = tarfile.SYMTYPE
+            info.linkname = "/etc/passwd"
+            archive.addfile(info)
+        target = tmp_path / "unpack"
+        target.mkdir()
+        with tarfile.open(archive_path) as archive:
+            try:
+                safe_extract(archive, str(target))
+            except Exception:
+                pass
+        link = target / "link"
+        assert not (link.is_symlink() and str(link.readlink()) == "/etc/passwd")
+
+    def test_an_ordinary_archive_still_unpacks(self, tmp_path):
+        import io
+        import sys
+        import tarfile
+
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+        from corpus import safe_extract
+
+        archive_path = tmp_path / "fine.tar"
+        with tarfile.open(archive_path, "w") as archive:
+            payload = b"hello"
+            info = tarfile.TarInfo("dir/file.txt")
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
+        target = tmp_path / "unpack"
+        target.mkdir()
+        with tarfile.open(archive_path) as archive:
+            safe_extract(archive, str(target))
+        assert (target / "dir" / "file.txt").read_bytes() == b"hello"

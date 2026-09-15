@@ -45,6 +45,21 @@ def _summarise(text: str, limit: int = 240) -> str:
     return collapsed[:limit] + ("..." if len(collapsed) > limit else "")
 
 
+def for_the_log(exc: BaseException) -> str:
+    """An exception rendered without anything the server sent back.
+
+    A 4xx body can quote the request that caused it, and the request carries
+    the text of an email. That excerpt belongs on screen, where the person
+    reading it already has the mail - not in a file that outlives the scan.
+    SECURITY.md promises message bodies are never written to the log, and an
+    echoing provider is the one way that promise could have been broken.
+    """
+    status = getattr(exc, "status_code", None)
+    if status is not None:
+        return f"{type(exc).__name__} (HTTP {status})"
+    return type(exc).__name__
+
+
 class ProviderError(RuntimeError):
     """The backend could not be reached, or returned something unusable.
 

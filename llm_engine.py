@@ -899,7 +899,8 @@ class LLMEngine:
             except (LLMAuthError, ClassificationCancelled):
                 raise
             except Exception as exc:  # noqa: BLE001 - one bad group must not stop a scan
-                log.warning("Classification failed for %d message(s): %s", len(group), exc)
+                log.warning("Classification failed for %d message(s): %s",
+                            len(group), providers.for_the_log(exc))
                 return [
                     Classification.failure(f"{type(exc).__name__}: {exc}", model=self.model)
                     for _ in group

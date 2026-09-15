@@ -70,6 +70,16 @@ class TestTheNumbersAreCurrent:
         assert words[len(profiles.ALL_TOPICS)] in everything().lower()
 
     def test_the_test_count(self):
+        """The quoted figure is for a checkout that has the private sets.
+
+        Without them a few files collect nothing, so a public clone counts
+        fewer and the number in the README would look wrong. It is not: it
+        describes the full suite, and the docs say so.
+        """
+        import private_fixtures
+        if any(private_fixtures.path(n) is None for n in private_fixtures.PRIVATE):
+            pytest.skip("counts differ without the evaluation sets; "
+                        "the quoted figure is for a full checkout")
         # sys.executable, not the checkout's virtualenv: CI installs into
         # the runner's own Python and there is no .venv there at all.
         out = subprocess.run(

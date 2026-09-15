@@ -24,11 +24,15 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 #: An override, so the sets can live outside the tree entirely.
 ENV_VAR = "MAIL_MANAGER_PRIVATE_FIXTURES"
 
-#: The sets that are not in the repository.
-PRIVATE = ("labelled.json", "acknowledgements.json")
+#: The sets that are not in the repository - all of them. Three were
+#: written by hand and carry nothing real, but "the synthetic ones are
+#: safe" is a judgement, and judgements about this corpus have been wrong
+#: four times. Shipping no message data at all is not a judgement.
+PRIVATE = ("labelled.json", "acknowledgements.json", "adversarial.json",
+           "holdout.json", "meetings.json")
 
 WHY = (
-    "built from a real inbox and kept out of the repository; see "
+    "evaluation data, kept out of the repository; see "
     "tests/private_fixtures.py"
 )
 

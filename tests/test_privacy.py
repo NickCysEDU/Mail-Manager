@@ -713,3 +713,46 @@ class TestNoRealEmployerSurvives:
         assert not (FORBIDDEN_ORGANISATIONS & seen), (
             f"{name} names a real organisation that was removed from the "
             "corpus once already")
+
+
+class TestAProviderCannotEchoMailIntoTheLog:
+    """A 4xx body can quote the request, and the request carries the email.
+
+    The excerpt belongs on screen, where the reader already has the mail. In
+    a log file it outlives the scan, and SECURITY.md promises message bodies
+    are never written there.
+    """
+
+    def test_the_log_form_drops_the_server_text(self):
+        import providers
+
+        class Rejected(Exception):
+            pass
+
+        leaked = ("invalid request: Dear Rowan, thanks for applying to "
+                  "Harborlight, your interview is Tuesday at 3pm")
+        failure = Rejected(leaked)
+        failure.status_code = 400
+        logged = providers.for_the_log(failure)
+        assert "Rowan" not in logged
+        assert "interview" not in logged
+        assert "Harborlight" not in logged
+        assert "400" in logged and "Rejected" in logged
+
+    def test_without_a_status_it_is_still_only_the_type(self):
+        import providers
+
+        assert providers.for_the_log(ValueError("body text here")) == "ValueError"
+
+    def test_the_batch_failure_path_uses_it(self):
+        """The one call site that logs a provider exception."""
+        import inspect
+
+        import llm_engine
+
+        source = inspect.getsource(llm_engine)
+        assert "Classification failed for" in source
+        window = source[source.index("Classification failed for") - 200:
+                        source.index("Classification failed for") + 260]
+        assert "for_the_log" in window, (
+            "the batch failure log line is back to formatting the exception")

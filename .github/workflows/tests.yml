@@ -75,3 +75,23 @@ jobs:
           python -m pyflakes $(git ls-files '*.py' | grep -v '^gui.py$') \
             | grep -v 'imported but unused' | tee /tmp/flakes
           test ! -s /tmp/flakes
+
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install pip-audit
+      # Reports rather than blocks. The cryptography pin is deliberate and
+      # explained in SECURITY.md: the advisories are in PKCS#7 and the X.509
+      # verifier, neither of which this app calls, and the versions that fix
+      # them publish no universal2 wheel, so taking them would drop every
+      # Intel Mac. A new finding in anything else is worth a look, which is
+      # what this is for.
+      - name: pip-audit
+        continue-on-error: true
+        run: pip-audit -r requirements.txt -r requirements-dev.txt --progress-spinner off

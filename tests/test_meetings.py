@@ -24,8 +24,12 @@ from rules_engine import (RuleClassifier, job_board_blast, job_posting_score,
                           meeting_request_score, normalize,
                           professional_context_score, unwrap_links)
 
-FIXTURE = Path(__file__).parent / "fixtures" / "meetings.json"
-CASES = json.loads(FIXTURE.read_text())
+import private_fixtures
+
+FIXTURE = private_fixtures.path("meetings.json")
+pytestmark = pytest.mark.skipif(
+    FIXTURE is None, reason="meetings.json is " + private_fixtures.WHY)
+CASES = json.loads(FIXTURE.read_text()) if FIXTURE else []
 
 
 @pytest.fixture(scope="module")

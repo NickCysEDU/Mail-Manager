@@ -27,6 +27,7 @@ import pathlib
 import random
 import subprocess
 import sys
+import os
 import tarfile
 import time
 import urllib.request
@@ -45,6 +46,36 @@ ARCHIVES = (
 )
 
 
+
+def _inside(base, target) -> bool:
+    """Whether ``target`` stays within ``base`` once symlinks are resolved."""
+    base = os.path.realpath(base)
+    target = os.path.realpath(target)
+    return target == base or target.startswith(base + os.sep)
+
+
+def safe_extract(archive, where) -> None:
+    """Unpack without letting the archive choose where its files land.
+
+    tarfile writes whatever path a member claims, including ../.. and
+    symlinks pointing anywhere - the flaw catalogued as CVE-2007-4559, which
+    sat in the standard library for fifteen years. Python 3.11.4 added a
+    filter that refuses those members; where it exists it is used, and where
+    it does not every member is checked by hand instead. Both of these
+    archives arrive over the network, which is the only reason this matters.
+    """
+    try:
+        archive.extractall(where, filter="data")
+        return
+    except TypeError:
+        pass
+    for member in archive.getmembers():
+        if member.issym() or member.islnk():
+            raise ValueError(f"{member.name}: archive contains a link")
+        if not _inside(where, os.path.join(where, member.name)):
+            raise ValueError(f"{member.name}: archive escapes the target")
+    archive.extractall(where)
+
 def fetch() -> int:
     CACHE.mkdir(parents=True, exist_ok=True)
     for name, _label in ARCHIVES:
@@ -55,7 +86,7 @@ def fetch() -> int:
         marker = CACHE / name.replace(".tar.bz2", "")
         if not any(CACHE.glob(marker.name.split("_", 1)[-1] or "*")):
             with tarfile.open(target) as archive:
-                archive.extractall(CACHE)
+                safe_extract(archive, CACHE)
     print(f"  ready in {CACHE}")
     return 0
 

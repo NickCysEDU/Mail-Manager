@@ -460,11 +460,20 @@ summaries are left out rather than written in the clear.
 
 [Full details in SECURITY.md](SECURITY.md).
 
+## Licence
+
+MIT, in `LICENSE`.
+
+The disk image also carries Qt, which is **LGPL v3**, as separate dynamic
+libraries you can replace. Every bundled library is named with its licence in
+[THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md), along with where the data
+in the offline lexicon came from.
+
 ## Development
 
 ```bash
 ./dev demo      # the app with sample mail, no setup
-./dev test      # 2,554 tests, about three minutes on four workers
+./dev test      # 2,575 tests (with the evaluation sets present), about three minutes on four workers
 ./dev eval      # sorter accuracy (needs a labelled set of your own)
 ./dev fake      # the whole pipeline in the terminal, offline
 ```

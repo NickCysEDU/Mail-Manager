@@ -25,6 +25,7 @@ import subprocess
 import sys
 import sysconfig
 import tempfile
+import os
 import zipfile
 from typing import List, Optional, Tuple
 
@@ -187,6 +188,13 @@ def main() -> int:
                 continue
             extracted = into / "unpacked"
             with zipfile.ZipFile(wheel) as archive:
+                # CPython's zipfile drops .. components, but say so rather
+                # than rely on it: a wheel is a download like any other.
+                for entry in archive.namelist():
+                    landing = os.path.realpath(os.path.join(extracted, entry))
+                    if not (landing == os.path.realpath(extracted)
+                            or landing.startswith(os.path.realpath(extracted) + os.sep)):
+                        raise ValueError(f"{entry}: wheel escapes the target")
                 archive.extractall(extracted)
             twin = next((p for p in extracted.rglob(path.name)), None)
             if twin is None:
