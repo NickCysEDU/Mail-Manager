@@ -18,7 +18,7 @@ from PySide6.QtCore import (QAbstractTableModel, QModelIndex, QSize,
                             QSortFilterProxyModel, Qt, Signal, Slot)
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPalette
 from PySide6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QLabel,
-                               QPlainTextEdit, QSplitter, QStyle,
+                               QPlainTextEdit, QPushButton, QSplitter, QStyle,
                                QStyledItemDelegate, QStyleOptionViewItem,
                                QTextBrowser, QToolButton, QVBoxLayout, QWidget)
 
@@ -617,6 +617,7 @@ class PreviewPane(QWidget):
     overrideChanged = Signal(int, object)  # source row, folder or None
     #: "Sort this mail too" - the window turns non-job routing on.
     sortNonJobRequested = Signal()
+    attachmentsRequested = Signal(int)   # source row
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -629,6 +630,13 @@ class PreviewPane(QWidget):
         self.header.setWordWrap(True)
         self.header.setTextFormat(Qt.TextFormat.RichText)
         self.header.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+
+        self.attachments_button = QPushButton("Attachments")
+        self.attachments_button.setEnabled(False)
+        self.attachments_button.setToolTip(
+            "Open what was attached. Images, audio, PDFs and text are shown "
+            "here; anything else can be saved. Nothing is ever run.")
+        self.attachments_button.clicked.connect(self._open_attachments)
 
         self.body_mode = QComboBox()
         self.body_mode.addItems(["Message text", "Exactly what the model was sent"])
@@ -690,6 +698,7 @@ class PreviewPane(QWidget):
         mode_row = QHBoxLayout()
         mode_row.addWidget(QLabel("Source:"))
         mode_row.addWidget(self.body_mode, 1)
+        mode_row.addWidget(self.attachments_button)
         left_layout.addLayout(mode_row)
         left_layout.addWidget(self.body_view, 1)
 
@@ -758,6 +767,7 @@ class PreviewPane(QWidget):
     def show_item(self, row: int, item: TriageItem, prompt_text: str = "") -> None:
         self._row = row
         self._item = item
+        self._sync_attachments(item)
         self._prompt_text = prompt_text
         message = item.email
 
@@ -805,6 +815,24 @@ class PreviewPane(QWidget):
             if message.attachments:
                 text += "\n\n--- ATTACHMENTS ---\n" + "\n".join(f"• {a}" for a in message.attachments)
             self.body_view.setPlainText(text)
+
+    def _sync_attachments(self, item) -> None:
+        """The button says how many, because "Attachments" alone is a guess."""
+        names = getattr(item.email, "attachments", ()) or ()
+        self.attachments_button.setEnabled(bool(names))
+        self.attachments_button.setText(
+            f"Attachments ({len(names)})" if names else "Attachments")
+
+    @Slot()
+    def _open_attachments(self) -> None:
+        """Ask whoever owns this pane to fetch and show them.
+
+        The pane has no mailbox connection of its own, and it should not: the
+        bytes are not in the message this pane was handed, because a scan
+        only ever downloads the first part of each message.
+        """
+        if self._item is not None:
+            self.attachmentsRequested.emit(self._row or 0)
 
     @Slot(str)
     def _folder_changed(self, text: str) -> None:
