@@ -272,8 +272,28 @@ def self_test(offline: bool = False) -> int:
             raise RuntimeError("filename sanitising does not work in this build")
         if not hasattr(attachment_view, "AttachmentViewer"):
             raise RuntimeError("the viewer is not in this build")
-        formats = "images, audio, PDF, text"
-        return f"present ({formats})"
+
+        # The Qt pieces, actually constructed. Checking that the Python
+        # modules import proved nothing: QtMultimedia and QtPdf were on the
+        # spec's exclude list for two releases, so audio and PDF said
+        # "unavailable in this build" while this check said "present".
+        working = ["images", "text"]
+        from PySide6.QtMultimedia import QAudioDecoder, QMediaPlayer
+        player = QMediaPlayer()
+        decoder = QAudioDecoder()
+        if player is None or decoder is None:
+            raise RuntimeError("audio is not in this build")
+        working.append("audio")
+        from PySide6.QtPdf import QPdfDocument
+        if QPdfDocument() is None:
+            raise RuntimeError("PDF is not in this build")
+        working.append("PDF")
+
+        import visualizers
+        if len(visualizers.SCENES) < 2:
+            raise RuntimeError("the visualisers are not in this build")
+        scenes = len(visualizers.SCENES)
+        return f"{', '.join(working)}; {scenes} visualisers"
 
     check("attachment viewer", _attachment_viewer)
 
