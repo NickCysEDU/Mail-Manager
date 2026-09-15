@@ -1745,6 +1745,7 @@ class MainWindow(QMainWindow):
         if not self._quitting and not self.confirm_quit():
             event.ignore()
             return
+        self._close_attachment_window()
         self.shutdown()
         self._save_layout()
         super().closeEvent(event)
@@ -3260,8 +3261,8 @@ class MainWindow(QMainWindow):
         subject = item.email.subject_display
 
         if self.demo:
-            AttachmentViewer(
-                _attachments.demo_attachments(item.email), subject, self).exec()
+            self._present_attachments(
+                _attachments.demo_attachments(item.email), subject, None)
             return
         if self._busy():
             return
@@ -3293,11 +3294,7 @@ class MainWindow(QMainWindow):
                 source.close()
                 return
             self._set_status("")
-            try:
-                AttachmentViewer(source.found, subject, self,
-                                 fetch=source.fetch).exec()
-            finally:
-                source.close()
+            self._present_attachments(source.found, subject, source)
 
         def failed(detail: str) -> None:
             self._set_status("")
@@ -3307,6 +3304,41 @@ class MainWindow(QMainWindow):
         worker.failed.connect(failed)
         self._register(worker)
         worker.start()
+
+    def _present_attachments(self, found, subject: str, source) -> None:
+        """Open the viewer as a window rather than a trap.
+
+        It used to be modal, which meant Quit did nothing while it was up:
+        the menu item fired and the application-modal dialog swallowed it. A
+        viewer is something you leave open beside the window anyway.
+        """
+        from attachment_view import AttachmentViewer
+
+        existing = getattr(self, "_attachment_window", None)
+        if existing is not None:
+            existing.close()
+        viewer = AttachmentViewer(found, subject, self,
+                                  fetch=source.fetch if source else None)
+        viewer.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self._attachment_window = viewer
+
+        def finished(*_args) -> None:
+            if source is not None:
+                source.close()
+            if getattr(self, "_attachment_window", None) is viewer:
+                self._attachment_window = None
+
+        viewer.finished.connect(finished)
+        viewer.show()
+        viewer.raise_()
+        viewer.activateWindow()
+
+    def _close_attachment_window(self) -> None:
+        """Called on the way out, so a viewer never outlives the window."""
+        viewer = getattr(self, "_attachment_window", None)
+        if viewer is not None:
+            self._attachment_window = None
+            viewer.close()
 
     def _about(self) -> None:
         """What this is, where the mail goes, and who to tell when it breaks."""
