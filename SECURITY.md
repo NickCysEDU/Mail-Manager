@@ -111,3 +111,9 @@ later, the test fails and the pin has to be revisited.
 ## Supported versions
 
 The latest release on `main` is the supported version.
+
+## Legal notices
+
+[LEGAL.md](LEGAL.md) covers the warranty position, what the app does with
+your data, trademark and affiliation notices, the encryption notice, and the
+terms contributions are accepted under.

@@ -460,14 +460,24 @@ summaries are left out rather than written in the clear.
 
 [Full details in SECURITY.md](SECURITY.md).
 
-## Licence
+## Licence and legal
 
-MIT, in `LICENSE`.
+MIT, in `LICENSE`. The software comes with **no warranty**, which matters
+more than usual for a program that moves real mail: nothing is deleted,
+nothing moves until you press Apply, and undo goes ten filings deep - but
+none of that is a guarantee, and none of it replaces a backup.
 
 The disk image also carries Qt, which is **LGPL v3**, as separate dynamic
 libraries you can replace. Every bundled library is named with its licence in
 [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md), along with where the data
 in the offline lexicon came from.
+
+Mail Manager is an independent project and is **not affiliated with Apple,
+Google, Anthropic, OpenAI, Microsoft or any mail provider**. Those names are
+used only to say what it works with. [LEGAL.md](LEGAL.md) has the warranty
+and liability position in plain language, the trademark notices, what happens
+to your data, the encryption notice, and the terms contributions are accepted
+under.
 
 ## Development
 

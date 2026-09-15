@@ -44,13 +44,30 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: python -m pytest
 
+      # The evaluation sets are built from a real mailbox and are not in the
+      # repository, so a hosted runner has nothing to score. Anyone with sets
+      # of their own can point MAIL_MANAGER_PRIVATE_FIXTURES at them and this
+      # step will use them; without it, it says so and moves on. The property
+      # that must hold regardless - nothing filed into the wrong folder - is
+      # asserted by tests/test_sorter_safety.py, which runs above.
       - name: The offline sorter still scores what it should
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
+          scored=0
           for set in labelled adversarial holdout meetings acknowledgements; do
-            python tools/evaluate.py --file "tests/fixtures/$set.json"
+            for dir in tests/fixtures tests/fixtures/private "${MAIL_MANAGER_PRIVATE_FIXTURES:-/nonexistent}"; do
+              if [ -f "$dir/$set.json" ]; then
+                python tools/evaluate.py --file "$dir/$set.json"
+                scored=$((scored + 1))
+                break
+              fi
+            done
           done
+          if [ "$scored" -eq 0 ]; then
+            echo "No evaluation sets in this checkout - they are not published."
+            echo "tests/private_fixtures.py says where to put your own."
+          fi
 
       - name: It still starts
         env:
