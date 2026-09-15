@@ -77,6 +77,18 @@ except Exception as _exc:      # never fail a build over a label
     print(f"==> No build stamp ({_exc})")
 
 datas = [(str(_stamp), ".")] if _stamp.exists() else []
+
+# The licences travel with the binary, not only with the repository. Qt is
+# LGPL v3 and the disk image carries twenty of its libraries; clause 4 wants
+# the notice to reach whoever received the program, and a link on a web page
+# somewhere is not that. Both files land next to the executable.
+for _legal in ("LICENSE", "THIRD-PARTY-LICENSES.md"):
+    _path = ROOT / _legal
+    if _path.exists():
+        datas.append((str(_path), "."))
+        print(f"==> Licence: {_legal}")
+    else:
+        print(f"==> Missing {_legal} - the bundle will not carry it")
 # The world-knowledge lexicon: 44,000 company domains and 4,570 airports in
 # 330 KB, so the app can tell that ryanair.com is an airline without asking
 # anybody at run time.
