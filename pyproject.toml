@@ -1,6 +1,6 @@
 [project]
 name = "mail-manager"
-version = "1.1.1"
+version = "1.1.2"
 description = "Sort your mail on your Mac. Offline by default; a language model if you want one."
 requires-python = ">=3.11"
 readme = "README.md"

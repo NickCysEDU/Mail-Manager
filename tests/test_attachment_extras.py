@@ -592,3 +592,115 @@ class TestPlayBeforeTheAnalysisArrives:
         spectrum.set_playing(False)
         spectrum.set_frames([array("f", [0.4] * 32) for _ in range(60)], 20)
         assert spectrum.maximumHeight() == 0
+
+
+class TestTheSpectrumGetsRoomToDrawIn:
+    """It appeared to work and drew nothing, twice.
+
+    Animating only the maximum height leaves the minimum at zero and the
+    size hint at -1, so a layout hands the widget whatever is spare - which
+    in a full pane is nothing. Tests that resized it by hand passed while
+    the real window showed an empty strip.
+    """
+
+    @staticmethod
+    def _in_a_layout(qtbot):
+        from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+
+        from attachment_widgets import Spectrum
+
+        host = QWidget()
+        qtbot.addWidget(host)
+        layout = QVBoxLayout(host)
+        layout.addWidget(QLabel("above"))
+        spectrum = Spectrum()
+        layout.addWidget(spectrum)
+        layout.addWidget(QLabel("below"))
+        layout.addStretch(1)
+        host.resize(900, 420)
+        host.show()
+        return host, spectrum
+
+    def test_it_takes_no_room_before_anything_plays(self, qtbot):
+        _host, spectrum = self._in_a_layout(qtbot)
+        assert spectrum.height() == 0
+
+    def test_it_takes_its_full_height_once_revealed(self, qtbot):
+        from array import array
+
+        _host, spectrum = self._in_a_layout(qtbot)
+        spectrum.set_frames([array("f", [0.5] * 32) for _ in range(60)], 20)
+        spectrum.set_playing(True)
+        spectrum._reveal_changed(1.0)
+        assert spectrum.height() == spectrum.HEIGHT, (
+            "the layout gave it a height its own hint did not ask for")
+        assert spectrum.sizeHint().height() == spectrum.HEIGHT
+
+    def test_it_grows_part_way_through_the_animation(self, qtbot):
+        from array import array
+
+        _host, spectrum = self._in_a_layout(qtbot)
+        spectrum.set_frames([array("f", [0.5] * 32) for _ in range(60)], 20)
+        spectrum._reveal_changed(0.5)
+        assert 0 < spectrum.height() < spectrum.HEIGHT
+
+    def test_it_gives_the_room_back(self, qtbot):
+        from array import array
+
+        _host, spectrum = self._in_a_layout(qtbot)
+        spectrum.set_frames([array("f", [0.5] * 32) for _ in range(60)], 20)
+        spectrum._reveal_changed(1.0)
+        spectrum._reveal_changed(0.0)
+        assert spectrum.height() == 0
+
+    def test_it_actually_paints_something(self, qtbot):
+        """A strip with height and nothing in it is the same bug wearing a hat."""
+        from array import array
+
+        _host, spectrum = self._in_a_layout(qtbot)
+        frames = [array("f", [0.2 + 0.7 * ((i + j) % 7) / 7 for j in range(32)])
+                  for i in range(60)]
+        spectrum.set_frames(frames, 20)
+        spectrum.set_playing(True)
+        spectrum._reveal_changed(1.0)
+        spectrum.set_position(500)
+        for _ in range(3):
+            spectrum._tick()
+        image = spectrum.grab().toImage()
+        colours = {image.pixel(x, y)
+                   for x in range(0, image.width(), 11)
+                   for y in range(0, image.height(), 11)}
+        assert len(colours) > 8, f"only {len(colours)} colours: nothing was drawn"
+
+    def test_the_audio_pane_reveals_it_on_play(self, qtbot):
+        """End to end: a real WAV, decoded, analysed, revealed."""
+        import math
+        import struct
+
+        import attachments
+        from attachment_view import AttachmentViewer
+
+        rate, seconds = 22050, 3
+        pcm = b"".join(
+            struct.pack("<h", int(9000 * math.sin(2 * math.pi * 220 * i / rate)))
+            for i in range(rate * seconds))
+        wav = (b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt "
+               + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16)
+               + b"data" + struct.pack("<I", len(pcm)) + pcm)
+        item = attachments.Attachment(part="1", name="tone.wav",
+                                      content_type="audio/wav",
+                                      size=len(wav), data=wav)
+        viewer = AttachmentViewer([item])
+        qtbot.addWidget(viewer)
+        viewer.resize(960, 680)
+        viewer.show()
+        viewer.list.setCurrentRow(0)
+        spectrum = viewer.audio.spectrum
+        assert spectrum.height() == 0, "it was visible before anything played"
+
+        viewer.audio._toggle()
+        qtbot.waitUntil(lambda: spectrum.ready and spectrum.height() > 40,
+                        timeout=30_000)
+        assert spectrum._frames
+        viewer.audio.stop()
+        viewer._sweep()
