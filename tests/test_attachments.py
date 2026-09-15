@@ -14,6 +14,13 @@ import pytest
 import attachments
 
 
+class _Signal:
+    """The smallest thing that answers .connect(), for stand-in widgets."""
+
+    def connect(self, *_args, **_kwargs):
+        pass
+
+
 class TestAFilenameIsASuggestion:
     """A name in a message is a string a stranger wrote."""
 
@@ -391,17 +398,41 @@ class TestTheWindowOffersThem:
         import attachment_view
 
         class Fake:
-            def __init__(self, found, subject="", parent=None):
+            """Stands in for the viewer, which is a window now, not a modal.
+
+            It has to answer the handful of things _present_attachments does
+            to it: the viewer is shown rather than exec'd so that Quit is not
+            swallowed while it is up.
+            """
+
+            finished = _Signal()
+
+            def __init__(self, found, subject="", parent=None, fetch=None):
                 shown["found"] = found
                 shown["subject"] = subject
+                shown["fetch"] = fetch
 
-            def exec(self):
-                return 0
+            def setAttribute(self, *_args):      # noqa: N802 - Qt's name
+                pass
+
+            def show(self):
+                shown["shown"] = True
+
+            def raise_(self):
+                pass
+
+            def activateWindow(self):            # noqa: N802 - Qt's name
+                pass
+
+            def close(self):
+                pass
 
         monkeypatch.setattr(attachment_view, "AttachmentViewer", Fake)
         window._open_attachments(rows[0])
         assert shown.get("found"), "demo mode produced no attachments"
         assert all(a.data for a in shown["found"])
+        assert shown.get("shown"), "the viewer was never shown"
+        assert shown.get("fetch") is None, "demo mode passed a fetcher"
 
     def test_without_a_password_it_says_so_instead_of_hanging(self, qtbot, monkeypatch):
         from PySide6.QtWidgets import QMessageBox

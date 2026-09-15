@@ -364,7 +364,15 @@ dimensions, audio tags, PDF producer - and whether a photograph carries GPS
 coordinates, which is worth knowing before you forward it.
 
 Space plays and pauses, the arrow keys move between attachments and scrub
-five seconds, Cmd-S saves, Cmd-I is Info.
+five seconds, Cmd-S saves, Cmd-I is Info. The window sits beside the main one
+rather than on top of it, so the app can still be quit while it is open.
+
+Press play on a sound file and a spectrum rises into view: a perspective grid
+that pulses with the bass, bars with reflections standing on it, ribbons
+across the sky following the synths, an orb that breathes with the vocals,
+and sparks thrown by the cymbals. Pause and it keeps breathing; leave it
+paused and it flows away after thirty seconds. It costs about two
+milliseconds a frame and nothing at all when nothing is playing.
 
 **Only the part you open is downloaded.** Listing costs about a fifth of a
 second; a six megabyte message used to cost six megabytes to see the first
@@ -504,7 +512,7 @@ notice, and contribution terms.
 
 ```bash
 ./dev demo      # the app with sample mail, no setup
-./dev test      # 2,699 tests, about three minutes on four workers
+./dev test      # 2,716 tests, about three minutes on four workers
 ./dev eval      # sorter accuracy (needs a labelled set of your own)
 ./dev fake      # the whole pipeline in the terminal, offline
 ```

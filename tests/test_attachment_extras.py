@@ -317,3 +317,171 @@ class TestTheAnalysis:
 
         kind, values, rate = bad
         assert attachment_audio.analyse(array(kind, values), rate, 1) == []
+
+
+class TestTheViewerDoesNotTrapTheApp:
+    """It was modal, so Quit did nothing while it was up."""
+
+    @staticmethod
+    def _one():
+        import attachments
+
+        return attachments.Attachment(part="1", name="a.txt",
+                                      content_type="text/plain",
+                                      size=5, data=b"hello")
+
+    def test_it_is_a_window_not_an_application_modal(self, qtbot):
+        from PySide6.QtCore import Qt
+
+        from attachment_view import AttachmentViewer
+
+        viewer = AttachmentViewer([self._one()])
+        qtbot.addWidget(viewer)
+        assert viewer.windowModality() == Qt.WindowModality.NonModal, (
+            "an application-modal viewer swallows Quit")
+        viewer._sweep()
+
+    def test_the_window_closes_it_on_the_way_out(self, qtbot):
+        from config import InMemoryCredentialStore, Settings
+        from gui import MainWindow
+
+        window = MainWindow(Settings(icloud_email="you@icloud.example"),
+                            InMemoryCredentialStore(), demo=True)
+        qtbot.addWidget(window)
+        window._load_demo_data()
+        assert hasattr(window, "_close_attachment_window")
+        window._close_attachment_window()      # safe with nothing open
+        rows = [i for i, item in enumerate(window.model.items)
+                if item.email.attachments]
+        window._open_attachments(rows[0])
+        assert getattr(window, "_attachment_window", None) is not None
+        window._close_attachment_window()
+        assert getattr(window, "_attachment_window", None) is None
+
+    def test_fetching_happens_off_the_interface_thread(self):
+        """Selecting a row used to freeze the window for a second or two."""
+        import inspect
+
+        import attachment_view
+
+        source = inspect.getsource(attachment_view.AttachmentViewer)
+        assert "_start_fetch" in source
+        assert "QApplication.processEvents()" not in source, (
+            "pumping events inside a click handler is the freeze, not a fix")
+        assert "_FetchThread" in inspect.getsource(attachment_view)
+
+
+class TestTheSpectrumArrivesAndLeaves:
+    """Hidden until play, breathing when paused, gone after a while."""
+
+    @staticmethod
+    def _loaded(qtbot):
+        from array import array
+
+        from attachment_widgets import Spectrum
+
+        spectrum = Spectrum()
+        qtbot.addWidget(spectrum)
+        spectrum.set_frames([array("f", [0.4] * 32) for _ in range(120)], 20)
+        return spectrum
+
+    def test_it_is_not_there_before_anything_plays(self, qtbot):
+        spectrum = self._loaded(qtbot)
+        assert spectrum.maximumHeight() == 0
+        assert spectrum._reveal == 0.0
+
+    def test_playing_brings_it_in(self, qtbot):
+        spectrum = self._loaded(qtbot)
+        spectrum.set_playing(True)
+        assert spectrum._timer.isActive()
+        assert spectrum._flow.state() != 0 or spectrum._reveal > 0
+
+    def test_pausing_keeps_it_moving_and_starts_the_countdown(self, qtbot):
+        spectrum = self._loaded(qtbot)
+        spectrum.set_playing(True)
+        spectrum._reveal_changed(1.0)
+        spectrum.set_playing(False)
+        assert spectrum._idling, "a paused spectrum should breathe, not freeze"
+        assert spectrum._away.isActive()
+        assert spectrum._timer.isActive()
+        spectrum._tick()
+        spectrum.grab()
+
+    def test_the_countdown_is_thirty_seconds(self, qtbot):
+        spectrum = self._loaded(qtbot)
+        assert spectrum.IDLE_SECONDS == 30
+        assert spectrum._away.interval() == 30_000
+
+    def test_concealing_stops_everything(self, qtbot):
+        spectrum = self._loaded(qtbot)
+        spectrum.set_playing(True)
+        spectrum._reveal_changed(1.0)
+        spectrum.conceal()
+        spectrum._reveal_changed(0.0)
+        assert spectrum.maximumHeight() == 0
+        assert not spectrum._timer.isActive()
+        assert not spectrum._away.isActive()
+
+    def test_the_idle_row_actually_moves(self, qtbot):
+        spectrum = self._loaded(qtbot)
+        spectrum._idling = True
+        first = list(spectrum._idle_row())
+        spectrum._drift += 1.0
+        second = list(spectrum._idle_row())
+        assert first != second
+
+    def test_four_bands_drive_four_things(self, qtbot):
+        """Bass, vocals, synths and cymbals are kept apart on purpose."""
+        from attachment_widgets import Spectrum
+
+        spans = [Spectrum.BASS, Spectrum.MID, Spectrum.SYNTH, Spectrum.HIGH]
+        assert len({tuple(s) for s in spans}) == 4
+        for lower, upper in zip(spans, spans[1:]):
+            assert lower[1] <= upper[0], "the bands overlap"
+
+
+class TestTheControlsExplainThemselves:
+    """A first-time reader should not have to guess what a button does."""
+
+    @staticmethod
+    def _viewer(qtbot):
+        import attachments
+        from attachment_view import AttachmentViewer
+
+        found = [attachments.Attachment(part="1", name="a.txt",
+                                        content_type="text/plain",
+                                        size=5, data=b"hello")]
+        viewer = AttachmentViewer(found)
+        qtbot.addWidget(viewer)
+        return viewer
+
+    def test_no_button_is_a_bare_symbol(self, qtbot):
+        from PySide6.QtWidgets import QAbstractButton
+
+        viewer = self._viewer(qtbot)
+        bare = [b.text() for b in viewer.findChildren(QAbstractButton)
+                if b.text().strip() and len(b.text().strip()) <= 2
+                and not b.toolTip()]
+        assert not bare, f"unlabelled controls: {bare}"
+        viewer._sweep()
+
+    def test_every_dropdown_fits_its_longest_option(self, qtbot):
+        from PySide6.QtWidgets import QComboBox
+
+        viewer = self._viewer(qtbot)
+        viewer.resize(980, 640)
+        for box in viewer.findChildren(QComboBox):
+            options = [box.itemText(i) for i in range(box.count())]
+            if not options:
+                continue
+            needed = max(box.fontMetrics().horizontalAdvance(o) for o in options)
+            assert box.minimumWidth() >= needed + 20, (
+                f"{options} would be clipped")
+        viewer._sweep()
+
+    def test_the_window_says_what_it_is_for(self, qtbot):
+        viewer = self._viewer(qtbot)
+        hint = viewer.hint.text().lower()
+        assert "click" in hint
+        assert "never" in hint or "nothing" in hint
+        viewer._sweep()

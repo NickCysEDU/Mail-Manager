@@ -30,7 +30,7 @@ import tempfile
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from PySide6.QtCore import QSize, Qt, QTimer, QUrl, Slot
+from PySide6.QtCore import QSize, Qt, QThread, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import (QAction, QGuiApplication, QImage, QKeySequence,
                            QPixmap)
 from PySide6.QtWidgets import (QApplication, QComboBox, QDialog,
@@ -61,6 +61,54 @@ def _muted(text: str) -> QLabel:
     return label
 
 
+def _combo(options, tip: str) -> QComboBox:
+    """A dropdown wide enough for its longest option, popup included.
+
+    Qt sizes a combo to whatever is selected and lets the popup inherit that
+    width, so a short current item clips every longer one in the list.
+    """
+    box = QComboBox()
+    box.addItems(options)
+    box.setToolTip(tip)
+    box.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+    metrics = box.fontMetrics()
+    widest = max((metrics.horizontalAdvance(option) for option in options),
+                 default=60)
+    box.setMinimumWidth(widest + 44)
+    view = box.view()
+    if view is not None:
+        view.setMinimumWidth(widest + 32)
+        view.setTextElideMode(Qt.TextElideMode.ElideNone)
+    return box
+
+
+class _FetchThread(QThread):
+    """One part, off the interface thread.
+
+    Fetching on the thread that handles clicks is why selecting an attachment
+    stuttered: a megabyte and a half over IMAP is a second or two, and for
+    that time nothing repaints. The window stays live now and says what it is
+    waiting for.
+    """
+
+    done = Signal(int, object)      # row, bytes
+    failed = Signal(int, str)
+
+    def __init__(self, fetch, row: int, item, parent=None) -> None:
+        super().__init__(parent)
+        self._fetch = fetch
+        self._row = row
+        self._item = item
+
+    def run(self) -> None:
+        try:
+            data = self._fetch(self._item)
+        except Exception as exc:      # noqa: BLE001 - reported, never raised
+            self.failed.emit(self._row, str(exc))
+            return
+        self.done.emit(self._row, data or b"")
+
+
 class ImagePane(QWidget):
     """Any format Qt decodes, at whatever size you want to see it."""
 
@@ -71,16 +119,17 @@ class ImagePane(QWidget):
         self._pixmap: Optional[QPixmap] = None
         self._mode = "Fit"
 
-        self.mode_box = QComboBox()
-        self.mode_box.addItems(self.MODES)
-        self.mode_box.setToolTip("How the image is sized in the window.")
+        self.mode_box = _combo(
+            list(self.MODES),
+            "How big the image is drawn. Fit shows all of it; Fill crops it "
+            "to the window; the percentages are its own size.")
         self.mode_box.currentTextChanged.connect(self._set_mode)
-        self.zoom_out = QPushButton("-")
-        self.zoom_in = QPushButton("+")
-        for button in (self.zoom_out, self.zoom_in):
-            button.setFixedWidth(34)
-        self.zoom_out.setToolTip("Smaller")
-        self.zoom_in.setToolTip("Larger")
+        # Words, not symbols. A bare + next to a bare - tells a first-time
+        # reader nothing about what it will do.
+        self.zoom_out = QPushButton("Smaller")
+        self.zoom_in = QPushButton("Larger")
+        self.zoom_out.setToolTip("Step down through the sizes in the list.")
+        self.zoom_in.setToolTip("Step up through the sizes in the list.")
         self.zoom_out.clicked.connect(lambda: self._step(-1))
         self.zoom_in.clicked.connect(lambda: self._step(1))
 
@@ -93,7 +142,7 @@ class ImagePane(QWidget):
 
         bar = QHBoxLayout()
         bar.setContentsMargins(0, 0, 0, 0)
-        bar.addWidget(QLabel("View"))
+        bar.addWidget(QLabel("Size"))
         bar.addWidget(self.mode_box)
         bar.addWidget(self.zoom_out)
         bar.addWidget(self.zoom_in)
@@ -182,12 +231,14 @@ class TextPane(QWidget):
 
         self.wrap_button = QPushButton("Wrap")
         self.wrap_button.setCheckable(True)
-        self.wrap_button.setToolTip("Fold long lines to the window width.")
+        self.wrap_button.setToolTip(
+            "Fold long lines so they fit the window instead of running off "
+            "the right-hand side.")
         self.wrap_button.toggled.connect(self._set_wrap)
-        smaller = QPushButton("A-")
-        larger = QPushButton("A+")
-        for button in (smaller, larger):
-            button.setFixedWidth(38)
+        smaller = QPushButton("Smaller text")
+        larger = QPushButton("Larger text")
+        smaller.setToolTip("Reduce the type size.")
+        larger.setToolTip("Increase the type size.")
         smaller.clicked.connect(lambda: self._resize(-1))
         larger.clicked.connect(lambda: self._resize(1))
 
@@ -446,14 +497,16 @@ class PdfPane(QWidget):
         super().__init__()
         self._document = None
         self._view = None
-        self.mode_box = QComboBox()
-        self.mode_box.addItems(list(self.MODES))
+        self.mode_box = _combo(
+            list(self.MODES),
+            "How the page is sized. Fit width fills the window across; "
+            "Whole page shows one page at a time.")
         self.mode_box.currentTextChanged.connect(self._set_mode)
         self.mode_box.setEnabled(False)
 
         bar = QHBoxLayout()
         bar.setContentsMargins(0, 0, 0, 0)
-        bar.addWidget(QLabel("View"))
+        bar.addWidget(QLabel("Page size"))
         bar.addWidget(self.mode_box)
         bar.addStretch(1)
 
@@ -532,11 +585,25 @@ class AttachmentViewer(QDialog):
         self._written: List[Path] = []
         self._last_dir = str(Path.home() / "Downloads")
         self._showing_metadata = False
+        #: row -> thread, so a part is never fetched twice at once.
+        self._fetching: dict = {}
+        #: the row whose arrival should switch the view.
+        self._awaiting: Optional[int] = None
 
         self.list = QListWidget()
         self.list.setFixedWidth(280)
+        self.list.setToolTip(
+            "Everything attached to this message. Pick one to look at it.")
         for item in self._found:
-            self.list.addItem(QListWidgetItem(_row_label(item)))
+            entry = QListWidgetItem(_row_label(item))
+            entry.setToolTip(_row_tooltip(item))
+            self.list.addItem(entry)
+
+        self.hint = _muted(
+            "Click an attachment to open it. Nothing here is ever run, and "
+            "nothing is saved unless you say so.\n"
+            "Space plays audio · arrow keys move and scrub · Info shows "
+            "details · Save keeps a copy.")
 
         self.image = ImagePane()
         self.audio = AudioPane()
@@ -573,8 +640,15 @@ class AttachmentViewer(QDialog):
             "tags it carries.")
         self.info_button.toggled.connect(self._toggle_metadata)
         self.save_button = QPushButton("Save…")
+        self.save_button.setToolTip(
+            "Keep a copy of this attachment. It is saved with the same "
+            "quarantine mark a download gets, so macOS will check it.")
         self.save_all = QPushButton("Save all…")
+        self.save_all.setToolTip(
+            "Choose a folder and keep a copy of everything attached.")
         self.copy_button = QPushButton("Copy image")
+        self.copy_button.setToolTip(
+            "Put this image on the clipboard, to paste somewhere else.")
         self.copy_button.hide()
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
@@ -594,8 +668,15 @@ class AttachmentViewer(QDialog):
         right.addWidget(self.status)
         right.addLayout(actions)
 
+        left = QVBoxLayout()
+        left.addWidget(self.list, 1)
+        left.addWidget(self.hint)
+        left_frame = QFrame()
+        left_frame.setLayout(left)
+        left_frame.setFixedWidth(296)
+
         body = QHBoxLayout(self)
-        body.addWidget(self.list)
+        body.addWidget(left_frame)
         frame = QFrame()
         frame.setLayout(right)
         frame.setSizePolicy(QSizePolicy.Policy.Expanding,
@@ -652,35 +733,56 @@ class AttachmentViewer(QDialog):
         row = self.list.currentRow()
         return self._found[row] if 0 <= row < len(self._found) else None
 
-    def _ensure_bytes(self, item) -> bool:
-        """Fetch this one part, if nobody has yet."""
-        if item.data is not None or self._fetch is None:
-            return item.data is not None
-        row = self.list.currentRow()
-        self.status.setText(f"Fetching {item.human_size()}…")
-        QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
-        QApplication.processEvents()
-        try:
-            data = self._fetch(item)
-        except Exception as exc:      # noqa: BLE001 - shown, not raised
-            QApplication.restoreOverrideCursor()
-            self.status.setText(f"Could not fetch it: {exc}")
-            return False
-        finally:
-            QApplication.restoreOverrideCursor()
-        if not data:
-            self.status.setText("That part came back empty.")
-            return False
-        filled = attachments.Attachment(
-            part=item.part, name=item.name, content_type=item.content_type,
-            encoding=item.encoding, size=len(data), cid=item.cid,
-            inline=item.inline, data=data)
-        self._found[row] = filled
-        self.list.item(row).setText(_row_label(filled))
-        return True
+    def _start_fetch(self, row: int, item, then_show: bool) -> None:
+        """Ask for one part on a thread, and keep the window responsive."""
+        if self._fetch is None or row in self._fetching:
+            return
+        thread = _FetchThread(self._fetch, row, item, self)
+        self._fetching[row] = thread
+        thread.done.connect(self._fetched)
+        thread.failed.connect(self._fetch_failed)
+        thread.finished.connect(lambda r=row: self._fetching.pop(r, None))
+        if then_show:
+            self._awaiting = row
+        thread.start()
+
+    @Slot(int, object)
+    def _fetched(self, row: int, data: bytes) -> None:
+        if not 0 <= row < len(self._found):
+            return
+        item = self._found[row]
+        if data:
+            self._found[row] = attachments.Attachment(
+                part=item.part, name=item.name, content_type=item.content_type,
+                encoding=item.encoding, size=len(data), cid=item.cid,
+                inline=item.inline, data=data)
+            self.list.item(row).setText(_row_label(self._found[row]))
+        if self._awaiting == row:
+            self._awaiting = None
+            if self.list.currentRow() == row:
+                self._render(row)
+        self._prefetch_around(self.list.currentRow())
+
+    @Slot(int, str)
+    def _fetch_failed(self, row: int, detail: str) -> None:
+        if self._awaiting == row:
+            self._awaiting = None
+            self.blank_label.setText(f"Could not fetch it.\n\n{detail}")
+            self.stack.setCurrentWidget(self.blank)
+            self.status.setText("")
+
+    def _prefetch_around(self, row: int) -> None:
+        """Quietly pull the neighbours, so stepping through is instant."""
+        if self._fetch is None:
+            return
+        for offset in (1, -1):
+            other = row + offset
+            if 0 <= other < len(self._found) and self._found[other].data is None:
+                if len(self._fetching) < 2:
+                    self._start_fetch(other, self._found[other], then_show=False)
 
     @Slot(int)
-    def _show(self, _row: int) -> None:
+    def _show(self, row: int) -> None:
         item = self._current()
         if item is None:
             return
@@ -688,13 +790,31 @@ class AttachmentViewer(QDialog):
         self.copy_button.hide()
         self.heading.setText(
             f"<b>{_html(item.shown)}</b><br>"
-            f"{_html(item.content_type)} · {item.human_size()}")
+            f"{_html(item.content_type)} · {_size_label(item)}")
 
-        if not self._ensure_bytes(item):
-            self.blank_label.setText(self.status.text() or "Not downloaded.")
+        if item.data is None:
+            if self._fetch is None:
+                self.blank_label.setText("Not downloaded.")
+                self.stack.setCurrentWidget(self.blank)
+                return
+            self.warning.hide()
+            self.blank_label.setText(
+                f"Fetching {_size_label(item)}…\n\n"
+                "The window stays usable while this happens.")
             self.stack.setCurrentWidget(self.blank)
+            self.status.setText("")
+            self._start_fetch(row, item, then_show=True)
             return
-        item = self._current()
+        self._render(row)
+        self._prefetch_around(row)
+
+    def _render(self, row: int) -> None:
+        item = self._found[row] if 0 <= row < len(self._found) else None
+        if item is None or item.data is None:
+            return
+        self.heading.setText(
+            f"<b>{_html(item.shown)}</b><br>"
+            f"{_html(item.content_type)} · {item.human_size()}")
 
         note = self._warning_for(item)
         self.warning.setText(note)
@@ -764,9 +884,9 @@ class AttachmentViewer(QDialog):
         item = self._current()
         if item is None:
             return
-        if not self._ensure_bytes(item):
+        if item.data is None:
+            self.status.setText("Still fetching that one - try again in a moment.")
             return
-        item = self._current()
         if item.executable and not self._confirm_program(item):
             return
         chosen, _ = QFileDialog.getSaveFileName(
@@ -784,18 +904,20 @@ class AttachmentViewer(QDialog):
             return
         self._last_dir = directory
         saved = 0
+        skipped = 0
         for row, item in enumerate(self._found):
             if item.data is None:
-                self.list.setCurrentRow(row)
-                if not self._ensure_bytes(item):
-                    continue
-                item = self._found[row]
+                skipped += 1
+                continue
             if item.executable and not self._confirm_program(item):
                 continue
             self._write(attachments.unique_path(Path(directory), item.filename), item)
             saved += 1
-        QMessageBox.information(
-            self, "Saved", f"{saved} attachment{'s' if saved != 1 else ''} saved.")
+        message = f"{saved} attachment{'s' if saved != 1 else ''} saved."
+        if skipped:
+            message += (f"\n\n{skipped} had not finished downloading. Open "
+                        "them once, then save again.")
+        QMessageBox.information(self, "Saved", message)
 
     def _confirm_program(self, item) -> bool:
         answer = QMessageBox.warning(
@@ -841,6 +963,21 @@ class AttachmentViewer(QDialog):
             self._temp.rmdir()
         except OSError:
             pass
+
+
+def _row_tooltip(item) -> str:
+    """What this attachment is, in a sentence, before it is opened."""
+    kind = item.kind if item.data else _kind_from_type(item)
+    said = {
+        "image": "An image. It opens here.",
+        "audio": "A sound file. It plays here.",
+        "video": "A video. It can be saved, not played here.",
+        "pdf": "A PDF. It opens here.",
+        "text": "Text. It opens here.",
+        "archive": "An archive. It can be saved; nothing here opens it.",
+        "program": "A program. It can be saved, never run.",
+    }.get(kind, "It can be saved; this is not a format the viewer opens.")
+    return f"{item.shown}\n{_size_label(item)}\n{said}"
 
 
 def _row_label(item) -> str:
