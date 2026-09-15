@@ -252,6 +252,31 @@ def self_test(offline: bool = False) -> int:
 
     check("encryption at rest", _encryption)
 
+    def _attachment_viewer() -> str:
+        """The viewer is reached by a function-level import, so prove it.
+
+        PyInstaller finds modules by reading the source, and a module only
+        ever imported inside a method is the kind it can miss. Missing it
+        would not break the build or the tests - it would break the button,
+        in the shipped app, for the person who pressed it.
+        """
+        import attachments
+        import attachment_view
+
+        sample = attachments.Attachment(
+            part="1", name="probe.png", content_type="image/png",
+            size=8, data=b"\x89PNG\r\n\x1a\n")
+        if sample.kind != "image":
+            raise RuntimeError("sniffing does not work in this build")
+        if attachments.safe_name("../../x") != "x":
+            raise RuntimeError("filename sanitising does not work in this build")
+        if not hasattr(attachment_view, "AttachmentViewer"):
+            raise RuntimeError("the viewer is not in this build")
+        formats = "images, audio, PDF, text"
+        return f"present ({formats})"
+
+    check("attachment viewer", _attachment_viewer)
+
     def _tls_probe() -> str:
         """A real handshake, because a path that exists is not proof."""
         import socket
