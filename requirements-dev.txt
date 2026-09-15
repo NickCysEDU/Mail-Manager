@@ -7,3 +7,9 @@ pytest-qt>=4.4.0        # tested with 4.5.0
 pytest-cov>=5.0.0       # tested with 7.1.0
 pytest-timeout>=2.3.0   # tested with 2.4.0, no hung test can wedge a build
 pytest-xdist>=3.5
+
+# Not imported by anything here; it arrives with the virtualenv. Pinned
+# forward because the version Python ships by default carries four
+# advisories, and a contributor running pip-audit should not have to work
+# out which findings are ours and which are the toolchain's.
+setuptools>=83.0.0

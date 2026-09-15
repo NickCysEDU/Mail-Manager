@@ -22,6 +22,9 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tests'))
+import private_fixtures as _private
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -66,8 +69,9 @@ def main() -> int:
     verbose = "-v" in sys.argv or "--verbose" in sys.argv
 
     for filename, title, caveat in SETS:
-        path = ROOT / "tests" / "fixtures" / filename
-        if not path.is_file():
+        path = _private.path(filename)
+        if path is None:
+            print(f"\n{title} - not in this checkout ({_private.WHY})")
             continue
         rows = json.loads(path.read_text("utf-8"))
         job_ok, exact, filed, filed_ok, misses = score(rows, rules)
