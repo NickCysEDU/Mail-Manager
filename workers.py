@@ -1312,8 +1312,7 @@ class AttachmentWorker(_BaseWorker):
         import attachments as _attachments
 
         try:
-            engine = IMAPEngine(host=self.account.imap_host,
-                                port=self.account.imap_port)
+            engine = IMAPEngine(host=self.account.host, port=self.account.port)
             with engine.session(self.account.email, self.password):
                 engine.select(getattr(self.message, "source_folder", "") or "INBOX",
                               readonly=True)
