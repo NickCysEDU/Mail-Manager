@@ -137,6 +137,20 @@ hiddenimports += [
 ]
 hiddenimports += collect_submodules("anthropic")
 
+# The viewer imports these inside methods, so nothing in the source tree
+# points at them at module level for the analysis to follow.
+hiddenimports += [
+    "PySide6.QtMultimedia", "PySide6.QtMultimediaWidgets",
+    "PySide6.QtPdf", "PySide6.QtPdfWidgets",
+]
+
+# QtMultimedia, QtMultimediaWidgets, QtPdf and QtPdfWidgets used to be on
+# this list, from before there was an attachment viewer. They are what plays
+# a sound file and draws a PDF, so excluding them shipped an app where both
+# said "unavailable in this build" - which the code handles politely and
+# which is not what anybody wanted. The self-test now builds one of each, so
+# putting them back on this list fails the build rather than the feature.
+
 # Qt modules this app never touches. Dropping them roughly halves the bundle.
 excludes = [
     "tkinter", "test", "unittest", "pydoc_data", "lib2to3",
@@ -145,9 +159,9 @@ excludes = [
     "PySide6.Qt3DInput", "PySide6.Qt3DLogic", "PySide6.Qt3DRender",
     "PySide6.QtBluetooth", "PySide6.QtCharts", "PySide6.QtDataVisualization",
     "PySide6.QtDesigner", "PySide6.QtGraphs", "PySide6.QtGraphsWidgets",
-    "PySide6.QtHelp", "PySide6.QtLocation", "PySide6.QtMultimedia",
-    "PySide6.QtMultimediaWidgets", "PySide6.QtNfc", "PySide6.QtOpcUa",
-    "PySide6.QtPdf", "PySide6.QtPdfWidgets", "PySide6.QtPositioning",
+    "PySide6.QtHelp", "PySide6.QtLocation",
+    "PySide6.QtNfc", "PySide6.QtOpcUa",
+    "PySide6.QtPositioning",
     "PySide6.QtQml", "PySide6.QtQuick", "PySide6.QtQuick3D",
     "PySide6.QtQuickControls2", "PySide6.QtQuickWidgets", "PySide6.QtRemoteObjects",
     "PySide6.QtScxml", "PySide6.QtSensors", "PySide6.QtSerialBus",

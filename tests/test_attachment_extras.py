@@ -895,3 +895,50 @@ class TestFullScreenGivesTheWidgetBack:
         assert spectrum.parentWidget() is host, "the spectrum did not come back"
         assert spectrum.maximumHeight() == before
         assert owner._full is None
+
+
+class TestTheBuildKeepsWhatTheViewerNeeds:
+    """QtMultimedia and QtPdf were excluded from the bundle for two releases.
+
+    The spec had them on a list of Qt modules "this app never touches", from
+    before there was an attachment viewer. Audio and PDF therefore said
+    "unavailable in this build" in every shipped copy, while the self-test
+    reported the viewer present - because it only checked that the Python
+    modules imported, which they did.
+    """
+
+    @staticmethod
+    def _spec() -> str:
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent
+        return (root / "MailManager.spec").read_text(encoding="utf-8")
+
+    @pytest.mark.parametrize("module", [
+        "PySide6.QtMultimedia", "PySide6.QtMultimediaWidgets",
+        "PySide6.QtPdf", "PySide6.QtPdfWidgets",
+    ])
+    def test_it_is_not_excluded(self, module):
+        spec = self._spec()
+        excludes = spec[spec.index("excludes = ["):spec.index("a = Analysis")]
+        assert f'"{module}"' not in excludes, (
+            f"{module} is excluded; the feature that needs it will not ship")
+
+    @pytest.mark.parametrize("module", [
+        "PySide6.QtMultimedia", "PySide6.QtPdf",
+    ])
+    def test_it_is_named_as_a_hidden_import(self, module):
+        """They are imported inside methods, where analysis cannot see them."""
+        assert f'"{module}"' in self._spec()
+
+    def test_the_self_test_builds_them_rather_than_importing_them(self):
+        import inspect
+
+        import main
+
+        source = inspect.getsource(main)
+        start = source.index("def _attachment_viewer")
+        body = source[start:start + 2000]
+        assert "QMediaPlayer()" in body, "it does not build a player"
+        assert "QPdfDocument()" in body, "it does not build a PDF document"
+        assert "visualizers" in body
