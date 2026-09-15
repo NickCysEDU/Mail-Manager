@@ -1,0 +1,319 @@
+"""The viewer's newer parts: metadata, cover art, the spectrum, the seek bar.
+
+Every parser here walks bytes a stranger sent, so the tests are mostly about
+what happens when those bytes are wrong.
+"""
+
+from __future__ import annotations
+
+import struct
+import zlib
+
+import pytest
+
+import attachment_meta
+
+
+def png(width: int = 8, height: int = 6) -> bytes:
+    def chunk(tag: bytes, body: bytes) -> bytes:
+        piece = tag + body
+        return struct.pack(">I", len(body)) + piece + struct.pack(">I", zlib.crc32(piece))
+
+    rows = b"".join(b"\x00" + b"\x20\x40\x80" * width for _ in range(height))
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+
+def id3(frames: bytes) -> bytes:
+    size = len(frames)
+    syncsafe = bytes([(size >> 21) & 0x7F, (size >> 14) & 0x7F,
+                      (size >> 7) & 0x7F, size & 0x7F])
+    return b"ID3\x03\x00\x00" + syncsafe + frames
+
+
+def text_frame(tag: bytes, value: str) -> bytes:
+    body = b"\x00" + value.encode("latin-1", "replace")
+    return tag + struct.pack(">I", len(body)) + b"\x00\x00" + body
+
+
+def apic(image: bytes) -> bytes:
+    body = b"\x00" + b"image/png" + b"\x00" + b"\x03" + b"cover" + b"\x00" + image
+    return b"APIC" + struct.pack(">I", len(body)) + b"\x00\x00" + body
+
+
+class TestImageFacts:
+    @pytest.mark.parametrize("maker, expected", [
+        (lambda: png(64, 48), (64, 48)),
+        (lambda: b"GIF89a" + struct.pack("<HH", 30, 20) + b"\x00" * 20, (30, 20)),
+    ])
+    def test_dimensions_come_off_the_header(self, maker, expected):
+        facts = attachment_meta.image_facts(maker())
+        assert facts.get("Dimensions") == f"{expected[0]} x {expected[1]} pixels"
+
+    def test_gps_presence_is_reported_because_it_is_a_location(self):
+        # A minimal little-endian TIFF header with one GPS IFD pointer.
+        entry = struct.pack("<HHII", 0x8825, 4, 1, 26)
+        ifd = struct.pack("<H", 1) + entry + struct.pack("<I", 0)
+        exif = b"Exif\x00\x00" + b"II*\x00" + struct.pack("<I", 8) + ifd
+        facts = attachment_meta.image_facts(b"\xff\xd8\xff\xe1" + exif + b"\x00" * 20)
+        assert "Location" in facts
+
+    @pytest.mark.parametrize("junk", [b"", b"\x89PNG", b"\xff\xd8", b"\x00" * 500,
+                                      b"\x89PNG\r\n\x1a\n" + b"\xff" * 40])
+    def test_broken_images_do_not_raise(self, junk):
+        assert isinstance(attachment_meta.image_facts(junk), dict)
+
+
+class TestAudioTagsAndCoverArt:
+    def test_id3_tags_are_read(self):
+        data = id3(text_frame(b"TIT2", "A Title")
+                   + text_frame(b"TPE1", "An Artist")
+                   + text_frame(b"TALB", "An Album"))
+        tags, art = attachment_meta.audio_facts(data)
+        assert tags.get("Title") == "A Title"
+        assert tags.get("Artist") == "An Artist"
+        assert tags.get("Album") == "An Album"
+        assert art is None
+
+    def test_cover_art_comes_back_as_bytes(self):
+        image = png(16, 16)
+        tags, art = attachment_meta.audio_facts(id3(apic(image) + text_frame(b"TIT2", "x")))
+        assert art is not None
+        assert art.startswith(b"\x89PNG\r\n\x1a\n")
+
+    def test_a_huge_cover_is_refused_rather_than_held(self):
+        big = b"\x89PNG\r\n\x1a\n" + b"\x00" * (attachment_meta.MAX_ART + 10)
+        _tags, art = attachment_meta.audio_facts(id3(apic(big)))
+        assert art is None
+
+    @pytest.mark.parametrize("junk", [
+        b"ID3", b"ID3\x03\x00\x00", b"ID3\x03\x00\x00\x7f\x7f\x7f\x7f",
+        b"ID3\x03\x00\x00\x00\x00\x00\x10" + b"\xff" * 16,
+        b"\x00\x00\x00\x18ftypM4A ", b"fLaC" + b"\xff" * 40,
+    ])
+    def test_broken_audio_metadata_does_not_raise(self, junk):
+        tags, art = attachment_meta.audio_facts(junk)
+        assert isinstance(tags, dict)
+
+    def test_an_mp4_atom_loop_is_bounded(self):
+        """A zero-length atom would spin forever without the guard."""
+        data = b"\x00\x00\x00\x18ftypM4A " + b"\x00" * 8 + struct.pack(">I", 0) + b"moov"
+        tags, art = attachment_meta.audio_facts(data)
+        assert isinstance(tags, dict)
+
+
+class TestPdfFacts:
+    def test_version_and_title(self):
+        data = b"%PDF-1.7\n/Title (Quarterly Report)\n/Author (Someone)\n"
+        facts = attachment_meta.pdf_facts(data)
+        assert facts.get("PDF version") == "1.7"
+        assert facts.get("Title") == "Quarterly Report"
+
+    def test_encryption_is_flagged(self):
+        assert attachment_meta.pdf_facts(b"%PDF-1.4\n/Encrypt 5 0 R\n").get("Encrypted")
+
+    def test_junk_does_not_raise(self):
+        assert isinstance(attachment_meta.pdf_facts(b"\x00\xff" * 300), dict)
+
+
+class TestTheFactsPanel:
+    def test_it_says_when_nothing_is_downloaded(self):
+        import attachments
+
+        item = attachments.Attachment(part="1", name="a.pdf",
+                                      content_type="application/pdf", size=10)
+        rows = dict(attachment_meta.facts_for(item))
+        assert rows.get("Contents") == "not downloaded yet"
+
+    def test_it_names_the_mismatch_when_the_type_is_a_lie(self):
+        import attachments
+
+        item = attachments.Attachment(
+            part="1", name="holiday.png", content_type="image/png",
+            size=40, data=b"MZ\x90\x00" + b"\x00" * 36)
+        rows = dict(attachment_meta.facts_for(item))
+        assert "Actually" in rows
+        assert "differs" in rows["Actually"]
+
+    def test_the_checksum_is_there_so_a_file_can_be_verified(self):
+        import attachments
+
+        item = attachments.Attachment(part="1", name="a.txt",
+                                      content_type="text/plain",
+                                      size=5, data=b"hello")
+        rows = dict(attachment_meta.facts_for(item))
+        assert len(rows["SHA-256"]) == 64
+
+
+class TestTheSeekBarStaysWhereItIsPut:
+    """Clicking flashed to the new place and slid back. That was two bugs.
+
+    A QSlider does not move to where you click, and a media player keeps
+    reporting its old position for a moment after a seek. The first version
+    of the guard here cleared as soon as one report landed near the target,
+    which let the next stale one through - so a quick run of clicks still
+    snapped backwards.
+    """
+
+    @staticmethod
+    def _bar(qtbot):
+        from attachment_widgets import SeekBar
+
+        bar = SeekBar()
+        qtbot.addWidget(bar)
+        bar.setRange(0, 137_000)
+        return bar
+
+    def test_a_stale_report_cannot_move_it(self, qtbot):
+        bar = self._bar(qtbot)
+        bar._request(90_000)
+        bar.setValue(90_000)
+        bar.report(20_000)                       # in flight from before
+        assert bar.value() == 90_000
+
+    def test_the_real_report_is_followed(self, qtbot):
+        bar = self._bar(qtbot)
+        bar._request(90_000)
+        bar.setValue(90_000)
+        bar.report(90_120)
+        assert abs(bar.value() - 90_120) < 500
+
+    def test_a_stale_report_behind_a_real_one_is_still_dropped(self, qtbot):
+        """The exact shape that made rapid clicking unreliable."""
+        bar = self._bar(qtbot)
+        bar._request(90_000)
+        bar.setValue(90_000)
+        bar.report(90_100)                       # the seek landed
+        bar.report(31_000)                       # one more stale report
+        assert bar.value() > 80_000
+
+    def test_fourteen_rapid_seeks_never_snap_back(self, qtbot):
+        bar = self._bar(qtbot)
+        wrong = 0
+        for index in range(14):
+            target = int(137_000 * ((index * 7 % 10) / 10.0))
+            bar._request(target)
+            bar.setValue(target)
+            bar.report(max(0, target - 30_000))
+            bar.report(target + 120)
+            bar.report(max(0, target - 28_000))
+            if abs(bar.value() - target) > 800:
+                wrong += 1
+        assert wrong == 0
+
+    def test_clicking_the_groove_asks_for_that_position(self, qtbot):
+        from PySide6.QtCore import QPointF, Qt
+        from PySide6.QtGui import QMouseEvent
+
+        bar = self._bar(qtbot)
+        bar.resize(400, 24)
+        asked = []
+        bar.seeked.connect(asked.append)
+        event = QMouseEvent(QMouseEvent.Type.MouseButtonPress,
+                            QPointF(300, 12), QPointF(300, 12),
+                            Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+                            Qt.KeyboardModifier.NoModifier)
+        bar.mousePressEvent(event)
+        assert asked, "clicking the groove did nothing"
+        assert asked[0] > 137_000 * 0.4, "it did not move towards the click"
+
+    def test_dragging_is_not_overridden_by_the_player(self, qtbot):
+        bar = self._bar(qtbot)
+        bar._dragging = True
+        bar.setValue(50_000)
+        bar.report(1_000)
+        assert bar.value() == 50_000
+
+
+class TestTheSpectrum:
+    def test_it_draws_nothing_and_costs_nothing_when_idle(self, qtbot):
+        from attachment_widgets import Spectrum
+
+        spectrum = Spectrum()
+        qtbot.addWidget(spectrum)
+        assert not spectrum.ready
+        spectrum.set_playing(True)
+        assert not spectrum._timer.isActive(), "it started a timer with no data"
+        spectrum.grab()          # must not raise
+
+    def test_frames_drive_it_and_clearing_stops_it(self, qtbot):
+        from array import array
+
+        from attachment_widgets import Spectrum
+
+        spectrum = Spectrum()
+        qtbot.addWidget(spectrum)
+        frames = [array("f", [0.5] * 32) for _ in range(40)]
+        spectrum.set_frames(frames, 20)
+        assert spectrum.ready
+        spectrum.set_position(500)
+        spectrum.set_playing(True)
+        assert spectrum._timer.isActive()
+        spectrum._tick()
+        spectrum.grab()
+        spectrum.clear()
+        assert not spectrum.ready
+        assert not spectrum._timer.isActive()
+
+    def test_a_position_past_the_end_does_not_raise(self, qtbot):
+        from array import array
+
+        from attachment_widgets import Spectrum
+
+        spectrum = Spectrum()
+        qtbot.addWidget(spectrum)
+        spectrum.set_frames([array("f", [0.2] * 32)], 20)
+        spectrum.set_position(999_999)
+        spectrum._tick()
+        spectrum.grab()
+
+
+class TestTheAnalysis:
+    def test_silence_produces_no_energy(self):
+        from array import array
+
+        import attachment_audio
+
+        frames = attachment_audio.analyse(array("h", [0] * 22050 * 2), 22050, 1)
+        assert frames
+        assert max(max(row) for row in frames) < 0.05
+
+    def test_a_tone_lands_in_the_right_part_of_the_spectrum(self):
+        import math
+        from array import array
+
+        import attachment_audio
+
+        rate = 22050
+        low = array("h", [int(12000 * math.sin(2 * math.pi * 120 * i / rate))
+                          for i in range(rate * 2)])
+        frames = attachment_audio.analyse(low, rate, 1)
+        middle = frames[len(frames) // 2]
+        assert sum(middle[:8]) > sum(middle[-8:]), "a bass tone lit the treble"
+
+    def test_quiet_and_loud_both_fill_the_strip(self):
+        import math
+        from array import array
+
+        import attachment_audio
+
+        rate = 22050
+        peaks = []
+        for amplitude in (700, 24000):
+            samples = array("h", [int(amplitude * math.sin(2 * math.pi * 300 * i / rate))
+                                  for i in range(rate * 2)])
+            frames = attachment_audio.analyse(samples, rate, 1)
+            peaks.append(max(max(row) for row in frames))
+        assert all(p > 0.7 for p in peaks), peaks
+
+    @pytest.mark.parametrize("bad", [
+        ("h", [], 22050), ("h", [1] * 10, 22050), ("h", [1] * 5000, 0),
+    ])
+    def test_nothing_usable_returns_nothing(self, bad):
+        from array import array
+
+        import attachment_audio
+
+        kind, values, rate = bad
+        assert attachment_audio.analyse(array(kind, values), rate, 1) == []

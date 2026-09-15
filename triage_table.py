@@ -813,7 +813,8 @@ class PreviewPane(QWidget):
             if message.links:
                 text += "\n\n--- LINKS ---\n" + "\n".join(f"• {link}" for link in message.links)
             if message.attachments:
-                text += "\n\n--- ATTACHMENTS ---\n" + "\n".join(f"• {a}" for a in message.attachments)
+                text += "\n\n--- ATTACHMENTS ---\n" + "\n".join(
+                    f"• {_attachment_line(a)}" for a in message.attachments)
             self.body_view.setPlainText(text)
 
     def _sync_attachments(self, item) -> None:
@@ -986,3 +987,28 @@ def _reasoning_html(item: TriageItem) -> str:
 # ==========================================================================
 # Settings dialog
 # ==========================================================================
+
+def _attachment_line(name: str) -> str:
+    """Name, and what kind of file the name says it is.
+
+    The list is built from the server's description of the message, so it is
+    there before anything is downloaded. Saying "photo.heic - image" beats
+    saying "photo.heic" to somebody deciding whether to bother opening it.
+    """
+    import attachments
+
+    shown = attachments.display_name(name)
+    ext = attachments.extension(name)
+    kinds = {
+        "image": ("png jpg jpeg gif webp heic heif tif tiff bmp svg avif"),
+        "audio": ("mp3 m4a aac wav flac ogg oga opus aiff aif wma"),
+        "video": ("mp4 mov m4v avi mkv webm wmv"),
+        "document": ("pdf doc docx rtf odt pages txt md csv tsv xls xlsx "
+                     "numbers ppt pptx key epub"),
+        "archive": ("zip tar gz tgz bz2 xz 7z rar"),
+        "program": ("app exe dmg pkg sh command scpt jar msi"),
+    }
+    for label, extensions in kinds.items():
+        if ext in extensions.split():
+            return f"{shown}  -  {label}"
+    return f"{shown}  -  {ext or 'file'}"

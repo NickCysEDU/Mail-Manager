@@ -347,34 +347,47 @@ slice, and click to copy it into a bug report.
 
 ## Attachments
 
-The preview pane has an **Attachments** button, which says how many there are.
-Images, audio, PDFs and text open in a window; anything else is described and
-can be saved. **Save all...** takes the lot.
+The preview lists what is attached - name and kind - before you open
+anything, because the server describes a message's parts without sending
+them. **Attachments** opens them.
 
-A scan only downloads the first part of each message, so the bytes are fetched
-when you ask, for that one message, with `BODY.PEEK` - it stays unread.
+| | |
+|---|---|
+| **Images** | Any format Qt decodes. Fit, Fill, 100%, 200%, 400%, and Copy image |
+| **Audio** | Play, seek, volume, cover art, tags, and a spectrum that follows the music |
+| **PDF** | Fit width, whole page or actual size |
+| **Text** | Wrap on or off, five font sizes |
+| **Anything else** | Described, and saved if you want it |
 
-**Nothing is ever run.** There is no "open with", and the viewer refuses a few
-things on purpose:
+**Info** shows what the file says about itself: type, size, SHA-256, image
+dimensions, audio tags, PDF producer - and whether a photograph carries GPS
+coordinates, which is worth knowing before you forward it.
 
-- A file's **bytes decide what it is**, not its name or its declared type. A
-  part claiming `image/png` that begins `MZ` is a Windows program, and it is
-  never handed to an image decoder.
+Space plays and pauses, the arrow keys move between attachments and scrub
+five seconds, Cmd-S saves, Cmd-I is Info.
+
+**Only the part you open is downloaded.** Listing costs about a fifth of a
+second; a six megabyte message used to cost six megabytes to see the first
+thing in it.
+
+**Nothing is ever run.** There is no "open with", and some refusals are
+deliberate:
+
+- A file's **bytes decide what it is**, not its name or declared type. A part
+  claiming `image/png` that begins `MZ` is a Windows program and never
+  reaches the image decoder.
 - **Filenames are treated as hostile.** `../../.ssh/authorized_keys` saves as
   `authorized_keys`, and a right-to-left override - the trick that makes
-  `photo<RLO>gnp.exe` read as `photo exe.png` - is stripped, so the label
-  says what the file is.
+  `photo<RLO>gnp.exe` read as `photo exe.png` - is stripped.
 - **SVG and HTML are shown as text**, because rendering either runs a parser
-  that can fetch remote content, which is how an attachment reports that you
-  opened it.
-- **Archives are never expanded.** Saving a zip is fine; walking paths a
-  stranger chose is not.
-- A **decompression bomb** is refused: dimensions are checked before pixels
-  are allocated.
+  that can fetch remote content.
+- **Archives are never expanded**, and a decompression bomb is refused before
+  any pixels are allocated.
+- **Cover art is an image from inside another file**, so it is sniffed and
+  size-capped like any other attachment before it is decoded.
 
-Saved files get the same **quarantine flag** a download gets, so macOS checks
-them, and a name that already exists becomes `report (2).pdf` rather than
-overwriting anything.
+Saved files get the quarantine flag a download gets, and a name that exists
+becomes `report (2).pdf` rather than overwriting anything.
 
 ## Undo
 
@@ -491,7 +504,7 @@ notice, and contribution terms.
 
 ```bash
 ./dev demo      # the app with sample mail, no setup
-./dev test      # 2,660 tests, about three minutes on four workers
+./dev test      # 2,699 tests, about three minutes on four workers
 ./dev eval      # sorter accuracy (needs a labelled set of your own)
 ./dev fake      # the whole pipeline in the terminal, offline
 ```
