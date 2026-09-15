@@ -469,5 +469,110 @@ class TestTheWorkerUsesTheRealAccountFields:
         worker.run()
         assert asked.get("host") == "imap.example.example"
         assert asked.get("port") == 993
+        assert asked.get("address") == "someone@example.example", (
+            "the worker read the wrong field off Account")
         assert failures, "a failure should be reported, not swallowed"
+        # The first version of this test only asked that *a* failure arrived,
+        # and passed while the worker was raising AttributeError on a field
+        # Account does not have. A failure is only acceptable if it is the one
+        # the fake engine raised on purpose.
+        assert "stop here" in failures[0], (
+            f"the worker failed for its own reasons, not the test's: {failures[0]}")
+        assert "AttributeError" not in failures[0]
         assert "secret" not in failures[0], "the password must not be in the message"
+
+
+class TestTheServerSPartListIsBelievedOverTheTruncatedFetch:
+    """A scan downloads 64 KB. A message can be six megabytes.
+
+    Counting attachments from the bytes that arrived means counting the ones
+    that happened to begin inside the first 64 KB - which for a real message
+    reported one of three. BODYSTRUCTURE describes every part without
+    sending any of them, and costs nothing extra in the same FETCH.
+    """
+
+    # A real-shaped reply: multipart/mixed holding text, an image, and a PDF.
+    REPLY = (
+        b'1 (UID 101 RFC822.SIZE 6000000 BODYSTRUCTURE ('
+        b'("text" "plain" ("charset" "UTF-8") NIL NIL "7bit" 2 1 NIL NIL NIL NIL)'
+        b'("image" "jpeg" ("name" "photo.jpeg") NIL NIL "base64" 1400000 NIL '
+        b'("inline" ("filename" "photo.jpeg")) NIL NIL)'
+        b'("application" "pdf" ("name" "paper.pdf") NIL NIL "base64" 1000000 NIL '
+        b'("attachment" ("filename" "paper.pdf")) NIL NIL)'
+        b' "mixed" ("boundary" "xyz") NIL NIL NIL))'
+    )
+
+    def test_every_leaf_part_is_described(self):
+        import imap_engine
+
+        parts = imap_engine.parse_bodystructure(self.REPLY)
+        assert len(parts) == 3
+        assert [p["content_type"] for p in parts] == [
+            "text/plain", "image/jpeg", "application/pdf"]
+        assert [p["size"] for p in parts] == [2, 1400000, 1000000]
+
+    def test_filenames_come_off_the_disposition(self):
+        import imap_engine
+
+        parts = imap_engine.parse_bodystructure(self.REPLY)
+        assert parts[1]["name"] == "photo.jpeg"
+        assert parts[2]["name"] == "paper.pdf"
+        assert parts[1]["disposition"] == "inline"
+        assert parts[2]["disposition"] == "attachment"
+
+    def test_the_body_is_not_counted_as_an_attachment(self):
+        import imap_engine
+
+        names = imap_engine.attachment_names(
+            imap_engine.parse_bodystructure(self.REPLY))
+        assert names == ("photo.jpeg", "paper.pdf")
+
+    def test_a_nested_multipart_is_numbered_the_way_imap_numbers_it(self):
+        import imap_engine
+
+        nested = (
+            b'BODYSTRUCTURE (('
+            b'("text" "plain" NIL NIL NIL "7bit" 10 1 NIL NIL NIL NIL)'
+            b'("text" "html" NIL NIL NIL "7bit" 20 1 NIL NIL NIL NIL)'
+            b' "alternative" NIL NIL NIL NIL)'
+            b'("application" "zip" ("name" "a.zip") NIL NIL "base64" 999 NIL '
+            b'("attachment" ("filename" "a.zip")) NIL NIL)'
+            b' "mixed" NIL NIL NIL NIL)'
+        )
+        parts = imap_engine.parse_bodystructure(nested)
+        assert [p["part"] for p in parts] == ["1.1", "1.2", "2"]
+        assert imap_engine.attachment_names(parts) == ("a.zip",)
+
+    @pytest.mark.parametrize("junk", [
+        b"", b"BODYSTRUCTURE", b"BODYSTRUCTURE (", b"BODYSTRUCTURE ((((",
+        b"BODYSTRUCTURE NIL", b"\x00\xff" * 200,
+        b'BODYSTRUCTURE ("text" "plain" NIL NIL NIL "7bit" notanumber 1)',
+    ])
+    def test_a_broken_reply_yields_nothing_rather_than_raising(self, junk):
+        import imap_engine
+
+        assert isinstance(imap_engine.parse_bodystructure(junk), list)
+
+    def test_a_literal_filename_is_read(self):
+        """Servers send long or non-ASCII names as {n}-prefixed literals."""
+        import imap_engine
+
+        reply = (
+            b'BODYSTRUCTURE (("application" "pdf" ("name" {11}\r\nquarter.pdf) '
+            b'NIL NIL "base64" 100 NIL ("attachment" ("filename" {11}\r\n'
+            b'quarter.pdf)) NIL NIL) "mixed" NIL NIL NIL NIL)'
+        )
+        parts = imap_engine.parse_bodystructure(reply)
+        assert parts and parts[0]["name"] == "quarter.pdf"
+
+    def test_a_hostile_filename_is_still_safe_once_displayed(self):
+        import imap_engine
+
+        reply = (
+            b'BODYSTRUCTURE (("application" "octet-stream" '
+            b'("name" "../../.ssh/authorized_keys") NIL NIL "base64" 10 NIL '
+            b'("attachment" ("filename" "../../.ssh/authorized_keys")) NIL NIL)'
+            b' "mixed" NIL NIL NIL NIL)'
+        )
+        names = imap_engine.attachment_names(imap_engine.parse_bodystructure(reply))
+        assert names and "/" not in names[0]

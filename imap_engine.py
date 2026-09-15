@@ -1062,12 +1062,17 @@ class IMAPEngine:
         conn = self._require_conn()
         uid_set = ",".join(uids)
         body_item = f"BODY.PEEK[]<0.{int(max_bytes)}>" if max_bytes > 0 else "BODY.PEEK[]"
+        # BODYSTRUCTURE costs nothing and is the only way to know what is
+        # attached to a message this fetch is deliberately truncating. Without
+        # it a six megabyte message reports whichever attachments happened to
+        # begin inside the first sixty-four kilobytes, which is not a number
+        # anybody can act on.
         data = self._cmd(
             "Fetching messages",
             conn.uid,
             "FETCH",
             uid_set,
-            f"(UID INTERNALDATE RFC822.SIZE FLAGS {body_item})",
+            f"(UID INTERNALDATE RFC822.SIZE FLAGS BODYSTRUCTURE {body_item})",
         )
         messages: List[EmailMessage] = []
         for item in data or ():
@@ -1102,6 +1107,10 @@ class IMAPEngine:
                 # letting the classifier believe it saw everything.
                 message.truncated = True
                 message.original_length = true_size
+            described = attachment_names(parse_bodystructure(bytes(prefix)))
+            if described:
+                # The server's own list beats whatever survived the cut.
+                message.attachments = described
             messages.append(message)
         if len(messages) < len(uids):
             # Every skipped item above is a message the caller asked for and
@@ -1463,3 +1472,166 @@ def attachments_of(raw: bytes) -> List["Attachment"]:
             data=payload or None,
         ))
     return found
+
+
+# -- BODYSTRUCTURE ---------------------------------------------------------
+# The server will describe a message's parts without sending them, which is
+# the only way to know what is attached to a six megabyte message when the
+# scan only downloads the first sixty-four kilobytes of it. The reply is a
+# nested parenthesised list, so it needs a real parser rather than a regex.
+
+def _tokenise(raw: bytes):
+    """Atoms, quoted strings, literals and parentheses, in order."""
+    i, n = 0, len(raw)
+    while i < n:
+        ch = raw[i:i + 1]
+        if ch in b" \t\r\n":
+            i += 1
+        elif ch in b"()":
+            yield ch.decode()
+            i += 1
+        elif ch == b'"':
+            j = i + 1
+            out = bytearray()
+            while j < n:
+                if raw[j:j + 1] == b"\\" and j + 1 < n:
+                    out += raw[j + 1:j + 2]
+                    j += 2
+                elif raw[j:j + 1] == b'"':
+                    break
+                else:
+                    out += raw[j:j + 1]
+                    j += 1
+            yield out.decode("utf-8", "replace")
+            i = j + 1
+        elif ch == b"{":
+            close = raw.find(b"}", i)
+            if close < 0:
+                return
+            length = int(raw[i + 1:close] or 0)
+            start = close + 1
+            while raw[start:start + 1] in (b"\r", b"\n"):
+                start += 1
+            yield raw[start:start + length].decode("utf-8", "replace")
+            i = start + length
+        else:
+            j = i
+            while j < n and raw[j:j + 1] not in b" \t\r\n()":
+                j += 1
+            word = raw[i:j].decode("utf-8", "replace")
+            yield None if word.upper() == "NIL" else word
+            i = j
+
+
+def _nest(tokens):
+    """Turn the token stream into nested lists."""
+    stack, current = [], []
+    for token in tokens:
+        if token == "(":
+            stack.append(current)
+            current = []
+        elif token == ")":
+            done = current
+            if not stack:
+                return done
+            current = stack.pop()
+            current.append(done)
+        else:
+            current.append(token)
+    return current
+
+
+def _walk_structure(node, path, out) -> None:
+    """Collect one entry per leaf part, numbered the way IMAP numbers them."""
+    if not isinstance(node, list) or not node:
+        return
+    if isinstance(node[0], list):
+        # multipart: children first, then the subtype
+        index = 1
+        for child in node:
+            if isinstance(child, list):
+                _walk_structure(child, path + [str(index)], out)
+                index += 1
+            else:
+                break
+        return
+    # A leaf: type subtype (params) id description encoding size ...
+    maintype = (node[0] or "").lower() if len(node) > 0 else ""
+    subtype = (node[1] or "").lower() if len(node) > 1 else ""
+    params = node[2] if len(node) > 2 and isinstance(node[2], list) else []
+    content_id = node[3] if len(node) > 3 else None
+    encoding = (node[5] or "") if len(node) > 5 else ""
+    try:
+        size = int(node[6]) if len(node) > 6 and node[6] is not None else 0
+    except (TypeError, ValueError):
+        size = 0
+
+    def pairs(items):
+        found = {}
+        for i in range(0, len(items) - 1, 2):
+            key = items[i]
+            if isinstance(key, str):
+                found[key.lower()] = items[i + 1]
+        return found
+
+    attrs = pairs(params)
+    name = attrs.get("name") or ""
+    disposition = ""
+    # The disposition block sits after the body fields; find the first list
+    # that looks like ("attachment" ("filename" "x")).
+    for extra in node[7:]:
+        if isinstance(extra, list) and extra and isinstance(extra[0], str):
+            if extra[0].lower() in ("attachment", "inline"):
+                disposition = extra[0].lower()
+                if len(extra) > 1 and isinstance(extra[1], list):
+                    name = pairs(extra[1]).get("filename") or name
+                break
+    out.append({
+        "part": ".".join(path) if path else "1",
+        "name": _decode_header_value(name) if name else "",
+        "content_type": f"{maintype}/{subtype}" if maintype else "",
+        "encoding": (encoding or "").lower(),
+        "size": size,
+        "cid": (content_id or "").strip("<>") if isinstance(content_id, str) else "",
+        "disposition": disposition,
+    })
+
+
+def parse_bodystructure(raw: bytes) -> list:
+    """Every leaf part the server described, as plain dicts."""
+    try:
+        start = raw.upper().find(b"BODYSTRUCTURE")
+        if start >= 0:
+            raw = raw[start + len(b"BODYSTRUCTURE"):]
+        tree = _nest(_tokenise(raw))
+        while isinstance(tree, list) and len(tree) == 1 and isinstance(tree[0], list):
+            tree = tree[0]
+        out: list = []
+        _walk_structure(tree, [], out)
+        return out
+    except Exception:      # noqa: BLE001 - a description is not worth a crash
+        return []
+
+
+def attachment_names(parts) -> tuple:
+    """The names a person would call attachments, in order, deduplicated."""
+    import attachments as _attachments
+
+    names = []
+    for part in parts:
+        name = part.get("name") or ""
+        content_type = (part.get("content_type") or "").lower()
+        disposition = part.get("disposition") or ""
+        if not name:
+            if disposition != "attachment":
+                continue
+            name = f"part-{part.get('part', '1')}"
+        if content_type.startswith("multipart/"):
+            continue
+        # The body itself is not an attachment.
+        if not disposition and content_type in ("text/plain", "text/html") and not name:
+            continue
+        shown = _attachments.display_name(name)
+        if shown not in names:
+            names.append(shown)
+    return tuple(names)
