@@ -1309,7 +1309,7 @@ universal, and `build_app.sh` checks both slices before it finishes.
 
 ## Which build is this
 
-Bottom right of the window: `1.0.0 · a1b2c3d`. The version alone does not
+Bottom right of the window: `1.1.0 · a1b2c3d`. The version alone does not
 identify a build, since every change between releases carries the same one, so the
 commit is the part that answers "which code was this?". Hover for the full
 line, including the Python version and whether the Intel or the Apple silicon
