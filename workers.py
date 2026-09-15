@@ -1318,33 +1318,84 @@ class AttachmentWorker(_BaseWorker):
             self.failed.emit(f"Could not list the attachments: {exc}")
             return
         keep = [a for a in found if not a.signature]
-        self.ready.emit(AttachmentSource(engine, self.message.uid, keep))
+        source = AttachmentSource(engine, self.message.uid, keep,
+                                  account=self.account, password=self.password)
+        source.remember_mailbox(
+            getattr(self.message, "source_folder", "") or "INBOX")
+        self.ready.emit(source)
 
 
 class AttachmentSource:
-    """A connection held open for as long as the window is, and the parts.
+    """Connections to fetch parts with, and the parts themselves.
 
-    Reconnecting per attachment costs a second or two each time; one session
-    for the life of the window costs nothing and is closed when it shuts.
+    One connection can only serve one request at a time - imaplib is not
+    thread safe, and two overlapping fetches corrupt the TLS stream outright.
+    So this keeps a small pool instead: a caller checks one out, uses it, and
+    puts it back. Extra connections are opened in the background after the
+    first, because opening one costs a second or so and the first fetch
+    should not wait for them.
     """
 
-    def __init__(self, engine, uid: str, found) -> None:
+    #: Enough to overlap a few attachments without being rude to the server.
+    POOL = 3
+
+    def __init__(self, engine, uid: str, found, account=None,
+                 password: str = "") -> None:
+        import queue
         import threading
 
-        self._engine = engine
         self._uid = uid
         self.found = found
-        #: One connection, one request at a time. imaplib is not thread safe
-        #: and two overlapping fetches corrupt the TLS stream outright - the
-        #: server answers "bad record mac" and drops the connection.
+        self._account = account
+        self._password = password
+        self._free = queue.Queue()
+        self._free.put(engine)
+        self._all = [engine]
         self._lock = threading.Lock()
+        self._closed = False
+        if account is not None and password:
+            threading.Thread(target=self._grow, daemon=True,
+                             name="attachment-pool").start()
+
+    def _grow(self) -> None:
+        """Open the rest of the pool, quietly, after the first fetch starts."""
+        for _ in range(self.POOL - 1):
+            if self._closed:
+                return
+            try:
+                engine = IMAPEngine(host=self._account.host,
+                                    port=self._account.port)
+                engine.connect(self._account.address, self._password)
+                engine.select(getattr(self, "_mailbox", "INBOX"), readonly=True)
+            except Exception:      # noqa: BLE001 - one is enough to work
+                return
+            with self._lock:
+                if self._closed:
+                    try:
+                        engine.logout()
+                    except Exception:      # noqa: BLE001
+                        pass
+                    return
+                self._all.append(engine)
+            self._free.put(engine)
+
+    def remember_mailbox(self, mailbox: str) -> None:
+        self._mailbox = mailbox or "INBOX"
 
     def fetch(self, item) -> bytes:
-        with self._lock:
-            return self._engine.fetch_part(self._uid, item.part, item.encoding)
+        engine = self._free.get()
+        try:
+            return engine.fetch_part(self._uid, item.part, item.encoding)
+        finally:
+            self._free.put(engine)
 
     def close(self) -> None:
-        try:
-            self._engine.logout()
-        except Exception:      # noqa: BLE001 - closing is best effort
-            pass
+        with self._lock:
+            self._closed = True
+            engines = list(self._all)
+            self._all = []
+        for engine in engines:
+            try:
+                engine.logout()
+            except Exception:      # noqa: BLE001 - closing is best effort
+                pass
