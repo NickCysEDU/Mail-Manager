@@ -238,7 +238,7 @@ parent-teacher conference and a sales demo stay where they are.
 
 ## Reading shape, not just words
 
-*"Seat 14C — FR7712 STN to DUB, Tuesday. Bags close 40 minutes before."* is a
+*"Seat 14C - FR7712 STN to DUB, Tuesday. Bags close 40 minutes before."* is a
 flight, and contains no word that says so. So alongside the phrase tables the
 sorter reads the shape of a message: which mailbox it came from (`offers@`,
 `billing@`, `bookings@`), the structured things in it (a flight number beside
@@ -274,59 +274,48 @@ the inbox became a to-do list.
 
 ## Rules
 
-**Settings → Auto Reply.** A rule is a list of conditions and a list of things
-to do, so it is whatever you need it to be rather than one of a fixed set.
+**Settings → Auto Reply.** A rule is conditions plus actions, so it is whatever
+you need rather than one of a fixed set.
 
-Five rules ship, all switched off: acknowledging an interview invitation,
-answering a request for documents or times, declining a recruiter politely,
-filing security notices, and leaving anything from a colleague alone. They are
-worked examples as much as defaults. Open one, see how it is built, change it.
+Five ship, all switched off: acknowledging an interview invitation, answering a
+request for documents or times, declining a recruiter, filing security notices,
+and leaving colleagues alone. They are worked examples - open one and change it.
 
-**Conditions** test the job category, the everyday topic, the sender, the
-sender's domain, the subject, the message text, either of those, the
-confidence, which mailbox it arrived in, how old it is, and whether it is bulk
-mail, carries an attachment or is a reply. The operators are the obvious ones:
-is, is not, contains, does not contain, starts with, ends with, is exactly,
-matches a pattern, is at least, is at most. A rule matches on **all** of its
-conditions or on **any** of them.
+**Conditions** test job category, everyday topic, sender, domain, subject,
+body, confidence, mailbox, age, and whether it is bulk, has an attachment or is
+a reply. Operators are the obvious ones (is, contains, starts with, matches a
+pattern, is at least...). A rule matches on **all** conditions or **any**.
 
-**Actions** are what happens next:
+**Actions:**
 
 | Action | What it does |
 | --- | --- |
-| Draft a reply from a template | Fills `{first_name}`, `{sender}`, `{subject}` and `{me}` |
+| Draft a reply from a template | Fills `{first_name}`, `{sender}`, `{subject}`, `{me}` |
 | Draft a reply with the model | Hands the message to the model with your guidance |
-| File it into a folder | Points the row at a folder. Nothing moves until you press Apply |
+| File it into a folder | Points the row at a folder; nothing moves until Apply |
 | Tick it / Leave it unticked | Sets the checkbox, so Apply picks it up or skips it |
 | Mark it as read | `\Seen` on the server |
 | Flag it | `\Flagged` on the server |
 | Leave it where it is | Cancels any filing an earlier rule asked for |
 | Stop | Skips every later rule for that message |
 
-Rules run top to bottom, and **↑ ↓** reorder them. A later rule adds to what an
-earlier one decided until one of them says stop, which is what makes an
-exception at the top of the list work: *leave anything from a colleague alone,
-and stop* above a rule that files everything else.
+Rules run top to bottom and **↑ ↓** reorder them. A later rule adds to what an
+earlier one decided until one says stop - which is how an exception at the top
+works: *leave colleagues alone, and stop*, above a rule that files the rest.
 
-**Try it on the last scan** runs every finished, switched-on rule over the
-messages already on screen and tells you what would happen, without touching
-the mailbox or the model. Reading a rule and knowing what it does are different
-things.
+**Try it on the last scan** runs your rules over the messages already on screen
+and shows what would happen, touching neither the mailbox nor the model.
 
-A rule that is half-written is never run. The editor lists what is missing
-rather than refusing to save it, because half-written is a normal state to
-leave a rule in overnight. The same list catches a pattern that would hang the
-app: `(a+)+` and `.*.*x` are refused before they run, because a regular
-expression cannot be interrupted once it has started.
+A half-written rule never runs; the editor lists what is missing rather than
+refusing to save. The same check refuses a pattern that would hang the app  - 
+`(a+)+` and `.*.*x` - because a regular expression cannot be interrupted once
+started.
 
-**Nothing is ever sent.** A drafted reply is written into your Drafts mailbox,
-threaded correctly with `In-Reply-To` and `References`, and you press send
-yourself in Mail. An app that answers a stranger's post on your behalf, with a
-model, without you reading it first, is not a feature anybody asks for twice.
-
-The model is told not to invent a fact and not to commit you to anything; where
-it needs something it does not have, it leaves `[a note in brackets]` and the
-draft lists those at the bottom. Bulk mail is skipped by default, per rule.
+**Nothing is ever sent.** Drafts go to your Drafts mailbox, threaded with
+`In-Reply-To` and `References`, and you press send yourself. The model is told
+not to invent facts or commit you to anything; where it lacks something it
+leaves `[a note in brackets]` and the draft lists those at the bottom. Bulk
+mail is skipped by default, per rule.
 
 ## Running a model on this Mac
 
@@ -395,55 +384,47 @@ Changes apply as you make them rather than when you press OK.
 
 ## How good the offline sorter actually is
 
-Two numbers, and the gap between them is worth understanding before trusting
-it with a mailbox.
+Two numbers, and the gap between them is the thing to understand before
+trusting it with a mailbox.
 
 Against **real collected mail** - 102 labelled messages from a live inbox - it
-gets 99.0% right on job versus not-job, 87.3% on the exact category, and 98.2%
-of what it files goes to the right folder. That is the number that describes
-ordinary use, because ordinary transactional mail comes out of templates and
-templates are what a rules engine is good at.
+gets 99.0% right on job versus not-job, 87.3% on exact category, and 98.2% of
+what it files lands in the right folder. That describes ordinary use:
+transactional mail comes out of templates, and templates are what a rules
+engine is good at.
 
-That set is not in this repository, and neither is the smaller
-acknowledgements one. Both were built from somebody's actual mailbox. Every
-name in them was replaced, but replacing every name in a hundred real messages
-is not a job with a provable end - four separate passes each found something
-the pass before had missed - so the honest thing is to keep them off the
-internet rather than to keep asserting they are clean. What ships is the
-tooling, the guards that check a corpus, and the three sets that were written
-by hand. `tests/private_fixtures.py` says where the private ones go if you
-build your own.
+Against **mail written to be awkward** - a held-out set that avoids every
+phrase the engine knows - it gets 37.5%. That is not a bug being hidden; it is
+what a phrase matcher does with prose it has never seen.
 
-Against **mail written by hand to be awkward** - a held-out set that
-deliberately avoids every phrase the engine knows - it gets 37.5%. That is not
-a bug being hidden; it is what a phrase-and-structure matcher does with prose
-it has never seen.
+What holds in both: it filed **nothing** wrongly in either adversarial set,
+because anything it cannot read clearly is held for review rather than guessed
+at. Getting a message wrong and showing it to you costs a moment. Getting it
+wrong and filing it costs you the message.
 
-What holds in both cases is the part that matters: it filed **nothing** wrongly
-in either adversarial set, because anything it cannot read clearly is held for
-review instead of guessed at. Getting a message wrong and showing it to you
-costs you a moment. Getting it wrong and filing it costs you the message.
+**None of the evaluation sets is published.** Two were built from a real
+mailbox; every name was replaced, but four separate passes each found something
+the one before had missed, so keeping them off the internet beats asserting
+they are clean. The other three were written by hand and go with them, because
+"the synthetic ones are safe" is a judgement and judgements here have been
+wrong. What ships is the tooling and the guards that check a corpus  - 
+`tests/private_fixtures.py` says where your own sets go.
 
 ```bash
-./dev eval --file tests/fixtures/holdout.json   # a set that does ship
-python tools/adversarial.py      # against the two hand-written sets
+./dev eval --file your-set.json  # any labelled set of your own
 python tools/corpus.py --fetch   # six thousand real messages, once
 python tools/corpus.py           # then run against them
 ```
 
-The third is the SpamAssassin public corpus: six thousand real messages from
-2002-2005, ham and spam labelled. Its vocabulary is twenty years old, so the
-recall figure is a floor rather than a description of a modern inbox. What does
-carry over is everything structural, and it earned its place by finding two
-real defects: a message beginning with seventy underscores took **43 seconds**
-to classify, and work-from-home spam was being read as an interview next step.
+That last is the SpamAssassin public corpus, 2002-2005, ham and spam labelled.
+Its vocabulary is twenty years old, so recall there is a floor rather than a
+description of a modern inbox. What carries over is structural, and it earned
+its place by finding two real defects: a message beginning with seventy
+underscores took **43 seconds** to classify, and work-from-home spam read as an
+interview next step.
 
-The number worth watching there is not how much spam reaches Junk. It is how
-much ordinary post does: **0.07%**, and **none** of it filed as job mail.
-
-If you want the harder cases sorted rather than queued, that is what the model
-backends are for. Point it at Gemini or Claude and the same messages get read
-properly.
+The number worth watching is not how much spam reaches Junk. It is how much
+ordinary post does: **0.07%**, and **none** of it filed as job mail.
 
 ## Privacy
 
@@ -462,42 +443,34 @@ summaries are left out rather than written in the clear.
 
 ## Licence and legal
 
-MIT, in `LICENSE`. The software comes with **no warranty**, which matters
-more than usual for a program that moves real mail: nothing is deleted,
-nothing moves until you press Apply, and undo goes ten filings deep - but
-none of that is a guarantee, and none of it replaces a backup.
+MIT ([LICENSE](LICENSE)), with **no warranty** - which matters for a program
+that moves real mail. Nothing is deleted, nothing moves until you press Apply,
+and undo goes ten deep; none of that replaces a backup.
 
-The disk image also carries Qt, which is **LGPL v3**, as separate dynamic
-libraries you can replace. Every bundled library is named with its licence in
-[THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md), along with where the data
-in the offline lexicon came from.
+The disk image also carries Qt under the **LGPL v3** as replaceable dynamic
+libraries. Bundled components and the lexicon's data sources are listed in
+[THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md).
 
-Mail Manager is an independent project and is **not affiliated with Apple,
-Google, Anthropic, OpenAI, Microsoft or any mail provider**. Those names are
-used only to say what it works with. [LEGAL.md](LEGAL.md) has the warranty
-and liability position in plain language, the trademark notices, what happens
-to your data, the encryption notice, and the terms contributions are accepted
-under.
+Mail Manager is independent and **not affiliated with Apple, Google,
+Anthropic, OpenAI, Microsoft or any mail provider**. [LEGAL.md](LEGAL.md) has
+the warranty position, trademark notices, data handling, the encryption
+notice, and contribution terms.
 
 ## Development
 
 ```bash
 ./dev demo      # the app with sample mail, no setup
-./dev test      # 2,582 tests (with the evaluation sets present), about three minutes on four workers
+./dev test      # 2,582 tests, about three minutes on four workers
 ./dev eval      # sorter accuracy (needs a labelled set of your own)
 ./dev fake      # the whole pipeline in the terminal, offline
 ```
 
 `./dev` lists everything. The [handbook](docs/HANDBOOK.md) covers the
-architecture, the classification rules, IMAP behaviour and the safety model in
-detail.
+architecture, classification rules, IMAP behaviour and safety model.
 
-## Use of AI-assisted tools
+## AI-assisted tools
 
-During development and campaign preparation, the Mail Manager team used AI-assisted tools in a limited supporting role, including coding assistance, copy editing, and the preparation of some sample display content.
-
-The same notice appears in the app, under **Help → About Mail Manager**.
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+During development and campaign preparation, the Mail Manager team used
+AI-assisted tools in a limited supporting role, including coding assistance,
+copy editing, and the preparation of some sample display content. The same
+notice is in the app, under **Help → About Mail Manager**.
