@@ -340,7 +340,7 @@ account later.
 
 ## Which build is this
 
-Bottom right: `1.0.0 · a1b2c3d`. A version number alone does not identify a
+Bottom right: `1.1.0 · a1b2c3d`. A version number alone does not identify a
 build between releases; the commit does. Hover for the full line, including
 the Python version and whether it is running the Intel or the Apple silicon
 slice, and click to copy it into a bug report.
