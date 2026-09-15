@@ -21,8 +21,8 @@ from typing import List, Optional
 
 import math as _math
 
-from PySide6.QtCore import (QEasingCurve, QPointF, QRectF, Qt, QTimer,
-                            QVariantAnimation, Signal)
+from PySide6.QtCore import (QEasingCurve, QPointF, QRectF, QSize, Qt,
+                            QTimer, QVariantAnimation, Signal)
 from PySide6.QtGui import (QColor, QLinearGradient, QPainter, QPainterPath,
                            QPen, QRadialGradient)
 from PySide6.QtWidgets import QSlider, QStyle, QStyleOptionSlider, QWidget
@@ -165,7 +165,7 @@ class Spectrum(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setMinimumHeight(0)
+        self.setMaximumHeight(0)
         self._frames: List = []
         self._rate = 20
         self._position = 0
@@ -262,12 +262,24 @@ class Spectrum(QWidget):
 
     def _reveal_changed(self, value) -> None:
         self._reveal = max(0.0, min(1.0, float(value)))
-        self.setMaximumHeight(int(self.HEIGHT * self._reveal))
+        height = int(self.HEIGHT * self._reveal)
+        # Both, and a sizeHint to match. A maximum alone leaves the minimum
+        # at zero and the hint at -1, so a layout hands out whatever is
+        # spare - which in a full pane is nothing, and the widget is there
+        # with no height to draw in.
+        self.setMinimumHeight(height)
+        self.setMaximumHeight(height)
         if self._reveal <= 0.001:
             self._timer.stop()
             self._idling = False
         self.updateGeometry()
         self.update()
+
+    def sizeHint(self) -> QSize:      # noqa: N802 - Qt's name
+        return QSize(320, int(self.HEIGHT * self._reveal))
+
+    def minimumSizeHint(self) -> QSize:      # noqa: N802 - Qt's name
+        return QSize(0, int(self.HEIGHT * self._reveal))
 
     def clear(self) -> None:
         self._flow.stop()
