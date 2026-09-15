@@ -485,3 +485,110 @@ class TestTheControlsExplainThemselves:
         assert "click" in hint
         assert "never" in hint or "nothing" in hint
         viewer._sweep()
+
+
+class TestOneConnectionMeansOneRequest:
+    """Two threads on one IMAP socket interleave inside TLS.
+
+    The server answers "bad record mac" and drops the connection, which is
+    not a race that fails quietly: every fetch after it fails too. Prefetch
+    caused it by starting a second thread while the first was mid-request.
+    """
+
+    def test_the_source_serialises_its_fetches(self):
+        import threading
+        import time
+
+        from workers import AttachmentSource
+
+        overlapping = []
+        inside = []
+        lock = threading.Lock()
+
+        class Engine:
+            def fetch_part(self, uid, part, encoding=""):
+                with lock:
+                    inside.append(part)
+                    if len(inside) > 1:
+                        overlapping.append(tuple(inside))
+                time.sleep(0.03)
+                with lock:
+                    inside.remove(part)
+                return b"x" * 10
+
+        source = AttachmentSource(Engine(), "1", [])
+
+        class Item:
+            def __init__(self, part):
+                self.part = part
+                self.encoding = ""
+
+        threads = [threading.Thread(target=source.fetch, args=(Item(str(i)),))
+                   for i in range(6)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert not overlapping, f"requests overlapped: {overlapping}"
+
+    def test_the_viewer_runs_one_worker_at_a_time(self, qtbot):
+        import attachments
+        from attachment_view import AttachmentViewer
+
+        found = [attachments.Attachment(part=str(i), name=f"f{i}.bin",
+                                        content_type="application/octet-stream",
+                                        size=10)
+                 for i in range(4)]
+        viewer = AttachmentViewer(found, fetch=lambda item: b"x" * 10)
+        qtbot.addWidget(viewer)
+        viewer._queue = [1, 2, 3]
+        viewer._worker = object()          # pretend one is already running
+        viewer._pump()
+        assert viewer._queue == [1, 2, 3], "it started a second worker"
+        viewer._sweep()
+
+    def test_what_is_being_looked_at_goes_to_the_front(self, qtbot):
+        import attachments
+        from attachment_view import AttachmentViewer
+
+        found = [attachments.Attachment(part=str(i), name=f"f{i}.bin",
+                                        content_type="application/octet-stream",
+                                        size=10)
+                 for i in range(4)]
+        viewer = AttachmentViewer(found, fetch=lambda item: b"x" * 10)
+        qtbot.addWidget(viewer)
+        viewer._worker = object()          # keep the pump from draining it
+        viewer._queue = []
+        viewer._start_fetch(3, found[3], then_show=False)
+        viewer._start_fetch(2, found[2], then_show=True)
+        assert viewer._queue[0] == 2, "the selected row waited behind a prefetch"
+        viewer._sweep()
+
+
+class TestPlayBeforeTheAnalysisArrives:
+    """Analysis finishes a moment after playback starts."""
+
+    def test_the_request_to_appear_is_remembered(self, qtbot):
+        from array import array
+
+        from attachment_widgets import Spectrum
+
+        spectrum = Spectrum()
+        qtbot.addWidget(spectrum)
+        spectrum.set_playing(True)              # nothing to show yet
+        assert spectrum.maximumHeight() == 0
+        assert spectrum._wanted
+        spectrum.set_frames([array("f", [0.4] * 32) for _ in range(60)], 20)
+        assert spectrum._timer.isActive(), "the spectrum never appeared"
+
+    def test_frames_arriving_after_a_pause_do_not_force_it_open(self, qtbot):
+        from array import array
+
+        from attachment_widgets import Spectrum
+
+        spectrum = Spectrum()
+        qtbot.addWidget(spectrum)
+        spectrum.set_playing(True)
+        spectrum.set_playing(False)
+        spectrum.set_frames([array("f", [0.4] * 32) for _ in range(60)], 20)
+        assert spectrum.maximumHeight() == 0

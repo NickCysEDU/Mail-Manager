@@ -1329,12 +1329,19 @@ class AttachmentSource:
     """
 
     def __init__(self, engine, uid: str, found) -> None:
+        import threading
+
         self._engine = engine
         self._uid = uid
         self.found = found
+        #: One connection, one request at a time. imaplib is not thread safe
+        #: and two overlapping fetches corrupt the TLS stream outright - the
+        #: server answers "bad record mac" and drops the connection.
+        self._lock = threading.Lock()
 
     def fetch(self, item) -> bytes:
-        return self._engine.fetch_part(self._uid, item.part, item.encoding)
+        with self._lock:
+            return self._engine.fetch_part(self._uid, item.part, item.encoding)
 
     def close(self) -> None:
         try:
