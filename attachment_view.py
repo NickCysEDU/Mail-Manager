@@ -33,7 +33,7 @@ from typing import Callable, List, Optional
 from PySide6.QtCore import QSize, Qt, QThread, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import (QAction, QGuiApplication, QImage, QKeySequence,
                            QPixmap)
-from PySide6.QtWidgets import (QApplication, QComboBox, QDialog,
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
                                QDialogButtonBox, QFileDialog, QFrame,
                                QHBoxLayout, QLabel, QListWidget,
                                QListWidgetItem, QMessageBox, QPlainTextEdit,
@@ -52,6 +52,14 @@ TEXT_LIMIT = 400_000
 #: Cover art is attacker-controlled bytes from inside another file, so it
 #: gets its own ceiling on top of the image one.
 MAX_ART_PIXELS = 16_000_000
+
+
+def _hz(value) -> str:
+    """A frequency as a person writes it: 630, 1k, 10k."""
+    if value >= 1000:
+        thousands = value / 1000.0
+        return f"{thousands:.0f}k" if thousands == int(thousands) else f"{thousands:.1f}k"
+    return f"{int(value)}"
 
 
 def _muted(text: str) -> QLabel:
@@ -306,6 +314,34 @@ class AudioPane(QWidget):
         self.tags = _muted("")
 
         self.spectrum = Spectrum()
+        import attachment_audio
+        import visualizers
+
+        self.scene_box = _combo(
+            [scene.name for scene in visualizers.SCENES],
+            "Which visualiser to draw. All of them read the same equaliser.")
+        self.scene_box.currentTextChanged.connect(
+            lambda name: self.spectrum.set_scene(visualizers.by_name(name)))
+        self.strobe_box = QCheckBox("Strobe")
+        self.strobe_box.setToolTip(
+            "Flash the scene on a bass hit. Off by default, because a "
+            "flashing screen is not for everybody.")
+        self.strobe_box.toggled.connect(self.spectrum.set_strobe)
+        self.full_button = QPushButton("Full screen")
+        self.full_button.setToolTip(
+            "Fill the screen with the visualiser. Escape returns.")
+        self.full_button.clicked.connect(self._go_full_screen)
+        self.spectrum.set_labels([_hz(c) for c in attachment_audio.CENTRES])
+
+        self.visual_row = QHBoxLayout()
+        self.visual_row.addWidget(QLabel("Visualiser"))
+        self.visual_row.addWidget(self.scene_box)
+        self.visual_row.addWidget(self.strobe_box)
+        self.visual_row.addWidget(self.full_button)
+        self.visual_row.addStretch(1)
+        self.visual_holder = QWidget()
+        self.visual_holder.setLayout(self.visual_row)
+        self.visual_holder.hide()
 
         self.play = QPushButton("Play")
         self.play.setFixedWidth(84)
@@ -338,6 +374,7 @@ class AudioPane(QWidget):
         layout = QVBoxLayout(self)
         layout.addLayout(header)
         layout.addWidget(self.spectrum)
+        layout.addWidget(self.visual_holder)
         layout.addLayout(controls)
         layout.addWidget(_muted(
             "Playback is local. Nothing about this file leaves the machine."))
@@ -384,6 +421,7 @@ class AudioPane(QWidget):
             return "audio playback is unavailable in this build"
         # A local file, never a URL from the message.
         self._player.setSource(QUrl.fromLocalFile(str(path)))
+        self.spectrum.follow(lambda: self._player.position() if self._player else 0)
         self.play.setEnabled(True)
         self._start_analysis(path)
         return "ready"
@@ -455,6 +493,18 @@ class AudioPane(QWidget):
         self.position.setRange(0, value)
         self._show_clock(self.position.value())
 
+    def _sync_visual_controls(self) -> None:
+        self.visual_holder.setVisible(self.spectrum.ready
+                                      and self.spectrum.maximumHeight() > 0)
+
+    @Slot()
+    def _go_full_screen(self) -> None:
+        """Hand the scene a window of its own, until Escape."""
+        from attachment_widgets import FullScreenSpectrum
+
+        self._full = FullScreenSpectrum(self.spectrum, self)
+        self._full.showFullScreen()
+
     def _state(self, *_args) -> None:
         try:
             from PySide6.QtMultimedia import QMediaPlayer
@@ -464,6 +514,7 @@ class AudioPane(QWidget):
             playing = False
         self.play.setText("Pause" if playing else "Play")
         self.spectrum.set_playing(playing)
+        QTimer.singleShot(950, self._sync_visual_controls)
 
     def _error(self, *_args) -> None:
         self.title.setText(self.title.text() + "  (this file will not play)")
@@ -474,6 +525,11 @@ class AudioPane(QWidget):
         self.clock.setText(f"{_mmss(position)} / {_mmss(self.position.maximum())}")
 
     def stop(self) -> None:
+        full = getattr(self, "_full", None)
+        if full is not None:
+            full.close()
+            self._full = None
+        self.visual_holder.hide()
         self.spectrum.set_playing(False)
         self.spectrum.clear()
         self._decoder = None
@@ -585,9 +641,8 @@ class AttachmentViewer(QDialog):
         self._written: List[Path] = []
         self._last_dir = str(Path.home() / "Downloads")
         self._showing_metadata = False
-        #: One worker at a time, and what is waiting behind it.
-        self._worker = None
-        self._worker_row: Optional[int] = None
+        #: In flight, by row, and what is waiting behind them.
+        self._workers: dict = {}
         self._queue: List[int] = []
         #: the row whose arrival should switch the view.
         self._awaiting: Optional[int] = None
@@ -747,8 +802,7 @@ class AttachmentViewer(QDialog):
             return
         if then_show:
             self._awaiting = row
-        if row in self._queue or (self._worker is not None
-                                  and self._worker_row == row):
+        if row in self._queue or row in self._workers:
             return
         if then_show:
             self._queue.insert(0, row)
@@ -756,25 +810,27 @@ class AttachmentViewer(QDialog):
             self._queue.append(row)
         self._pump()
 
-    def _pump(self) -> None:
-        if self._worker is not None or not self._queue:
-            return
-        row = self._queue.pop(0)
-        if not 0 <= row < len(self._found) or self._found[row].data is not None:
-            self._pump()
-            return
-        thread = _FetchThread(self._fetch, row, self._found[row], self)
-        self._worker = thread
-        self._worker_row = row
-        thread.done.connect(self._fetched)
-        thread.failed.connect(self._fetch_failed)
-        thread.finished.connect(self._worker_done)
-        thread.start()
+    #: Never more than the connection pool holds. Each fetch checks a
+    #: connection out, so more workers than connections only queues inside
+    #: the source and gains nothing.
+    LANES = 3
 
-    @Slot()
-    def _worker_done(self) -> None:
-        self._worker = None
-        self._worker_row = None
+    def _pump(self) -> None:
+        while self._queue and len(self._workers) < self.LANES:
+            row = self._queue.pop(0)
+            if not 0 <= row < len(self._found):
+                continue
+            if self._found[row].data is not None or row in self._workers:
+                continue
+            thread = _FetchThread(self._fetch, row, self._found[row], self)
+            self._workers[row] = thread
+            thread.done.connect(self._fetched)
+            thread.failed.connect(self._fetch_failed)
+            thread.finished.connect(lambda r=row: self._worker_done(r))
+            thread.start()
+
+    def _worker_done(self, row: int) -> None:
+        self._workers.pop(row, None)
         self._pump()
 
     @Slot(int, object)
@@ -834,6 +890,10 @@ class AttachmentViewer(QDialog):
             self.stack.setCurrentWidget(self.blank)
             self.status.setText("")
             self._start_fetch(row, item, then_show=True)
+            # Start the neighbours now rather than when this one lands: the
+            # pool has lanes to spare and the second attachment is usually
+            # the next thing clicked.
+            self._prefetch_around(row)
             return
         self._render(row)
         self._prefetch_around(row)

@@ -21,11 +21,14 @@ from typing import List, Optional
 
 import math as _math
 
+import visualizers
+
 from PySide6.QtCore import (QEasingCurve, QPointF, QRectF, QSize, Qt,
                             QTimer, QVariantAnimation, Signal)
 from PySide6.QtGui import (QColor, QLinearGradient, QPainter, QPainterPath,
                            QPen, QRadialGradient)
-from PySide6.QtWidgets import QSlider, QStyle, QStyleOptionSlider, QWidget
+from PySide6.QtWidgets import (QLabel, QSlider, QStyle, QStyleOptionSlider,
+                               QVBoxLayout, QWidget)
 
 
 class SeekBar(QSlider):
@@ -121,99 +124,91 @@ class SeekBar(QSlider):
         self.blockSignals(False)
 
 
+class SpectrumState:
+    """Everything a scene is handed, and nothing it has to work out."""
+
+    __slots__ = ("levels", "peaks", "bass", "mid", "synth", "high", "hit",
+                 "hue", "phase", "scroll", "strobe", "sparks", "labels")
+
+    def __init__(self) -> None:
+        self.levels: List[float] = []
+        self.peaks: List[float] = []
+        self.bass = self.mid = self.synth = self.high = 0.0
+        self.hit = 0.0
+        self.hue = 0.0
+        self.phase = 0.0
+        self.scroll = 0.0
+        self.strobe = False
+        self.sparks: List[List[float]] = []
+        self.labels: List[str] = []
+
+
 class Spectrum(QWidget):
-    """A small window onto the music, with the parts of it kept separate.
+    """The equaliser, and whichever scene is drawing it.
 
-    Four things move independently, because one bar graph reacting to
-    everything reads as noise:
-
-    *The floor* is a perspective grid that recedes to a horizon. It scrolls
-    at a steady rate and its brightness follows the bass, so a kick lands as
-    a pulse down the whole plane. This is the nostalgic part and it is on
-    purpose.
-
-    *The bars* are the spectrum, drawn twice: once standing on the floor at
-    the horizon, once as a dimmer reflection in front of it. Perspective is a
-    single horizontal scale that shrinks with height, which is enough to read
-    as depth and costs one multiply.
-
-    *The orb* in the middle breathes with the mid band - where a voice sits -
-    so singing pushes it out and an instrumental passage lets it settle.
-
-    *The sparks* are triggered by transients in the top bands, which is where
-    cymbals and consonants live. They are a fixed pool of sixty, reused, so a
-    loud passage cannot allocate anything.
-
-    All of it draws from numbers worked out before playback started. The
-    paint loop interpolates and draws; it computes no spectra. Nothing runs
-    when nothing is playing.
+    The numbers are worked out once, before playback. This keeps the smoothed
+    state and hands it to a scene; changing theme swaps one object and costs
+    nothing. Nothing runs while nothing is playing.
     """
 
-    HEIGHT = 168
+    HEIGHT = 240
 
-    #: Which bands feed which element, as fractions of the band count.
-    BASS = (0.00, 0.14)
-    MID = (0.18, 0.52)
+    #: Which bands feed which aggregate, as fractions of the band count.
+    BASS = (0.00, 0.16)
+    MID = (0.20, 0.52)
     SYNTH = (0.52, 0.74)
     HIGH = (0.76, 1.00)
 
-    #: Sparks in the pool. Fixed, so a busy passage allocates nothing.
     SPARKS = 60
-
-    #: How long a paused track keeps its visualiser before it flows away.
     IDLE_SECONDS = 30
 
     def __init__(self) -> None:
         super().__init__()
         self.setMaximumHeight(0)
         self._frames: List = []
-        self._rate = 20
+        self._rate = 15
         self._position = 0
         self._level: List[float] = []
         self._peak: List[float] = []
-        self._bass = 0.0
-        self._mid = 0.0
-        self._synth = 0.0
-        self._high = 0.0
         self._last_high = 0.0
-        self._scroll = 0.0
-        self._phase = 0.0
-        # x, y, vx, vy, life - reused rather than reallocated.
+        self._last_bass = 0.0
+        self._state = SpectrumState()
+        self._scene = visualizers.SCENES[0]
         self._sparks = [[0.0, 0.0, 0.0, 0.0, 0.0] for _ in range(self.SPARKS)]
         self._next_spark = 0
         self._timer = QTimer(self)
-        self._timer.setInterval(33)          # ~30fps
+        self._timer.setInterval(33)
         self._timer.timeout.connect(self._tick)
 
-        #: 0 hidden, 1 fully out. Everything drawn is scaled by this, so the
-        #: arrival and the departure are the same code read in two
-        #: directions.
         self._reveal = 0.0
         self._idling = False
         self._drift = 0.0
-        #: Playing was asked for, whether or not there was anything to show.
         self._wanted = False
-        self.setMaximumHeight(0)
+        self._source = None
 
         self._flow = QVariantAnimation(self)
         self._flow.setDuration(900)
         self._flow.setEasingCurve(QEasingCurve.Type.InOutCubic)
         self._flow.valueChanged.connect(self._reveal_changed)
 
-        #: Paused, and counting down to going away.
         self._away = QTimer(self)
         self._away.setSingleShot(True)
         self._away.setInterval(self.IDLE_SECONDS * 1000)
         self._away.timeout.connect(self.conceal)
 
-    # -- input ------------------------------------------------------------
-    def set_frames(self, frames: List, rate: int) -> None:
-        """The analysis, which finishes a moment after playback starts.
+    # -- what it shows ----------------------------------------------------
+    def set_scene(self, scene) -> None:
+        self._scene = scene
+        self.update()
 
-        Whoever presses play does it before this arrives, so the request to
-        appear is remembered and acted on here. Without that the spectrum
-        waits for a second press that never comes.
-        """
+    def set_strobe(self, on: bool) -> None:
+        self._state.strobe = bool(on)
+
+    def set_labels(self, labels) -> None:
+        self._state.labels = list(labels or [])
+
+    def set_frames(self, frames: List, rate: int) -> None:
+        """The analysis, which lands a moment after playback starts."""
         self._frames = frames or []
         self._rate = max(1, rate)
         width = len(self._frames[0]) if self._frames else 0
@@ -226,8 +221,17 @@ class Spectrum(QWidget):
     def set_position(self, milliseconds: int) -> None:
         self._position = max(0, milliseconds)
 
+    def follow(self, source) -> None:
+        """Where to read the position, rather than waiting to be told.
+
+        positionChanged fires only when the position changes, and not at all
+        until the player has produced samples - so the display sat on frame
+        zero, which is the silence at the top of a track. It looked dead
+        until the track was paused and skipped, which forced a report out.
+        """
+        self._source = source
+
     def set_playing(self, playing: bool) -> None:
-        """Arrive on play, idle on pause, leave after a while of neither."""
         self._wanted = bool(playing)
         if playing and self._frames:
             self._idling = False
@@ -236,13 +240,33 @@ class Spectrum(QWidget):
             self._timer.start()
             return
         if self._reveal > 0.0 and self._frames:
-            # Keep moving, quietly, and go if nothing happens.
             self._idling = True
             self._timer.start()
             self._away.start()
             return
         self._timer.stop()
         self.update()
+
+    def clear(self) -> None:
+        self._flow.stop()
+        self._away.stop()
+        self._reveal = 0.0
+        self._idling = False
+        self._wanted = False
+        self.setMinimumHeight(0)
+        self.setMaximumHeight(0)
+        self._timer.stop()
+        self._frames = []
+        self._level = []
+        self._peak = []
+        for spark in self._sparks:
+            spark[4] = 0.0
+        self.updateGeometry()
+        self.update()
+
+    @property
+    def ready(self) -> bool:
+        return bool(self._frames)
 
     # -- arriving and leaving ---------------------------------------------
     def reveal(self) -> None:
@@ -263,10 +287,9 @@ class Spectrum(QWidget):
     def _reveal_changed(self, value) -> None:
         self._reveal = max(0.0, min(1.0, float(value)))
         height = int(self.HEIGHT * self._reveal)
-        # Both, and a sizeHint to match. A maximum alone leaves the minimum
-        # at zero and the hint at -1, so a layout hands out whatever is
-        # spare - which in a full pane is nothing, and the widget is there
-        # with no height to draw in.
+        # Minimum, maximum and both hints together. A maximum on its own
+        # leaves the minimum at zero and the hint at -1, so a layout hands
+        # out whatever is spare - which in a full pane is nothing.
         self.setMinimumHeight(height)
         self.setMaximumHeight(height)
         if self._reveal <= 0.001:
@@ -276,32 +299,12 @@ class Spectrum(QWidget):
         self.update()
 
     def sizeHint(self) -> QSize:      # noqa: N802 - Qt's name
-        return QSize(320, int(self.HEIGHT * self._reveal))
+        return QSize(420, int(self.HEIGHT * self._reveal))
 
     def minimumSizeHint(self) -> QSize:      # noqa: N802 - Qt's name
         return QSize(0, int(self.HEIGHT * self._reveal))
 
-    def clear(self) -> None:
-        self._flow.stop()
-        self._away.stop()
-        self._reveal = 0.0
-        self._idling = False
-        self.setMaximumHeight(0)
-        self._timer.stop()
-        self._frames = []
-        self._level = []
-        self._peak = []
-        self._bass = self._mid = self._synth = self._high = 0.0
-        self._wanted = False
-        for spark in self._sparks:
-            spark[4] = 0.0
-        self.update()
-
-    @property
-    def ready(self) -> bool:
-        return bool(self._frames)
-
-    # -- animation --------------------------------------------------------
+    # -- the numbers ------------------------------------------------------
     def _row(self) -> Optional[List[float]]:
         if not self._frames:
             return None
@@ -316,62 +319,70 @@ class Spectrum(QWidget):
             return [a + (b - a) * blend for a, b in zip(first, second)]
         return list(first)
 
+    def _idle_row(self) -> List[float]:
+        count = len(self._level) or 24
+        return [0.05 + 0.09 * (1.0 + _math.sin(self._drift * 2.1 + i * 0.44)) / 2.0
+                * (0.35 + 0.65 * _math.sin(self._drift * 0.7 + i * 0.13) ** 2)
+                for i in range(count)]
+
     def _band(self, row: List[float], span) -> float:
         count = len(row)
         low = int(span[0] * count)
         high = max(low + 1, int(span[1] * count))
         return sum(row[low:high]) / max(1, high - low)
 
-    def _idle_row(self) -> List[float]:
-        """A slow wave travelling across the bands.
-
-        Paused is not stopped. Something that freezes mid-song looks broken;
-        something that breathes looks like it is waiting.
-        """
-        count = len(self._level) or 32
-        return [0.06 + 0.10 * (1.0 + _math.sin(self._drift * 2.2 + i * 0.42)) / 2.0
-                * (0.35 + 0.65 * _math.sin(self._drift * 0.7 + i * 0.13) ** 2)
-                for i in range(count)]
-
     def _tick(self) -> None:
+        if self._source is not None and not self._idling:
+            try:
+                self._position = max(0, int(self._source()))
+            except Exception:      # noqa: BLE001 - a dead player is not fatal
+                pass
         self._drift += 0.035
         row = self._idle_row() if self._idling else self._row()
         if row is None:
             self.update()
             return
+
         for i, value in enumerate(row):
             if i >= len(self._level):
                 break
             current = self._level[i]
-            self._level[i] = value if value > current else current * 0.80 + value * 0.20
+            self._level[i] = value if value > current else current * 0.78 + value * 0.22
             if self._level[i] >= self._peak[i]:
                 self._peak[i] = self._level[i]
             else:
-                self._peak[i] = max(self._level[i], self._peak[i] - 0.014)
+                self._peak[i] = max(self._level[i], self._peak[i] - 0.016)
 
+        state = self._state
         bass = self._band(row, self.BASS)
-        mid = self._band(row, self.MID)
-        synth = self._band(row, self.SYNTH)
+        state.bass = state.bass * 0.70 + bass * 0.30
+        state.mid = state.mid * 0.80 + self._band(row, self.MID) * 0.20
+        state.synth = state.synth * 0.88 + self._band(row, self.SYNTH) * 0.12
         high = self._band(row, self.HIGH)
-        self._bass = self._bass * 0.72 + bass * 0.28
-        self._mid = self._mid * 0.80 + mid * 0.20
-        # Slower than the rest: a pad should swell, not flicker.
-        self._synth = self._synth * 0.88 + synth * 0.12
-        self._high = self._high * 0.55 + high * 0.45
+        state.high = state.high * 0.55 + high * 0.45
 
-        # A transient in the top bands, not loudness: cymbals are sudden.
-        if high - self._last_high > 0.10:
+        # Transients, not loudness: a cymbal is sudden and so is a kick.
+        if high - self._last_high > 0.09:
             self._spawn(min(4, int((high - self._last_high) * 22)))
         self._last_high = high
+        state.hit = max(0.0, state.hit - 0.16)
+        if bass - self._last_bass > 0.10:
+            state.hit = 1.0
+        self._last_bass = bass
 
-        self._scroll = (self._scroll + 0.012 + self._bass * 0.05) % 1.0
-        self._phase += 0.0045
+        state.scroll = (state.scroll + 0.012 + state.bass * 0.05) % 1.0
+        state.phase += 0.0045
+        state.hue = (state.phase * 0.5) % 1.0
+        state.levels = self._level
+        state.peaks = self._peak
+        state.sparks = self._sparks
+
         for spark in self._sparks:
             if spark[4] <= 0.0:
                 continue
             spark[0] += spark[2]
             spark[1] += spark[3]
-            spark[3] += 0.045          # a little gravity
+            spark[3] += 0.045
             spark[4] -= 0.028
         self.update()
 
@@ -380,10 +391,11 @@ class Spectrum(QWidget):
         for _ in range(count):
             spark = self._sparks[self._next_spark]
             self._next_spark = (self._next_spark + 1) % self.SPARKS
-            spark[0] = width * (0.5 + (self._phase * 7.3 % 1.0 - 0.5) * 0.8)
-            spark[1] = self.HEIGHT * 0.52
-            spark[2] = (self._phase * 11.7 % 1.0 - 0.5) * 3.4
-            spark[3] = -1.6 - (self._phase * 5.1 % 1.0) * 1.4
+            phase = self._state.phase
+            spark[0] = width * (0.5 + (phase * 7.3 % 1.0 - 0.5) * 0.8)
+            spark[1] = self.height() * 0.52
+            spark[2] = (phase * 11.7 % 1.0 - 0.5) * 3.4
+            spark[3] = -1.6 - (phase * 5.1 % 1.0) * 1.4
             spark[4] = 1.0
 
     # -- painting ---------------------------------------------------------
@@ -391,144 +403,72 @@ class Spectrum(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         rect = self.rect()
-        width, height = rect.width(), rect.height()
-        horizon = height * 0.52
-
-        painter.fillRect(rect, QColor(8, 6, 18))
-
         if self._reveal <= 0.001:
             return
         if self._reveal < 0.999:
-            # Rise into place and fade, rather than appearing whole.
             painter.setOpacity(self._reveal)
-            painter.translate(0.0, (1.0 - self._reveal) * height * 0.45)
-
+            painter.translate(0.0, (1.0 - self._reveal) * rect.height() * 0.45)
         if not self._level:
-            painter.setPen(QPen(QColor(150, 150, 170, 70)))
-            painter.drawLine(0, int(horizon), width, int(horizon))
+            painter.fillRect(rect, QColor(8, 6, 18))
             painter.setPen(QPen(QColor(150, 150, 170, 120)))
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter,
                              "the spectrum appears when something is playing")
             return
+        self._scene.paint(painter, rect, self._state)
 
-        hue = (self._phase * 0.5) % 1.0
-        self._paint_sky(painter, width, horizon, hue)
-        self._paint_floor(painter, width, height, horizon, hue)
-        self._paint_bars(painter, width, horizon, hue)
-        self._paint_ribbons(painter, width, horizon, hue)
-        self._paint_orb(painter, width, horizon, hue)
-        self._paint_sparks(painter, hue)
 
-    def _paint_sky(self, painter, width, horizon, hue) -> None:
-        sky = QLinearGradient(0.0, 0.0, 0.0, horizon)
-        sky.setColorAt(0.0, QColor(10, 8, 26))
-        sky.setColorAt(1.0, QColor.fromHsvF((hue + 0.72) % 1.0, 0.85, 0.30, 1.0))
-        painter.fillRect(QRectF(0, 0, width, horizon), sky)
-        # A sun on the horizon, swelling with the low end.
-        radius = horizon * (0.42 + self._bass * 0.22)
-        glow = QRadialGradient(QPointF(width / 2.0, horizon), radius)
-        glow.setColorAt(0.0, QColor.fromHsvF(hue, 0.55, 1.0, 0.55 + self._bass * 0.3))
-        glow.setColorAt(1.0, QColor(0, 0, 0, 0))
-        painter.fillRect(QRectF(0, 0, width, horizon), glow)
+class FullScreenSpectrum(QWidget):
+    """The scene on its own, filling the screen, until Escape.
 
-    def _paint_floor(self, painter, width, height, horizon, hue) -> None:
-        """A grid in perspective. Lines, not polygons: cheap and it reads."""
-        depth = height - horizon
-        colour = QColor.fromHsvF(hue, 0.7, 1.0, 0.30 + self._bass * 0.45)
-        painter.setPen(QPen(colour, 1.0))
-        # Receding horizontals, spaced so they bunch towards the horizon.
-        for step in range(1, 13):
-            t = ((step + self._scroll) / 13.0) ** 2.4
-            y = horizon + t * depth
-            painter.drawLine(QPointF(0, y), QPointF(width, y))
-        # Verticals converging on the middle.
-        middle = width / 2.0
-        for index in range(-7, 8):
-            x = middle + index * width * 0.16
-            painter.drawLine(QPointF(middle + index * 6.0, horizon),
-                             QPointF(x, height))
+    It borrows the running Spectrum rather than building a second one, so
+    there is one analysis, one timer and one set of smoothed values however
+    many windows are looking at them. On the way out the widget goes back
+    where it came from.
+    """
 
-    def _paint_bars(self, painter, width, horizon, hue) -> None:
-        count = len(self._level)
-        if not count:
+    def __init__(self, spectrum: Spectrum, owner=None) -> None:
+        super().__init__(None)
+        self.setWindowTitle("Visualiser")
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self._spectrum = spectrum
+        self._owner = owner
+        self._home = spectrum.parentWidget()
+        self._layout_index = None
+
+        parent_layout = self._home.layout() if self._home else None
+        if parent_layout is not None:
+            self._layout_index = parent_layout.indexOf(spectrum)
+
+        self._min, self._max = spectrum.minimumHeight(), spectrum.maximumHeight()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        spectrum.setMinimumHeight(0)
+        spectrum.setMaximumHeight(16_777_215)
+        layout.addWidget(spectrum)
+
+        hint = QLabel("Escape to return")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setStyleSheet("color: rgba(255,255,255,120); padding: 6px;")
+        layout.addWidget(hint)
+
+    def keyPressEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        if event.key() in (Qt.Key.Key_Escape, Qt.Key.Key_F, Qt.Key.Key_Space):
+            self.close()
             return
-        span = width * 0.86
-        left = (width - span) / 2.0
-        gap = 2.0
-        bar = max(1.0, (span - gap * (count - 1)) / count)
-        ceiling = horizon - 10
-        for index, value in enumerate(self._level):
-            x = left + index * (bar + gap)
-            tall = value * ceiling * 0.82
-            shade = ((index / count) * 0.42 + hue) % 1.0
-            top = QColor.fromHsvF(shade, 0.62, 1.0, 0.96)
-            base = QColor.fromHsvF((shade + 0.1) % 1.0, 0.9, 0.85, 0.9)
-            gradient = QLinearGradient(0.0, horizon - tall, 0.0, horizon)
-            gradient.setColorAt(0.0, top)
-            gradient.setColorAt(1.0, base)
-            painter.fillRect(QRectF(x, horizon - tall, bar, tall), gradient)
-            # Its reflection, squashed and faded, standing on the floor.
-            mirror = QLinearGradient(0.0, horizon, 0.0, horizon + tall * 0.42)
-            faded = QColor(base)
-            faded.setAlphaF(0.28)
-            mirror.setColorAt(0.0, faded)
-            mirror.setColorAt(1.0, QColor(0, 0, 0, 0))
-            painter.fillRect(QRectF(x, horizon, bar, tall * 0.42), mirror)
-            cap = self._peak[index] * ceiling * 0.82
-            if cap > 3:
-                painter.fillRect(QRectF(x, horizon - cap - 2.0, bar, 2.0),
-                                 QColor.fromHsvF(shade, 0.15, 1.0, 0.9))
+        super().keyPressEvent(event)
 
-    def _paint_ribbons(self, painter, width, horizon, hue) -> None:
-        """The synth band: slow ribbons undulating across the sky.
-
-        Three polylines at twenty points each. They swell with the upper
-        mids, which is where a pad or a lead sits, and they keep moving in
-        the idle state so a paused track still looks alive.
-        """
-        strength = self._synth
-        if strength < 0.02:
-            return
-        points = 20
-        for ribbon in range(3):
-            amplitude = horizon * (0.05 + strength * 0.16) * (1.0 - ribbon * 0.22)
-            middle = horizon * (0.28 + ribbon * 0.13)
-            shade = (hue + 0.52 + ribbon * 0.06) % 1.0
-            colour = QColor.fromHsvF(shade, 0.55, 1.0,
-                                     (0.22 + strength * 0.45) * (1.0 - ribbon * 0.25))
-            painter.setPen(QPen(colour, 2.0 - ribbon * 0.4))
-            path = QPainterPath()
-            for step in range(points + 1):
-                t = step / points
-                x = t * width
-                y = middle + _math.sin(
-                    t * 6.0 + self._phase * 9.0 + ribbon * 1.7) * amplitude
-                if step == 0:
-                    path.moveTo(QPointF(x, y))
-                else:
-                    path.lineTo(QPointF(x, y))
-            painter.drawPath(path)
-
-    def _paint_orb(self, painter, width, horizon, hue) -> None:
-        """The mid band, where a voice sits."""
-        size = 8.0 + self._mid * 34.0
-        centre = QPointF(width / 2.0, horizon - size * 0.6)
-        glow = QRadialGradient(centre, size * 1.9)
-        glow.setColorAt(0.0, QColor.fromHsvF((hue + 0.45) % 1.0, 0.35, 1.0,
-                                             0.55 + self._mid * 0.4))
-        glow.setColorAt(0.55, QColor.fromHsvF((hue + 0.45) % 1.0, 0.8, 1.0, 0.22))
-        glow.setColorAt(1.0, QColor(0, 0, 0, 0))
-        painter.setBrush(glow)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(centre, size * 1.9, size * 1.9)
-
-    def _paint_sparks(self, painter, hue) -> None:
-        painter.setPen(Qt.PenStyle.NoPen)
-        for spark in self._sparks:
-            life = spark[4]
-            if life <= 0.0:
-                continue
-            colour = QColor.fromHsvF((hue + 0.15) % 1.0, 0.18, 1.0, life * 0.9)
-            painter.setBrush(colour)
-            radius = 1.2 + life * 1.8
-            painter.drawEllipse(QPointF(spark[0], spark[1]), radius, radius)
+    def closeEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        """Put the spectrum back exactly where it was."""
+        spectrum = self._spectrum
+        spectrum.setParent(None)
+        spectrum.setMinimumHeight(self._min)
+        spectrum.setMaximumHeight(self._max)
+        parent_layout = self._home.layout() if self._home else None
+        if parent_layout is not None and self._layout_index is not None:
+            parent_layout.insertWidget(self._layout_index, spectrum)
+        elif self._home is not None:
+            spectrum.setParent(self._home)
+        spectrum.show()
+        if self._owner is not None:
+            self._owner._full = None
+        super().closeEvent(event)

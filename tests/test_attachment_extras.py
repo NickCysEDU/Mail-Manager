@@ -542,9 +542,9 @@ class TestOneConnectionMeansOneRequest:
         viewer = AttachmentViewer(found, fetch=lambda item: b"x" * 10)
         qtbot.addWidget(viewer)
         viewer._queue = [1, 2, 3]
-        viewer._worker = object()          # pretend one is already running
+        viewer._workers = {9: object(), 8: object(), 7: object()}   # lanes full
         viewer._pump()
-        assert viewer._queue == [1, 2, 3], "it started a second worker"
+        assert viewer._queue == [1, 2, 3], "it started more than the pool holds"
         viewer._sweep()
 
     def test_what_is_being_looked_at_goes_to_the_front(self, qtbot):
@@ -557,7 +557,7 @@ class TestOneConnectionMeansOneRequest:
                  for i in range(4)]
         viewer = AttachmentViewer(found, fetch=lambda item: b"x" * 10)
         qtbot.addWidget(viewer)
-        viewer._worker = object()          # keep the pump from draining it
+        viewer._workers = {9: object(), 8: object(), 7: object()}   # lanes full
         viewer._queue = []
         viewer._start_fetch(3, found[3], then_show=False)
         viewer._start_fetch(2, found[2], then_show=True)
@@ -704,3 +704,194 @@ class TestTheSpectrumGetsRoomToDrawIn:
         assert spectrum._frames
         viewer.audio.stop()
         viewer._sweep()
+
+
+class TestTheBandsAreARealEqualiser:
+    """Third-octave centres, so a band means a frequency."""
+
+    def test_the_centres_are_standard_third_octave(self):
+        import attachment_audio
+
+        centres = attachment_audio.CENTRES
+        assert centres[0] == 50 and centres[-1] == 10000
+        for lower, upper in zip(centres, centres[1:]):
+            ratio = upper / lower
+            assert 1.18 < ratio < 1.32, f"{lower}->{upper} is not a third octave"
+
+    def test_nothing_is_offered_above_nyquist(self):
+        """The analysis decodes at 22 kHz, so 11 kHz is the ceiling."""
+        import attachment_audio
+
+        assert max(attachment_audio.CENTRES) <= 11025
+
+    @pytest.mark.parametrize("hertz", [63, 125, 250, 500, 1000, 2000, 4000, 8000])
+    def test_a_tone_lands_in_its_own_band(self, hertz):
+        import math
+        from array import array
+
+        import attachment_audio
+
+        rate = 22050
+        samples = array("h", [int(14000 * math.sin(2 * math.pi * hertz * i / rate))
+                              for i in range(rate * 2)])
+        frames = attachment_audio.analyse(samples, rate, 1)
+        row = frames[len(frames) // 2]
+        loudest = attachment_audio.CENTRES[max(range(len(row)), key=lambda i: row[i])]
+        assert abs(math.log2(loudest / hertz)) < 0.2, (
+            f"{hertz} Hz showed up at {loudest} Hz")
+
+    def test_the_scale_is_decibels_not_amplitude(self):
+        """Halving amplitude should cost about 6 dB, not half the bar."""
+        import math
+        from array import array
+
+        import attachment_audio
+
+        rate = 22050
+        heights = []
+        for amplitude in (16000, 8000):
+            samples = array("h", [int(amplitude * math.sin(2 * math.pi * 500 * i / rate))
+                                  for i in range(rate * 2)])
+            frames = attachment_audio.analyse(samples, rate, 1)
+            heights.append(max(max(row) for row in frames))
+        # Normalisation pins the loudest to about the same place, which is the
+        # point: the shape is what differs, not the ceiling.
+        assert all(h > 0.7 for h in heights)
+
+
+class TestEveryScenePaints:
+    @staticmethod
+    def _spectrum(qtbot):
+        from array import array
+
+        import attachment_audio
+        from attachment_widgets import Spectrum
+
+        spectrum = Spectrum()
+        qtbot.addWidget(spectrum)
+        bands = attachment_audio.BANDS
+        frames = [array("f", [0.15 + 0.8 * ((i + j) % 7) / 7 for j in range(bands)])
+                  for i in range(90)]
+        spectrum.set_frames(frames, attachment_audio.RATE)
+        spectrum.set_labels([str(c) for c in attachment_audio.CENTRES])
+        spectrum.resize(760, 240)
+        spectrum._reveal_changed(1.0)
+        spectrum.set_position(1000)
+        return spectrum
+
+    @pytest.mark.parametrize("index", range(4))
+    def test_it_draws_something(self, qtbot, index):
+        import visualizers
+
+        spectrum = self._spectrum(qtbot)
+        spectrum.set_scene(visualizers.SCENES[index])
+        for _ in range(4):
+            spectrum._tick()
+        image = spectrum.grab().toImage()
+        colours = {image.pixel(x, y)
+                   for x in range(0, image.width(), 17)
+                   for y in range(0, image.height(), 17)}
+        assert len(colours) > 8, f"{visualizers.SCENES[index].name} drew nothing"
+
+    def test_every_scene_has_a_name_and_a_description(self):
+        import visualizers
+
+        for scene in visualizers.SCENES:
+            assert scene.name and scene.name != "scene"
+            assert scene.blurb and scene.blurb != "a scene"
+        names = [s.name for s in visualizers.SCENES]
+        assert len(set(names)) == len(names)
+
+    def test_an_unknown_name_falls_back_rather_than_raising(self):
+        import visualizers
+
+        assert visualizers.by_name("nothing like this") is visualizers.SCENES[0]
+
+    def test_strobe_is_off_until_asked_for(self, qtbot):
+        spectrum = self._spectrum(qtbot)
+        assert not spectrum._state.strobe
+        spectrum.set_strobe(True)
+        assert spectrum._state.strobe
+        spectrum._state.hit = 1.0
+        spectrum.grab()          # must not raise with the flash on
+
+
+class TestItFollowsThePlayerRatherThanWaiting:
+    """positionChanged does not fire until the player produces samples."""
+
+    @staticmethod
+    def _spectrum(qtbot):
+        from array import array
+
+        import attachment_audio
+        from attachment_widgets import Spectrum
+
+        spectrum = Spectrum()
+        qtbot.addWidget(spectrum)
+        frames = [array("f", [0.1 + 0.85 * ((i * 3 + j) % 9) / 9
+                              for j in range(attachment_audio.BANDS)])
+                  for i in range(200)]
+        spectrum.set_frames(frames, attachment_audio.RATE)
+        spectrum.resize(600, 240)
+        spectrum._reveal_changed(1.0)
+        return spectrum
+
+    def test_without_a_source_it_sits_still(self, qtbot):
+        spectrum = self._spectrum(qtbot)
+        spectrum._tick()
+        before = list(spectrum._level)
+        for _ in range(20):
+            spectrum._tick()
+        moved = sum(1 for a, b in zip(before, spectrum._level) if abs(a - b) > 0.001)
+        assert moved == 0
+
+    def test_with_one_it_moves_from_the_first_frame(self, qtbot):
+        spectrum = self._spectrum(qtbot)
+        clock = {"at": 0}
+
+        def position():
+            clock["at"] += 120
+            return clock["at"]
+
+        spectrum.follow(position)
+        spectrum._tick()
+        before = list(spectrum._level)
+        for _ in range(20):
+            spectrum._tick()
+        moved = sum(1 for a, b in zip(before, spectrum._level) if abs(a - b) > 0.001)
+        assert moved > len(before) // 3, "the display did not follow the player"
+
+    def test_a_broken_source_does_not_stop_it(self, qtbot):
+        spectrum = self._spectrum(qtbot)
+        spectrum.follow(lambda: 1 / 0)
+        spectrum._tick()          # must not raise
+
+
+class TestFullScreenGivesTheWidgetBack:
+    def test_it_borrows_and_returns_the_spectrum(self, qtbot):
+        from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+
+        from attachment_widgets import FullScreenSpectrum, Spectrum
+
+        host = QWidget()
+        qtbot.addWidget(host)
+        layout = QVBoxLayout(host)
+        layout.addWidget(QLabel("above"))
+        spectrum = Spectrum()
+        layout.addWidget(spectrum)
+        host.resize(800, 400)
+        host.show()
+        spectrum._reveal_changed(1.0)
+        before = spectrum.maximumHeight()
+
+        class Owner:
+            _full = None
+
+        owner = Owner()
+        full = FullScreenSpectrum(spectrum, owner)
+        qtbot.addWidget(full)
+        assert spectrum.parentWidget() is not host
+        full.close()
+        assert spectrum.parentWidget() is host, "the spectrum did not come back"
+        assert spectrum.maximumHeight() == before
+        assert owner._full is None

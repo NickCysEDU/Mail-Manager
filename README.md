@@ -367,12 +367,19 @@ Space plays and pauses, the arrow keys move between attachments and scrub
 five seconds, Cmd-S saves, Cmd-I is Info. The window sits beside the main one
 rather than on top of it, so the app can still be quit while it is open.
 
-Press play on a sound file and a spectrum rises into view: a perspective grid
-that pulses with the bass, bars with reflections standing on it, ribbons
-across the sky following the synths, an orb that breathes with the vocals,
-and sparks thrown by the cymbals. Pause and it keeps breathing; leave it
-paused and it flows away after thirty seconds. It costs about two
-milliseconds a frame and nothing at all when nothing is playing.
+Press play on a sound file and a visualiser rises into view. The bars are a
+real equaliser: twenty-four third-octave bands from 50 Hz to 10 kHz, on a
+decibel scale, normalised to the track so a quiet recording fills the display
+like a loud one. A tone lands in its own band, and there is a test that says so.
+
+Four themes to pick from - a vaporwave city whose skyline is the equaliser, a
+neon tunnel, an oscilloscope, and the bars on their own with their
+frequencies written under them. Strobe is a checkbox, off by default. Full
+screen is a button, Escape comes back.
+
+Pause and it keeps breathing; leave it and it flows away after thirty
+seconds. Between a third of a millisecond and three and a half a frame
+depending on the theme, and nothing at all when nothing is playing.
 
 **Only the part you open is downloaded.** Listing costs about a fifth of a
 second; a six megabyte message used to cost six megabytes to see the first
@@ -512,7 +519,7 @@ notice, and contribution terms.
 
 ```bash
 ./dev demo      # the app with sample mail, no setup
-./dev test      # 2,727 tests, about three minutes on four workers
+./dev test      # 2,749 tests, about three minutes on four workers
 ./dev eval      # sorter accuracy (needs a labelled set of your own)
 ./dev fake      # the whole pipeline in the terminal, offline
 ```
