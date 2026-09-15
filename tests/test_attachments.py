@@ -451,8 +451,15 @@ class TestTheWorkerUsesTheRealAccountFields:
                 asked["host"] = host
                 asked["port"] = port
 
-            def session(self, address, password):
+            def connect(self, address, password):
                 asked["address"] = address
+                asked["password"] = password
+
+            def select(self, mailbox, readonly=True):
+                asked["mailbox"] = mailbox
+
+            def describe_attachments(self, uid):
+                asked["uid"] = uid
                 raise RuntimeError("stop here, the point is already made")
 
         monkeypatch.setattr(workers, "IMAPEngine", FakeEngine)
@@ -471,6 +478,8 @@ class TestTheWorkerUsesTheRealAccountFields:
         assert asked.get("port") == 993
         assert asked.get("address") == "someone@example.example", (
             "the worker read the wrong field off Account")
+        assert asked.get("mailbox") == "INBOX"
+        assert asked.get("uid") == "1"
         assert failures, "a failure should be reported, not swallowed"
         # The first version of this test only asked that *a* failure arrived,
         # and passed while the worker was raising AttributeError on a field

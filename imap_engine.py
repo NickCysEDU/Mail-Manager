@@ -943,6 +943,64 @@ class IMAPEngine:
                 return int(found.group(1))
         return 0
 
+    def describe_attachments(self, uid: str) -> List["Attachment"]:
+        """What is attached, without downloading any of it.
+
+        One FETCH of BODYSTRUCTURE. The window can open on this alone, which
+        is the difference between a list appearing at once and waiting for
+        six megabytes of somebody's holiday photographs first.
+        """
+        import attachments as _attachments
+
+        conn = self._require_conn()
+        data = self._cmd("Listing attachments", conn.uid, "FETCH", str(uid),
+                         "(BODYSTRUCTURE)")
+        blob = b""
+        for item in data or ():
+            blob += item if isinstance(item, bytes) else (
+                item[0] if isinstance(item, tuple) and item else b"")
+        found = []
+        for part in parse_bodystructure(blob):
+            name = part.get("name") or ""
+            content_type = (part.get("content_type") or "").lower()
+            disposition = part.get("disposition") or ""
+            if content_type.startswith("multipart/"):
+                continue
+            if not name and disposition != "attachment" and not part.get("cid"):
+                continue
+            if not name:
+                name = part.get("cid") or f"part-{part['part']}"
+            found.append(_attachments.Attachment(
+                part=part["part"], name=name, content_type=content_type,
+                encoding=part.get("encoding", ""), size=int(part.get("size") or 0),
+                cid=part.get("cid", ""), inline=(disposition == "inline"),
+                data=None))
+        return found
+
+    def fetch_part(self, uid: str, part: str, encoding: str = "",
+                   limit: int = 0) -> bytes:
+        """One MIME section, decoded. Nothing else comes down the wire.
+
+        This is what makes opening an attachment quick: asking for section 3
+        of a message fetches that section, not the message. A six megabyte
+        mail with three attachments used to cost six megabytes to look at any
+        one of them.
+        """
+        import attachments as _attachments
+
+        ceiling = int(limit) if limit else _attachments.MAX_FETCH
+        ceiling = max(1, min(ceiling, _attachments.MAX_FETCH))
+        conn = self._require_conn()
+        item = f"BODY.PEEK[{part}]<0.{ceiling}>"
+        data = self._cmd("Fetching attachment", conn.uid, "FETCH", str(uid),
+                         f"({item})")
+        raw = b""
+        for entry in data or ():
+            if isinstance(entry, tuple) and len(entry) >= 2 and entry[1]:
+                raw = entry[1]
+                break
+        return _decode_part(raw, encoding)
+
     def fetch_attachments(self, uid: str, limit: int = 0) -> List["Attachment"]:
         """Every attached part of one message, with its bytes.
 
@@ -1635,3 +1693,16 @@ def attachment_names(parts) -> tuple:
         if shown not in names:
             names.append(shown)
     return tuple(names)
+
+
+def _decode_part(raw: bytes, encoding: str) -> bytes:
+    """Undo the transfer encoding a part was sent in."""
+    encoding = (encoding or "").strip().lower()
+    if encoding == "base64":
+        import base64
+        # Servers wrap base64; ignore anything that is not alphabet.
+        return base64.b64decode(re.sub(rb"[^A-Za-z0-9+/=]", b"", raw), validate=False)
+    if encoding in ("quoted-printable", "quotedprintable"):
+        import quopri
+        return quopri.decodestring(raw)
+    return raw

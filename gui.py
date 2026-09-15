@@ -3287,12 +3287,17 @@ class MainWindow(QMainWindow):
         self._set_status(f"Fetching what is attached to \u201c{subject[:40]}\u201d...")
         worker = AttachmentWorker(account, password, item.email, self)
 
-        def show(found) -> None:
-            if not found:
+        def show(source) -> None:
+            if not source.found:
                 self._set_status("Nothing came back for that message.")
+                source.close()
                 return
             self._set_status("")
-            AttachmentViewer(found, subject, self).exec()
+            try:
+                AttachmentViewer(source.found, subject, self,
+                                 fetch=source.fetch).exec()
+            finally:
+                source.close()
 
         def failed(detail: str) -> None:
             self._set_status("")

@@ -1288,17 +1288,16 @@ def required_folders(items: Sequence[TriageItem], plan: Optional[FolderPlan]) ->
 
 
 class AttachmentWorker(_BaseWorker):
-    """Fetch one message's attached parts without blocking the window.
+    """List what is attached to one message, without downloading any of it.
 
-    A scan keeps only the first part of each message, so the bytes of an
-    attachment are never already in hand. This asks the server for that one
-    message, with BODY.PEEK so it stays unread, and a ceiling so a fifty
-    megabyte video cannot be started by accident.
+    One FETCH of BODYSTRUCTURE. The window opens on that alone - a fraction
+    of a second rather than however long six megabytes takes - and parts are
+    fetched one at a time, by AttachmentSource, as somebody looks at them.
     """
 
-    ready = Signal(object)      # List[attachments.Attachment]
+    ready = Signal(object)      # AttachmentSource
     failed = Signal(str)
-    task_name = "attachment fetch"
+    task_name = "attachment listing"
 
     def __init__(self, account, password: str, message, parent=None,
                  limit: int = 0) -> None:
@@ -1309,22 +1308,36 @@ class AttachmentWorker(_BaseWorker):
         self.limit = limit
 
     def run(self) -> None:
-        import attachments as _attachments
-
         try:
             engine = IMAPEngine(host=self.account.host, port=self.account.port)
-            with engine.session(self.account.address, self.password):
-                engine.select(getattr(self.message, "source_folder", "") or "INBOX",
-                              readonly=True)
-                size = engine.message_size(self.message.uid)
-                ceiling = self.limit or _attachments.MAX_FETCH
-                if size and size > ceiling:
-                    self.failed.emit(
-                        f"That message is {size // (1024 * 1024)} MB, which is "
-                        "larger than this will download in one go.")
-                    return
-                found = engine.fetch_attachments(self.message.uid, limit=ceiling)
+            engine.connect(self.account.address, self.password)
+            engine.select(getattr(self.message, "source_folder", "") or "INBOX",
+                          readonly=True)
+            found = engine.describe_attachments(self.message.uid)
         except Exception as exc:      # noqa: BLE001 - reported to the window
-            self.failed.emit(f"Could not fetch the attachments: {exc}")
+            self.failed.emit(f"Could not list the attachments: {exc}")
             return
-        self.ready.emit([a for a in found if not a.signature])
+        keep = [a for a in found if not a.signature]
+        self.ready.emit(AttachmentSource(engine, self.message.uid, keep))
+
+
+class AttachmentSource:
+    """A connection held open for as long as the window is, and the parts.
+
+    Reconnecting per attachment costs a second or two each time; one session
+    for the life of the window costs nothing and is closed when it shuts.
+    """
+
+    def __init__(self, engine, uid: str, found) -> None:
+        self._engine = engine
+        self._uid = uid
+        self.found = found
+
+    def fetch(self, item) -> bytes:
+        return self._engine.fetch_part(self._uid, item.part, item.encoding)
+
+    def close(self) -> None:
+        try:
+            self._engine.logout()
+        except Exception:      # noqa: BLE001 - closing is best effort
+            pass
