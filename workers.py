@@ -1313,7 +1313,7 @@ class AttachmentWorker(_BaseWorker):
 
         try:
             engine = IMAPEngine(host=self.account.host, port=self.account.port)
-            with engine.session(self.account.email, self.password):
+            with engine.session(self.account.address, self.password):
                 engine.select(getattr(self.message, "source_folder", "") or "INBOX",
                               readonly=True)
                 size = engine.message_size(self.message.uid)
