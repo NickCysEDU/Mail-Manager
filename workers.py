@@ -1285,3 +1285,47 @@ def required_folders(items: Sequence[TriageItem], plan: Optional[FolderPlan]) ->
         if folder not in needed:
             needed.append(folder)
     return needed
+
+
+class AttachmentWorker(_BaseWorker):
+    """Fetch one message's attached parts without blocking the window.
+
+    A scan keeps only the first part of each message, so the bytes of an
+    attachment are never already in hand. This asks the server for that one
+    message, with BODY.PEEK so it stays unread, and a ceiling so a fifty
+    megabyte video cannot be started by accident.
+    """
+
+    ready = Signal(object)      # List[attachments.Attachment]
+    failed = Signal(str)
+    task_name = "attachment fetch"
+
+    def __init__(self, account, password: str, message, parent=None,
+                 limit: int = 0) -> None:
+        super().__init__(parent)
+        self.account = account
+        self.password = password
+        self.message = message
+        self.limit = limit
+
+    def run(self) -> None:
+        import attachments as _attachments
+
+        try:
+            engine = IMAPEngine(host=self.account.imap_host,
+                                port=self.account.imap_port)
+            with engine.session(self.account.email, self.password):
+                engine.select(getattr(self.message, "source_folder", "") or "INBOX",
+                              readonly=True)
+                size = engine.message_size(self.message.uid)
+                ceiling = self.limit or _attachments.MAX_FETCH
+                if size and size > ceiling:
+                    self.failed.emit(
+                        f"That message is {size // (1024 * 1024)} MB, which is "
+                        "larger than this will download in one go.")
+                    return
+                found = engine.fetch_attachments(self.message.uid, limit=ceiling)
+        except Exception as exc:      # noqa: BLE001 - reported to the window
+            self.failed.emit(f"Could not fetch the attachments: {exc}")
+            return
+        self.ready.emit([a for a in found if not a.signature])

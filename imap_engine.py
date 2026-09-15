@@ -20,6 +20,10 @@ from __future__ import annotations
 import base64
 import email
 import email.policy
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from attachments import Attachment
 import imaplib
 import logging
 import re
@@ -918,6 +922,56 @@ class IMAPEngine:
         )
         return result
 
+    # -- attachments ------------------------------------------------------
+    def message_size(self, uid: str) -> int:
+        """RFC822.SIZE for one message, or 0 if the server will not say.
+
+        Asked before fetching, so a fifty-megabyte message can be declined
+        rather than discovered halfway down a hotel connection.
+        """
+        conn = self._require_conn()
+        try:
+            data = self._cmd("Checking size", conn.uid, "FETCH", str(uid),
+                             "(RFC822.SIZE)")
+        except Exception:      # noqa: BLE001 - a size is a courtesy
+            return 0
+        for item in data or ():
+            blob = item if isinstance(item, bytes) else (
+                item[0] if isinstance(item, tuple) and item else b"")
+            found = _SIZE_RE.search(blob or b"")
+            if found:
+                return int(found.group(1))
+        return 0
+
+    def fetch_attachments(self, uid: str, limit: int = 0) -> List["Attachment"]:
+        """Every attached part of one message, with its bytes.
+
+        The whole message is fetched rather than individual sections: the
+        alternative is parsing BODYSTRUCTURE by hand, and Python's email
+        package already decodes base64, quoted-printable and the header
+        encodings correctly. BODY.PEEK keeps the message unread, as
+        everywhere else here.
+
+        ``limit`` caps the fetch. Zero means the module default.
+        """
+        import attachments as _attachments
+
+        ceiling = int(limit) if limit else _attachments.MAX_FETCH
+        ceiling = max(1, min(ceiling, _attachments.MAX_FETCH))
+        conn = self._require_conn()
+        data = self._cmd(
+            "Fetching attachments", conn.uid, "FETCH", str(uid),
+            f"(BODY.PEEK[]<0.{ceiling}>)",
+        )
+        raw = b""
+        for item in data or ():
+            if isinstance(item, tuple) and len(item) >= 2 and item[1]:
+                raw = item[1]
+                break
+        if not raw:
+            return []
+        return attachments_of(raw)
+
     def _fetch_serial(
         self, uids: Sequence[str], mailbox: str, max_bytes: int,
         progress: Optional[ProgressCallback], cancel: Optional[threading.Event],
@@ -1366,3 +1420,46 @@ def _error_text(exc: BaseException) -> str:
             return first.decode("utf-8", "replace")
         return str(first)
     return str(exc)
+
+
+def attachments_of(raw: bytes) -> List["Attachment"]:
+    """Parse a raw message into its attached parts, bytes included.
+
+    Inline parts referenced by the body (a signature image, a logo) are
+    reported too but marked ``inline``, so the viewer can list them
+    separately rather than pretending a tracking pixel is a document.
+    """
+    import attachments as _attachments
+
+    try:
+        message = email.message_from_bytes(raw, policy=email.policy.default)
+    except Exception:      # noqa: BLE001 - a broken message has no attachments
+        return []
+
+    found: List[_attachments.Attachment] = []
+    for index, part in enumerate(message.walk(), start=1):
+        if part.is_multipart():
+            continue
+        disposition = (part.get_content_disposition() or "").lower()
+        filename = part.get_filename()
+        cid = (part.get("Content-ID") or "").strip("<>")
+        if disposition not in ("attachment", "inline") and not filename:
+            continue
+        if not filename and not cid:
+            continue
+        try:
+            payload = part.get_payload(decode=True) or b""
+        except Exception:      # noqa: BLE001 - one bad part is not the message
+            payload = b""
+        name = _decode_header_value(filename) if filename else (cid or f"part-{index}")
+        found.append(_attachments.Attachment(
+            part=str(index),
+            name=name,
+            content_type=(part.get_content_type() or "").lower(),
+            encoding=(part.get("Content-Transfer-Encoding") or "").lower(),
+            size=len(payload),
+            cid=cid,
+            inline=(disposition == "inline" or bool(cid and not filename)),
+            data=payload or None,
+        ))
+    return found

@@ -345,6 +345,37 @@ build between releases; the commit does. Hover for the full line, including
 the Python version and whether it is running the Intel or the Apple silicon
 slice, and click to copy it into a bug report.
 
+## Attachments
+
+The preview pane has an **Attachments** button, which says how many there are.
+Images, audio, PDFs and text open in a window; anything else is described and
+can be saved. **Save all...** takes the lot.
+
+A scan only downloads the first part of each message, so the bytes are fetched
+when you ask, for that one message, with `BODY.PEEK` - it stays unread.
+
+**Nothing is ever run.** There is no "open with", and the viewer refuses a few
+things on purpose:
+
+- A file's **bytes decide what it is**, not its name or its declared type. A
+  part claiming `image/png` that begins `MZ` is a Windows program, and it is
+  never handed to an image decoder.
+- **Filenames are treated as hostile.** `../../.ssh/authorized_keys` saves as
+  `authorized_keys`, and a right-to-left override - the trick that makes
+  `photo<RLO>gnp.exe` read as `photo exe.png` - is stripped, so the label
+  says what the file is.
+- **SVG and HTML are shown as text**, because rendering either runs a parser
+  that can fetch remote content, which is how an attachment reports that you
+  opened it.
+- **Archives are never expanded.** Saving a zip is fine; walking paths a
+  stranger chose is not.
+- A **decompression bomb** is refused: dimensions are checked before pixels
+  are allocated.
+
+Saved files get the same **quarantine flag** a download gets, so macOS checks
+them, and a name that already exists becomes `report (2).pdf` rather than
+overwriting anything.
+
 ## Undo
 
 ⌘Z after an Apply moves everything back where it came from. The app moves real
@@ -460,7 +491,7 @@ notice, and contribution terms.
 
 ```bash
 ./dev demo      # the app with sample mail, no setup
-./dev test      # 2,582 tests, about three minutes on four workers
+./dev test      # 2,642 tests, about three minutes on four workers
 ./dev eval      # sorter accuracy (needs a labelled set of your own)
 ./dev fake      # the whole pipeline in the terminal, offline
 ```

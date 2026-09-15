@@ -100,7 +100,7 @@ from triage_table import (  # noqa: F401 - re-exported; gui was their home
     category_color, LEAVE_IN_PLACE)
 from menubar import MenuBarController
 from welcome import SetupWizard
-from workers import (
+from workers import (AttachmentWorker,
     ReplyWorker,
     ApplyWorker,
     ScanOutcome,
@@ -334,6 +334,7 @@ class MainWindow(QMainWindow):
 
         self.preview = PreviewPane()
         self.preview.overrideChanged.connect(self._override_changed)
+        self.preview.attachmentsRequested.connect(self._open_attachments)
         self.preview.sortNonJobRequested.connect(
             lambda: self._switch_routing(NonJobRouting.FILE))
 
@@ -3239,6 +3240,68 @@ class MainWindow(QMainWindow):
         box.setTextFormat(Qt.TextFormat.RichText)
         box.setText(f"<table style='font-size:13px'>{body}</table>")
         box.exec()
+
+    @Slot(int)
+    def _open_attachments(self, row: int) -> None:
+        """Fetch what was attached to one message, then show it.
+
+        The bytes are not already here. A scan downloads the first part of
+        each message and keeps the text, which is the right trade for sorting
+        a hundred of them and the wrong one for looking at a photograph, so
+        this asks the server again for that one message.
+        """
+        import attachments as _attachments
+        from attachment_view import AttachmentViewer
+
+        items = getattr(self.model, "items", [])
+        item = items[row] if 0 <= row < len(items) else None
+        if item is None:
+            return
+        subject = item.email.subject_display
+
+        if self.demo:
+            AttachmentViewer(
+                _attachments.demo_attachments(item.email), subject, self).exec()
+            return
+        if self._busy():
+            return
+
+        wanted = item.email.account_id or ""
+        account = next((a for a in self.settings.scan_accounts if a.id == wanted),
+                       None) or next(iter(self.settings.scan_accounts), None)
+        password = ""
+        if account is not None:
+            try:
+                password = self.store.get_mailbox_password(account.address)
+            except CredentialError as exc:
+                QMessageBox.warning(self, "Keychain", str(exc))
+                return
+        if account is None or not password:
+            QMessageBox.information(
+                self, "Attachments",
+                "The mailbox this message came from is not connected, so its "
+                "attachments cannot be fetched. Add its password in Settings "
+                "and scan again.")
+            return
+
+        self._set_status(f"Fetching what is attached to \u201c{subject[:40]}\u201d...")
+        worker = AttachmentWorker(account, password, item.email, self)
+
+        def show(found) -> None:
+            if not found:
+                self._set_status("Nothing came back for that message.")
+                return
+            self._set_status("")
+            AttachmentViewer(found, subject, self).exec()
+
+        def failed(detail: str) -> None:
+            self._set_status("")
+            QMessageBox.warning(self, "Attachments", detail)
+
+        worker.ready.connect(show)
+        worker.failed.connect(failed)
+        self._register(worker)
+        worker.start()
 
     def _about(self) -> None:
         """What this is, where the mail goes, and who to tell when it breaks."""
