@@ -756,3 +756,43 @@ class TestAProviderCannotEchoMailIntoTheLog:
                         source.index("Classification failed for") + 260]
         assert "for_the_log" in window, (
             "the batch failure log line is back to formatting the exception")
+
+
+class TestNoEvaluationDataIsTracked:
+    """The sets are ignored, but ignoring is not the same as untracked.
+
+    git mv moves a file and stages it at the new path, ignore rules and all.
+    That very nearly committed the two inbox-derived sets into the
+    repository they were being removed from; the gitignore said the right
+    thing and git had already been told otherwise.
+    """
+
+    @staticmethod
+    def _tracked():
+        out = subprocess.run(["git", "ls-files"], cwd=ROOT,
+                             capture_output=True, text=True)
+        return out.stdout.splitlines() if out.returncode == 0 else None
+
+    def test_no_fixture_json_is_tracked(self):
+        tracked = self._tracked()
+        if tracked is None:
+            pytest.skip("not a git checkout")
+        offenders = [f for f in tracked
+                     if f.startswith("tests/fixtures/") and f.endswith(".json")]
+        assert not offenders, (
+            f"evaluation data is tracked: {offenders}. It is ignored, which "
+            "does nothing once a path is in the index - git rm --cached it.")
+
+    def test_the_private_directory_is_ignored(self):
+        probe = FIXTURES / "private" / "labelled.json"
+        out = subprocess.run(["git", "check-ignore", "-q", str(probe)], cwd=ROOT)
+        assert out.returncode == 0, (
+            "tests/fixtures/private is not ignored; a stray add would publish "
+            "a hundred real messages")
+
+    def test_the_resolver_knows_which_sets_are_private(self):
+        import private_fixtures
+
+        assert set(private_fixtures.PRIVATE) == {
+            "labelled.json", "acknowledgements.json", "adversarial.json",
+            "holdout.json", "meetings.json"}
