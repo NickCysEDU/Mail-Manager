@@ -174,3 +174,34 @@ class TestItDoesNotReadLikeAMachineWroteIt:
                 if "—" not in line:
                     continue
                 assert "Seat 14C" in line, f"{name}:{number}: {line.strip()[:70]}"
+
+
+class TestTheLicencesTravelWithTheBinary:
+    """Qt is LGPL v3 and the disk image carries twenty of its libraries.
+
+    Clause 4 wants the notice to reach whoever received the program. A file
+    on a web page is not that, so both licence files are bundled next to the
+    executable, and the app says which licence Qt is under.
+    """
+
+    def test_the_spec_bundles_both_licence_files(self):
+        spec = (ROOT / "MailManager.spec").read_text(encoding="utf-8")
+        assert "THIRD-PARTY-LICENSES.md" in spec
+        assert '"LICENSE"' in spec or "'LICENSE'" in spec
+
+    def test_the_notice_names_qt_and_the_lgpl(self):
+        notice = (ROOT / "THIRD-PARTY-LICENSES.md").read_text(encoding="utf-8")
+        assert "LGPL" in notice
+        assert "Qt" in notice
+        assert "gnu.org/licenses/lgpl-3.0" in notice
+        # Where to get the source of the thing you were given.
+        assert "download.qt.io" in notice or "code.qt.io" in notice
+
+    def test_about_says_it_too(self):
+        source = (ROOT / "about.py").read_text(encoding="utf-8")
+        assert "LGPL" in source, "the window claims MIT and stops there"
+        assert "THIRD_PARTY_URL" in source
+
+    def test_the_lexicon_provenance_is_recorded(self):
+        notice = (ROOT / "THIRD-PARTY-LICENSES.md").read_text(encoding="utf-8")
+        assert "OurAirports" in notice and "Wikidata" in notice
