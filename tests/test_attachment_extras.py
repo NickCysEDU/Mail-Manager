@@ -1299,6 +1299,64 @@ class TestTheVisualiserCanBeSwitchedOff:
         viewer._sweep()
 
 
+#: What the reference workload below costs on the machine the sixteen
+#: millisecond budget was set on. Measured, not guessed.
+REFERENCE_MS = 12.2
+_FACTOR = None
+
+
+def _machine_factor() -> float:
+    """How much slower this machine is than the one the budget was set on.
+
+    A wall-clock budget is not a test of the code when the code runs on
+    both a laptop and a shared virtual machine: the same scene measured
+    5.5 ms here and 22.7 ms on a CI runner, and the gap was not even
+    consistent between scenes. So the budget is scaled by what this
+    machine takes over a fixed workload of the same kind - antialiased
+    strokes and a smooth scaled blit, which is what the scenes spend
+    their time on.
+
+    That keeps the check meaningful as a regression test: a scene that
+    gets slower relative to everything else still fails. It stops being a
+    measure of how fast the runner is, which is not something this
+    repository can fix.
+    """
+    import math
+    import time
+
+    from PySide6.QtCore import QPointF, QRectF, Qt
+    from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
+
+    global _FACTOR
+    if _FACTOR is not None:
+        return _FACTOR
+
+    canvas = QPixmap(900, 600)
+    painter = QPainter(canvas)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    painter.fillRect(QRectF(0, 0, 900, 600), QColor(0, 0, 0))
+    rounds = 8
+    started = time.monotonic()
+    for step in range(rounds):
+        for i in range(120):
+            angle = (i / 120.0) * math.tau + step * 0.1
+            painter.setPen(QPen(QColor.fromHsvF(i / 120.0, 0.7, 1.0, 0.8), 6.0,
+                                Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            painter.drawLine(QPointF(450, 300),
+                             QPointF(450 + math.cos(angle) * 280,
+                                     300 + math.sin(angle) * 280))
+        small = canvas.scaled(450, 300, Qt.AspectRatioMode.IgnoreAspectRatio,
+                              Qt.TransformationMode.SmoothTransformation)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        painter.drawPixmap(QRectF(0, 0, 900, 600), small, QRectF(small.rect()))
+    taken = (time.monotonic() - started) / rounds * 1000
+    painter.end()
+    # Never below one: a machine faster than the reference still has to
+    # meet the real budget.
+    _FACTOR = max(1.0, taken / REFERENCE_MS)
+    return _FACTOR
+
+
 def _scene_count():
     """Every scene, not the five that existed when this was written.
 
@@ -1365,8 +1423,10 @@ class TestItHoldsSixtyFramesASecond:
             spectrum._tick()
             spectrum.grab()
         each = (time.monotonic() - started) / rounds * 1000
-        assert each < 16.67, (
-            f"{visualizers.SCENES[index].name} takes {each:.1f} ms a frame")
+        budget = 16.67 * _machine_factor()
+        assert each < budget, (
+            f"{visualizers.SCENES[index].name} takes {each:.1f} ms a frame, "
+            f"against {budget:.1f} ms for this machine")
 
     def test_nothing_is_drawn_when_it_is_not_revealed(self, qtbot):
         spectrum = self._spectrum(qtbot, 1920, 1080)
