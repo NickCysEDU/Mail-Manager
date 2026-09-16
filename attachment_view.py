@@ -443,10 +443,22 @@ class AudioPane(QWidget):
         self.decay.valueChanged.connect(
             lambda value: self.spectrum.set_decay(value / 100.0))
 
-        self.sense_box = _labelled("on", self.sense)
-        self.rate_box = _labelled("every", self.flash)
-        self.decay_box = _labelled("Decay", self.decay)
+        # Words, not prepositions. "on" and "every" were shorter and told
+        # nobody what the slider under them did.
+        self.sense_box = _labelled("sens", self.sense)
+        self.rate_box = _labelled("rate", self.flash)
+        self.decay_box = _labelled("decay", self.decay)
         self.decay_box.hide()
+
+        import visualizers as _vis
+
+        self.mode_box = _combo(
+            list(_vis.by_name("Oscilloscope").MODES),
+            "How the beam is driven. Sweep goes round once a frame; X-Y "
+            "plots left against right, which is what a record cut for a "
+            "scope draws its picture in.")
+        self.mode_box.currentTextChanged.connect(self.spectrum.set_scope_mode)
+        self.mode_box.hide()
         # The tick box and the two sliders that shape it, as one block: on
         # their own the sliders said "Sensitivity" and "Rate" with nothing
         # to say what of.
@@ -457,7 +469,7 @@ class AudioPane(QWidget):
             "Which part of the sound sets the strobe off.")
         self.strobe_source.currentTextChanged.connect(
             self.spectrum.set_strobe_source)
-        self.source_box = _labelled("", self.strobe_source)
+        self.source_box = _labelled("on", self.strobe_source)
 
         self.strobe_group = QWidget()
         strobe_row = QHBoxLayout(self.strobe_group)
@@ -472,10 +484,10 @@ class AudioPane(QWidget):
         # the pane.
         self.visual_row = FlowRow(spacing=16)
         # Grouped: what to draw, how it reacts, then what to do with it.
-        groups = ((self.enable_box, self.busy, self.scene_box, self.shape_box),
-                  (self.strobe_group,),
-                  (self.decay_box,),
-                  (self.colour_button, self.full_button))
+        groups = ((self.enable_box, self.busy, self.scene_box, self.shape_box,
+                   self.colour_button, self.mode_box, self.decay_box,
+                   self.full_button),
+                  (self.strobe_group,))
         for index, group in enumerate(groups):
             if index:
                 self.visual_row.add_gap(26)
@@ -489,7 +501,8 @@ class AudioPane(QWidget):
         _match_text(self.visual_holder)
         self._visual_controls = (self.scene_box, self.shape_box,
                                  self.strobe_group, self.decay_box,
-                                 self.full_button, self.colour_button)
+                                 self.mode_box, self.full_button,
+                                 self.colour_button)
         # Everything except the tick box starts unavailable, because the
         # visualiser starts off.
         self._grey_visual_controls(False)
@@ -508,6 +521,10 @@ class AudioPane(QWidget):
         self.volume.setValue(70)
         self.volume.setFixedWidth(104)
         self.volume.setToolTip("Volume")
+
+        # The window already says which file this is, twice, above the
+        # pane. A third copy is a line of type the picture could have had.
+        self.title.hide()
 
         header = QHBoxLayout()
         header.addWidget(self.art)
@@ -532,6 +549,10 @@ class AudioPane(QWidget):
         # its shape asks for. Its maximum caps it and its floor lets it
         # give way, which is all the control that is needed.
         layout.addWidget(self.spectrum)
+        # A gap under the picture. Packed tight the transport's first row
+        # of pixels landed on the scene's last one - not enough to see,
+        # but they should not be touching either.
+        layout.addSpacing(8)
         layout.addLayout(controls)
         # Below the transport, outside the picture. Putting them inside the
         # visualiser frame meant they were hidden whenever it was, and they
@@ -566,6 +587,9 @@ class AudioPane(QWidget):
         self.stop()
         self._path = path
         self.title.setText(f"<b>{_html(item.shown)}</b>")
+        # Shown only when there is no window heading above it - the
+        # metadata pane borrows this widget on its own.
+        self.title.setVisible(False)
 
         data = item.data or b""
         tags, art = attachment_meta.audio_facts(data)
@@ -644,11 +668,11 @@ class AudioPane(QWidget):
         def done(result) -> None:
             if not alive():
                 return
-            frames, shapes, calibration = result
+            frames, shapes, vectors, calibration = result
             self.spectrum.set_calibration(calibration)
             self.busy.stop()
             self.spectrum.set_working(None)
-            self.spectrum.set_traces(shapes)
+            self.spectrum.set_traces(shapes, vectors)
             self.spectrum.set_frames(frames, attachment_audio.RATE)
             self._decoder = None
 
@@ -724,7 +748,7 @@ class AudioPane(QWidget):
         for widget in self._visual_controls:
             if widget is self.colour_button:
                 widget.setVisible(on and scene == "VU meters")
-            elif widget is self.decay_box:
+            elif widget in (self.decay_box, self.mode_box):
                 widget.setVisible(on and scene == "Oscilloscope")
             else:
                 widget.setVisible(on)
@@ -737,6 +761,7 @@ class AudioPane(QWidget):
         off, so the decode only starts when this is ticked.
         """
         self._grey_visual_controls(on)
+        self._apply_budget()
         if not on:
             self._analysis_token += 1
             self._cancel_analysis()
@@ -767,6 +792,13 @@ class AudioPane(QWidget):
         layout = self.layout()
         if layout is None:
             return self.HEIGHT if hasattr(self, "HEIGHT") else 240
+        # Ask for a fresh answer. invalidate() only marks the layout dirty;
+        # minimumSize() keeps handing back the old number until it is made
+        # to recompute, so a control row that had just grown was measured
+        # at its previous height and the scene was given room that was no
+        # longer there.
+        self.visual_row.invalidate()
+        layout.activate()
         needed_by_everything = layout.minimumSize().height()
         claimed_by_scene = self.spectrum.minimumHeight()
         needed_by_the_rest = max(0, needed_by_everything - claimed_by_scene)
@@ -799,6 +831,11 @@ class AudioPane(QWidget):
         # when there is something for it to do.
         self._show_visual_controls(self.enable_box.isChecked())
         self.visual_row.invalidate()
+        # Scenes bring their own controls - the scope has two more than
+        # anything else - so the row can get taller and the scene's share
+        # of the pane has to be worked out again. Without this the extra
+        # line pushed the transport up into the picture.
+        self._apply_budget()
 
     @Slot()
     def _choose_colours(self) -> None:
@@ -1065,10 +1102,22 @@ class AttachmentViewer(QDialog):
     """
 
     def __init__(self, found: List[attachments.Attachment], subject: str = "",
-                 parent=None, fetch: Optional[Callable] = None) -> None:
+                 parent=None, fetch: Optional[Callable] = None,
+                 library: bool = False) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Attachments")
-        self.setMinimumSize(QSize(900, 600))
+        # The same window serves two jobs. As a library it is somebody's
+        # own music rather than a message's parts, so it gains a way to
+        # add tracks and loses the ones about saving copies of something
+        # that arrived in the post.
+        self.library = bool(library)
+        self.setWindowTitle("Visualiser" if library else "Attachments")
+        # Narrower than the attachment window is allowed to be: the
+        # visualiser has to be usable on a small screen.
+        # Tall enough that the picture still has room once the transport
+        # and the controls have theirs. Any shorter and the scene is the
+        # thing that gives way, which is the wrong way round for a window
+        # whose whole job is the scene.
+        self.setMinimumSize(QSize(720 if library else 900, 600))
         self._found = list(found)
         self._fetch = fetch
         self._temp = Path(tempfile.mkdtemp(prefix="mm-attach-"))
@@ -1094,23 +1143,29 @@ class AttachmentViewer(QDialog):
         # Not the dim style. This is the only place the keys are written
         # down, and a run-on line of grey text separated by middots is
         # something people's eyes slide off rather than read.
+        opening = ("Add a track, then click it to watch. Nothing is sent "
+                   "anywhere and nothing is kept."
+                   if library else
+                   "Click an attachment to open it. Nothing here is ever "
+                   "run, and nothing is saved unless you say so.")
+        keys = [("K / Space", "play or pause"),
+                ("J&nbsp;&nbsp;L", "back or on ten seconds"),
+                ("← →", "scrub"),
+                ("↑ ↓", "move between tracks" if library
+                 else "move between attachments"),
+                ("F", "full screen"),
+                ("⌘I", "show details")]
+        if not library:
+            keys.append(("⌘S", "save a copy"))
         self.hint = QLabel(
-            "<p style='margin:0 0 6px 0'>Click an attachment to open it. "
-            "Nothing here is ever run, and nothing is saved unless you "
-            "say so.</p>"
+            f"<p style='margin:0 0 6px 0'>{opening}</p>"
             "<table cellspacing='0' cellpadding='0'>"
             + "".join(
                 "<tr>"
-                f"<td style='padding:1px 8px 1px 0'><b>{keys}</b></td>"
+                f"<td style='padding:1px 8px 1px 0'><b>{key}</b></td>"
                 f"<td style='padding:1px 0'>{what}</td>"
                 "</tr>"
-                for keys, what in (("K&nbsp;/&nbsp;Space", "play or pause"),
-                                   ("J&nbsp;&nbsp;L", "back or on ten seconds"),
-                                   ("← →", "scrub"),
-                                   ("↑ ↓", "move between attachments"),
-                                   ("F", "full screen"),
-                                   ("⌘I", "show details"),
-                                   ("⌘S", "save a copy")))
+                for key, what in keys)
             + "</table>")
         self.hint.setTextFormat(Qt.TextFormat.RichText)
         self.hint.setWordWrap(True)
@@ -1163,7 +1218,15 @@ class AttachmentViewer(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
 
+        self.add_button = QPushButton("\uff0b  Add a track")
+        self.add_button.setToolTip("Choose sound files from this machine.")
+        self.add_button.clicked.connect(self._add_tracks)
+        self.add_button.setVisible(self.library)
+        for widget in (self.save_button, self.save_all):
+            widget.setVisible(not self.library)
+
         actions = QHBoxLayout()
+        actions.addWidget(self.add_button)
         actions.addWidget(self.info_button)
         actions.addWidget(self.save_button)
         actions.addWidget(self.save_all)
@@ -1183,7 +1246,9 @@ class AttachmentViewer(QDialog):
         left.addWidget(self.hint)
         left_frame = QFrame()
         left_frame.setLayout(left)
-        left_frame.setFixedWidth(296)
+        # Narrower for the library: its list holds file names rather than
+        # a message's parts, and the picture is what the window is for.
+        left_frame.setFixedWidth(232 if self.library else 296)
 
         body = QHBoxLayout(self)
         body.addWidget(left_frame)
@@ -1205,6 +1270,38 @@ class AttachmentViewer(QDialog):
             self.heading.setText("<b>Nothing is attached to this message.</b>")
             for button in (self.save_button, self.save_all, self.info_button):
                 button.setEnabled(False)
+
+    def _add_tracks(self) -> None:
+        """Pick sound files and list them as if they had arrived attached."""
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        chosen, _ = QFileDialog.getOpenFileNames(
+            self, "Choose sound files", "",
+            "Audio (*.mp3 *.m4a *.aac *.wav *.aiff *.aif *.flac *.ogg "
+            "*.oga *.opus *.wma);;Any file (*)")
+        if not chosen:
+            return
+        refused = []
+        for name in chosen:
+            path = Path(name)
+            try:
+                data = path.read_bytes()
+            except OSError as exc:
+                refused.append(f"{path.name}: {exc}")
+                continue
+            kind, mime = attachments.sniff(data[:4096], name=path.name)
+            if kind != "audio":
+                refused.append(f"{path.name}: reads as {kind or 'something else'}")
+                continue
+            self._found.append(attachments.Attachment(
+                part=str(len(self._found) + 1), name=path.name,
+                content_type=mime, size=len(data), data=data))
+            self.list.addItem(QListWidgetItem(_row_label(self._found[-1])))
+        if refused:
+            QMessageBox.information(
+                self, "Some files were not added", "\n".join(refused))
+        if self.list.count() and self.list.currentRow() < 0:
+            self.list.setCurrentRow(0)
 
     def _add_shortcuts(self) -> None:
         """Space plays, arrows move, the ordinary ones save and close."""

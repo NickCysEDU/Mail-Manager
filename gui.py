@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import csv
 import json
-import re
 import logging
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+import shiboken6
 from PySide6.QtCore import (
     QThread,
     QByteArray,
@@ -3253,44 +3254,40 @@ class MainWindow(QMainWindow):
 
     @Slot(int)
     def _visualise_a_file(self) -> None:
-        """Play a sound file from this machine, for the look of it.
+        """The visualiser window: somebody's own music, not a message's.
 
-        It goes through the same viewer an attachment does, so the file is
-        read once into memory and nothing about it leaves the machine -
-        the same promise the rest of the viewer makes.
+        One at a time, and never alongside an attachment window - both are
+        the same class and the second would fight the first over the audio
+        device and over which one the keyboard is talking to.
         """
-        from PySide6.QtWidgets import QFileDialog, QMessageBox
+        from PySide6.QtWidgets import QMessageBox
 
-        import attachments as _attachments
         from attachment_view import AttachmentViewer
 
-        chosen, _ = QFileDialog.getOpenFileName(
-            self, "Choose a sound file", "",
-            "Audio (*.mp3 *.m4a *.aac *.wav *.aiff *.aif *.flac *.ogg "
-            "*.oga *.opus *.wma *.alac);;Any file (*)")
-        if not chosen:
+        existing = getattr(self, "_visualiser_window", None)
+        if existing is not None and shiboken6.isValid(existing):
+            existing.show()
+            existing.raise_()
+            existing.activateWindow()
             return
-        path = Path(chosen)
-        try:
-            data = path.read_bytes()
-        except OSError as exc:
-            QMessageBox.warning(self, "Cannot read that file", str(exc))
-            return
-        kind, mime = _attachments.sniff(data[:4096], name=path.name)
-        if kind != "audio":
+
+        attached = getattr(self, "_attachment_window", None)
+        if attached is not None and shiboken6.isValid(attached) and attached.isVisible():
             QMessageBox.information(
-                self, "Not a sound file",
-                f"{path.name} reads as {kind or 'something else'}, so there "
-                "is nothing to listen to.")
+                self, "Attachments are open",
+                "Close the attachment window first. Both play sound, and "
+                "two of them at once fight over the speakers.")
+            attached.raise_()
             return
-        item = _attachments.Attachment(part="1", name=path.name,
-                                       content_type=mime, size=len(data),
-                                       data=data)
-        viewer = AttachmentViewer([item], path.name, self)
-        self._attachment_window = viewer
-        viewer.show()
-        viewer.list.setCurrentRow(0)
-        viewer.audio.enable_box.setChecked(True)
+
+        window = AttachmentViewer([], "", self, library=True)
+        self._visualiser_window = window
+        window.finished.connect(lambda *_: self._forget_visualiser())
+        window.show()
+        window._add_tracks()
+
+    def _forget_visualiser(self) -> None:
+        self._visualiser_window = None
 
     def _open_attachments(self, row: int) -> None:
         """Fetch what was attached to one message, then show it.
