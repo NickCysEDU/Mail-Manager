@@ -474,10 +474,18 @@ GAMMA = 0.72
 
 #: Points in one X-Y frame. A drawing is cut at audio rate, so every
 #: sample in the window is part of the picture: taking every eighth one,
-#: as the sweep does, turns a detailed figure into a scribble. Kept as
-#: int16 rather than floats because a three minute track at this density
-#: is eleven megabytes of them and would be four times that.
-VECTOR_POINTS = 1024
+#: as the sweep does, turns a detailed figure into a scribble.
+#:
+#: The length was chosen by rendering Oscilloscope Music's "Function" at
+#: 130, 260, 520 and 1024 and looking at the results. Its figures repeat
+#: about every 65 samples, so 512 is eight passes of the same shape laid
+#: over each other - enough that the figure is solid, few enough that it
+#: has not moved on to the next one. At 1024 the later figures smear into
+#: the earlier ones; at 260 the shape is not finished.
+#:
+#: Kept as int16 rather than floats: the same density in floats is four
+#: times the memory for no more picture.
+VECTOR_POINTS = 512
 
 #: Points in one oscilloscope trace. Enough to show a waveform's shape at
 #: any width the scene is drawn at, small enough that a three minute track

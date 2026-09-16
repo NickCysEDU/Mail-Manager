@@ -1229,6 +1229,8 @@ class AttachmentViewer(QDialog):
             widget.setVisible(not self.library)
 
         actions = QHBoxLayout()
+        actions.addWidget(self.status)
+        actions.addSpacing(12)
         actions.addWidget(self.add_button)
         actions.addWidget(self.info_button)
         actions.addWidget(self.save_button)
@@ -1237,11 +1239,29 @@ class AttachmentViewer(QDialog):
         actions.addStretch(1)
         actions.addWidget(buttons)
 
+        # Scrollable, so a window too small to hold everything hides
+        # nothing: the controls move off the bottom and can be scrolled
+        # back to rather than being cut off where they stand.
+        from PySide6.QtWidgets import QScrollArea
+
+        scroller = QScrollArea()
+        scroller.setWidgetResizable(True)
+        scroller.setFrameShape(QFrame.Shape.NoFrame)
+        scroller.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroller.setWidget(self.stack)
+        self.scroller = scroller
+
+        # The status shares the footnote's line. On its own it was a line
+        # of window given over to the word "ready", which the picture
+        # playing in front of it had already said.
+        self.status.setAlignment(Qt.AlignmentFlag.AlignLeft
+                                 | Qt.AlignmentFlag.AlignVCenter)
+
         right = QVBoxLayout()
         right.addWidget(self.heading)
         right.addWidget(self.warning)
-        right.addWidget(self.stack, 1)
-        right.addWidget(self.status)
+        right.addWidget(scroller, 1)
         right.addLayout(actions)
 
         left = QVBoxLayout()
