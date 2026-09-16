@@ -360,11 +360,14 @@ class Oscilloscope(Scene):
             alpha = fresh ** 2.2
             if alpha < 0.02:
                 continue
-            width = 1.0 + fresh * (1.8 + flash * 2.4)
-            green = QColor.fromHsvF(0.33 - flash * 0.08,
-                                    0.85 - flash * 0.5,
-                                    1.0,
-                                    min(1.0, alpha * (0.85 + flash * 0.4)))
+            width = 0.8 + fresh * fresh * (2.4 + flash * 2.6)
+            # The live sweep is near white at its centre and the trail
+            # falls back to a deep phosphor green, which is what makes
+            # persistence read as persistence rather than as many lines.
+            green = QColor.fromHsvF(0.34 - flash * 0.09,
+                                    0.95 - fresh * 0.55 - flash * 0.3,
+                                    0.75 + fresh * 0.25,
+                                    min(1.0, alpha * (0.9 + flash * 0.4)))
             painter.setPen(QPen(green, width, Qt.PenStyle.SolidLine,
                                 Qt.PenCapStyle.RoundCap,
                                 Qt.PenJoinStyle.RoundJoin))
@@ -417,28 +420,45 @@ class Oscilloscope(Scene):
         return out
 
     def _grid(self, painter, rect, flash) -> None:
-        """A polar graticule: rings for amplitude, spokes for phase."""
+        """A polar graticule, drawn like a scope's rather than a chart's.
+
+        Rings for amplitude and ticks around the rim for phase. The spokes
+        used to run right through the middle and cross the trace, which
+        made the whole thing look like graph paper with a squiggle on it.
+        """
         centre = rect.center()
-        reach = min(rect.width(), rect.height()) * 0.47
+        reach = min(rect.width(), rect.height()) * 0.44
+        base = min(rect.width(), rect.height()) * 0.30
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        faint = QColor.fromHsvF(0.33, 0.6, 1.0, 0.09 + flash * 0.16)
+
+        # Amplitude rings, faint, evenly spaced either side of the zero.
+        faint = QColor.fromHsvF(0.33, 0.55, 1.0, 0.08 + flash * 0.12)
         painter.setPen(QPen(faint, 1.0))
-        for step in range(1, 5):
-            radius = reach * step / 5.0
-            painter.drawEllipse(centre, radius, radius)
-        for step in range(12):
-            angle = step * math.tau / 12.0
+        for step in (0.4, 0.6, 0.8, 1.2, 1.4):
+            painter.drawEllipse(centre, base * step, base * step)
+
+        # Phase ticks at the rim only, longer every quarter turn.
+        painter.setPen(QPen(QColor.fromHsvF(0.33, 0.5, 1.0,
+                                            0.18 + flash * 0.25), 1.0))
+        for step in range(24):
+            angle = step * math.tau / 24.0
+            long = step % 6 == 0
+            inner = reach * (0.94 if long else 0.97)
             painter.drawLine(
-                QPointF(centre.x() + math.cos(angle) * reach * 0.12,
-                        centre.y() + math.sin(angle) * reach * 0.12),
+                QPointF(centre.x() + math.cos(angle) * inner,
+                        centre.y() + math.sin(angle) * inner),
                 QPointF(centre.x() + math.cos(angle) * reach,
                         centre.y() + math.sin(angle) * reach))
-        # The zero ring, brighter: the trace sits on it when there is
-        # silence, which is the line a flat scope draws.
-        zero = QColor.fromHsvF(0.33, 0.5, 1.0, 0.26 + flash * 0.35)
-        painter.setPen(QPen(zero, 1.3))
-        base = min(rect.width(), rect.height()) * 0.30
+
+        # The zero ring: where the trace sits in silence.
+        zero = QColor.fromHsvF(0.33, 0.45, 1.0, 0.30 + flash * 0.35)
+        painter.setPen(QPen(zero, 1.4))
         painter.drawEllipse(centre, base, base)
+
+        # And the bezel, which makes it read as an instrument.
+        painter.setPen(QPen(QColor.fromHsvF(0.33, 0.35, 1.0,
+                                            0.14 + flash * 0.2), 2.0))
+        painter.drawEllipse(centre, reach, reach)
 
 
 class Bars(Scene):
@@ -702,11 +722,16 @@ class Meters(Scene):
         # 1.20 radii above the centre and the frequency 0.78 below it, so
         # the two together decide how big the arc can be - which is why the
         # faces used to run off the top of the window.
-        radius = min(inner.width() / 2.55, inner.height() / 2.46)
+        # Sized to what is actually drawn. The outermost number sits 1.20
+        # radii from the centre and is about a quarter of a radius tall, so
+        # the face reaches 1.33 radii above the centre; the frequency ends
+        # 0.84 below it. Reserving 2.46 for a face 2.17 tall left a quarter
+        # of every cell empty and the dials looking lost in it.
+        radius = min(inner.width() / 2.55, inner.height() / 2.20)
         # A face is 2.30 radii tall. On a tall cell the width caps the
         # radius, so that block has to be centred in what is left or every
         # dial sits jammed against the top with empty space underneath.
-        block = radius * 2.30
+        block = radius * 2.20
         top = inner.top() + max(0.0, (inner.height() - block) / 2.0)
         centre_x = inner.center().x()
         centre_y = top + radius * 1.30
@@ -824,12 +849,18 @@ class Meters(Scene):
                          Qt.AlignmentFlag.AlignCenter, text)
 
     def _needle(self, painter, geometry, value, state) -> None:
+        centre = geometry["centre"]
         radius = geometry["radius"]
         pivot = geometry["pivot"]
         angle = self._angle(value)
         reach = QPointF(math.cos(angle), -math.sin(angle))
-        tip = pivot + reach * (radius * 0.86)
-        tail = pivot - reach * (radius * 0.14)
+        # Placed against the scale, measured from the arc's own centre, so
+        # the needle reads true; it is only hinged lower, where a real
+        # movement sits. Short of the arc rather than through it - at 0.86
+        # it crossed the scale it is reading and went through the number
+        # at the top.
+        tip = centre + reach * (radius * 0.80)
+        tail = pivot
         halo = QColor(state.dial_colour)
         halo.setAlphaF(0.26)
         painter.setPen(QPen(halo, max(3.0, radius * 0.085),

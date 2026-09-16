@@ -1161,11 +1161,34 @@ class TestTheVisualiserControlsAreReachable:
         viewer.list.setCurrentRow(0)
         return viewer
 
-    def test_they_are_visible_as_soon_as_a_sound_file_opens(self, qtbot):
+    def test_only_the_tick_box_shows_until_the_visualiser_is_on(self, qtbot):
+        """Off means gone, not greyed.
+
+        Half a dozen disabled controls is more to read than none, and none
+        of them can be used. The tick box that turns them on is the only
+        thing worth showing while the visualiser is off.
+        """
         viewer = self._pane(qtbot)
         assert viewer.audio.visual_holder.isVisible()
-        assert viewer.audio.scene_box.isVisible()
-        assert viewer.audio.full_button.isVisible()
+        assert viewer.audio.enable_box.isVisible()
+        for widget in (viewer.audio.scene_box, viewer.audio.shape_box,
+                       viewer.audio.strobe_group, viewer.audio.full_button):
+            assert not widget.isVisible(), (
+                "a control for something switched off is on screen")
+        viewer._sweep()
+
+    def test_they_appear_when_the_visualiser_is_switched_on(self, qtbot):
+        viewer = self._pane(qtbot)
+        viewer.audio.enable_box.setChecked(True)
+        qtbot.wait(0)
+        for widget in (viewer.audio.scene_box, viewer.audio.shape_box,
+                       viewer.audio.strobe_group, viewer.audio.full_button):
+            assert widget.isVisible()
+        viewer.audio.enable_box.setChecked(False)
+        qtbot.wait(0)
+        for widget in (viewer.audio.scene_box, viewer.audio.shape_box,
+                       viewer.audio.strobe_group, viewer.audio.full_button):
+            assert not widget.isVisible()
         viewer._sweep()
 
     def test_they_are_not_inside_the_visualiser(self, qtbot):
@@ -1176,12 +1199,32 @@ class TestTheVisualiserControlsAreReachable:
             "the controls sit inside the picture and vanish with it")
         viewer._sweep()
 
-    def test_the_colour_button_belongs_to_the_meter_scene_only(self, qtbot):
+    def test_a_scenes_own_controls_belong_to_that_scene(self, qtbot):
+        """Colours are for the meters, decay is for the scope, and
+        neither exists while the visualiser is off."""
         viewer = self._pane(qtbot)
-        viewer.audio._scene_chosen("Equaliser")
-        assert not viewer.audio.colour_button.isVisible()
-        viewer.audio._scene_chosen("VU meters")
-        assert viewer.audio.colour_button.isVisible()
+        audio = viewer.audio
+        audio.enable_box.setChecked(True)
+        qtbot.wait(0)
+
+        audio.scene_box.setCurrentText("Equaliser")
+        qtbot.wait(0)
+        assert not audio.colour_button.isVisible()
+        assert not audio.decay_box.isVisible()
+
+        audio.scene_box.setCurrentText("VU meters")
+        qtbot.wait(0)
+        assert audio.colour_button.isVisible()
+        assert not audio.decay_box.isVisible()
+
+        audio.scene_box.setCurrentText("Oscilloscope")
+        qtbot.wait(0)
+        assert audio.decay_box.isVisible()
+        assert not audio.colour_button.isVisible()
+
+        audio.enable_box.setChecked(False)
+        qtbot.wait(0)
+        assert not audio.decay_box.isVisible()
         viewer._sweep()
 
 
