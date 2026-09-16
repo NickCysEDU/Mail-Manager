@@ -15,7 +15,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from PySide6.QtCore import Qt, QUrl, Signal, Slot
+from PySide6.QtCore import QEvent, Qt, QThread, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices, QDoubleValidator
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
@@ -2844,11 +2844,35 @@ class SettingsDialog(QDialog):
             _abandon(worker)
         return True
 
+    def _stop_stray_workers(self) -> None:
+        """Stop every worker thread still running under this dialog.
+
+        The named ones above are stopped deliberately, because stopping a
+        download is worth asking about. These are the quiet ones - reading
+        the Keychain, listing installed models, probing an endpoint - which
+        nobody needs to be consulted about but which are just as fatal if
+        they outlive the dialog: Qt calls qFatal and takes the process down
+        when a running QThread is destroyed, and a dialog destroys its
+        children. Closing Settings while a probe was in flight killed the
+        app.
+        """
+        for thread in self.findChildren(QThread):
+            if not thread.isRunning():
+                continue
+            stop = getattr(thread, "stop", None)
+            if stop is not None:
+                stop(4000)
+                continue
+            thread.requestInterruption()
+            thread.quit()
+            thread.wait(4000)
+
     def done(self, result: int) -> None:  # noqa: N802
         """Qt funnels OK, Cancel, Escape and the close box through here."""
         if not self._stop_ollama_workers():
             return
         self._stop_test_worker()
+        self._stop_stray_workers()
         super().done(result)
 
     def closeEvent(self, event) -> None:  # noqa: N802
@@ -2856,7 +2880,19 @@ class SettingsDialog(QDialog):
             event.ignore()
             return
         self._stop_test_worker()
+        self._stop_stray_workers()
         super().closeEvent(event)
+
+    def event(self, incoming) -> bool:
+        """Last stop before Qt deletes this dialog and all its children.
+
+        done() and closeEvent() cover a dialog somebody closes. One that is
+        simply deleted - deleteLater, or a parent going away - reaches its
+        destructor without either, so the sweep has to happen here too.
+        """
+        if incoming.type() == QEvent.Type.DeferredDelete:
+            self._stop_stray_workers()
+        return super().event(incoming)
 
 
 # ==========================================================================

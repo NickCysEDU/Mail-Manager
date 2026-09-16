@@ -645,3 +645,84 @@ class TestQuittingWithSettingsOpen:
         finally:
             window._settings_dialog = None
             dialog.deleteLater()
+
+
+class TestADeletedSettingsDialogDoesNotTakeTheAppWithIt:
+    """Qt calls qFatal when a running QThread is destroyed.
+
+    A dialog destroys its children, and Settings parents its workers to
+    itself, so a probe still in flight when the dialog went away aborted
+    the process - no exception, no traceback, just SIGABRT. done() and
+    closeEvent() stopped the two workers somebody might want to be asked
+    about; the quiet ones - reading the Keychain, listing models, probing
+    an endpoint - were stopped nowhere, and neither hook runs at all when
+    a dialog is deleted rather than closed.
+
+    It reached CI as a worker crashing mid-file, which reads like anything
+    at all.
+    """
+
+    class _Slow(_BaseWorker):
+        """Runs until asked to stop, so the race is not a race.
+
+        It reports through a plain Event rather than its own state: the
+        worker is a child of the dialog, so by the time the dialog has
+        gone the C++ object has too and there is nothing left to ask.
+        """
+
+        def __init__(self, finished: threading.Event, parent=None) -> None:
+            super().__init__(parent)
+            self._finished = finished
+
+        def run(self) -> None:
+            try:
+                for _ in range(200):
+                    if (self.isInterruptionRequested()
+                            or self.cancel_event.is_set()):
+                        return
+                    time.sleep(0.02)
+            finally:
+                self._finished.set()
+
+    def _dialog(self, qapp, tmp_path, monkeypatch):
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        return SettingsDialog(Settings(icloud_email="you@icloud.example"),
+                              InMemoryCredentialStore())
+
+    def test_deleting_it_stops_a_worker_still_running(self, qapp, tmp_path,
+                                                      monkeypatch):
+        from PySide6.QtCore import QEvent
+
+        done = threading.Event()
+        dialog = self._dialog(qapp, tmp_path, monkeypatch)
+        worker = self._Slow(done, parent=dialog)
+        worker.start()
+        for _ in range(50):
+            if worker.isRunning():
+                break
+            time.sleep(0.01)
+        assert worker.isRunning(), "the worker never started, so nothing is proven"
+
+        dialog.deleteLater()
+        qapp.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        qapp.processEvents()
+        # Reaching this line at all is most of the assertion: the abort
+        # took the whole process rather than raising anything catchable.
+        assert done.wait(5.0), "the worker was still running when the dialog went"
+
+    def test_closing_it_stops_a_worker_still_running(self, qapp, tmp_path,
+                                                     monkeypatch):
+        done = threading.Event()
+        dialog = self._dialog(qapp, tmp_path, monkeypatch)
+        worker = self._Slow(done, parent=dialog)
+        worker.start()
+        for _ in range(50):
+            if worker.isRunning():
+                break
+            time.sleep(0.01)
+        assert worker.isRunning()
+
+        dialog.close()
+        assert done.wait(5.0), "closing Settings left a worker running"
+        assert not worker.isRunning()
+        dialog.deleteLater()
