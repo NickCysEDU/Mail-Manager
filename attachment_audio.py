@@ -286,12 +286,14 @@ class _AnalysisThread(_QThread_base):
             # the bands so one index reads both.
             shapes = traces(self._samples, self._rate, self._channels,
                             should_stop=lambda: self._stop)
+            vectors = vector_traces(self._samples, self._rate, self._channels,
+                                    should_stop=lambda: self._stop)
         except Exception as exc:      # noqa: BLE001
             if not self._stop:
                 self.failed.emit(str(exc))
             return
         if not self._stop:
-            self.done.emit((frames, shapes, calibration))
+            self.done.emit((frames, shapes, vectors, calibration))
 
 
 class _Analysis(QObject_base):
@@ -383,12 +385,15 @@ def decode(path, on_done, on_fail, on_progress=None) -> Optional[object]:
     decoder = QAudioDecoder()
     wanted = QAudioFormat()
     wanted.setSampleFormat(QAudioFormat.SampleFormat.Int16)
-    wanted.setChannelCount(1)
+    # Two channels, so the scope can plot one against the other. That is
+    # what oscilloscope music is: the picture lives in the difference
+    # between left and right, and a mono decode throws it away.
+    wanted.setChannelCount(2)
     wanted.setSampleRate(DECODE_RATE)
     decoder.setAudioFormat(wanted)
 
     collected = array("h")
-    state = {"rate": DECODE_RATE, "channels": 1}
+    state = {"rate": DECODE_RATE, "channels": 2}
 
     def buffer_ready() -> None:
         buffer = decoder.read()
@@ -515,6 +520,49 @@ def traces(samples: array, sample_rate: int, channels: int = 1,
                 if channels > 1:
                     value = (value + samples[index + 1]) * 0.5
                 row[point] = max(-1.0, min(1.0, value * scale))
+        out.append(row)
+        at += hop
+    return out
+
+
+def vector_traces(samples: array, sample_rate: int, channels: int = 2,
+                  should_stop=None) -> List[array]:
+    """Left against right, which is how oscilloscope music draws.
+
+    Interleaved as x, y, x, y - so one trace is 2 * TRACE_POINTS long.
+    A record that was written for a scope puts a picture in here; an
+    ordinary stereo mix puts a blob that leans with the stereo image,
+    which is what a vectorscope shows and is worth looking at anyway.
+
+    No trigger: the position in the file is the position in the drawing,
+    and hunting for a zero crossing would tear the picture apart.
+    """
+    if not samples or sample_rate <= 0 or channels < 2:
+        return []
+    total = len(samples) // channels
+    if total <= WINDOW:
+        return []
+
+    hop = max(1, sample_rate // RATE)
+    # A longer window than the sweep uses: a drawing takes more than one
+    # cycle of anything to complete.
+    span = min(total, max(TRACE_POINTS * 2, sample_rate // 24))
+    step = max(1, span // TRACE_POINTS)
+    scale = 1.0 / 32768.0
+    out: List[array] = []
+    at = 0
+    checked = 0
+    while at + span <= total:
+        checked += 1
+        if should_stop is not None and not checked % 40 and should_stop():
+            return []
+        row = array("f", [0.0]) * (TRACE_POINTS * 2)
+        for point in range(TRACE_POINTS):
+            index = (at + point * step) * channels
+            if index + 1 < len(samples):
+                row[point * 2] = max(-1.0, min(1.0, samples[index] * scale))
+                row[point * 2 + 1] = max(
+                    -1.0, min(1.0, samples[index + 1] * scale))
         out.append(row)
         at += hop
     return out

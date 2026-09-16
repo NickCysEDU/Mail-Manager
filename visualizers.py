@@ -403,9 +403,23 @@ class Oscilloscope(Scene):
     MIN_DECAY = 0.03
     MAX_DECAY = 1.50
 
+    #: How the beam is driven. Sweep is a clock going round once a frame;
+    #: X-Y drives it from the two channels at once, which is what a record
+    #: written for a scope expects and what draws the picture in it.
+    MODES = ("Sweep", "X-Y")
+
     def __init__(self) -> None:
         self._decay = 0.28
+        self._mode = "Sweep"
         self._plasma = Plasma()
+
+    @property
+    def mode(self) -> str:
+        return self._mode
+
+    def set_mode(self, mode: str) -> None:
+        if mode in self.MODES:
+            self._mode = mode
 
     # -- the control ------------------------------------------------------
     @property
@@ -428,16 +442,23 @@ class Oscilloscope(Scene):
         painter.restore()
         self._grid(painter, rect, flash)
 
-        trace = getattr(state, "trace", None)
-        if trace is None:
-            trace = self._from_levels(state)
+        vector = getattr(state, "vector", None)
+        drawing = self._mode == "X-Y" and vector is not None
+        if drawing:
+            trace = vector
+            kept = getattr(state, "vector_history", None)
+        else:
+            trace = getattr(state, "trace", None)
+            if trace is None:
+                trace = self._from_levels(state)
+            kept = getattr(state, "trace_history", None)
         if trace is None:
             return
+        self._drawing = drawing
 
         # How many frames are worth keeping for the decay that is set.
         keep = max(1, min(self.MAX_HISTORY, int(self._decay * 60.0)))
-        kept = getattr(state, "trace_history", None) or [list(trace)]
-        kept = kept[-keep:]
+        kept = (kept or [list(trace)])[-keep:]
 
         painter.setBrush(Qt.BrushStyle.NoBrush)
         total = len(kept)
@@ -462,6 +483,32 @@ class Oscilloscope(Scene):
             painter.drawPath(self._path(rect, old, state, flash))
 
     def _path(self, rect, trace, state, flash):
+        if getattr(self, "_drawing", False):
+            return self._vector_path(rect, trace, flash)
+        return self._sweep_path(rect, trace, state, flash)
+
+    def _vector_path(self, rect, trace, flash):
+        """Left against right, plotted straight.
+
+        No trigger and no clock: where the beam is, is what the record
+        says. A disc cut for a scope draws a picture here; an ordinary mix
+        draws the blob a vectorscope shows, leaning with the stereo image.
+        """
+        path = QPainterPath()
+        side = min(rect.width(), rect.height()) * (0.44 + flash * 0.08)
+        centre = rect.center()
+        count = len(trace) // 2
+        for index in range(count):
+            x = centre.x() + trace[index * 2] * side
+            # Screen y grows downwards and a scope's does not.
+            y = centre.y() - trace[index * 2 + 1] * side
+            if index:
+                path.lineTo(x, y)
+            else:
+                path.moveTo(x, y)
+        return path
+
+    def _sweep_path(self, rect, trace, state, flash):
         """One sweep, swept around a circle rather than across.
 
         The beam starts at twelve o'clock and goes round once; how far
@@ -755,7 +802,14 @@ class Meters(Scene):
         them. This picks the arrangement whose cells are closest to the
         shape a meter wants, which is a little wider than it is tall.
         """
-        best = (1, count, 1e9)
+        # A fallback that is actually a layout. This used to start at one
+        # column by ten rows and keep it whenever nothing cleared the
+        # minimums - which in a short strip is every arrangement, so ten
+        # meters were stacked in a column six pixels tall.
+        widest = max(range(1, count + 1),
+                     key=lambda c: min(rect.width() / c,
+                                       rect.height() / ((count + c - 1) // c)))
+        best = (widest, (count + widest - 1) // widest, 1e9)
         for columns in range(1, count + 1):
             rows = (count + columns - 1) // columns
             cell_w = rect.width() / columns
@@ -1151,8 +1205,15 @@ class Waterfall(Scene):
                 if previous is not None:
                     bucket = min(len(self.SHADES) - 1,
                                  int(value * len(self.SHADES)))
-                    buckets[bucket].moveTo(previous)
-                    buckets[bucket].lineTo(here)
+                    path = buckets[bucket]
+                    path.moveTo(previous)
+                    # A curve between the two, with the control points
+                    # level with each end. Straight segments made every
+                    # ridge a zig-zag; this rounds the peaks the way a
+                    # spectrum actually moves between bands.
+                    half = (previous.x() + here.x()) * 0.5
+                    path.cubicTo(QPointF(half, previous.y()),
+                                 QPointF(half, here.y()), here)
                 previous = here
 
         painter.setBrush(Qt.BrushStyle.NoBrush)

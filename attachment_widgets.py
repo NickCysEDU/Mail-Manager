@@ -142,7 +142,8 @@ class SpectrumState:
     __slots__ = ("levels", "peaks", "bass", "mid", "synth", "high", "hit",
                  "hue", "phase", "scroll", "strobe", "sparks", "labels",
                  "dials", "dial_labels", "dial_colour", "background",
-                 "trace", "calibration", "history", "trace_history")
+                 "trace", "vector", "calibration", "history",
+                 "trace_history", "vector_history")
 
     def __init__(self) -> None:
         self.levels: List[float] = []
@@ -156,10 +157,12 @@ class SpectrumState:
         self.sparks: List[List[float]] = []
         self.labels: List[str] = []
         self.trace = None
+        self.vector = None
         self.calibration: dict = {}
         #: Recent frames, oldest first, for the scenes that show time.
         self.history: List = []
         self.trace_history: List = []
+        self.vector_history: List = []
         self.dials: List[float] = []
         self.dial_labels: List[str] = []
         #: The reference these are copied from is red on near black.
@@ -195,9 +198,11 @@ class Spectrum(QWidget):
     #: Frames of history kept for the scenes that plot time.
     HISTORY = 96
 
-    #: The least it will ever take. Below this it is not worth drawing,
-    #: but it still must not push anything else off the pane.
-    FLOOR = 56
+    #: The least it will ever take. Below about this the scenes have
+    #: nowhere to put their detail - ten dials in sixty pixels is not a
+    #: rack of meters, it is a smear - so the strip keeps this much and
+    #: the controls wrap instead.
+    FLOOR = 150
 
     #: Frames up to this many pixels are drawn at their real size. Above
     #: it the scene is drawn into a smaller buffer and stretched, because
@@ -231,6 +236,8 @@ class Spectrum(QWidget):
         self._dial_centres = None
         #: One slice of the real waveform per frame, for the scope.
         self._traces: List = []
+        #: Left against right, for the vector mode.
+        self._vectors: List = []
         self._state = SpectrumState()
         self._scene = visualizers.SCENES[0]
         self._sparks = [[0.0, 0.0, 0.0, 0.0, 0.0] for _ in range(self.SPARKS)]
@@ -362,6 +369,13 @@ class Spectrum(QWidget):
         """How big a jump in the bass counts as a hit, 0 fussy to 1 eager."""
         self._strobe_sense = max(0.0, min(1.0, float(sense)))
 
+    def set_scope_mode(self, mode: str) -> None:
+        """Sweep or X-Y, for whichever scene has a beam."""
+        setter = getattr(self._scene, "set_mode", None)
+        if setter is not None:
+            setter(mode)
+        self.update()
+
     def set_decay(self, seconds: float) -> None:
         """Pass the phosphor decay to whichever scene has one."""
         setter = getattr(self._scene, "set_decay", None)
@@ -426,9 +440,10 @@ class Spectrum(QWidget):
         """What is needed to read a bar's height back as a level."""
         self._state.calibration = dict(calibration or {})
 
-    def set_traces(self, shapes) -> None:
+    def set_traces(self, shapes, vectors=None) -> None:
         """The waveform slices that go with the frames."""
         self._traces = list(shapes or [])
+        self._vectors = list(vectors or [])
 
     def set_frames(self, frames: List, rate: int) -> None:
         """The analysis, which lands a moment after playback starts."""
@@ -493,6 +508,7 @@ class Spectrum(QWidget):
         self._peak = []
         self._state.history = []
         self._state.trace_history = []
+        self._state.vector_history = []
         for spark in self._sparks:
             spark[4] = 0.0
         self.updateGeometry()
@@ -592,7 +608,13 @@ class Spectrum(QWidget):
         # inside the picture, unclickable, at any window under about a
         # thousand pixels tall. A widget that can shrink cannot do that.
         self.setMaximumHeight(height)
-        self.setMinimumHeight(min(height, self.FLOOR))
+        # The floor is what the strip would like to keep, not what it may
+        # insist on. Bounded by the budget, because a minimum larger than
+        # the room available is how the transport ended up drawn over the
+        # picture - the layout has to put it somewhere.
+        floor = self.FLOOR if self._budget is None else min(self.FLOOR,
+                                                            self._budget)
+        self.setMinimumHeight(min(height, floor))
         # Only a slide that is heading for zero means "gone". The first
         # frame of a slide *away* from zero also reports about zero, and
         # stopping on that killed the scene every time it opened - which
@@ -620,7 +642,9 @@ class Spectrum(QWidget):
     def minimumSizeHint(self) -> QSize:      # noqa: N802 - Qt's name
         if self._unbounded:
             return QSize(0, 0)
-        return QSize(0, min(int(self._full_height() * self._reveal), self.FLOOR))
+        floor = self.FLOOR if self._budget is None else min(self.FLOOR,
+                                                            self._budget)
+        return QSize(0, min(int(self._full_height() * self._reveal), floor))
 
     # -- the numbers ------------------------------------------------------
     def _row(self) -> Optional[List[float]]:
@@ -636,6 +660,12 @@ class Spectrum(QWidget):
             blend = exact - index
             return [a + (b - a) * blend for a, b in zip(first, second)]
         return list(first)
+
+    def _vector_now(self):
+        if not self._vectors:
+            return None
+        exact = (self._position / 1000.0) * self._rate
+        return self._vectors[min(len(self._vectors) - 1, max(0, int(exact)))]
 
     def _trace_now(self):
         """The waveform slice for wherever the track is now."""
@@ -734,6 +764,7 @@ class Spectrum(QWidget):
         state.levels = self._level
         state.peaks = self._peak
         state.trace = self._trace_now()
+        state.vector = self._vector_now()
         # History belongs to the clock, not to the paint. Scenes used to
         # collect it themselves inside paint(), which tied how much they
         # remembered to how often they happened to be redrawn.
@@ -744,6 +775,10 @@ class Spectrum(QWidget):
             state.trace_history.append(list(state.trace))
             if len(state.trace_history) > self.HISTORY:
                 del state.trace_history[:len(state.trace_history) - self.HISTORY]
+        if state.vector is not None:
+            state.vector_history.append(list(state.vector))
+            if len(state.vector_history) > self.HISTORY:
+                del state.vector_history[:len(state.vector_history) - self.HISTORY]
         state.sparks = self._sparks
 
         if self._dial_frames and not self._idling:

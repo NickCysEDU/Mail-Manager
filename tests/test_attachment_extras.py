@@ -2050,3 +2050,126 @@ class TestTheStripGivesWayWhenThereIsNoRoom:
         _host, spectrum = self._in_a_pane(qtbot, 120)
         assert spectrum.height() <= spectrum.HEIGHT
         assert spectrum.height() >= 0
+
+
+class TestOscilloscopeMusic:
+    """Left against right, which is how a scope draws a picture.
+
+    A record cut for an oscilloscope puts the drawing in the difference
+    between the two channels. Decoding to mono threw it away, so the
+    decode asks for two and the scope can plot one against the other.
+    """
+
+    @staticmethod
+    def _stereo_square(seconds: float = 0.4):
+        from array import array
+
+        import attachment_audio
+
+        rate = attachment_audio.DECODE_RATE
+        corners = [(-1, -1), (1, -1), (1, 1), (-1, 1)]
+        per_side = max(4, int(rate * seconds) // 40 // 4)
+        pcm = array("h")
+        for _ in range(40):
+            for index in range(4):
+                x0, y0 = corners[index]
+                x1, y1 = corners[(index + 1) % 4]
+                for step in range(per_side):
+                    share = step / per_side
+                    pcm.append(int(18000 * (x0 + (x1 - x0) * share)))
+                    pcm.append(int(18000 * (y0 + (y1 - y0) * share)))
+        return pcm, rate
+
+    def test_the_decode_asks_for_two_channels(self):
+        """One channel cannot hold a picture."""
+        import inspect
+
+        import attachment_audio
+
+        source = inspect.getsource(attachment_audio.decode)
+        code = "\n".join(line.split("#", 1)[0] for line in source.splitlines())
+        assert "setChannelCount(2)" in code
+
+    def test_a_stereo_circle_comes_back_as_a_circle(self):
+        import math
+        from array import array
+
+        import attachment_audio
+
+        rate = attachment_audio.DECODE_RATE
+        pcm = array("h")
+        for index in range(rate):
+            angle = 2 * math.pi * 40 * index / rate
+            pcm.append(int(20000 * math.cos(angle)))
+            pcm.append(int(20000 * math.sin(angle)))
+        vectors = attachment_audio.vector_traces(pcm, rate, 2)
+        assert vectors, "nothing to plot"
+        first = vectors[0]
+        radii = [math.hypot(first[i * 2], first[i * 2 + 1])
+                 for i in range(len(first) // 2)]
+        assert max(radii) - min(radii) < 0.05, (
+            f"a circle came back as something else: {min(radii):.2f} to "
+            f"{max(radii):.2f}")
+
+    def test_the_scope_plots_the_picture_not_a_sweep(self, qapp):
+        """The X-Y path has to follow the samples, not a clock."""
+        from PySide6.QtCore import QRectF
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        scope = visualizers.by_name("Oscilloscope")
+        scope.set_mode("X-Y")
+        assert scope.mode == "X-Y"
+
+        state = SpectrumState()
+        # A square, as four corners.
+        state.vector = [-1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0]
+        scope._drawing = True
+        path = scope._path(QRectF(0, 0, 200, 200), state.vector, state, 0.0)
+        assert path.elementCount() == 4
+        xs = {round(path.elementAt(i).x) for i in range(4)}
+        ys = {round(path.elementAt(i).y) for i in range(4)}
+        assert len(xs) == 2 and len(ys) == 2, (
+            "the four corners did not land on two x values and two y values, "
+            "so this is not plotting one channel against the other")
+        scope.set_mode("Sweep")
+
+    def test_an_unknown_mode_is_ignored(self):
+        import visualizers
+
+        scope = visualizers.by_name("Oscilloscope")
+        scope.set_mode("Sweep")
+        scope.set_mode("nonsense")
+        assert scope.mode == "Sweep"
+
+
+class TestTheVisualiserWindowIsItsOwnThing:
+    """Somebody's own music, not a message's parts."""
+
+    @staticmethod
+    def _window(qtbot, library):
+        from attachment_view import AttachmentViewer
+
+        viewer = AttachmentViewer([], "", library=library)
+        qtbot.addWidget(viewer)
+        return viewer
+
+    def test_a_library_offers_adding_and_not_saving(self, qtbot):
+        viewer = self._window(qtbot, library=True)
+        assert viewer.windowTitle() == "Visualiser"
+        assert viewer.add_button.isVisible() or not viewer.isVisible()
+        assert not viewer.save_button.isVisible()
+        assert not viewer.save_all.isVisible()
+
+    def test_an_attachment_window_offers_saving_and_not_adding(self, qtbot):
+        viewer = self._window(qtbot, library=False)
+        assert viewer.windowTitle() == "Attachments"
+        assert not viewer.add_button.isVisible()
+
+    def test_the_library_does_not_promise_to_save_anything(self, qtbot):
+        """The key list should not offer a shortcut the window has removed."""
+        viewer = self._window(qtbot, library=True)
+        assert "save a copy" not in viewer.hint.text()
+        plain = self._window(qtbot, library=False)
+        assert "save a copy" in plain.hint.text()
