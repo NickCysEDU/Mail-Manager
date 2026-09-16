@@ -62,8 +62,9 @@ class Vaporwave(Scene):
         hue = state.hue
 
         sky = QLinearGradient(0.0, 0.0, 0.0, horizon)
-        sky.setColorAt(0.0, QColor(12, 6, 30))
-        sky.setColorAt(1.0, QColor.fromHsvF((hue + 0.74) % 1.0, 0.86, 0.34))
+        sky.setColorAt(0.0, QColor(4, 2, 14))
+        sky.setColorAt(0.55, QColor.fromHsvF((hue + 0.72) % 1.0, 0.92, 0.22))
+        sky.setColorAt(1.0, QColor.fromHsvF((hue + 0.78) % 1.0, 0.80, 0.46))
         painter.fillRect(QRectF(0, 0, width, horizon), sky)
 
         # The strobe belongs to the sun here: a kick makes it flare and
@@ -94,7 +95,7 @@ class Vaporwave(Scene):
         self._floor(painter, width, height, horizon, state)
         self._reflection(painter, width, height, horizon, state)
         self._ribbons(painter, width, horizon, state)
-        self._orb(painter, width, horizon, state)
+        self._stars(painter, width, horizon, state)
 
     def _far_skyline(self, painter, width, horizon, state) -> None:
         """A dimmer row behind, offset, so the city has depth."""
@@ -111,7 +112,7 @@ class Vaporwave(Scene):
             far.addRect(QRectF(index * block + block * 0.3, horizon - tall,
                                block * 0.84, tall))
         painter.fillPath(far, QColor.fromHsvF((state.hue + 0.66) % 1.0,
-                                              0.80, 0.16, 0.95))
+                                              0.85, 0.10, 1.0))
 
     def _reflection(self, painter, width, height, horizon, state) -> None:
         """The city again, upside down in the floor, fading out."""
@@ -139,8 +140,16 @@ class Vaporwave(Scene):
             tall = horizon * (0.10 + value * 0.42)
             x = index * block
             shade = ((index / count) * 0.2 + state.hue + 0.6) % 1.0
+            # Darker bodies than before, so the lit windows and the roof
+            # line carry the shape rather than the block itself.
             painter.fillRect(QRectF(x, horizon - tall, block * 0.92, tall),
-                             QColor.fromHsvF(shade, 0.75, 0.22, 0.95))
+                             QColor.fromHsvF(shade, 0.88, 0.13, 1.0))
+            # A lit roof edge. This is what makes the city read against a
+            # bright sun instead of dissolving into it.
+            painter.fillRect(QRectF(x, horizon - tall, block * 0.92,
+                                    max(1.0, horizon * 0.006)),
+                             QColor.fromHsvF((shade + 0.08) % 1.0, 0.45, 1.0,
+                                             0.55 + value * 0.45))
             # Lit windows. Collected into one path and filled once at the
             # end: several hundred drawRect calls with a brush change each
             # was most of what this scene cost at 1080p.
@@ -192,16 +201,24 @@ class Vaporwave(Scene):
                 path.moveTo(point) if step == 0 else path.lineTo(point)
             painter.drawPath(path)
 
-    def _orb(self, painter, width, horizon, state) -> None:
-        size = 8.0 + state.mid * 32.0
-        centre = QPointF(width / 2.0, horizon - size * 0.6)
-        glow = QRadialGradient(centre, size * 1.9)
-        shade = (state.hue + 0.45) % 1.0
-        glow.setColorAt(0.0, QColor.fromHsvF(shade, 0.30, 1.0, 0.5 + state.mid * 0.4))
-        glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+    def _stars(self, painter, width, horizon, state) -> None:
+        """A few fixed stars high in the sky, brightening with the treble.
+
+        Cheap detail that gives the top of the frame something to do now
+        the orb has gone, and it does not sit in front of the city.
+        """
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(glow)
-        painter.drawEllipse(centre, size * 1.9, size * 1.9)
+        shade = (state.hue + 0.5) % 1.0
+        for index in range(14):
+            # Deterministic placement, so they do not crawl about.
+            x = ((index * 97) % 100) / 100.0 * width
+            y = ((index * 37) % 100) / 100.0 * horizon * 0.52
+            twinkle = 0.35 + 0.65 * abs(math.sin(state.phase * 1.6 + index))
+            size = 0.8 + state.high * 1.8 * twinkle
+            painter.setBrush(QColor.fromHsvF(shade, 0.10, 1.0,
+                                             0.25 + state.high * 0.55 * twinkle))
+            painter.drawEllipse(QPointF(x, y), size, size)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
 
 
 class Tunnel(Scene):
@@ -223,15 +240,18 @@ class Tunnel(Scene):
             t = ((index + state.scroll + rush) % self.RINGS) / self.RINGS
             # Perspective: near rings are large and bright, far ones small.
             scale = t ** 1.8
-            radius = 14.0 + scale * max(width, height) * 0.62
+            # Bass swells the ring rather than squashing it. The squash made
+            # every ring an ellipse, which read as a mistake next to the
+            # circular scenes rather than as a reaction to the music.
+            swell = 1.0 + state.bass * 0.14
+            radius = (14.0 + scale * max(width, height) * 0.62) * swell
             energy = state.levels[int(t * (len(state.levels) - 1))] if state.levels else 0.0
             shade = (state.hue + t * 0.5) % 1.0
             alpha = (1.0 - t) * (0.35 + energy * 0.6)
             painter.setPen(QPen(QColor.fromHsvF(shade, 0.7, 1.0, alpha),
                                 1.0 + energy * 4.0))
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            squash = 1.0 - state.bass * 0.18
-            painter.drawEllipse(centre, radius, radius * squash)
+            painter.drawEllipse(centre, radius, radius)
 
         self._spokes(painter, centre, min(width, height) * 0.5, state)
         self._sparks(painter, state)
@@ -437,14 +457,30 @@ class Meters(Scene):
     START = 143.0
     SWEEP = -106.0
 
+    #: Where 0 dB - which is also 100 per cent - sits along the travel.
+    #: A VU movement deflects in proportion to voltage, so per cent is
+    #: linear along the arc and every dB mark falls where 20*log10 puts
+    #: it. Taking +3 dB as the end of the travel fixes the rest.
+    _FULL = 1.0 / (10.0 ** (3.0 / 20.0))
+
+    @staticmethod
+    def _db_at(db: float) -> float:
+        return (10.0 ** (db / 20.0)) * Meters._FULL
+
     #: dB marks along the arc, and where each one sits across the sweep.
-    DB_MARKS = ((-24, 0.00), (-12, 0.20), (-3, 0.46), (0, 0.68),
-                (1, 0.79), (2, 0.89), (3, 1.00))
+    DB_MARKS = tuple((db, (10.0 ** (db / 20.0)) / (10.0 ** (3.0 / 20.0)))
+                     for db in (-24, -12, -3, 0, 1, 2, 3))
     #: Below this face radius the per-cent row is dropped as unreadable.
     PERCENT_RADIUS = 150.0
-    #: Per cent marks, on the inside.
-    PERCENT_MARKS = ((0, 0.02), (20, 0.19), (40, 0.36), (60, 0.53),
-                     (80, 0.68), (100, 0.82))
+    #: Per cent marks, on the inside. Linear in deflection, as the movement
+    #: is: the eyeballed set put 100 per cent at 0.82 of the travel, which
+    #: is nearly a decibel and a half out.
+    PERCENT_MARKS = tuple((pc, pc / 100.0 / (10.0 ** (3.0 / 20.0)))
+                          for pc in (0, 20, 40, 60, 80, 100))
+    #: Unnumbered ticks, one per dB. They crowd towards the quiet end
+    #: because the scale does, which is what a real face looks like.
+    MINOR = tuple((10.0 ** (db / 20.0)) / (10.0 ** (3.0 / 20.0))
+                  for db in range(-20, 4))
 
     def __init__(self) -> None:
         self._faces: dict = {}
@@ -581,8 +617,8 @@ class Meters(Scene):
             self._tick(painter, centre, radius, fraction, colour,
                        0.88, 1.0, max(1.2, radius * 0.026))
         painter.setPen(QPen(dim, max(0.8, radius * 0.014)))
-        for step in range(1, 28):
-            self._tick(painter, centre, radius, step / 28.0, dim,
+        for fraction in self.MINOR:
+            self._tick(painter, centre, radius, fraction, dim,
                        0.94, 1.0, max(0.8, radius * 0.014))
 
         font = painter.font()
@@ -666,8 +702,100 @@ class Meters(Scene):
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
 
+class Ambience(Scene):
+    """The one that came with the media player everybody had.
+
+    Smooth ribbons drawn from the middle outwards and mirrored top to
+    bottom, each one riding a different part of the spectrum, colours
+    wandering slowly through the wheel. No bars anywhere: this scene is
+    about long curves that fold over each other, and the overlaps doing
+    the work that a glow would.
+
+    Drawn additively, so where two ribbons cross they brighten - which is
+    what made the original look lit from behind rather than painted.
+    """
+
+    name = "Ambience"
+    blurb = "mirrored ribbons folding over each other, as it was in 2001"
+
+    #: How many ribbons, and how many points along each. Sixty points is
+    #: past the width of a pixel at any size this is drawn at.
+    RIBBONS = 5
+    STEPS = 60
+
+    def paint(self, painter, rect, state) -> None:
+        width, height = rect.width(), rect.height()
+        middle = height * 0.5
+        painter.fillRect(rect, QColor(3, 2, 8))
+        levels = state.levels
+        if not levels:
+            return
+
+        flash = self.flash(state)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.save()
+        painter.setCompositionMode(
+            QPainter.CompositionMode.CompositionMode_Plus)
+        for ribbon in range(self.RIBBONS):
+            share = ribbon / max(1, self.RIBBONS - 1)
+            # Each ribbon listens to its own quarter of the spectrum.
+            low = int(share * (len(levels) - 1) * 0.75)
+            band = sum(levels[low:low + 4]) / max(1, len(levels[low:low + 4]))
+            reach = middle * (0.18 + band * 0.74 + flash * 0.20)
+            turn = state.phase * (0.7 + ribbon * 0.23)
+            shade = (state.hue + share * 0.42 + 0.1) % 1.0
+            colour = QColor.fromHsvF(shade, 0.72 - flash * 0.35, 1.0,
+                                     0.30 + band * 0.45 + flash * 0.2)
+            painter.setPen(QPen(colour,
+                                max(1.6, height * 0.010 * (0.6 + band)),
+                                Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+                                Qt.PenJoinStyle.RoundJoin))
+            self._ribbon(painter, width, middle, reach, turn, ribbon, +1)
+            self._ribbon(painter, width, middle, reach, turn, ribbon, -1)
+        painter.restore()
+        self._core(painter, width, middle, state, flash)
+
+    def _ribbon(self, painter, width, middle, reach, turn, index, side) -> None:
+        """One curve, mirrored by ``side``.
+
+        Two sines of different periods rather than one, because a single
+        sine reads as a rope and two read as something being blown about.
+        """
+        path = QPainterPath()
+        for step in range(self.STEPS + 1):
+            across = step / self.STEPS
+            x = across * width
+            wave = (math.sin(across * math.tau * 1.4 + turn)
+                    * 0.66
+                    + math.sin(across * math.tau * 2.7 - turn * 1.3 + index)
+                    * 0.34)
+            # Pinched at both ends, so the ribbons meet rather than being
+            # cut off by the edge of the frame.
+            pinch = math.sin(across * math.pi) ** 0.7
+            y = middle + side * wave * reach * pinch
+            if step == 0:
+                path.moveTo(x, y)
+            else:
+                path.lineTo(x, y)
+        painter.drawPath(path)
+
+    def _core(self, painter, width, middle, state, flash) -> None:
+        """A soft line along the middle, brightest where the bass is."""
+        glow = QLinearGradient(0.0, middle, width, middle)
+        shade = (state.hue + 0.5) % 1.0
+        edge = QColor.fromHsvF(shade, 0.6, 1.0, 0.0)
+        centre = QColor.fromHsvF(shade, 0.25, 1.0,
+                                 0.25 + state.bass * 0.5 + flash * 0.25)
+        glow.setColorAt(0.0, edge)
+        glow.setColorAt(0.5, centre)
+        glow.setColorAt(1.0, edge)
+        painter.setPen(QPen(glow, max(1.0, middle * 0.012)))
+        painter.drawLine(QPointF(0.0, middle), QPointF(width, middle))
+
+
 #: Every theme, in the order the picker offers them.
-SCENES = (Vaporwave(), Tunnel(), Oscilloscope(), Bars(), Meters())
+SCENES = (Vaporwave(), Tunnel(), Oscilloscope(), Bars(), Meters(),
+          Ambience())
 
 
 def by_name(name: str) -> Scene:
@@ -675,3 +803,30 @@ def by_name(name: str) -> Scene:
         if scene.name == name:
             return scene
     return SCENES[0]
+
+
+# ==========================================================================
+# Post-processing
+# ==========================================================================
+#: What each scene asks for after it has drawn itself. Kept here rather than
+#: on the classes so the whole look of the set can be read at once.
+#:
+#: bloom     how much light bleeds out of bright areas
+#: scanlines a CRT's horizontal lines, 0 to 1
+#: vignette  how much the corners fall off
+#: grain     film noise, which hides banding in the gradients
+#: aberration how far the red and blue channels separate, in pixels
+POST = {
+    "Vaporwave city": {"bloom": 0.55, "scanlines": 0.18, "vignette": 0.40,
+                       "grain": 0.05, "aberration": 1.2},
+    "Neon tunnel": {"bloom": 0.70, "vignette": 0.55, "aberration": 1.8},
+    "Oscilloscope": {"bloom": 0.85, "scanlines": 0.26, "vignette": 0.30},
+    "Equaliser": {"bloom": 0.30, "vignette": 0.22},
+    "VU meters": {"bloom": 0.40, "vignette": 0.45, "grain": 0.07},
+    "Ambience": {"bloom": 0.80, "vignette": 0.35, "aberration": 1.0},
+}
+
+
+def post_for(scene) -> dict:
+    """The recipe for this scene, or nothing if it wants none."""
+    return POST.get(getattr(scene, "name", ""), {})

@@ -1358,3 +1358,306 @@ class TestItHoldsSixtyFramesASecond:
         image = spectrum.grab().toImage()
         # A widget with no height cannot have drawn anything.
         assert image.height() <= 1
+
+
+class TestTheAnalysisStaysOffTheUiThread:
+    """Five and a half seconds of arithmetic used to run on the UI thread.
+
+    analyse() is a pure-Python FFT over the whole track. It was called
+    from the decoder's finished signal, which Qt delivers on the thread
+    that owns the widgets, so a three minute file froze the window solid -
+    grey, beachballing, indistinguishable from a crash - before anything
+    appeared. The module docstring claimed it ran in a worker thread; it
+    did not.
+    """
+
+    def test_analyse_can_be_abandoned_partway(self):
+        import attachment_audio
+        from array import array
+
+        samples = array("h", [0] * (attachment_audio.DECODE_RATE * 8))
+        frames = attachment_audio.analyse(samples, attachment_audio.DECODE_RATE,
+                                          1, should_stop=lambda: True)
+        assert frames == [], (
+            "a cancelled analysis must give up, not finish the track")
+
+    def test_analyse_reports_progress(self):
+        import attachment_audio
+        from array import array
+
+        seen = []
+        samples = array("h", [1000] * (attachment_audio.DECODE_RATE * 6))
+        attachment_audio.analyse(samples, attachment_audio.DECODE_RATE, 1,
+                                 on_progress=seen.append)
+        assert seen, "nothing to show the user while they wait"
+        assert all(0.0 <= value <= 1.0 for value in seen)
+        assert seen == sorted(seen), "progress must not go backwards"
+
+    def test_the_decoder_hands_back_something_cancellable(self):
+        import attachment_audio
+
+        assert hasattr(attachment_audio, "stop_all"), (
+            "a pane destroyed as somebody's child cannot cancel its own "
+            "analysis, so there has to be a way to stop all of them")
+
+
+class TestTheVuScaleIsARealOne:
+    """The marks were eyeballed and the per-cent row was a decibel and a
+    half out. A VU movement deflects in proportion to voltage, which fixes
+    every mark on the face, so they are computed rather than placed."""
+
+    def test_zero_db_and_one_hundred_per_cent_are_the_same_point(self):
+        import visualizers
+
+        meters = visualizers.by_name("VU meters")
+        zero_db = dict(meters.DB_MARKS)[0]
+        full_scale = dict(meters.PERCENT_MARKS)[100]
+        assert abs(zero_db - full_scale) < 1e-9, (
+            "0 dB is 100 per cent on a VU meter; if these disagree the face "
+            "is decoration rather than a scale")
+
+    def test_the_marks_are_where_the_arithmetic_puts_them(self):
+        import math
+
+        import visualizers
+
+        meters = visualizers.by_name("VU meters")
+        top = 10.0 ** (3.0 / 20.0)
+        for db, fraction in meters.DB_MARKS:
+            assert abs(fraction - (10.0 ** (db / 20.0)) / top) < 1e-9, db
+
+    def test_per_cent_is_linear_in_deflection(self):
+        import visualizers
+
+        meters = visualizers.by_name("VU meters")
+        marks = dict(meters.PERCENT_MARKS)
+        steps = [marks[pc] - marks[pc - 20] for pc in (20, 40, 60, 80, 100)]
+        assert max(steps) - min(steps) < 1e-9, (
+            "the movement is linear, so the per-cent marks are evenly spaced")
+
+
+class TestTheTunnelIsRound:
+    def test_bass_swells_the_rings_rather_than_squashing_them(self):
+        """They were drawn as ellipses, up to 18 per cent flatter on a
+        kick, which read as a mistake beside the circular scenes."""
+        import inspect
+
+        import visualizers
+
+        source = inspect.getsource(visualizers.by_name("Neon tunnel").paint)
+        # Comments only, stripped: the comment explaining the removal says
+        # the word, and checking the prose passes on the bug it describes.
+        code = "\n".join(line.split("#", 1)[0] for line in source.splitlines())
+        assert "squash" not in code, "the ellipse squash is back"
+        assert "drawEllipse(centre, radius, radius)" in code
+
+
+class TestPaintingCannotTakeTheProcessDown:
+    """An exception out of paintEvent is fatal, not merely wrong.
+
+    Qt catches it, prints it, and carries on with a painter still open on
+    the backing store; the next frame then segfaults. A wrong argument
+    type in the polish pass turned into SIGSEGV that way, and only turned
+    up under a stress run that resized the window to one pixel tall.
+    """
+
+    def _spectrum(self, qapp):
+        from array import array
+
+        from attachment_widgets import Spectrum
+
+        widget = Spectrum()
+        widget.set_frames([array("f", [0.5] * 27) for _ in range(40)], 15)
+        widget._reveal = 1.0
+        widget._target = 1.0
+        return widget
+
+    @pytest.mark.parametrize("size", [(0, 0), (1, 1), (936, 1), (4, 300),
+                                      (300, 4), (1280, 240)])
+    def test_every_scene_survives_a_degenerate_frame(self, qapp, size):
+        from PySide6.QtGui import QPainter, QPixmap
+
+        import visualizers
+
+        widget = self._spectrum(qapp)
+        widget.set_post(True)
+        # Through _paint, not _paint_scene: the crash was the QRect that
+        # _paint takes from the widget meeting a QRectF source rectangle,
+        # so a test that hands _paint_scene a QRectF of its own never sees
+        # it and passes on the bug.
+        widget.resize(max(1, size[0]), max(1, size[1]))
+        canvas = QPixmap(max(1, size[0]), max(1, size[1]))
+        for scene in visualizers.SCENES:
+            widget.set_scene(scene)
+            painter = QPainter(canvas)
+            try:
+                widget._paint(painter)
+            finally:
+                painter.end()
+        widget.deleteLater()
+
+    def test_paint_event_closes_its_painter_even_when_a_scene_raises(self, qapp):
+        widget = self._spectrum(qapp)
+
+        class Exploding:
+            name = "boom"
+
+            def paint(self, *_args):
+                raise RuntimeError("scene went wrong")
+
+        widget.set_scene(Exploding())
+        widget.resize(200, 80)
+        with pytest.raises(RuntimeError):
+            widget._paint(_Recorder())
+        widget.deleteLater()
+
+
+class _Recorder:
+    """Stands in for a QPainter, and fails the way a real one would."""
+
+    def __getattr__(self, _name):
+        def call(*_args, **_kwargs):
+            return None
+        return call
+
+
+class TestTheVisualiserControlsFitTheirRow:
+    """They overlapped each other and then ran off the pane.
+
+    The row grows and shrinks with what is selected - the colour button
+    only exists for the meters - and a plain QHBoxLayout lays them out in
+    one line however narrow it gets.
+    """
+
+    def test_the_row_wraps_instead_of_overflowing(self, qapp):
+        from PySide6.QtWidgets import QPushButton, QWidget
+
+        from attachment_widgets import FlowRow
+
+        host = QWidget()
+        row = FlowRow(spacing=10)
+        host.setLayout(row)
+        for index in range(8):
+            row.addWidget(QPushButton(f"button {index}"))
+        host.resize(300, 400)
+        host.show()
+        qapp.processEvents()
+        widest = max(row.itemAt(i).widget().geometry().right()
+                     for i in range(row.count()))
+        assert widest <= 300, f"a control reached {widest} in a 300px row"
+        rows = {row.itemAt(i).widget().geometry().top()
+                for i in range(row.count())}
+        assert len(rows) > 1, "nothing wrapped, so nothing was fixed"
+        host.deleteLater()
+
+    def test_items_on_a_line_share_a_centre(self, qapp):
+        from PySide6.QtWidgets import QCheckBox, QComboBox, QWidget
+
+        from attachment_widgets import FlowRow
+
+        host = QWidget()
+        row = FlowRow(spacing=10)
+        host.setLayout(row)
+        box = QCheckBox("Visualiser")
+        combo = QComboBox()
+        combo.addItems(["Vaporwave city", "VU meters"])
+        row.addWidget(box)
+        row.addWidget(combo)
+        host.resize(600, 200)
+        host.show()
+        qapp.processEvents()
+        centres = [box.geometry().center().y(), combo.geometry().center().y()]
+        assert abs(centres[0] - centres[1]) <= 1, (
+            "a tick box and a combo box on one line have to agree on where "
+            "the middle is, or the row reads as two rows")
+        host.deleteLater()
+
+
+class TestTheTransportKeys:
+    """J back ten seconds, K play or pause, L forward ten.
+
+    In full screen these were dead for a while without anybody noticing:
+    the class had two keyPressEvent methods and the later one, which only
+    knew about Escape, quietly replaced the one that knew about J, K and
+    L. A test that called the method and checked it did not raise passed
+    the whole time, because the surviving method does not raise either.
+    """
+
+    def _pane(self, qapp, tmp_path):
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        pane.position.setRange(0, 300_000)
+        pane.position.setValue(120_000)
+        return pane
+
+    def test_the_window_maps_j_k_and_l(self):
+        import inspect
+
+        import attachment_view
+
+        source = inspect.getsource(attachment_view.AttachmentViewer._add_shortcuts)
+        for key in ('add("J"', 'add("K"', 'add("L"'):
+            assert key in source, f"{key} is not bound in the viewer"
+
+    def test_j_and_l_move_by_ten_seconds(self, qapp, tmp_path):
+        import attachment_view
+
+        pane = self._pane(qapp, tmp_path)
+        moved = []
+        pane._seek = moved.append
+
+        pane.transport("forward")
+        assert pane.position.value() == 120_000 + attachment_view.SKIP_MS
+        pane.transport("back")
+        assert pane.position.value() == 120_000
+        assert moved, "the position moved on screen but the player was told nothing"
+        pane.deleteLater()
+
+    def test_they_stop_at_the_ends_rather_than_running_past(self, qapp, tmp_path):
+        pane = self._pane(qapp, tmp_path)
+        pane._seek = lambda _value: None
+
+        pane.position.setValue(2_000)
+        pane.transport("back")
+        assert pane.position.value() == 0
+        pane.position.setValue(299_000)
+        pane.transport("forward")
+        assert pane.position.value() == 300_000
+        pane.deleteLater()
+
+    def test_full_screen_has_exactly_one_key_handler(self):
+        """Two of them is how the transport keys died last time."""
+        import inspect
+
+        from attachment_widgets import FullScreenSpectrum
+
+        source = inspect.getsource(FullScreenSpectrum)
+        assert source.count("def keyPressEvent") == 1, (
+            "more than one keyPressEvent: the last one defined wins and the "
+            "others are dead")
+
+    def test_full_screen_keys_reach_the_transport(self, qapp):
+        from PySide6.QtCore import QEvent, Qt
+        from PySide6.QtGui import QKeyEvent
+        from PySide6.QtWidgets import QVBoxLayout, QWidget
+
+        from attachment_widgets import FullScreenSpectrum, Spectrum
+
+        asked = []
+
+        class Owner:
+            def transport(self, action):
+                asked.append(action)
+
+        home = QWidget()
+        QVBoxLayout(home).addWidget(Spectrum())
+        spectrum = home.layout().itemAt(0).widget()
+        full = FullScreenSpectrum(spectrum, Owner())
+        for key, wanted in ((Qt.Key.Key_J, "back"), (Qt.Key.Key_K, "toggle"),
+                            (Qt.Key.Key_L, "forward")):
+            full.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, key,
+                                         Qt.KeyboardModifier.NoModifier))
+        assert asked == ["back", "toggle", "forward"], (
+            f"full screen swallowed the transport keys: {asked}")
+        full.close()
