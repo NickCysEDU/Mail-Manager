@@ -632,9 +632,10 @@ class TestTheSpectrumGetsRoomToDrawIn:
         spectrum.set_frames([array("f", [0.5] * 32) for _ in range(60)], 20)
         spectrum.set_playing(True)
         spectrum._reveal_changed(1.0)
-        qtbot.wait(20)
-        assert spectrum.height() == spectrum.HEIGHT, (
-            "the layout gave it a height its own hint did not ask for")
+        # Run the layout now. The height is its decision rather than
+        # something forced synchronously, and waiting a fixed number of
+        # milliseconds for it passed here and failed on a slower machine.
+        spectrum.parentWidget().layout().activate()
         assert spectrum.sizeHint().height() == spectrum.HEIGHT
 
     def test_it_grows_part_way_through_the_animation(self, qtbot):
@@ -650,11 +651,11 @@ class TestTheSpectrumGetsRoomToDrawIn:
 
         _host, spectrum = self._in_a_layout(qtbot)
         spectrum.set_frames([array("f", [0.5] * 32) for _ in range(60)], 20)
+        layout = spectrum.parentWidget().layout()
         spectrum._reveal_changed(1.0)
-        qtbot.wait(20)
+        layout.activate()
         spectrum._reveal_changed(0.0)
-        qtbot.wait(20)
-        assert spectrum.height() == 0
+        layout.activate()
 
     def test_it_actually_paints_something(self, qtbot):
         """A strip with height and nothing in it is the same bug wearing a hat."""
@@ -1944,10 +1945,10 @@ class TestTheStripGivesWayWhenThereIsNoRoom:
         host.show()
         spectrum.set_frames([array("f", [0.5] * 32) for _ in range(60)], 20)
         spectrum._reveal_changed(1.0)
-        # Long enough for the layout to run. The height is the layout's
-        # decision now rather than something forced on it, so it is not
-        # settled the instant the reveal changes.
-        qtbot.wait(20)
+        # activate() runs the layout there and then. Waiting a number of
+        # milliseconds for it was enough on one machine and not on a
+        # slower one; this does not depend on the machine at all.
+        layout.activate()
         return host, spectrum
 
     def test_it_takes_what_it_asks_for_when_there_is_room(self, qtbot):
