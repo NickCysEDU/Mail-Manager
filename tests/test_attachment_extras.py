@@ -698,6 +698,9 @@ class TestTheSpectrumGetsRoomToDrawIn:
         spectrum = viewer.audio.spectrum
         assert spectrum.height() == 0, "it was visible before anything played"
 
+        # The visualiser is off by default now, so asking for it is part of
+        # the sequence a person goes through.
+        viewer.audio.enable_box.setChecked(True)
         viewer.audio._toggle()
         qtbot.waitUntil(lambda: spectrum.ready and spectrum.height() > 40,
                         timeout=30_000)
@@ -713,31 +716,40 @@ class TestTheBandsAreARealEqualiser:
         import attachment_audio
 
         centres = attachment_audio.CENTRES
-        assert centres[0] == 50 and centres[-1] == 10000
+        assert centres[0] == 50 and centres[-1] == 20000
         for lower, upper in zip(centres, centres[1:]):
             ratio = upper / lower
             assert 1.18 < ratio < 1.32, f"{lower}->{upper} is not a third octave"
 
     def test_nothing_is_offered_above_nyquist(self):
-        """The analysis decodes at 22 kHz, so 11 kHz is the ceiling."""
+        """Half the decode rate is all that exists in the signal."""
         import attachment_audio
 
-        assert max(attachment_audio.CENTRES) <= 11025
+        assert max(attachment_audio.CENTRES) <= attachment_audio.DECODE_RATE / 2
 
     @pytest.mark.parametrize("hertz", [63, 125, 250, 500, 1000, 2000, 4000, 8000])
     def test_a_tone_lands_in_its_own_band(self, hertz):
+        """Within one third-octave, which is the resolution on offer.
+
+        The decoder runs at 48 kHz so the dial scene can show 18 and 22 kHz,
+        and a 2048-point window at that rate is 23 Hz a bin. Two adjacent
+        third-octave bands below 100 Hz are 13 Hz apart, so the lowest of
+        them share bins and the winner between neighbours is not guaranteed.
+        Everything from 100 Hz up lands exactly.
+        """
         import math
         from array import array
 
         import attachment_audio
 
-        rate = 22050
+        rate = attachment_audio.DECODE_RATE
         samples = array("h", [int(14000 * math.sin(2 * math.pi * hertz * i / rate))
-                              for i in range(rate * 2)])
+                              for i in range(rate)])
         frames = attachment_audio.analyse(samples, rate, 1)
         row = frames[len(frames) // 2]
         loudest = attachment_audio.CENTRES[max(range(len(row)), key=lambda i: row[i])]
-        assert abs(math.log2(loudest / hertz)) < 0.2, (
+        tolerance = 0.36 if hertz < 100 else 0.2
+        assert abs(math.log2(loudest / hertz)) < tolerance, (
             f"{hertz} Hz showed up at {loudest} Hz")
 
     def test_the_scale_is_decibels_not_amplitude(self):
@@ -747,11 +759,11 @@ class TestTheBandsAreARealEqualiser:
 
         import attachment_audio
 
-        rate = 22050
+        rate = attachment_audio.DECODE_RATE
         heights = []
         for amplitude in (16000, 8000):
             samples = array("h", [int(amplitude * math.sin(2 * math.pi * 500 * i / rate))
-                                  for i in range(rate * 2)])
+                                  for i in range(rate)])
             frames = attachment_audio.analyse(samples, rate, 1)
             heights.append(max(max(row) for row in frames))
         # Normalisation pins the loudest to about the same place, which is the
@@ -942,3 +954,407 @@ class TestTheBuildKeepsWhatTheViewerNeeds:
         assert "QMediaPlayer()" in body, "it does not build a player"
         assert "QPdfDocument()" in body, "it does not build a PDF document"
         assert "visualizers" in body
+
+
+class TestTheMeterScene:
+    """Ten analogue dials, copied from a photograph of a rack of them."""
+
+    @staticmethod
+    def _spectrum(qtbot, position=1500):
+        import math
+        from array import array
+
+        import attachment_audio
+        import visualizers
+        from attachment_widgets import Spectrum
+
+        rate = attachment_audio.DECODE_RATE
+        pcm = array("h", [
+            int(10000 * (math.sin(2 * math.pi * 73 * i / rate)
+                         + 0.8 * math.sin(2 * math.pi * 1400 * i / rate)) / 1.8)
+            for i in range(rate * 3)])
+        spectrum = Spectrum()
+        qtbot.addWidget(spectrum)
+        spectrum.set_frames(attachment_audio.analyse(pcm, rate, 1),
+                            attachment_audio.RATE)
+        spectrum.set_scene(visualizers.by_name("VU meters"))
+        spectrum.resize(1000, 520)
+        spectrum._reveal_changed(1.0)
+        spectrum.set_position(position)
+        for _ in range(5):
+            spectrum._tick()
+        return spectrum
+
+    def test_there_are_ten_bands_with_the_asked_for_labels(self, qtbot):
+        spectrum = self._spectrum(qtbot)
+        assert len(spectrum._state.dials) == 10
+        assert spectrum._state.dial_labels == [
+            "73Hz", "120Hz", "300Hz", "576Hz", "1.4kHz",
+            "2.4kHz", "6kHz", "9kHz", "18kHz", "22kHz"]
+
+    def test_a_tone_moves_its_own_needle(self, qtbot):
+        spectrum = self._spectrum(qtbot)
+        dials = spectrum._state.dials
+        assert dials[0] > 0.5, "73 Hz did not move the 73 Hz needle"
+        assert dials[4] > 0.4, "1.4 kHz did not move the 1.4 kHz needle"
+        assert dials[8] < 0.4, "18 kHz moved with nothing there"
+
+    def test_the_decoder_reaches_the_top_band(self):
+        """22 kHz needs 48 kHz decoding; 22 kHz decoding would be noise."""
+        import attachment_audio
+
+        assert attachment_audio.DECODE_RATE >= 44100
+        assert max(attachment_audio.DIAL_CENTRES) <= attachment_audio.DECODE_RATE / 2
+
+    def test_it_draws_and_the_face_is_cached(self, qtbot):
+        import visualizers
+
+        spectrum = self._spectrum(qtbot)
+        scene = visualizers.by_name("VU meters")
+        spectrum.grab()
+        assert scene._faces, "the static face is redrawn every frame"
+        before = len(scene._faces)
+        for _ in range(5):
+            spectrum._tick()
+            spectrum.grab()
+        assert len(scene._faces) == before, "the cache is not being reused"
+
+    def test_colours_can_be_changed(self, qtbot):
+        from PySide6.QtGui import QColor
+
+        spectrum = self._spectrum(qtbot)
+        first = spectrum.grab().toImage()
+        spectrum.set_colours(dial=QColor(80, 200, 255),
+                             background=QColor(2, 8, 16))
+        spectrum._tick()
+        second = spectrum.grab().toImage()
+        assert first != second, "recolouring changed nothing"
+        assert spectrum.colours[0].blue() > spectrum.colours[0].red()
+
+    def test_the_scale_matches_the_reference(self):
+        import visualizers
+
+        meters = visualizers.by_name("VU meters")
+        marks = [value for value, _ in meters.DB_MARKS]
+        assert marks == [-24, -12, -3, 0, 1, 2, 3]
+        percent = [value for value, _ in meters.PERCENT_MARKS]
+        assert percent == [0, 20, 40, 60, 80, 100]
+        # Clockwise from bottom left, as a moving-coil meter reads.
+        assert meters.SWEEP < 0
+
+
+class TestTheColourPicker:
+    def test_it_offers_the_formats_qt_can_read(self):
+        import colour_picker
+
+        formats = colour_picker.readable_formats()
+        for expected in ("png", "jpg", "gif"):
+            assert expected in formats
+
+    def test_a_swatch_reports_what_it_was_set_to(self, qtbot):
+        from PySide6.QtGui import QColor
+
+        from colour_picker import Swatch
+
+        swatch = Swatch(QColor("#ff0000"), "Dial")
+        qtbot.addWidget(swatch)
+        seen = []
+        swatch.picked.connect(seen.append)
+        swatch.set_colour(QColor("#00ff00"))
+        assert seen and seen[-1].green() == 255
+
+    def test_clicking_a_picture_yields_the_pixel_under_the_click(self, qtbot, tmp_path):
+        from PySide6.QtCore import QPointF, Qt
+        from PySide6.QtGui import QImage, QMouseEvent
+
+        from colour_picker import ImageSampler
+
+        image = QImage(40, 40, QImage.Format.Format_RGB32)
+        image.fill(0xFF3366CC)
+        path = tmp_path / "flat.png"
+        image.save(str(path))
+
+        sampler = ImageSampler()
+        qtbot.addWidget(sampler)
+        sampler.resize(200, 160)
+        assert "x" in sampler.load(path)
+        taken = []
+        sampler.sampled.connect(taken.append)
+        centre = QPointF(sampler.width() / 2, sampler.height() / 2)
+        sampler.mousePressEvent(QMouseEvent(
+            QMouseEvent.Type.MouseButtonPress, centre, centre,
+            Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier))
+        assert taken, "clicking the picture took no colour"
+        assert (taken[0].red(), taken[0].green(), taken[0].blue()) == (0x33, 0x66, 0xCC)
+
+    def test_an_unreadable_file_is_reported_not_raised(self, qtbot, tmp_path):
+        from colour_picker import ImageSampler
+
+        bad = tmp_path / "not-a-picture.png"
+        bad.write_bytes(b"\x00\xff" * 200)
+        sampler = ImageSampler()
+        qtbot.addWidget(sampler)
+        assert "not a picture" in sampler.load(bad).lower()
+
+
+class TestTheVisualiserControlsAreReachable:
+    """They were inside the visualiser frame, hidden by a one-shot timer."""
+
+    @staticmethod
+    def _pane(qtbot):
+        import math
+        import struct
+
+        import attachments
+        from attachment_view import AttachmentViewer
+
+        rate = 22050
+        pcm = b"".join(struct.pack("<h", int(9000 * math.sin(2 * math.pi * 220 * i / rate)))
+                       for i in range(rate))
+        wav = (b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt "
+               + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16)
+               + b"data" + struct.pack("<I", len(pcm)) + pcm)
+        item = attachments.Attachment(part="1", name="t.wav",
+                                      content_type="audio/wav",
+                                      size=len(wav), data=wav)
+        viewer = AttachmentViewer([item])
+        qtbot.addWidget(viewer)
+        viewer.resize(1000, 760)
+        viewer.show()
+        viewer.list.setCurrentRow(0)
+        return viewer
+
+    def test_they_are_visible_as_soon_as_a_sound_file_opens(self, qtbot):
+        viewer = self._pane(qtbot)
+        assert viewer.audio.visual_holder.isVisible()
+        assert viewer.audio.scene_box.isVisible()
+        assert viewer.audio.full_button.isVisible()
+        viewer._sweep()
+
+    def test_they_are_not_inside_the_visualiser(self, qtbot):
+        viewer = self._pane(qtbot)
+        holder = viewer.audio.visual_holder.geometry()
+        spectrum = viewer.audio.spectrum.geometry()
+        assert not spectrum.intersects(holder), (
+            "the controls sit inside the picture and vanish with it")
+        viewer._sweep()
+
+    def test_the_colour_button_belongs_to_the_meter_scene_only(self, qtbot):
+        viewer = self._pane(qtbot)
+        viewer.audio._scene_chosen("Equaliser")
+        assert not viewer.audio.colour_button.isVisible()
+        viewer.audio._scene_chosen("VU meters")
+        assert viewer.audio.colour_button.isVisible()
+        viewer._sweep()
+
+
+class TestAnAnalysisThatOutlivesItsWindow:
+    """The decoder finishes on its own schedule, sometimes after the close.
+
+    Calling into a deleted widget from that callback raises out of Qt's
+    event loop, which in a running app means a traceback and a dead
+    visualiser. Found by a test whose teardown ran while a decode was still
+    going.
+    """
+
+    @staticmethod
+    def _pane(qtbot):
+        import math
+        import struct
+
+        import attachments
+        from attachment_view import AttachmentViewer
+
+        rate = 22050
+        pcm = b"".join(struct.pack("<h", int(8000 * math.sin(2 * math.pi * 300 * i / rate)))
+                       for i in range(rate))
+        wav = (b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt "
+               + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16)
+               + b"data" + struct.pack("<I", len(pcm)) + pcm)
+        item = attachments.Attachment(part="1", name="t.wav",
+                                      content_type="audio/wav",
+                                      size=len(wav), data=wav)
+        viewer = AttachmentViewer([item])
+        qtbot.addWidget(viewer)
+        viewer.list.setCurrentRow(0)
+        return viewer
+
+    def test_a_token_is_taken_per_file(self, qtbot):
+        viewer = self._pane(qtbot)
+        first = viewer.audio._analysis_token
+        viewer.audio.stop()
+        assert viewer.audio._analysis_token > first
+        viewer._sweep()
+
+    def test_frames_for_a_previous_file_are_dropped(self, qtbot):
+        import attachment_audio
+
+        viewer = self._pane(qtbot)
+        pane = viewer.audio
+        stale = pane._analysis_token
+        pane._analysis_token += 1          # another file was loaded
+        before = list(pane.spectrum._frames)
+
+        # Rebuild the closure the decoder would call, with the old token.
+        def alive() -> bool:
+            return stale == pane._analysis_token
+
+        assert not alive(), "a late analysis would be accepted"
+        assert pane.spectrum._frames == before
+        viewer._sweep()
+
+    def test_the_guard_uses_a_liveness_check_as_well(self):
+        """A token alone does not help if the widget is gone."""
+        import inspect
+
+        import attachment_view
+
+        source = inspect.getsource(attachment_view.AudioPane._start_analysis)
+        assert "shiboken6" in source
+        assert "isValid" in source
+
+
+class TestTheVisualiserCanBeSwitchedOff:
+    """Off by default, and off means nothing is computed or drawn."""
+
+    @staticmethod
+    def _pane(qtbot):
+        import math
+        import struct
+
+        import attachments
+        from attachment_view import AttachmentViewer
+
+        rate = 22050
+        pcm = b"".join(struct.pack("<h", int(9000 * math.sin(2 * math.pi * 300 * i / rate)))
+                       for i in range(rate))
+        wav = (b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt "
+               + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16)
+               + b"data" + struct.pack("<I", len(pcm)) + pcm)
+        item = attachments.Attachment(part="1", name="t.wav",
+                                      content_type="audio/wav",
+                                      size=len(wav), data=wav)
+        viewer = AttachmentViewer([item])
+        qtbot.addWidget(viewer)
+        viewer.resize(900, 700)
+        viewer.show()
+        viewer.list.setCurrentRow(0)
+        return viewer
+
+    def test_it_starts_off(self, qtbot):
+        viewer = self._pane(qtbot)
+        assert not viewer.audio.enable_box.isChecked()
+        viewer._sweep()
+
+    def test_its_controls_start_unavailable(self, qtbot):
+        viewer = self._pane(qtbot)
+        pane = viewer.audio
+        assert pane.enable_box.isEnabled(), "the tick box itself must work"
+        for widget in (pane.scene_box, pane.strobe_box, pane.full_button):
+            assert not widget.isEnabled()
+        viewer._sweep()
+
+    def test_nothing_is_analysed_while_it_is_off(self, qtbot):
+        viewer = self._pane(qtbot)
+        assert viewer.audio._decoder is None, (
+            "a decode was started for a visualiser nobody asked for")
+        assert not viewer.audio.spectrum.ready
+        viewer._sweep()
+
+    def test_playing_with_it_off_draws_nothing(self, qtbot):
+        viewer = self._pane(qtbot)
+        spectrum = viewer.audio.spectrum
+        viewer.audio._state()          # as a playback state change would
+        assert spectrum.height() == 0
+        assert not spectrum._timer.isActive()
+        viewer._sweep()
+
+    def test_ticking_it_frees_the_controls(self, qtbot):
+        viewer = self._pane(qtbot)
+        pane = viewer.audio
+        pane.enable_box.setChecked(True)
+        for widget in (pane.scene_box, pane.strobe_box, pane.full_button):
+            assert widget.isEnabled()
+        viewer._sweep()
+
+    def test_unticking_it_stops_everything(self, qtbot):
+        from array import array
+
+        import attachment_audio
+
+        viewer = self._pane(qtbot)
+        spectrum = viewer.audio.spectrum
+        viewer.audio.enable_box.setChecked(True)
+        spectrum.set_frames([array("f", [0.5] * attachment_audio.BANDS)
+                             for _ in range(60)], attachment_audio.RATE)
+        spectrum.set_playing(True)
+        spectrum._reveal_changed(1.0)
+        assert spectrum.height() > 0
+
+        viewer.audio.enable_box.setChecked(False)
+        assert not spectrum.ready
+        assert not spectrum._timer.isActive()
+        assert spectrum.maximumHeight() == 0
+        viewer._sweep()
+
+
+class TestItHoldsSixtyFramesASecond:
+    """Every scene, at the sizes a screen actually is."""
+
+    @staticmethod
+    def _spectrum(qtbot, width, height):
+        import math
+        from array import array
+
+        import attachment_audio
+        from attachment_widgets import Spectrum
+
+        rate = attachment_audio.DECODE_RATE
+        pcm = array("h", [
+            int(10000 * (math.sin(2 * math.pi * 90 * i / rate)
+                         + 0.7 * math.sin(2 * math.pi * 1100 * i / rate)) / 1.7)
+            for i in range(rate * 2)])
+        spectrum = Spectrum()
+        qtbot.addWidget(spectrum)
+        spectrum.set_frames(attachment_audio.analyse(pcm, rate, 1),
+                            attachment_audio.RATE)
+        spectrum.set_labels([str(c) for c in attachment_audio.CENTRES])
+        spectrum.resize(width, height)
+        spectrum._reveal_changed(1.0)
+        spectrum.set_position(900)
+        return spectrum
+
+    def test_the_timer_asks_for_sixty(self):
+        from attachment_widgets import Spectrum
+
+        spectrum = Spectrum()
+        assert spectrum._timer.interval() <= 17, "that is not sixty a second"
+
+    @pytest.mark.parametrize("index", range(5))
+    def test_each_scene_fits_a_frame_at_1080p(self, qtbot, index):
+        import time
+
+        import visualizers
+
+        spectrum = self._spectrum(qtbot, 1920, 1080)
+        spectrum.set_scene(visualizers.SCENES[index])
+        for _ in range(3):
+            spectrum._tick()
+            spectrum.grab()
+        started = time.monotonic()
+        rounds = 16
+        for step in range(rounds):
+            spectrum.set_position(900 + step * 16)
+            spectrum._tick()
+            spectrum.grab()
+        each = (time.monotonic() - started) / rounds * 1000
+        assert each < 16.67, (
+            f"{visualizers.SCENES[index].name} takes {each:.1f} ms a frame")
+
+    def test_nothing_is_drawn_when_it_is_not_revealed(self, qtbot):
+        spectrum = self._spectrum(qtbot, 1920, 1080)
+        spectrum._reveal_changed(0.0)
+        image = spectrum.grab().toImage()
+        # A widget with no height cannot have drawn anything.
+        assert image.height() <= 1

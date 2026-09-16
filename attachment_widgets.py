@@ -27,7 +27,8 @@ from PySide6.QtCore import (QEasingCurve, QPointF, QRectF, QSize, Qt,
                             QTimer, QVariantAnimation, Signal)
 from PySide6.QtGui import (QColor, QLinearGradient, QPainter, QPainterPath,
                            QPen, QRadialGradient)
-from PySide6.QtWidgets import (QLabel, QSlider, QStyle, QStyleOptionSlider,
+from PySide6.QtWidgets import (QGraphicsOpacityEffect, QHBoxLayout, QLabel,
+                               QSlider, QStyle, QStyleOptionSlider,
                                QVBoxLayout, QWidget)
 
 
@@ -124,11 +125,21 @@ class SeekBar(QSlider):
         self.blockSignals(False)
 
 
+def _hz_label(value) -> str:
+    """73Hz, 1.4kHz, 22kHz - as the reference meters are labelled."""
+    if value >= 1000:
+        thousands = value / 1000.0
+        text = f"{thousands:.0f}" if thousands == int(thousands) else f"{thousands:.1f}"
+        return f"{text}kHz"
+    return f"{int(value)}Hz"
+
+
 class SpectrumState:
     """Everything a scene is handed, and nothing it has to work out."""
 
     __slots__ = ("levels", "peaks", "bass", "mid", "synth", "high", "hit",
-                 "hue", "phase", "scroll", "strobe", "sparks", "labels")
+                 "hue", "phase", "scroll", "strobe", "sparks", "labels",
+                 "dials", "dial_labels", "dial_colour", "background")
 
     def __init__(self) -> None:
         self.levels: List[float] = []
@@ -141,6 +152,11 @@ class SpectrumState:
         self.strobe = False
         self.sparks: List[List[float]] = []
         self.labels: List[str] = []
+        self.dials: List[float] = []
+        self.dial_labels: List[str] = []
+        #: The reference these are copied from is red on near black.
+        self.dial_colour = QColor(226, 62, 48)
+        self.background = QColor(6, 4, 6)
 
 
 class Spectrum(QWidget):
@@ -172,12 +188,19 @@ class Spectrum(QWidget):
         self._peak: List[float] = []
         self._last_high = 0.0
         self._last_bass = 0.0
+        self._dial_frames: List = []
+        self._dial_level: List[float] = []
         self._state = SpectrumState()
         self._scene = visualizers.SCENES[0]
         self._sparks = [[0.0, 0.0, 0.0, 0.0, 0.0] for _ in range(self.SPARKS)]
         self._next_spark = 0
+        self._target = 0.0
+        self._unbounded = False
+        self._reserve = 0
         self._timer = QTimer(self)
-        self._timer.setInterval(33)
+        # Sixty a second. Every scene paints in well under a frame at
+        # 1080p, so the limit is the display rather than the drawing.
+        self._timer.setInterval(16)
         self._timer.timeout.connect(self._tick)
 
         self._reveal = 0.0
@@ -207,13 +230,33 @@ class Spectrum(QWidget):
     def set_labels(self, labels) -> None:
         self._state.labels = list(labels or [])
 
+    def set_colours(self, dial=None, background=None) -> None:
+        if dial is not None:
+            self._state.dial_colour = QColor(dial)
+        if background is not None:
+            self._state.background = QColor(background)
+        self.update()
+
+    @property
+    def colours(self):
+        return self._state.dial_colour, self._state.background
+
     def set_frames(self, frames: List, rate: int) -> None:
         """The analysis, which lands a moment after playback starts."""
+        import attachment_audio
+
         self._frames = frames or []
         self._rate = max(1, rate)
         width = len(self._frames[0]) if self._frames else 0
         self._level = [0.0] * width
         self._peak = [0.0] * width
+        # The dial scene wants ten named bands rather than the twenty-seven
+        # the equaliser uses, so they are read out of the same frames once.
+        self._dial_frames = attachment_audio.regroup(
+            self._frames, attachment_audio.DIAL_CENTRES)
+        self._dial_level = [0.0] * len(attachment_audio.DIAL_CENTRES)
+        self._state.dial_labels = [_hz_label(c)
+                                   for c in attachment_audio.DIAL_CENTRES]
         if self._frames and self._wanted:
             self.set_playing(True)
         self.update()
@@ -251,6 +294,7 @@ class Spectrum(QWidget):
         self._flow.stop()
         self._away.stop()
         self._reveal = 0.0
+        self._target = 0.0
         self._idling = False
         self._wanted = False
         self.setMinimumHeight(0)
@@ -279,29 +323,65 @@ class Spectrum(QWidget):
         self._animate_to(0.0)
 
     def _animate_to(self, target: float) -> None:
+        self._target = float(target)
         self._flow.stop()
         self._flow.setStartValue(float(self._reveal))
         self._flow.setEndValue(float(target))
         self._flow.start()
 
+    def set_reserve(self, pixels: int) -> None:
+        """Leave this many pixels clear at the bottom of the scene."""
+        self._reserve = max(0, int(pixels))
+        self.update()
+
+    def set_unbounded(self, free: bool) -> None:
+        """Stop holding the widget to its strip height.
+
+        In the pane the scene is a 240px band and the reveal animation
+        drives that height. Full screen wants the whole window, so the
+        clamps come off - without this the animation kept reapplying them
+        and the scene sat as a band across the middle of the screen.
+        """
+        self._unbounded = bool(free)
+        if free:
+            self.setMinimumHeight(0)
+            self.setMaximumHeight(16_777_215)
+        else:
+            self._reveal_changed(self._reveal)
+        self.updateGeometry()
+
     def _reveal_changed(self, value) -> None:
         self._reveal = max(0.0, min(1.0, float(value)))
         height = int(self.HEIGHT * self._reveal)
+        if self._unbounded:
+            if self._reveal <= 0.001 and self._target <= 0.0:
+                self._timer.stop()
+                self._idling = False
+            self.update()
+            return
         # Minimum, maximum and both hints together. A maximum on its own
         # leaves the minimum at zero and the hint at -1, so a layout hands
         # out whatever is spare - which in a full pane is nothing.
         self.setMinimumHeight(height)
         self.setMaximumHeight(height)
-        if self._reveal <= 0.001:
+        # Only a slide that is heading for zero means "gone". The first
+        # frame of a slide *away* from zero also reports about zero, and
+        # stopping on that killed the scene every time it opened - which
+        # looked like a visualiser that would not come back after a hide.
+        if self._reveal <= 0.001 and self._target <= 0.0:
             self._timer.stop()
             self._idling = False
         self.updateGeometry()
         self.update()
 
     def sizeHint(self) -> QSize:      # noqa: N802 - Qt's name
+        if self._unbounded:
+            return QSize(1280, 720)
         return QSize(420, int(self.HEIGHT * self._reveal))
 
     def minimumSizeHint(self) -> QSize:      # noqa: N802 - Qt's name
+        if self._unbounded:
+            return QSize(0, 0)
         return QSize(0, int(self.HEIGHT * self._reveal))
 
     # -- the numbers ------------------------------------------------------
@@ -377,6 +457,23 @@ class Spectrum(QWidget):
         state.peaks = self._peak
         state.sparks = self._sparks
 
+        if self._dial_frames and not self._idling:
+            exact = self._position / 1000.0 * self._rate
+            index = min(len(self._dial_frames) - 1, max(0, int(exact)))
+            wanted = self._dial_frames[index]
+            for i, value in enumerate(wanted):
+                if i >= len(self._dial_level):
+                    break
+                current = self._dial_level[i]
+                # A moving coil has mass: quick to rise, slow to fall back.
+                self._dial_level[i] = (value if value > current
+                                       else current * 0.86 + value * 0.14)
+        elif self._idling and self._dial_level:
+            for i in range(len(self._dial_level)):
+                self._dial_level[i] = (0.10 + 0.08 * _math.sin(
+                    self._drift * 1.6 + i * 0.6)) 
+        state.dials = self._dial_level
+
         for spark in self._sparks:
             if spark[4] <= 0.0:
                 continue
@@ -403,6 +500,16 @@ class Spectrum(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         rect = self.rect()
+        if self._reserve:
+            # The strip is part of the picture, not a gap in it, so it takes
+            # the scene's own background - including a picked one.
+            painter.fillRect(rect, self._state.background)
+            # Kept clear for the floating control bar. Reserving the strip
+            # permanently rather than while the bar shows means the scene
+            # never has a button sitting on top of it, and never resizes
+            # underneath the viewer when the bar fades.
+            rect = rect.adjusted(0, 0, 0, -min(self._reserve,
+                                               rect.height() // 3))
         if self._reveal <= 0.001:
             return
         if self._reveal < 0.999:
@@ -418,18 +525,26 @@ class Spectrum(QWidget):
 
 
 class FullScreenSpectrum(QWidget):
-    """The scene on its own, filling the screen, until Escape.
+    """The scene alone, filling the screen, with controls that get out of it.
 
     It borrows the running Spectrum rather than building a second one, so
     there is one analysis, one timer and one set of smoothed values however
-    many windows are looking at them. On the way out the widget goes back
-    where it came from.
+    many windows are looking. On the way out the widget goes back where it
+    came from.
+
+    The controls float on top and fade after a few seconds of stillness.
+    Moving the mouse brings them back, and they stay while the pointer is on
+    them - otherwise reaching for the volume makes them vanish under it.
     """
+
+    #: Stillness before the controls go, and before the pointer does.
+    IDLE_MS = 2600
 
     def __init__(self, spectrum: Spectrum, owner=None) -> None:
         super().__init__(None)
         self.setWindowTitle("Visualiser")
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self.setMouseTracking(True)
         self._spectrum = spectrum
         self._owner = owner
         self._home = spectrum.parentWidget()
@@ -438,29 +553,103 @@ class FullScreenSpectrum(QWidget):
         parent_layout = self._home.layout() if self._home else None
         if parent_layout is not None:
             self._layout_index = parent_layout.indexOf(spectrum)
-
         self._min, self._max = spectrum.minimumHeight(), spectrum.maximumHeight()
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        spectrum.setMinimumHeight(0)
-        spectrum.setMaximumHeight(16_777_215)
+        spectrum.set_unbounded(True)
+        spectrum.setParent(self)
         layout.addWidget(spectrum)
 
-        hint = QLabel("Escape to return")
-        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        hint.setStyleSheet("color: rgba(255,255,255,120); padding: 6px;")
-        layout.addWidget(hint)
+        self.bar = QWidget(self)
+        self.bar.setMouseTracking(True)
+        self.bar.setStyleSheet(
+            "background: rgba(12,10,18,215); border-radius: 10px;")
+        self._bar_layout = QHBoxLayout(self.bar)
+        self._bar_layout.setContentsMargins(14, 10, 14, 10)
+        self._bar_layout.setSpacing(10)
+
+        self._fade = QVariantAnimation(self)
+        self._fade.setDuration(320)
+        self._fade.valueChanged.connect(self._set_bar_opacity)
+        self._effect = QGraphicsOpacityEffect(self.bar)
+        self._effect.setOpacity(1.0)
+        self.bar.setGraphicsEffect(self._effect)
+
+        self._idle = QTimer(self)
+        self._idle.setSingleShot(True)
+        self._idle.setInterval(self.IDLE_MS)
+        self._idle.timeout.connect(self._hide_controls)
+        self._idle.start()
+
+    # -- what goes in the bar ---------------------------------------------
+    def add_control(self, widget) -> None:
+        widget.setMouseTracking(True)
+        self._bar_layout.addWidget(widget)
+
+    def add_stretch(self) -> None:
+        self._bar_layout.addStretch(1)
+
+    # -- showing and hiding ------------------------------------------------
+    def _set_bar_opacity(self, value) -> None:
+        self._effect.setOpacity(max(0.0, min(1.0, float(value))))
+        self.bar.setVisible(self._effect.opacity() > 0.01)
+
+    def _show_controls(self) -> None:
+        if self._effect.opacity() < 0.99:
+            self._fade.stop()
+            self._fade.setStartValue(self._effect.opacity())
+            self._fade.setEndValue(1.0)
+            self._fade.start()
+        self.unsetCursor()
+        self._idle.start()
+
+    def _hide_controls(self) -> None:
+        if self.bar.underMouse():
+            self._idle.start()
+            return
+        self._fade.stop()
+        self._fade.setStartValue(self._effect.opacity())
+        self._fade.setEndValue(0.0)
+        self._fade.start()
+        self.setCursor(Qt.CursorShape.BlankCursor)
+
+    def mouseMoveEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        self._show_controls()
+        super().mouseMoveEvent(event)
+
+    def resizeEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        super().resizeEvent(event)
+        self._place_bar()
+
+    def showEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        super().showEvent(event)
+        self._place_bar()
+
+    def _place_bar(self) -> None:
+        wanted = self.bar.sizeHint()
+        width = min(max(wanted.width(), 520), self.width() - 60)
+        height = max(wanted.height(), 48)
+        self.bar.setGeometry(int((self.width() - width) / 2),
+                             int(self.height() - height - 34), width, height)
+        self.bar.raise_()
+        self._spectrum.set_reserve(height + 52)
 
     def keyPressEvent(self, event) -> None:      # noqa: N802 - Qt's name
-        if event.key() in (Qt.Key.Key_Escape, Qt.Key.Key_F, Qt.Key.Key_Space):
+        self._show_controls()
+        if event.key() == Qt.Key.Key_Escape:
             self.close()
             return
         super().keyPressEvent(event)
 
     def closeEvent(self, event) -> None:      # noqa: N802 - Qt's name
         """Put the spectrum back exactly where it was."""
+        self._idle.stop()
+        self._fade.stop()
         spectrum = self._spectrum
         spectrum.setParent(None)
+        spectrum.set_reserve(0)
+        spectrum.set_unbounded(False)
         spectrum.setMinimumHeight(self._min)
         spectrum.setMaximumHeight(self._max)
         parent_layout = self._home.layout() if self._home else None
