@@ -13,7 +13,14 @@ VOLUME="${APP_NAME}"
 STAGING="build/dmg"
 DMG="dist/${APP_NAME}.dmg"
 
-G=$'\033[32m'; R=$'\033[31m'; N=$'\033[0m'
+# Colour only when somebody is watching. These go to stderr, and a
+# redirected build log or a CI transcript got the raw escape codes,
+# which is noise at best and confuses anything parsing the output.
+if [[ -t 2 ]]; then
+  G=$'\033[32m'; R=$'\033[31m'; N=$'\033[0m'
+else
+  G=''; R=''; N=''
+fi
 say()  { printf '%s==>%s %s\n' "$G" "$N" "$*" >&2; }
 die()  { printf '%serror:%s %s\n' "$R" "$N" "$*" >&2; exit 1; }
 
