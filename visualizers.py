@@ -399,6 +399,8 @@ class Oscilloscope(Scene):
     #: Traces kept at the longest decay. At sixty a second this is about a
     #: second and a half of history, which is longer than anybody sets it.
     MAX_HISTORY = 90
+    #: And in X-Y, where every frame is a complete figure.
+    MAX_XY_HISTORY = 6
     #: Seconds of persistence at each end of the slider.
     MIN_DECAY = 0.03
     MAX_DECAY = 1.50
@@ -457,7 +459,15 @@ class Oscilloscope(Scene):
         self._drawing = drawing
 
         # How many frames are worth keeping for the decay that is set.
-        keep = max(1, min(self.MAX_HISTORY, int(self._decay * 60.0)))
+        if drawing:
+            # A drawing is a whole picture per frame, and each frame is a
+            # different moment of it. Stacking sixteen of them does not
+            # read as persistence, it reads as a scribble - so X-Y keeps a
+            # handful at most, and the slider chooses between one and six.
+            keep = max(1, min(self.MAX_XY_HISTORY,
+                              int(round(self._decay * 4.0)) + 1))
+        else:
+            keep = max(1, min(self.MAX_HISTORY, int(self._decay * 60.0)))
         kept = (kept or [list(trace)])[-keep:]
 
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -469,7 +479,12 @@ class Oscilloscope(Scene):
             alpha = fresh ** 2.2
             if alpha < 0.02:
                 continue
-            width = 0.8 + fresh * fresh * (2.4 + flash * 2.6)
+            # A figure has detail in it that a fat beam fills in, so the
+            # X-Y trace is drawn finer than a sweep's.
+            if drawing:
+                width = 0.7 + fresh * fresh * (1.1 + flash * 0.9)
+            else:
+                width = 0.8 + fresh * fresh * (2.4 + flash * 2.6)
             # The live sweep is near white at its centre and the trail
             # falls back to a deep phosphor green, which is what makes
             # persistence read as persistence rather than as many lines.

@@ -1553,7 +1553,16 @@ class FlowHolder(QWidget):
         return QSize(width, self.heightForWidth(width))
 
     def minimumSizeHint(self) -> QSize:      # noqa: N802 - Qt's name
-        return self.sizeHint()
+        """As narrow as its widest single control, and as tall as it needs.
+
+        Returning the size hint here made the pane six hundred pixels wide
+        at minimum, so a narrower window could not shrink it - the layout
+        kept the width and everything past the edge was simply cut off.
+        A row that wraps has no minimum width beyond one control.
+        """
+        width = self.width() or 600
+        return QSize(self._row.minimumSize().width(),
+                     self.heightForWidth(width))
 
     def resizeEvent(self, event) -> None:      # noqa: N802 - Qt's name
         super().resizeEvent(event)

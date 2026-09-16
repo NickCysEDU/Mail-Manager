@@ -2200,3 +2200,94 @@ class TestTheVisualiserWindowIsItsOwnThing:
         assert "save a copy" not in viewer.hint.text()
         plain = self._window(qtbot, library=False)
         assert "save a copy" in plain.hint.text()
+
+
+class TestNothingRunsOffTheEdge:
+    """The pane has to fit the width it is given, not the one it wants.
+
+    The container holding the wrapping row reported a six hundred pixel
+    minimum width, so a narrower window could not shrink it: the layout
+    kept the width it wanted and everything past the right edge was cut,
+    mid-word in the case of the decay label.
+    """
+
+    def test_the_control_row_has_no_width_of_its_own(self, qapp):
+        from PySide6.QtWidgets import QPushButton
+
+        from attachment_widgets import FlowHolder, FlowRow
+
+        row = FlowRow(spacing=16)
+        for index in range(6):
+            row.addWidget(QPushButton(f"control {index}"))
+        holder = FlowHolder(row)
+        holder.resize(900, 40)
+        qapp.processEvents()
+        widest = max(row.itemAt(i).sizeHint().width()
+                     for i in range(row.count()))
+        assert holder.minimumSizeHint().width() <= widest + 1, (
+            f"the row insists on {holder.minimumSizeHint().width()} pixels "
+            f"when its widest control is {widest}; a row that wraps has no "
+            "minimum width beyond one control")
+        holder.deleteLater()
+
+    def test_it_reports_a_taller_height_when_it_is_narrower(self, qapp):
+        from PySide6.QtWidgets import QPushButton
+
+        from attachment_widgets import FlowHolder, FlowRow
+
+        row = FlowRow(spacing=16)
+        for index in range(8):
+            row.addWidget(QPushButton(f"control {index}"))
+        holder = FlowHolder(row)
+        assert holder.hasHeightForWidth()
+        wide = holder.heightForWidth(1200)
+        narrow = holder.heightForWidth(300)
+        assert narrow > wide, (
+            "a wrapping row is taller when it is narrower; if it says "
+            "otherwise the layout gives it one line and cuts the rest")
+        holder.deleteLater()
+
+    @pytest.mark.timeout(120)
+    def test_no_control_reaches_past_the_pane(self, qapp, tmp_path):
+        """The bug as it looked: the decay caption cut off mid-word."""
+        import wave
+
+        from PySide6.QtCore import QPoint
+
+        import attachments
+        from attachment_view import AttachmentViewer
+
+        path = tmp_path / "tone.wav"
+        with wave.open(str(path), "wb") as handle:
+            handle.setnchannels(2)
+            handle.setsampwidth(2)
+            handle.setframerate(8000)
+            handle.writeframes(b"\x00\x10\x00\x08" * 8000)
+        data = path.read_bytes()
+        item = attachments.Attachment(part="1", name="tone.wav",
+                                      content_type="audio/wav",
+                                      size=len(data), data=data)
+        dialog = AttachmentViewer([item])
+        qapp.processEvents()
+        dialog.show()
+        dialog.list.setCurrentRow(0)
+        pane = dialog.audio
+        pane.enable_box.setChecked(True)
+        qapp.processEvents()
+
+        offenders = []
+        for width, height in ((1400, 900), (1000, 700), (900, 600)):
+            dialog.resize(width, height)
+            qapp.processEvents()
+            dialog.layout().activate()
+            for name in ("scene_box", "shape_box", "strobe_group",
+                         "full_button", "position", "volume"):
+                widget = getattr(pane, name)
+                if not widget.isVisible():
+                    continue
+                edge = widget.geometry().translated(
+                    widget.parentWidget().mapTo(pane, QPoint(0, 0))).right()
+                if edge > pane.width() + 1:
+                    offenders.append(f"{width}x{height}/{name}")
+        dialog.close()
+        assert not offenders, f"drawn past the right edge: {offenders}"
