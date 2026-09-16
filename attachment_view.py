@@ -445,11 +445,21 @@ class AudioPane(QWidget):
         # The tick box and the two sliders that shape it, as one block: on
         # their own the sliders said "Sensitivity" and "Rate" with nothing
         # to say what of.
+        from attachment_widgets import Spectrum as _Spec
+
+        self.strobe_source = _combo(
+            list(_Spec.STROBE_SOURCES),
+            "Which part of the sound sets the strobe off.")
+        self.strobe_source.currentTextChanged.connect(
+            self.spectrum.set_strobe_source)
+        self.source_box = _labelled("on", self.strobe_source)
+
         self.strobe_group = QWidget()
         strobe_row = QHBoxLayout(self.strobe_group)
         strobe_row.setContentsMargins(0, 0, 0, 0)
         strobe_row.setSpacing(8)
-        for widget in (self.strobe_box, self.sense_box, self.rate_box):
+        for widget in (self.strobe_box, self.source_box, self.sense_box,
+                       self.rate_box):
             strobe_row.addWidget(widget)
 
         # A row that wraps. These controls come and go with what is chosen,
@@ -700,12 +710,20 @@ class AudioPane(QWidget):
         for widget in self._visual_controls:
             widget.setEnabled(on)
             widget.setGraphicsEffect(None)
-            if not on:
-                from PySide6.QtWidgets import QGraphicsOpacityEffect
+        # Hidden rather than dimmed. Half a dozen greyed-out controls is
+        # more to read than none, and none of them can be used.
+        self._show_visual_controls(on)
+        self.visual_row.invalidate()
 
-                faded = QGraphicsOpacityEffect(widget)
-                faded.setOpacity(0.35)
-                widget.setGraphicsEffect(faded)
+    def _show_visual_controls(self, on: bool) -> None:
+        scene = self.scene_box.currentText()
+        for widget in self._visual_controls:
+            if widget is self.colour_button:
+                widget.setVisible(on and scene == "VU meters")
+            elif widget is self.decay_box:
+                widget.setVisible(on and scene == "Oscilloscope")
+            else:
+                widget.setVisible(on)
 
     def _enable_visualiser(self, on: bool) -> None:
         """Off means off: no decode, no timer, no widget with a height.
@@ -775,9 +793,7 @@ class AudioPane(QWidget):
         self.spectrum.set_scene(scene)
         # Only the meters have colours to set, so the button only appears
         # when there is something for it to do.
-        self.colour_button.setVisible(scene.name == "VU meters")
-        scope = scene.name == "Oscilloscope"
-        self.decay_box.setVisible(scope and self.enable_box.isChecked())
+        self._show_visual_controls(self.enable_box.isChecked())
         self.visual_row.invalidate()
 
     @Slot()
@@ -1088,6 +1104,7 @@ class AttachmentViewer(QDialog):
                                    ("J&nbsp;&nbsp;L", "back or on ten seconds"),
                                    ("← →", "scrub"),
                                    ("↑ ↓", "move between attachments"),
+                                   ("F", "full screen"),
                                    ("⌘I", "show details"),
                                    ("⌘S", "save a copy")))
             + "</table>")
@@ -1200,12 +1217,25 @@ class AttachmentViewer(QDialog):
         add("J", lambda: self._nudge(-SKIP_MS))
         add("K", self._space)
         add("L", lambda: self._nudge(SKIP_MS))
+        add("F", self._toggle_full_screen)
         add(QKeySequence.StandardKey.Save, self._save_current)
         add("Ctrl+I", lambda: self.info_button.toggle())
         add("Down", lambda: self._step_row(1))
         add("Up", lambda: self._step_row(-1))
         add("Right", lambda: self._nudge(5000))
         add("Left", lambda: self._nudge(-5000))
+
+    def _toggle_full_screen(self) -> None:
+        """F, from the window. Escape or F again comes back."""
+        if self.stack.currentWidget() is not self.audio:
+            return
+        if not self.audio.full_button.isEnabled():
+            return
+        full = getattr(self.audio, "_full", None)
+        if full is not None:
+            full.close()
+        else:
+            self.audio._go_full_screen()
 
     def _space(self) -> None:
         if self.stack.currentWidget() is self.audio and self.audio.play.isEnabled():

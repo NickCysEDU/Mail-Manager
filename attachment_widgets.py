@@ -250,6 +250,9 @@ class Spectrum(QWidget):
         #: Middle of the slider until somebody moves it.
         self._strobe_rate = 0.5
         self._strobe_sense = 0.5
+        #: Which part of the sound the strobe listens to.
+        self._strobe_source = "Bass"
+        self._last_watched = 0.0
         self._since_hit = 99
         self._timer = QTimer(self)
         # Sixty a second. Every scene paints in well under a frame at
@@ -340,6 +343,14 @@ class Spectrum(QWidget):
     def set_strobe_rate(self, rate: float) -> None:
         """How soon after a flash the next one may fire, 0 rare to 1 often."""
         self._strobe_rate = max(0.0, min(1.0, float(rate)))
+
+    #: What the strobe can be told to listen to.
+    STROBE_SOURCES = ("Bass", "Mids", "Treble", "Synths")
+
+    def set_strobe_source(self, name: str) -> None:
+        """Which part of the sound sets the strobe off."""
+        if name in self.STROBE_SOURCES:
+            self._strobe_source = name
 
     def set_strobe_sense(self, sense: float) -> None:
         """How big a jump in the bass counts as a hit, 0 fussy to 1 eager."""
@@ -523,6 +534,9 @@ class Spectrum(QWidget):
         #: Middle of the slider until somebody moves it.
         self._strobe_rate = 0.5
         self._strobe_sense = 0.5
+        #: Which part of the sound the strobe listens to.
+        self._strobe_source = "Bass"
+        self._last_watched = 0.0
         self._since_hit = 99 if fraction is None else max(0.0, min(1.0, float(fraction)))
         if self._working is not None:
             self.reveal()
@@ -670,14 +684,19 @@ class Spectrum(QWidget):
         self._last_high = high
         state.hit = max(0.0, state.hit - 0.16)
         # Sensitivity decides what counts as a hit; rate decides how soon
-        # another may follow. They were one slider, which meant a busy
-        # track either strobed constantly or never.
-        jump = 0.22 - self._strobe_sense * 0.17    # 0.22 fussy, 0.05 eager
-        wait = int(34 - self._strobe_rate * 32)    # frames before the next
+        # another may follow. Both ranges are wide: at one end the strobe
+        # waits for something unmistakable and fires at most twice a bar,
+        # at the other it takes almost anything and fires every frame it
+        # is allowed to.
+        watched = {"Bass": bass, "Mids": state.mid, "Treble": high,
+                   "Synths": state.synth}.get(self._strobe_source, bass)
+        jump = 0.40 - self._strobe_sense * 0.39    # 0.40 fussy, 0.01 eager
+        wait = int(75 - self._strobe_rate * 73)    # frames before the next
         self._since_hit += 1
-        if bass - self._last_bass > jump and self._since_hit >= wait:
+        if watched - self._last_watched > jump and self._since_hit >= wait:
             state.hit = 1.0
             self._since_hit = 0
+        self._last_watched = watched
         self._last_bass = bass
 
         state.scroll = (state.scroll + 0.012 + state.bass * 0.05) % 1.0
