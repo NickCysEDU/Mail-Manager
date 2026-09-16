@@ -384,15 +384,20 @@ class AudioPane(QWidget):
             "flashes. Off by default: a flashing screen is not for "
             "everybody.")
         self.strobe_box.toggled.connect(self.spectrum.set_strobe)
-        self.colour_button = QPushButton("Meters…")
+        self.colour_button = QPushButton("\u25c9")
         self.colour_button.setToolTip(
-            "Colours for the dials and the background, and which frequency "
-            "each of the ten meters reads.")
+            "Meter colours and frequencies")
         self.colour_button.clicked.connect(self._choose_colours)
         self.colour_button.hide()
-        self.full_button = QPushButton("Full screen")
+        self.full_button = QPushButton("\u2921")
         self.full_button.setToolTip(
-            "Fill the screen with the visualiser. Escape returns.")
+            "Full screen (F). Escape or F comes back.")
+        # Square buttons carrying a symbol. The words cost eighty pixels
+        # of a row that has to hold everything, and this row is what the
+        # picture is squashed by.
+        for button in (self.colour_button, self.full_button):
+            button.setFixedWidth(34)
+            button.setAccessibleName(button.toolTip().split("(")[0].strip())
         self.full_button.clicked.connect(self._go_full_screen)
         self.spectrum.set_labels([_hz(c) for c in attachment_audio.CENTRES])
 
@@ -411,7 +416,7 @@ class AudioPane(QWidget):
         self.sense = QSlider(Qt.Orientation.Horizontal)
         self.sense.setRange(0, 100)
         self.sense.setValue(50)
-        self.sense.setFixedWidth(90)
+        self.sense.setFixedWidth(74)
         self.sense.setToolTip(
             "How big a jump in the bass counts as a hit. Right of centre "
             "catches a soft beat; left waits for something obvious.")
@@ -421,7 +426,7 @@ class AudioPane(QWidget):
         self.flash = QSlider(Qt.Orientation.Horizontal)
         self.flash.setRange(0, 100)
         self.flash.setValue(50)
-        self.flash.setFixedWidth(90)
+        self.flash.setFixedWidth(74)
         self.flash.setToolTip(
             "How soon after one flash the next may fire, from every few "
             "bars to every beat it can find.")
@@ -431,16 +436,16 @@ class AudioPane(QWidget):
         self.decay = QSlider(Qt.Orientation.Horizontal)
         self.decay.setRange(3, 150)
         self.decay.setValue(28)
-        self.decay.setFixedWidth(90)
+        self.decay.setFixedWidth(74)
         self.decay.setToolTip(
             "How long the oscilloscope's phosphor keeps glowing, from a "
             "hundredth of a second to a second and a half.")
         self.decay.valueChanged.connect(
             lambda value: self.spectrum.set_decay(value / 100.0))
 
-        self.sense_box = _labelled("fires at", self.sense)
-        self.rate_box = _labelled("as often as", self.flash)
-        self.decay_box = _labelled("Trace decay", self.decay)
+        self.sense_box = _labelled("on", self.sense)
+        self.rate_box = _labelled("every", self.flash)
+        self.decay_box = _labelled("Decay", self.decay)
         self.decay_box.hide()
         # The tick box and the two sliders that shape it, as one block: on
         # their own the sliders said "Sensitivity" and "Rate" with nothing
@@ -452,7 +457,7 @@ class AudioPane(QWidget):
             "Which part of the sound sets the strobe off.")
         self.strobe_source.currentTextChanged.connect(
             self.spectrum.set_strobe_source)
-        self.source_box = _labelled("on", self.strobe_source)
+        self.source_box = _labelled("", self.strobe_source)
 
         self.strobe_group = QWidget()
         strobe_row = QHBoxLayout(self.strobe_group)
@@ -465,7 +470,7 @@ class AudioPane(QWidget):
         # A row that wraps. These controls come and go with what is chosen,
         # and in one fixed line they overlapped each other and then ran off
         # the pane.
-        self.visual_row = FlowRow(spacing=10)
+        self.visual_row = FlowRow(spacing=16)
         # Grouped: what to draw, how it reacts, then what to do with it.
         groups = ((self.enable_box, self.busy, self.scene_box, self.shape_box),
                   (self.strobe_group,),
@@ -533,8 +538,7 @@ class AudioPane(QWidget):
         # were hidden by a one-shot timer that fired before the analysis
         # finished - so they never came back.
         layout.addWidget(self.visual_holder)
-        layout.addWidget(_muted(
-            "Playback is local. Nothing about this file leaves the machine."))
+        layout.addWidget(_muted("Playback is local."))
         layout.addStretch(1)
 
         self.play.clicked.connect(self._toggle)
