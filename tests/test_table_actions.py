@@ -32,6 +32,11 @@ def window(qapp, tmp_path, monkeypatch):
     win.folder_plan = FolderPlan()
     yield win
     win.close()
+    # close() only hides it. Without deleteLater the window and every
+    # widget under it stay alive for the rest of the session, and
+    # setStyleSheet restyles all of them on every theme change - which
+    # is what made this file take minutes instead of seconds.
+    win.deleteLater()
 
 
 @pytest.fixture

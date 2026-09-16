@@ -72,6 +72,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import git_check_ignore, git_lines
+
 ROOT = Path(__file__).resolve().parent.parent
 
 ADDRESS = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
@@ -171,10 +173,8 @@ def personal_addresses(text: str) -> list:
 
 
 def tracked(*patterns: str) -> list:
-    out = subprocess.run(["git", "ls-files", *patterns], cwd=ROOT,
-                         capture_output=True, text=True, check=True)
-    return [line for line in out.stdout.splitlines()
-            if line and line not in EXEMPT]
+    return [line for line in git_lines("ls-files", *patterns)
+            if line not in EXEMPT]
 
 
 ADVICE = ("If it is a placeholder, move it to the reserved .example TLD. If it "
@@ -576,9 +576,7 @@ class TestNothingSensitiveCanBeCommitted:
         if not existed:
             path.touch()
         try:
-            out = subprocess.run(["git", "check-ignore", "-v", name],
-                                 cwd=ROOT, capture_output=True, text=True)
-            assert out.returncode == 0, f"{name} is not ignored"
+            assert git_check_ignore(name), f"{name} is not ignored"
         finally:
             if not existed:
                 path.unlink()
@@ -589,16 +587,13 @@ class TestNothingSensitiveCanBeCommitted:
         if not existed:
             directory.mkdir()
         try:
-            out = subprocess.run(["git", "check-ignore", "-v", "Logs/"],
-                                 cwd=ROOT, capture_output=True, text=True)
-            assert out.returncode == 0
+            assert git_check_ignore("Logs/")
         finally:
             if not existed:
                 directory.rmdir()
 
     def test_nothing_sensitive_is_tracked_right_now(self):
-        tracked = subprocess.run(["git", "ls-files"], cwd=ROOT,
-                                 capture_output=True, text=True).stdout.split()
+        tracked = git_lines("ls-files")
         bad = [f for f in tracked
                if re.search(r"(^|/)(settings|corrections|verdicts|"
                             r"agent-status)\.json$|\.(pem|key|p12|cer|env|"
@@ -769,14 +764,10 @@ class TestNoEvaluationDataIsTracked:
 
     @staticmethod
     def _tracked():
-        out = subprocess.run(["git", "ls-files"], cwd=ROOT,
-                             capture_output=True, text=True)
-        return out.stdout.splitlines() if out.returncode == 0 else None
+        return git_lines("ls-files")
 
     def test_no_fixture_json_is_tracked(self):
         tracked = self._tracked()
-        if tracked is None:
-            pytest.skip("not a git checkout")
         offenders = [f for f in tracked
                      if f.startswith("tests/fixtures/") and f.endswith(".json")]
         assert not offenders, (
@@ -785,8 +776,7 @@ class TestNoEvaluationDataIsTracked:
 
     def test_the_private_directory_is_ignored(self):
         probe = FIXTURES / "private" / "labelled.json"
-        out = subprocess.run(["git", "check-ignore", "-q", str(probe)], cwd=ROOT)
-        assert out.returncode == 0, (
+        assert git_check_ignore(probe), (
             "tests/fixtures/private is not ignored; a stray add would publish "
             "a hundred real messages")
 

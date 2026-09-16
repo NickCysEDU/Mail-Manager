@@ -28,6 +28,11 @@ def window(qapp, tmp_path, monkeypatch):
     subject = MainWindow(settings, InMemoryCredentialStore())
     yield subject
     subject.close()
+    # close() only hides it. Without deleteLater the window and every
+    # widget under it stay alive for the rest of the session, and
+    # setStyleSheet restyles all of them on every theme change - which
+    # is what made this file take minutes instead of seconds.
+    subject.deleteLater()
 
 
 @pytest.fixture
@@ -42,6 +47,11 @@ def two_mailbox_window(qapp, tmp_path, monkeypatch):
     subject.show()
     yield subject
     subject.close()
+    # close() only hides it. Without deleteLater the window and every
+    # widget under it stay alive for the rest of the session, and
+    # setStyleSheet restyles all of them on every theme change - which
+    # is what made this file take minutes instead of seconds.
+    subject.deleteLater()
 
 
 class TestColumnsCanBeTurnedOff:
@@ -1279,3 +1289,72 @@ class TestADialogDoesNotOutliveItsVisit:
         assert after - before < 50, (
             f"{after - before} widgets left behind by {rounds} visits to "
             "Settings - the dialog is not being released")
+
+
+class TestTheWindowFixtureDestroysItsWindow:
+    """A fixture that only closes its window leaks the whole thing.
+
+    close() hides; it does not delete. Seven fixtures across the suite
+    closed a MainWindow and left all hundred and sixty of its widgets alive
+    for the rest of the session. Because setStyleSheet restyles every live
+    widget, the cost of each theme change grew with every test that had run
+    before it, and test_window_tools.py went from seconds to never
+    finishing - the whole file timed out behind one slow worker.
+
+    This checks the shape a fixture has to have, rather than the fixture
+    itself, so the same mistake in a new file is caught here.
+    """
+
+    @staticmethod
+    def _settle(qapp):
+        from PySide6.QtCore import QEvent
+        for _ in range(4):
+            qapp.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            qapp.processEvents()
+
+    @pytest.mark.timeout(300)
+    def test_closing_and_deleting_returns_the_widget_count(self, qapp, tmp_path,
+                                                           monkeypatch):
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        settings = Settings(icloud_email="you@icloud.example").normalized()
+
+        self._settle(qapp)
+        before = len(qapp.allWidgets())
+        for _ in range(3):
+            subject = MainWindow(settings, InMemoryCredentialStore())
+            subject.close()
+            subject.deleteLater()
+            del subject
+            self._settle(qapp)
+        after = len(qapp.allWidgets())
+        assert after - before < 50, (
+            f"{after - before} widgets survived three windows that were "
+            "closed and deleted; deleteLater is not collecting them")
+
+    def test_every_window_fixture_asks_for_deletion(self):
+        """The fixtures themselves, read rather than run."""
+        import re
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent
+        pattern = re.compile(
+            r"@pytest\.fixture[^\n]*\ndef (\w+)\([^)]*\)[^\n]*:\n(.*?)"
+            r"(?=\n@|\nclass |\ndef |\Z)", re.S)
+        call = re.compile(r"\.deleteLater\s*\(")
+        offenders = []
+        for path in sorted(root.glob("test_*.py")):
+            for match in pattern.finditer(path.read_text()):
+                name, body = match.group(1), match.group(2)
+                # Comments do not delete anything, and the comment above
+                # each of these fixes says the word - so strip them before
+                # looking, or the guard passes on the bug it describes.
+                code = "\n".join(line.split("#", 1)[0]
+                                  for line in body.splitlines())
+                builds_window = "MainWindow(" in code or "Dialog(" in code
+                if not builds_window or "yield" not in code:
+                    continue
+                if ".close()" in code and not call.search(code):
+                    offenders.append(f"{path.name}:{name}")
+        assert not offenders, (
+            "these fixtures close a window but never delete it, so it stays "
+            f"alive for the whole session: {offenders}")
