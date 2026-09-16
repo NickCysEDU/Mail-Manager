@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import git_lines
+
 import profiles
 import providers
 import rules_engine
@@ -86,8 +88,9 @@ class TestTheNumbersAreCurrent:
             [sys.executable, "-m", "pytest", "-p", "no:randomly",
              "-n", "0", "--collect-only", "-q"],
             cwd=ROOT, capture_output=True, text=True)
-        if out.returncode != 0:
-            pytest.skip("could not collect the suite")
+        assert out.returncode == 0, (
+            "could not collect the suite, so the quoted count is unchecked:\n"
+            + out.stderr[-2000:])
         total = sum(int(line.rsplit(": ", 1)[1])
                     for line in out.stdout.splitlines()
                     if re.match(r"^tests/.*: \d+$", line))
@@ -136,8 +139,9 @@ class TestEveryLinkResolves:
 
     @pytest.mark.parametrize("name", DOCS)
     def test_local_files_exist_and_are_committed(self, name):
-        tracked = set(subprocess.run(["git", "ls-files"], cwd=ROOT,
-                                     capture_output=True, text=True).stdout.split())
+        # Via the helper, because a git that refuses to run used to leave
+        # this set empty and make every link look uncommitted.
+        tracked = set(git_lines("ls-files"))
         for ref in self._refs(name):
             ref = ref.split()[0].strip()
             if ref.startswith(("http", "mailto:", "#")):

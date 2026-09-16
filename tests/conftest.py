@@ -579,3 +579,78 @@ def reap_deleted_widgets():
         return
     app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     app.processEvents()
+
+
+# --------------------------------------------------------------------------
+# git, found rather than assumed
+# --------------------------------------------------------------------------
+#: The repository root, for git calls that must run from inside it.
+GIT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def git_binary() -> str:
+    """The first git on this machine that will actually run.
+
+    On a Mac where Xcode is installed but its licence has never been
+    accepted, ``/usr/bin/git`` is a shim that refuses every command. Tests
+    that read ``git ls-files`` then saw an empty list and reported that
+    every file was untracked, which is a lie about the repository dressed
+    up as a test failure. Look for one that works, and say plainly when
+    none does.
+    """
+    import shutil
+    import subprocess
+
+    candidates = [
+        shutil.which("git") or "/usr/bin/git",
+        "/Library/Developer/CommandLineTools/usr/bin/git",
+        "/opt/homebrew/bin/git",
+        "/usr/local/bin/git",
+    ]
+    problems = []
+    for candidate in candidates:
+        try:
+            probe = subprocess.run([candidate, "rev-parse", "--git-dir"],
+                                   cwd=GIT_ROOT, capture_output=True,
+                                   text=True)
+        except OSError as exc:
+            problems.append(f"{candidate}: {exc}")
+            continue
+        if probe.returncode == 0:
+            return candidate
+        problems.append(f"{candidate}: {probe.stderr.strip() or probe.returncode}")
+    raise RuntimeError("no working git found:\n  " + "\n  ".join(problems))
+
+
+def git_lines(*arguments: str) -> list:
+    """Run git and insist it worked, so a broken git cannot read as an empty
+    repository."""
+    import subprocess
+
+    done = subprocess.run([git_binary(), *arguments], cwd=GIT_ROOT,
+                          capture_output=True, text=True)
+    if done.returncode != 0:
+        raise RuntimeError(
+            f"git {' '.join(arguments)} failed ({done.returncode}): "
+            f"{done.stderr.strip()}")
+    return [line for line in done.stdout.splitlines() if line]
+
+
+def git_check_ignore(path: str) -> bool:
+    """True when git ignores this path.
+
+    check-ignore answers 0 for ignored and 1 for not, and anything else
+    means git did not answer at all. Telling those apart matters: a caller
+    that reads "did not run" as "not ignored" fails confusingly, and one
+    that reads it as "ignored" - or skips itself - quietly stops checking
+    that private files stay out of the repository.
+    """
+    import subprocess
+
+    done = subprocess.run([git_binary(), "check-ignore", "-q", str(path)],
+                          cwd=GIT_ROOT, capture_output=True, text=True)
+    if done.returncode not in (0, 1):
+        raise RuntimeError(
+            f"git check-ignore could not run ({done.returncode}): "
+            f"{done.stderr.strip()}")
+    return done.returncode == 0
