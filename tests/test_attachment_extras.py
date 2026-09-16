@@ -632,6 +632,7 @@ class TestTheSpectrumGetsRoomToDrawIn:
         spectrum.set_frames([array("f", [0.5] * 32) for _ in range(60)], 20)
         spectrum.set_playing(True)
         spectrum._reveal_changed(1.0)
+        qtbot.wait(20)
         assert spectrum.height() == spectrum.HEIGHT, (
             "the layout gave it a height its own hint did not ask for")
         assert spectrum.sizeHint().height() == spectrum.HEIGHT
@@ -650,7 +651,9 @@ class TestTheSpectrumGetsRoomToDrawIn:
         _host, spectrum = self._in_a_layout(qtbot)
         spectrum.set_frames([array("f", [0.5] * 32) for _ in range(60)], 20)
         spectrum._reveal_changed(1.0)
+        qtbot.wait(20)
         spectrum._reveal_changed(0.0)
+        qtbot.wait(20)
         assert spectrum.height() == 0
 
     def test_it_actually_paints_something(self, qtbot):
@@ -1389,9 +1392,17 @@ class TestItHoldsSixtyFramesASecond:
         spectrum.set_frames(attachment_audio.analyse(pcm, rate, 1),
                             attachment_audio.RATE)
         spectrum.set_labels([str(c) for c in attachment_audio.CENTRES])
+        # Unbounded, or the strip's own maximum height clamps the widget
+        # and the frame measured is 240 tall however big the numbers in
+        # this call are. This test has been called "at 1080p" since it was
+        # written and had never once drawn a frame that size.
+        spectrum.set_unbounded(True)
         spectrum.resize(width, height)
         spectrum._reveal_changed(1.0)
         spectrum.set_position(900)
+        assert spectrum.height() == height, (
+            f"the widget is {spectrum.height()} tall, not {height}; this is "
+            "not measuring what it says it is")
         return spectrum
 
     def test_the_timer_asks_for_sixty(self, qapp):
@@ -1411,18 +1422,30 @@ class TestItHoldsSixtyFramesASecond:
 
         import visualizers
 
+        from PySide6.QtGui import QPainter, QPixmap
+
         spectrum = self._spectrum(qtbot, 1920, 1080)
         spectrum.set_scene(visualizers.SCENES[index])
-        for _ in range(3):
-            spectrum._tick()
-            spectrum.grab()
-        started = time.monotonic()
-        rounds = 16
-        for step in range(rounds):
-            spectrum.set_position(900 + step * 16)
-            spectrum._tick()
-            spectrum.grab()
-        each = (time.monotonic() - started) / rounds * 1000
+        # Into a surface that is made once, the way the running app paints
+        # into a backing store it already has. grab() allocates a fresh
+        # eight megapixel pixmap every frame, which cost ten milliseconds
+        # here - most of the budget, spent on something the app never does.
+        canvas = QPixmap(1920, 1080)
+        canvas.setDevicePixelRatio(spectrum.devicePixelRatioF())
+        painter = QPainter(canvas)
+        try:
+            for _ in range(3):
+                spectrum._tick()
+                spectrum._paint(painter)
+            started = time.monotonic()
+            rounds = 16
+            for step in range(rounds):
+                spectrum.set_position(900 + step * 16)
+                spectrum._tick()
+                spectrum._paint(painter)
+            each = (time.monotonic() - started) / rounds * 1000
+        finally:
+            painter.end()
         budget = 16.67 * _machine_factor()
         assert each < budget, (
             f"{visualizers.SCENES[index].name} takes {each:.1f} ms a frame, "
@@ -1432,8 +1455,19 @@ class TestItHoldsSixtyFramesASecond:
         spectrum = self._spectrum(qtbot, 1920, 1080)
         spectrum._reveal_changed(0.0)
         image = spectrum.grab().toImage()
-        # A widget with no height cannot have drawn anything.
-        assert image.height() <= 1
+        # The widget keeps its size in full screen, so "nothing drawn" has
+        # to be read off the pixels rather than off the height.
+        # Uniform, rather than any particular colour: whatever the widget's
+        # own background happens to be, a scene that drew would not leave
+        # every corner and the middle identical.
+        sampled = {image.pixelColor(x, y).rgb()
+                   for x, y in ((2, 2), (image.width() - 3, 2),
+                                (2, image.height() - 3),
+                                (image.width() - 3, image.height() - 3),
+                                (image.width() // 2, image.height() // 2),
+                                (image.width() // 3, image.height() // 4))}
+        assert len(sampled) == 1, (
+            f"something was drawn at zero reveal: {len(sampled)} colours")
 
 
 class TestTheAnalysisStaysOffTheUiThread:
@@ -1877,3 +1911,66 @@ class TestTheControlsAreNeverInsideThePicture:
                 f"{shape}: the strip runs {pane.spectrum.geometry().bottom()} "
                 f"past a pane {pane.height()} tall")
         dialog.close()
+
+
+class TestTheStripGivesWayWhenThereIsNoRoom:
+    """It used to insist on its height and push the transport off the pane.
+
+    The height was forced by setting the minimum and the maximum to the
+    same number. In a pane too short to hold everything the layout then
+    had nowhere to put the controls and drew them over the scene - the
+    scrub bar inside the picture, unclickable. A widget that can shrink
+    cannot do that, so the minimum is a floor and the maximum is what the
+    shape asks for.
+    """
+
+    @staticmethod
+    def _in_a_pane(qtbot, host_height):
+        from array import array
+
+        from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+
+        from attachment_widgets import Spectrum
+
+        host = QWidget()
+        qtbot.addWidget(host)
+        layout = QVBoxLayout(host)
+        layout.addWidget(QLabel("above"))
+        spectrum = Spectrum()
+        layout.addWidget(spectrum)
+        layout.addWidget(QLabel("below"))
+        layout.addStretch(1)
+        host.resize(900, host_height)
+        host.show()
+        spectrum.set_frames([array("f", [0.5] * 32) for _ in range(60)], 20)
+        spectrum._reveal_changed(1.0)
+        # Long enough for the layout to run. The height is the layout's
+        # decision now rather than something forced on it, so it is not
+        # settled the instant the reveal changes.
+        qtbot.wait(20)
+        return host, spectrum
+
+    def test_it_takes_what_it_asks_for_when_there_is_room(self, qtbot):
+        _host, spectrum = self._in_a_pane(qtbot, 420)
+        assert spectrum.height() == spectrum.HEIGHT
+
+    # Down to a host that can still hold its own minimum content. Below
+    # about 150 nothing fits whatever the strip does, and Qt overlaps
+    # because it has been asked for the impossible.
+    @pytest.mark.parametrize("host_height", [320, 260, 200, 170])
+    def test_it_never_pushes_its_neighbours_off(self, qtbot, host_height):
+        host, spectrum = self._in_a_pane(qtbot, host_height)
+        layout = host.layout()
+        for index in range(layout.count()):
+            widget = layout.itemAt(index).widget()
+            if widget is None or widget is spectrum:
+                continue
+            assert widget.geometry().bottom() <= host.height(), (
+                f"{widget.text()} was pushed off a {host_height}px host")
+            assert not spectrum.geometry().intersects(widget.geometry()), (
+                f"the scene was drawn over {widget.text()}")
+
+    def test_it_can_shrink_to_its_floor(self, qtbot):
+        _host, spectrum = self._in_a_pane(qtbot, 120)
+        assert spectrum.height() <= spectrum.HEIGHT
+        assert spectrum.height() >= 0

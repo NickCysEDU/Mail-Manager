@@ -44,7 +44,7 @@ import shiboken6
 
 import attachment_meta
 import attachments
-from attachment_widgets import FlowRow, SeekBar, Spectrum
+from attachment_widgets import FlowRow, SeekBar, Spectrum, Spinner
 from widgets import _html, system_font
 
 #: Text longer than this is truncated on screen. A log file attached to a bug
@@ -69,6 +69,37 @@ def _muted(text: str) -> QLabel:
     label.setProperty("dim", "true")
     label.setWordWrap(True)
     return label
+
+
+#: The size everything in the visualiser controls is written at.
+CONTROL_POINT_SIZE = 11.5
+
+
+def _match_text(root) -> None:
+    """Give every control under ``root`` the same text size."""
+    font = root.font()
+    font.setPointSizeF(CONTROL_POINT_SIZE)
+    root.setFont(font)
+    for child in root.findChildren(QWidget):
+        child.setFont(font)
+
+
+def _labelled(text: str, control) -> QWidget:
+    """A caption and its control as one thing.
+
+    The row wraps, and a bare label followed by a bare slider could be
+    split across the break - leaving a caption on one line and the slider
+    it names on the next, which reads as two unrelated controls.
+    """
+    holder = QWidget()
+    row = QHBoxLayout(holder)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(6)
+    caption = QLabel(text)
+    caption.setToolTip(control.toolTip())
+    row.addWidget(caption)
+    row.addWidget(control)
+    return holder
 
 
 def _combo(options, tip: str) -> QComboBox:
@@ -372,24 +403,53 @@ class AudioPane(QWidget):
             "tunnel; the strip keeps it out of the way.")
         self.shape_box.currentTextChanged.connect(self._shape_chosen)
 
-        self.flash_label = QLabel("Flash")
+        # Two controls, not one. They do different things and lumping them
+        # behind a single "Flash" slider made both of them hard to find.
+        self.busy = Spinner()
+
+        self.sense = QSlider(Qt.Orientation.Horizontal)
+        self.sense.setRange(0, 100)
+        self.sense.setValue(50)
+        self.sense.setFixedWidth(90)
+        self.sense.setToolTip(
+            "How big a jump in the bass counts as a hit. Right of centre "
+            "catches a soft beat; left waits for something obvious.")
+        self.sense.valueChanged.connect(
+            lambda value: self.spectrum.set_strobe_sense(value / 100.0))
+
         self.flash = QSlider(Qt.Orientation.Horizontal)
         self.flash.setRange(0, 100)
         self.flash.setValue(50)
-        self.flash.setFixedWidth(96)
+        self.flash.setFixedWidth(90)
         self.flash.setToolTip(
-            "How often the strobe is allowed to fire, from every few bars "
-            "to every beat it can find.")
+            "How soon after one flash the next may fire, from every few "
+            "bars to every beat it can find.")
         self.flash.valueChanged.connect(
             lambda value: self.spectrum.set_strobe_rate(value / 100.0))
+
+        self.decay = QSlider(Qt.Orientation.Horizontal)
+        self.decay.setRange(3, 150)
+        self.decay.setValue(28)
+        self.decay.setFixedWidth(90)
+        self.decay.setToolTip(
+            "How long the oscilloscope's phosphor keeps glowing, from a "
+            "hundredth of a second to a second and a half.")
+        self.decay.valueChanged.connect(
+            lambda value: self.spectrum.set_decay(value / 100.0))
+
+        self.sense_box = _labelled("Sensitivity", self.sense)
+        self.rate_box = _labelled("Rate", self.flash)
+        self.decay_box = _labelled("Decay", self.decay)
+        self.decay_box.hide()
 
         # A row that wraps. These controls come and go with what is chosen,
         # and in one fixed line they overlapped each other and then ran off
         # the pane.
         self.visual_row = FlowRow(spacing=10)
         # Grouped: what to draw, how it reacts, then what to do with it.
-        groups = ((self.enable_box, self.scene_box, self.shape_box),
-                  (self.strobe_box, self.flash_label, self.flash),
+        groups = ((self.enable_box, self.busy, self.scene_box, self.shape_box),
+                  (self.strobe_box, self.sense_box, self.rate_box),
+                  (self.decay_box,),
                   (self.colour_button, self.full_button))
         for index, group in enumerate(groups):
             if index:
@@ -398,8 +458,13 @@ class AudioPane(QWidget):
                 self.visual_row.addWidget(widget)
         self.visual_holder = QWidget()
         self.visual_holder.setLayout(self.visual_row)
-        self._visual_controls = (self.scene_box, self.shape_box, self.strobe_box,
-                                 self.flash_label, self.flash,
+        # One size for the whole section. Checkboxes, combo boxes, buttons
+        # and plain labels each come with their own idea of how big their
+        # text should be, and side by side in one row that reads as a mess.
+        _match_text(self.visual_holder)
+        self._visual_controls = (self.scene_box, self.shape_box,
+                                 self.strobe_box, self.sense_box,
+                                 self.rate_box, self.decay_box,
                                  self.full_button, self.colour_button)
         # Everything except the tick box starts unavailable, because the
         # visualiser starts off.
@@ -438,6 +503,10 @@ class AudioPane(QWidget):
 
         layout = QVBoxLayout(self)
         layout.addLayout(header)
+        # No stretch. With one it competed with the spacer at the foot of
+        # this layout and took half the spare room rather than the height
+        # its shape asks for. Its maximum caps it and its floor lets it
+        # give way, which is all the control that is needed.
         layout.addWidget(self.spectrum)
         layout.addLayout(controls)
         # Below the transport, outside the picture. Putting them inside the
@@ -549,16 +618,21 @@ class AudioPane(QWidget):
             except Exception:      # noqa: BLE001 - assume alive without it
                 return True
 
-        def done(frames) -> None:
+        def done(result) -> None:
             if not alive():
                 return
+            frames, shapes, calibration = result
+            self.spectrum.set_calibration(calibration)
+            self.busy.stop()
             self.spectrum.set_working(None)
+            self.spectrum.set_traces(shapes)
             self.spectrum.set_frames(frames, attachment_audio.RATE)
             self._decoder = None
 
         def failed(_detail: str) -> None:
             if alive():
                 self._decoder = None
+                self.busy.stop()
                 self.spectrum.set_working(None)
 
         def progress(fraction: float) -> None:
@@ -568,6 +642,7 @@ class AudioPane(QWidget):
         # Any earlier analysis is told to stop rather than left to finish a
         # file nobody is looking at.
         self._cancel_analysis()
+        self.busy.start()
         self.spectrum.set_working(0.0)
         self._decoder = attachment_audio.decode(path, done, failed, progress)
 
@@ -634,6 +709,7 @@ class AudioPane(QWidget):
         if not on:
             self._analysis_token += 1
             self._cancel_analysis()
+            self.busy.stop()
             self.spectrum.set_working(None)
             self.spectrum.set_playing(False)
             self.spectrum.clear()
@@ -691,6 +767,9 @@ class AudioPane(QWidget):
         # Only the meters have colours to set, so the button only appears
         # when there is something for it to do.
         self.colour_button.setVisible(scene.name == "VU meters")
+        scope = scene.name == "Oscilloscope"
+        self.decay_box.setVisible(scope and self.enable_box.isChecked())
+        self.visual_row.invalidate()
 
     @Slot()
     def _choose_colours(self) -> None:
@@ -961,11 +1040,28 @@ class AttachmentViewer(QDialog):
             entry.setToolTip(_row_tooltip(item))
             self.list.addItem(entry)
 
-        self.hint = _muted(
-            "Click an attachment to open it. Nothing here is ever run, and "
-            "nothing is saved unless you say so.\n"
-            "K or space plays · J and L jump ten seconds · arrow keys move "
-            "and scrub · Info shows details · Save keeps a copy.")
+        # Not the dim style. This is the only place the keys are written
+        # down, and a run-on line of grey text separated by middots is
+        # something people's eyes slide off rather than read.
+        self.hint = QLabel(
+            "<p style='margin:0 0 6px 0'>Click an attachment to open it. "
+            "Nothing here is ever run, and nothing is saved unless you "
+            "say so.</p>"
+            "<table cellspacing='0' cellpadding='0'>"
+            + "".join(
+                "<tr>"
+                f"<td style='padding:1px 8px 1px 0'><b>{keys}</b></td>"
+                f"<td style='padding:1px 0'>{what}</td>"
+                "</tr>"
+                for keys, what in (("K&nbsp;/&nbsp;Space", "play or pause"),
+                                   ("J&nbsp;&nbsp;L", "back or on ten seconds"),
+                                   ("← →", "scrub"),
+                                   ("↑ ↓", "move between attachments"),
+                                   ("⌘I", "show details"),
+                                   ("⌘S", "save a copy")))
+            + "</table>")
+        self.hint.setTextFormat(Qt.TextFormat.RichText)
+        self.hint.setWordWrap(True)
 
         self.image = ImagePane()
         self.audio = AudioPane()
