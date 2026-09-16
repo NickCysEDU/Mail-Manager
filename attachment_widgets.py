@@ -200,6 +200,9 @@ class Spectrum(QWidget):
         self._last_bass = 0.0
         self._dial_frames: List = []
         self._dial_level: List[float] = []
+        #: Which frequency each meter reads. Chosen by the user; starts at
+        #: the ten from the photograph the scene was copied from.
+        self._dial_centres = None
         self._state = SpectrumState()
         self._scene = visualizers.SCENES[0]
         self._sparks = [[0.0, 0.0, 0.0, 0.0, 0.0] for _ in range(self.SPARKS)]
@@ -214,6 +217,11 @@ class Spectrum(QWidget):
         self._buffer = None
         #: None for the fixed strip, else width-to-height.
         self._aspect = None
+        #: The most the strip may take, set by whoever owns the layout.
+        #: Without it a tall shape simply demanded its height, the layout
+        #: could not fit the transport underneath, and the controls ended
+        #: up drawn on top of the scene.
+        self._budget = None
         #: Middle of the slider until somebody moves it.
         self._strobe_rate = 0.5
         self._since_hit = 99
@@ -262,12 +270,27 @@ class Spectrum(QWidget):
             self._reveal_changed(self._reveal)
         self.update()
 
+    def set_budget(self, pixels) -> None:
+        """The most this strip may occupy, whatever shape is chosen."""
+        self._budget = None if pixels is None else max(80, int(pixels))
+        if not self._unbounded:
+            self._reveal_changed(self._reveal)
+        self.updateGeometry()
+
     def _full_height(self) -> int:
-        """How tall the strip wants to be when fully revealed."""
+        """How tall the strip wants to be when fully revealed.
+
+        Never more than the budget: a shape is a preference, not a claim
+        on space the window does not have.
+        """
         if self._aspect is None:
-            return self.HEIGHT
-        width = self.width() or self.sizeHint().width() or 420
-        return max(120, min(self.MAX_HEIGHT, int(width / self._aspect)))
+            wanted = self.HEIGHT
+        else:
+            width = self.width() or self.sizeHint().width() or 420
+            wanted = max(120, min(self.MAX_HEIGHT, int(width / self._aspect)))
+        if self._budget is not None:
+            wanted = min(wanted, self._budget)
+        return max(60, wanted)
 
     def set_strobe_rate(self, rate: float) -> None:
         """How willing the strobe is to fire, 0 sparing to 1 eager.
@@ -281,6 +304,45 @@ class Spectrum(QWidget):
 
     def set_labels(self, labels) -> None:
         self._state.labels = list(labels or [])
+
+    def dial_centres(self):
+        """The frequency each meter is reading, in Hz."""
+        import attachment_audio
+
+        return tuple(self._dial_centres or attachment_audio.DIAL_CENTRES)
+
+    def set_dial_centres(self, centres) -> None:
+        """Point the meters at different frequencies.
+
+        The analysis is not redone: regroup re-reads the frames that are
+        already in memory against whatever centres are asked for, so this
+        is immediate however long the track is.
+        """
+        import attachment_audio
+
+        cleaned = []
+        for value in centres:
+            try:
+                hertz = int(value)
+            except (TypeError, ValueError):
+                continue
+            # Below 20 Hz nobody hears it, and above the Nyquist limit of
+            # the decode there is nothing in the signal to read.
+            top = attachment_audio.DECODE_RATE // 2
+            cleaned.append(max(20, min(top, hertz)))
+        if not cleaned:
+            return
+        self._dial_centres = tuple(cleaned)
+        self._rebuild_dials()
+        self.update()
+
+    def _rebuild_dials(self) -> None:
+        import attachment_audio
+
+        centres = self._dial_centres or attachment_audio.DIAL_CENTRES
+        self._dial_frames = attachment_audio.regroup(self._frames, centres)
+        self._dial_level = [0.0] * len(centres)
+        self._state.dial_labels = [_hz_label(c) for c in centres]
 
     def set_colours(self, dial=None, background=None) -> None:
         if dial is not None:
@@ -304,11 +366,7 @@ class Spectrum(QWidget):
         self._peak = [0.0] * width
         # The dial scene wants ten named bands rather than the twenty-seven
         # the equaliser uses, so they are read out of the same frames once.
-        self._dial_frames = attachment_audio.regroup(
-            self._frames, attachment_audio.DIAL_CENTRES)
-        self._dial_level = [0.0] * len(attachment_audio.DIAL_CENTRES)
-        self._state.dial_labels = [_hz_label(c)
-                                   for c in attachment_audio.DIAL_CENTRES]
+        self._rebuild_dials()
         if self._frames and self._wanted:
             self.set_playing(True)
         self.update()
@@ -394,6 +452,11 @@ class Spectrum(QWidget):
         self._buffer = None
         #: None for the fixed strip, else width-to-height.
         self._aspect = None
+        #: The most the strip may take, set by whoever owns the layout.
+        #: Without it a tall shape simply demanded its height, the layout
+        #: could not fit the transport underneath, and the controls ended
+        #: up drawn on top of the scene.
+        self._budget = None
         #: Middle of the slider until somebody moves it.
         self._strobe_rate = 0.5
         self._since_hit = 99 if fraction is None else max(0.0, min(1.0, float(fraction)))
@@ -721,9 +784,12 @@ class FullScreenSpectrum(QWidget):
         self.bar.setMouseTracking(True)
         self.bar.setStyleSheet(
             "background: rgba(12,10,18,215); border-radius: 10px;")
-        self._bar_layout = QHBoxLayout(self.bar)
+        # The same wrapping row the window uses. A fixed line squeezed its
+        # controls into nothing on a small screen rather than taking a
+        # second line.
+        self._bar_layout = FlowRow(spacing=10)
         self._bar_layout.setContentsMargins(14, 10, 14, 10)
-        self._bar_layout.setSpacing(10)
+        self.bar.setLayout(self._bar_layout)
 
         self._fade = QVariantAnimation(self)
         self._fade.setDuration(320)
@@ -741,7 +807,9 @@ class FullScreenSpectrum(QWidget):
     # -- what goes in the bar ---------------------------------------------
     def add_control(self, widget, stretch: int = 0) -> None:
         widget.setMouseTracking(True)
-        self._bar_layout.addWidget(widget, stretch)
+        self._bar_layout.addWidget(widget)
+        if stretch:
+            self._bar_layout.set_stretch(widget)
 
     def add_stretch(self) -> None:
         self._bar_layout.addStretch(1)
@@ -806,16 +874,20 @@ class FullScreenSpectrum(QWidget):
         self._place_bar()
 
     def _place_bar(self) -> None:
-        wanted = self.bar.sizeHint()
         # Wide enough that the seek bar is obviously the long one and the
-        # volume slider obviously the short one.
-        width = min(max(wanted.width(), int(self.width() * 0.72), 900),
-                    self.width() - 80)
-        height = max(wanted.height(), 48)
+        # volume slider obviously the short one, but never wider than the
+        # screen it has to sit on.
+        width = max(320, min(int(self.width() * 0.86), self.width() - 48))
+        margins = self._bar_layout.contentsMargins()
+        rows = self._bar_layout.heightForWidth(
+            width - margins.left() - margins.right())
+        height = max(48, rows + margins.top() + margins.bottom())
         self.bar.setGeometry(int((self.width() - width) / 2),
-                             int(self.height() - height - 34), width, height)
+                             int(self.height() - height - 28), width, height)
         self.bar.raise_()
-        self._spectrum.set_reserve(height + 52)
+        # Exactly what the bar occupies, so the scene stops above it rather
+        # than being drawn underneath and reading as a cut-off control.
+        self._spectrum.set_reserve(height + 44)
 
     def closeEvent(self, event) -> None:      # noqa: N802 - Qt's name
         """Put the spectrum back exactly where it was."""
@@ -852,6 +924,7 @@ class FlowRow(QLayout):
         super().__init__(parent)
         self._items: list = []
         self._gaps: dict = {}
+        self._stretch = None
         self._gap = spacing
         self.setContentsMargins(0, 0, 0, 0)
 
@@ -890,6 +963,10 @@ class FlowRow(QLayout):
             size = size.expandedTo(item.minimumSize())
         return size
 
+    def set_stretch(self, widget) -> None:
+        """Let this one widget take whatever width is spare on its line."""
+        self._stretch = widget
+
     def add_gap(self, pixels: int) -> None:
         """A wider space, to separate one group of controls from the next."""
         self._gaps[len(self._items)] = int(pixels)
@@ -914,7 +991,28 @@ class FlowRow(QLayout):
             tallest = max(tallest, wanted.height())
         if current:
             rows.append((current, tallest))
+        if self._stretch is not None:
+            self._widen(rows, rect)
         return rows
+
+    def _widen(self, rows, rect) -> None:
+        """Give the stretchy widget the room its line has left over."""
+        for row, _tallest in rows:
+            for index, (item, box) in enumerate(row):
+                if item.widget() is not self._stretch:
+                    continue
+                used = sum(other.width() for _, other in row)
+                spare = rect.width() - used - self._gap * (len(row) - 1)
+                if spare > 0:
+                    grown = QRect(box)
+                    grown.setWidth(box.width() + spare)
+                    row[index] = (item, grown)
+                    for after in range(index + 1, len(row)):
+                        later_item, later_box = row[after]
+                        moved = QRect(later_box)
+                        moved.moveLeft(later_box.left() + spare)
+                        row[after] = (later_item, moved)
+                return
 
     def _lay(self, rect, apply: bool) -> int:
         y = rect.y()

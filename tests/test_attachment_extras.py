@@ -1661,3 +1661,143 @@ class TestTheTransportKeys:
         assert asked == ["back", "toggle", "forward"], (
             f"full screen swallowed the transport keys: {asked}")
         full.close()
+
+
+class TestTheControlsAreNeverInsideThePicture:
+    """Reported repeatedly, and missed by every check until now.
+
+    The checks were wrong, not the report. They built an AudioPane on its
+    own instead of the dialog it actually lives in, compared rectangles
+    instead of asking what a click would land on, and never tried the
+    shapes - which is where it happened. A tall shape made the strip
+    demand a height the layout could not give, so the transport and the
+    visualiser row were drawn on top of the scene.
+    """
+
+    def _viewer(self, qapp, tmp_path):
+        import wave
+
+        import attachments
+        from attachment_view import AttachmentViewer
+
+        path = tmp_path / "tone.wav"
+        with wave.open(str(path), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(8000)
+            handle.writeframes(b"\x00\x10" * 8000)
+        data = path.read_bytes()
+        item = attachments.Attachment(part="1", name="tone.wav",
+                                      content_type="audio/wav",
+                                      size=len(data), data=data)
+        dialog = AttachmentViewer([item], "Test")
+        dialog.resize(1100, 820)
+        dialog.show()
+        qapp.processEvents()
+        dialog.list.setCurrentRow(0)
+        qapp.processEvents()
+        return dialog
+
+    @staticmethod
+    def _reveal(pane, qapp):
+        """Get the strip to its full height without waiting for a decode.
+
+        Everything here only goes wrong once the strip actually occupies
+        space. Left at zero - which is where it sits until a track has been
+        analysed and played - nothing can overlap anything and the checks
+        pass while the bug is sitting there.
+        """
+        from array import array
+
+        import attachment_audio
+
+        frames = [array("f", [0.4] * attachment_audio.BANDS) for _ in range(60)]
+        pane.spectrum.set_frames(frames, attachment_audio.RATE)
+        pane.spectrum._flow.stop()
+        pane.spectrum._target = 1.0
+        pane.spectrum._reveal_changed(1.0)
+        qapp.processEvents()
+        assert pane.spectrum.height() > 100, (
+            "the strip is not showing, so this proves nothing")
+
+    @pytest.mark.timeout(120)
+    def test_no_control_sits_on_the_scene_at_any_shape(self, qapp, tmp_path):
+        from attachment_widgets import Spectrum
+
+        dialog = self._viewer(qapp, tmp_path)
+        pane = dialog.audio
+        pane.enable_box.setChecked(True)
+        self._reveal(pane, qapp)
+
+        offenders = []
+        for shape, _ratio in Spectrum.SHAPES:
+            pane.shape_box.setCurrentText(shape)
+            qapp.processEvents()
+            scene = pane.spectrum.geometry()
+            for name, widget in (("play", pane.play), ("seek", pane.position),
+                                 ("volume", pane.volume),
+                                 ("visualiser", pane.enable_box),
+                                 ("scene", pane.scene_box),
+                                 ("shape", pane.shape_box),
+                                 ("full screen", pane.full_button)):
+                if not widget.isVisible():
+                    continue
+                from PySide6.QtCore import QPoint
+
+                box = widget.geometry().translated(
+                    widget.parentWidget().mapTo(pane, QPoint(0, 0)))
+                if scene.intersects(box):
+                    offenders.append(f"{shape}/{name}")
+        dialog.close()
+        assert not offenders, (
+            f"controls drawn inside the visualiser frame: {offenders}")
+
+    @pytest.mark.timeout(120)
+    def test_every_control_can_actually_be_clicked(self, qapp, tmp_path):
+        """childAt, not a rectangle comparison: a widget can be in the
+        right place and still have something on top of it."""
+        from attachment_widgets import Spectrum
+
+        dialog = self._viewer(qapp, tmp_path)
+        pane = dialog.audio
+        pane.enable_box.setChecked(True)
+        self._reveal(pane, qapp)
+
+        blocked = []
+        for shape, _ratio in Spectrum.SHAPES:
+            pane.shape_box.setCurrentText(shape)
+            qapp.processEvents()
+            for name, widget in (("play", pane.play), ("seek", pane.position),
+                                 ("volume", pane.volume),
+                                 ("visualiser", pane.enable_box),
+                                 ("shape", pane.shape_box),
+                                 ("full screen", pane.full_button)):
+                if not widget.isVisible():
+                    continue
+                centre = widget.mapTo(dialog, widget.rect().center())
+                if not dialog.rect().contains(centre):
+                    blocked.append(f"{shape}/{name}: off the dialog")
+                    continue
+                hit = dialog.childAt(centre)
+                if not (hit is widget or (hit is not None
+                                          and widget.isAncestorOf(hit))):
+                    blocked.append(f"{shape}/{name}: {type(hit).__name__} on top")
+        dialog.close()
+        assert not blocked, f"controls a click cannot reach: {blocked}"
+
+    @pytest.mark.timeout(120)
+    def test_the_strip_never_asks_for_more_room_than_there_is(self, qapp,
+                                                             tmp_path):
+        from attachment_widgets import Spectrum
+
+        dialog = self._viewer(qapp, tmp_path)
+        pane = dialog.audio
+        pane.enable_box.setChecked(True)
+        self._reveal(pane, qapp)
+        for shape, _ratio in Spectrum.SHAPES:
+            pane.shape_box.setCurrentText(shape)
+            qapp.processEvents()
+            assert pane.spectrum.geometry().bottom() <= pane.height() + 1, (
+                f"{shape}: the strip runs {pane.spectrum.geometry().bottom()} "
+                f"past a pane {pane.height()} tall")
+        dialog.close()

@@ -352,10 +352,10 @@ class AudioPane(QWidget):
             "Flash the scene on a bass hit. Off by default, because a "
             "flashing screen is not for everybody.")
         self.strobe_box.toggled.connect(self.spectrum.set_strobe)
-        self.colour_button = QPushButton("Colours…")
+        self.colour_button = QPushButton("Meters…")
         self.colour_button.setToolTip(
-            "Set the dial and background colours, from a wheel or by taking "
-            "one out of a picture.")
+            "Colours for the dials and the background, and which frequency "
+            "each of the ten meters reads.")
         self.colour_button.clicked.connect(self._choose_colours)
         self.colour_button.hide()
         self.full_button = QPushButton("Full screen")
@@ -646,12 +646,39 @@ class AudioPane(QWidget):
                     == QMediaPlayer.PlaybackState.PlayingState):
                 self.spectrum.set_playing(True)
 
+    def _spectrum_budget(self) -> int:
+        """How much height the scene may have without evicting anything.
+
+        Asked of the layout rather than totted up by hand: whatever the
+        layout says it needs at minimum, less what the scene is currently
+        claiming, is what everything else needs. The rest is the scene's.
+
+        A shape that wanted more than this used to take it anyway - the
+        layout could not fit the transport underneath and drew it on top
+        of the picture instead.
+        """
+        layout = self.layout()
+        if layout is None:
+            return self.HEIGHT if hasattr(self, "HEIGHT") else 240
+        needed_by_everything = layout.minimumSize().height()
+        claimed_by_scene = self.spectrum.minimumHeight()
+        needed_by_the_rest = max(0, needed_by_everything - claimed_by_scene)
+        return max(120, self.height() - needed_by_the_rest - 8)
+
+    def _apply_budget(self) -> None:
+        self.spectrum.set_budget(self._spectrum_budget())
+
+    def resizeEvent(self, incoming) -> None:      # noqa: N802 - Qt's name
+        super().resizeEvent(incoming)
+        self._apply_budget()
+
     @Slot(str)
     def _shape_chosen(self, name: str) -> None:
         from attachment_widgets import Spectrum as _Spectrum
 
         for label, ratio in _Spectrum.SHAPES:
             if label == name:
+                self._apply_budget()
                 self.spectrum.set_aspect(ratio)
                 return
 
@@ -670,9 +697,11 @@ class AudioPane(QWidget):
         from colour_picker import ColourWindow
 
         dial, background = self.spectrum.colours
-        window = ColourWindow(dial, background, self)
+        window = ColourWindow(dial, background, self,
+                              centres=self.spectrum.dial_centres())
         window.changed.connect(
             lambda d, b: self.spectrum.set_colours(dial=d, background=b))
+        window.bands_changed.connect(self.spectrum.set_dial_centres)
         window.exec()
 
     def transport(self, action: str) -> None:

@@ -128,11 +128,14 @@ class ColourWindow(QDialog):
     """Both colours, a wheel for each, and a picture to sample from."""
 
     changed = Signal(QColor, QColor)      # dial, background
+    bands_changed = Signal(tuple)         # one frequency per meter
 
-    def __init__(self, dial: QColor, background: QColor, parent=None) -> None:
+    def __init__(self, dial: QColor, background: QColor, parent=None,
+                 centres=()) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Meter colours")
-        self.setMinimumWidth(520)
+        self.setWindowTitle("Meters")
+        self.setMinimumWidth(560)
+        self._centres = tuple(centres)
 
         self.dial = Swatch(dial, "Dial colour")
         self.background = Swatch(background, "Background")
@@ -185,11 +188,58 @@ class ColourWindow(QDialog):
         layout.addLayout(aim)
         layout.addWidget(self.sampler, 1)
         layout.addWidget(self.note)
+        if self._centres:
+            layout.addWidget(self._band_box())
         layout.addWidget(buttons)
 
         self.dial.picked.connect(self._announce)
         self.background.picked.connect(self._announce)
         self.sampler.sampled.connect(self._take)
+
+    # -- which frequency each meter reads ---------------------------------
+    def _band_box(self):
+        """One spin box per meter, so the rack can be pointed anywhere.
+
+        Nothing is re-analysed when these change: the frames already in
+        memory are re-read against the new centres, so a three minute
+        track responds immediately.
+        """
+        from PySide6.QtWidgets import QGridLayout, QGroupBox, QSpinBox
+
+        box = QGroupBox("What each meter reads")
+        grid = QGridLayout(box)
+        grid.setHorizontalSpacing(14)
+        self._spins = []
+        for index, hertz in enumerate(self._centres):
+            spin = QSpinBox()
+            # 20 Hz to the Nyquist limit of the decode: outside that there
+            # is nothing in the signal to point a meter at.
+            spin.setRange(20, 24_000)
+            spin.setSingleStep(10)
+            spin.setValue(int(hertz))
+            spin.setSuffix(" Hz")
+            spin.setAccessibleName(f"Meter {index + 1} frequency")
+            spin.valueChanged.connect(self._bands_edited)
+            self._spins.append(spin)
+            grid.addWidget(QLabel(f"{index + 1}"), index // 5, (index % 5) * 2)
+            grid.addWidget(spin, index // 5, (index % 5) * 2 + 1)
+
+        back = QPushButton("Back to the original ten")
+        back.clicked.connect(self._reset_bands)
+        grid.addWidget(back, 2, 0, 1, 10)
+        return box
+
+    def _bands_edited(self, *_args) -> None:
+        self.bands_changed.emit(tuple(spin.value() for spin in self._spins))
+
+    def _reset_bands(self) -> None:
+        import attachment_audio
+
+        for spin, hertz in zip(self._spins, attachment_audio.DIAL_CENTRES):
+            spin.blockSignals(True)
+            spin.setValue(int(hertz))
+            spin.blockSignals(False)
+        self._bands_edited()
 
     def _aim(self, swatch: Swatch) -> None:
         self._target = swatch
