@@ -117,9 +117,16 @@ def _draw_cycle(painter: QPainter, tiny: bool) -> None:
     pen.setCapStyle(Qt.PenCapStyle.RoundCap)
     painter.setPen(pen)
     painter.setBrush(Qt.BrushStyle.NoBrush)
-    # Open at the top right, where the arrowhead goes. The arc stops short
-    # of the head so the two do not pile up into one thick blob.
-    start_deg, span_deg = 38.0, -300.0
+    # Open at the top, centred. The gap used to run from 38 to 98 degrees,
+    # which put its middle at 68 - up and to the right - and the whole mark
+    # read as lopsided. Centring the opening on twelve o'clock puts the
+    # arrowhead and the tail the same distance either side of the middle.
+    #
+    # Qt measures from three o'clock anticlockwise, so half the gap either
+    # side of 90 is where the arc starts and ends.
+    gap_deg = 60.0
+    start_deg = 90.0 - gap_deg / 2.0
+    span_deg = -(360.0 - gap_deg)
     painter.drawArc(ring, int(start_deg * 16), int(span_deg * 16))
 
     # The head goes where the travel arrives, not where it sets off. It was
