@@ -646,7 +646,6 @@ class Meters(Scene):
                          Qt.AlignmentFlag.AlignCenter, text)
 
     def _needle(self, painter, geometry, value, state) -> None:
-        centre = geometry["centre"]
         radius = geometry["radius"]
         pivot = geometry["pivot"]
         angle = self._angle(value)
