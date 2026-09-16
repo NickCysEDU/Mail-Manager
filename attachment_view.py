@@ -44,7 +44,8 @@ import shiboken6
 
 import attachment_meta
 import attachments
-from attachment_widgets import FlowRow, SeekBar, Spectrum, Spinner
+from attachment_widgets import (FlowHolder, FlowRow, SeekBar, Spectrum,
+                                Spinner)
 from widgets import _html, system_font
 
 #: Text longer than this is truncated on screen. A log file attached to a bug
@@ -384,20 +385,19 @@ class AudioPane(QWidget):
             "flashes. Off by default: a flashing screen is not for "
             "everybody.")
         self.strobe_box.toggled.connect(self.spectrum.set_strobe)
-        self.colour_button = QPushButton("\u25c9")
+        self.colour_button = QPushButton("Colours")
         self.colour_button.setToolTip(
             "Meter colours and frequencies")
         self.colour_button.clicked.connect(self._choose_colours)
         self.colour_button.hide()
-        self.full_button = QPushButton("\u2921")
+        self.full_button = QPushButton("Full screen")
         self.full_button.setToolTip(
             "Full screen (F). Escape or F comes back.")
-        # Square buttons carrying a symbol. The words cost eighty pixels
-        # of a row that has to hold everything, and this row is what the
-        # picture is squashed by.
+        # Words, not symbols. A glyph saves eighty pixels and costs
+        # anybody who has not met it before knowing what the button does,
+        # which is the wrong trade for a control somebody uses once.
         for button in (self.colour_button, self.full_button):
-            button.setFixedWidth(34)
-            button.setAccessibleName(button.toolTip().split("(")[0].strip())
+            button.setAccessibleName(button.text())
         self.full_button.clicked.connect(self._go_full_screen)
         self.spectrum.set_labels([_hz(c) for c in attachment_audio.CENTRES])
 
@@ -493,8 +493,7 @@ class AudioPane(QWidget):
                 self.visual_row.add_gap(26)
             for widget in group:
                 self.visual_row.addWidget(widget)
-        self.visual_holder = QWidget()
-        self.visual_holder.setLayout(self.visual_row)
+        self.visual_holder = FlowHolder(self.visual_row)
         # One size for the whole section. Checkboxes, combo boxes, buttons
         # and plain labels each come with their own idea of how big their
         # text should be, and side by side in one row that reads as a mess.
@@ -1132,7 +1131,11 @@ class AttachmentViewer(QDialog):
         self._awaiting: Optional[int] = None
 
         self.list = QListWidget()
-        self.list.setFixedWidth(280)
+        # No fixed width. At 280 inside a narrower panel its right edge
+        # was outside the frame, so three sides of its border were drawn
+        # and the fourth was cut - which reads as a border that cannot
+        # make up its mind.
+        self.list.setMinimumWidth(180)
         self.list.setToolTip(
             "Everything attached to this message. Pick one to look at it.")
         for item in self._found:

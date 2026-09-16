@@ -169,8 +169,17 @@ class MenuBarController(QObject):
             schedule_menu.addAction(action)
             self._interval_actions[minutes] = action
 
-        self._status_action = QAction(scheduler.read_status().describe(), self)
+        # With scanning switched off there is no background run to report,
+        # and the last failure - which may be weeks old and about a
+        # network that has since come back - is not news. It stays in the
+        # tooltip for anybody who wants it.
+        record = scheduler.read_status()
+        off = not schedule_minutes
+        self._status_action = QAction(
+            "Automatic scanning is off" if off else record.summary(), self)
+        self._status_action.setToolTip(record.describe())
         self._status_action.setEnabled(False)
+        self._scheduled = not off
         menu.addAction(self._status_action)
         menu.addSeparator()
 
@@ -252,7 +261,18 @@ class MenuBarController(QObject):
 
     def refresh_status(self, text: str = "") -> None:
         if self._status_action is not None:
-            self._status_action.setText(text or scheduler.read_status().describe())
+            record = scheduler.read_status()
+            full = text or record.describe()
+            if text:
+                short = full.splitlines()[0]
+            elif not getattr(self, "_scheduled", True):
+                short = "Automatic scanning is off"
+            else:
+                short = record.summary()
+            if len(short) > record.SUMMARY_LIMIT:
+                short = short[:record.SUMMARY_LIMIT - 1].rstrip() + "…"
+            self._status_action.setText(short)
+            self._status_action.setToolTip(full)
 
     def notify(self, title: str, message: str) -> None:
         if self.tray is not None and self.tray.isVisible():

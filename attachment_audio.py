@@ -472,6 +472,13 @@ DIAL_CENTRES = (73, 120, 300, 576, 1400, 2400, 6000, 9000, 18000, 22000)
 RANGE_DB = 55.0
 GAMMA = 0.72
 
+#: Points in one X-Y frame. A drawing is cut at audio rate, so every
+#: sample in the window is part of the picture: taking every eighth one,
+#: as the sweep does, turns a detailed figure into a scribble. Kept as
+#: int16 rather than floats because a three minute track at this density
+#: is eleven megabytes of them and would be four times that.
+VECTOR_POINTS = 1024
+
 #: Points in one oscilloscope trace. Enough to show a waveform's shape at
 #: any width the scene is drawn at, small enough that a three minute track
 #: costs about a megabyte of them.
@@ -546,9 +553,10 @@ def vector_traces(samples: array, sample_rate: int, channels: int = 2,
     hop = max(1, sample_rate // RATE)
     # A longer window than the sweep uses: a drawing takes more than one
     # cycle of anything to complete.
-    span = min(total, max(TRACE_POINTS * 2, sample_rate // 24))
-    step = max(1, span // TRACE_POINTS)
-    scale = 1.0 / 32768.0
+    # Consecutive samples, not every nth. The window is about twenty
+    # milliseconds, which is roughly how long a figure takes to be drawn
+    # once, and every sample in it is a point on the figure.
+    span = min(total, VECTOR_POINTS)
     out: List[array] = []
     at = 0
     checked = 0
@@ -556,13 +564,12 @@ def vector_traces(samples: array, sample_rate: int, channels: int = 2,
         checked += 1
         if should_stop is not None and not checked % 40 and should_stop():
             return []
-        row = array("f", [0.0]) * (TRACE_POINTS * 2)
-        for point in range(TRACE_POINTS):
-            index = (at + point * step) * channels
+        row = array("h", [0]) * (span * 2)
+        for point in range(span):
+            index = (at + point) * channels
             if index + 1 < len(samples):
-                row[point * 2] = max(-1.0, min(1.0, samples[index] * scale))
-                row[point * 2 + 1] = max(
-                    -1.0, min(1.0, samples[index + 1] * scale))
+                row[point * 2] = samples[index]
+                row[point * 2 + 1] = samples[index + 1]
         out.append(row)
         at += hop
     return out

@@ -29,7 +29,7 @@ from PySide6.QtGui import (QColor, QImage, QLinearGradient, QPainter, QPainterPa
                            QPixmap,
                            QPen, QRadialGradient)
 from PySide6.QtWidgets import (QGraphicsOpacityEffect, QHBoxLayout, QLabel,
-                               QLayout,
+                               QLayout, QSizePolicy,
                                QSlider, QStyle, QStyleOptionSlider,
                                QVBoxLayout, QWidget)
 
@@ -1206,7 +1206,19 @@ class FlowRow(QLayout):
             widget = item.widget()
             if widget is not None and widget.isHidden():
                 continue
-            wanted = item.sizeHint()
+            # Never below what the widget says it needs. A size hint is a
+            # preference and a minimum is not: sized to the hint alone,
+            # combo boxes and tick boxes came out two pixels short and the
+            # bottoms of their letters were cut off.
+            hint = item.sizeHint()
+            # From the widget, not the item: a QWidgetItem's minimumSize
+            # reports whatever minimum was set on the widget, which is
+            # usually nothing, rather than what the widget says it needs
+            # to draw itself.
+            least = (widget.minimumSizeHint() if widget is not None
+                     else item.minimumSize())
+            wanted = QSize(max(hint.width(), least.width()),
+                           max(hint.height(), least.height()))
             lead = self._gaps.get(index, 0) if current else 0
             if current and x + lead + wanted.width() > rect.right():
                 rows.append((current, tallest))
@@ -1506,3 +1518,45 @@ class Spinner(QWidget):
             painter.drawArc(box, int(-self._angle * 16), int(270 * 16))
         finally:
             painter.end()
+
+
+class FlowHolder(QWidget):
+    """A widget whose height follows the wrapping row inside it.
+
+    A layout asks a widget how tall it wants to be, and a plain QWidget
+    answers with a single number. A row that wraps has no single number -
+    it is taller when it is narrower - so the container has to say so, or
+    the layout hands it one line's worth and everything that wrapped onto
+    a second line is simply cut off. Which is what was happening.
+    """
+
+    def __init__(self, row, parent=None) -> None:
+        super().__init__(parent)
+        self.setLayout(row)
+        self._row = row
+        policy = self.sizePolicy()
+        policy.setHeightForWidth(True)
+        policy.setVerticalPolicy(QSizePolicy.Policy.Minimum)
+        self.setSizePolicy(policy)
+
+    def hasHeightForWidth(self) -> bool:      # noqa: N802 - Qt's name
+        return True
+
+    def heightForWidth(self, width: int) -> int:      # noqa: N802 - Qt's name
+        margins = self.contentsMargins()
+        inner = max(0, width - margins.left() - margins.right())
+        return (self._row.heightForWidth(inner)
+                + margins.top() + margins.bottom())
+
+    def sizeHint(self) -> QSize:      # noqa: N802 - Qt's name
+        width = self.width() or 600
+        return QSize(width, self.heightForWidth(width))
+
+    def minimumSizeHint(self) -> QSize:      # noqa: N802 - Qt's name
+        return self.sizeHint()
+
+    def resizeEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        super().resizeEvent(event)
+        # A new width means a new height. Without this the container keeps
+        # whatever height it had when it was last measured.
+        self.updateGeometry()
