@@ -12,7 +12,14 @@ PY="$VENV/bin/python"
 STAMP="$VENV/.deps-stamp"
 APP="dist/Mail Manager.app"
 
-B=$'\033[1m'; D=$'\033[2m'; G=$'\033[32m'; Y=$'\033[33m'; R=$'\033[31m'; N=$'\033[0m'
+# Colour only when somebody is watching. These go to stderr, and a
+# redirected build log or a CI transcript got the raw escape codes,
+# which is noise at best and confuses anything parsing the output.
+if [[ -t 2 ]]; then
+  B=$'\033[1m'; D=$'\033[2m'; G=$'\033[32m'; Y=$'\033[33m'; R=$'\033[31m'; N=$'\033[0m'
+else
+  B=''; D=''; G=''; Y=''; R=''; N=''
+fi
 say()  { printf '%s==>%s %s\n' "$G" "$N" "$*" >&2; }
 warn() { printf '%s==>%s %s\n' "$Y" "$N" "$*" >&2; }
 die()  { printf '%serror:%s %s\n' "$R" "$N" "$*" >&2; exit 1; }
