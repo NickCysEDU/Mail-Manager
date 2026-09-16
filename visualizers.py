@@ -314,7 +314,7 @@ class Oscilloscope(Scene):
     """
 
     name = "Oscilloscope"
-    blurb = "the waveform itself, on a phosphor you can set the decay of"
+    blurb = "the waveform swept round a circle, on a phosphor you can set"
 
     #: Traces kept at the longest decay. At sixty a second this is about a
     #: second and a half of history, which is longer than anybody sets it.
@@ -371,20 +371,31 @@ class Oscilloscope(Scene):
             painter.drawPath(self._path(rect, old, state, flash))
 
     def _path(self, rect, trace, state, flash):
-        """One sweep, left to right."""
+        """One sweep, swept around a circle rather than across.
+
+        The beam starts at twelve o'clock and goes round once; how far
+        the signal is from zero is how far the trace is from the ring.
+        A steady tone draws a closed flower, and the trace joins up with
+        itself because the capture is triggered on a zero crossing.
+        """
         path = QPainterPath()
         count = len(trace)
-        middle = rect.center().y()
-        # The flash drives the gain, so a kick makes the beam jump off the
-        # top of the screen the way an overdriven scope does.
-        height = rect.height() * (0.40 + flash * 0.16)
+        centre = rect.center()
+        base = min(rect.width(), rect.height()) * 0.30
+        swing = min(rect.width(), rect.height()) * (0.17 + flash * 0.07)
+        first = None
         for index, value in enumerate(trace):
-            x = rect.left() + rect.width() * (index / max(1, count - 1))
-            y = middle - value * height
+            angle = (index / count) * math.tau - math.pi / 2.0
+            reach = base + value * swing
+            point = QPointF(centre.x() + math.cos(angle) * reach,
+                            centre.y() + math.sin(angle) * reach)
             if index:
-                path.lineTo(x, y)
+                path.lineTo(point)
             else:
-                path.moveTo(x, y)
+                path.moveTo(point)
+                first = point
+        if first is not None:
+            path.lineTo(first)        # close the sweep
         return path
 
     def _from_levels(self, state):
@@ -406,22 +417,28 @@ class Oscilloscope(Scene):
         return out
 
     def _grid(self, painter, rect, flash) -> None:
-        """Ten divisions across and eight down, as a scope's screen has."""
-        faint = QColor.fromHsvF(0.33, 0.6, 1.0, 0.10 + flash * 0.18)
+        """A polar graticule: rings for amplitude, spokes for phase."""
+        centre = rect.center()
+        reach = min(rect.width(), rect.height()) * 0.47
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        faint = QColor.fromHsvF(0.33, 0.6, 1.0, 0.09 + flash * 0.16)
         painter.setPen(QPen(faint, 1.0))
-        for step in range(1, 10):
-            x = rect.left() + rect.width() * step / 10.0
-            painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
-        for step in range(1, 8):
-            y = rect.top() + rect.height() * step / 8.0
-            painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
-        # The centre lines, brighter, as they are on a real graticule.
-        centre = QColor.fromHsvF(0.33, 0.5, 1.0, 0.22 + flash * 0.35)
-        painter.setPen(QPen(centre, 1.2))
-        painter.drawLine(QPointF(rect.center().x(), rect.top()),
-                         QPointF(rect.center().x(), rect.bottom()))
-        painter.drawLine(QPointF(rect.left(), rect.center().y()),
-                         QPointF(rect.right(), rect.center().y()))
+        for step in range(1, 5):
+            radius = reach * step / 5.0
+            painter.drawEllipse(centre, radius, radius)
+        for step in range(12):
+            angle = step * math.tau / 12.0
+            painter.drawLine(
+                QPointF(centre.x() + math.cos(angle) * reach * 0.12,
+                        centre.y() + math.sin(angle) * reach * 0.12),
+                QPointF(centre.x() + math.cos(angle) * reach,
+                        centre.y() + math.sin(angle) * reach))
+        # The zero ring, brighter: the trace sits on it when there is
+        # silence, which is the line a flat scope draws.
+        zero = QColor.fromHsvF(0.33, 0.5, 1.0, 0.26 + flash * 0.35)
+        painter.setPen(QPen(zero, 1.3))
+        base = min(rect.width(), rect.height()) * 0.30
+        painter.drawEllipse(centre, base, base)
 
 
 class Bars(Scene):
@@ -585,6 +602,10 @@ class Meters(Scene):
                      for db in (-24, -12, -3, 0, 1, 2, 3))
     #: Below this face radius the per-cent row is dropped as unreadable.
     PERCENT_RADIUS = 150.0
+    #: And below this, the face shows only what it can show clearly.
+    ROOMY = 62.0
+    #: The three numbers worth keeping when there is no room for seven.
+    SPARSE_MARKS = ((-24, 0.0447), (0, 0.7079), (3, 1.0))
     #: Per cent marks, on the inside. Linear in deflection, as the movement
     #: is: the eyeballed set put 100 per cent at 0.82 of the travel, which
     #: is nearly a decibel and a half out.
@@ -681,7 +702,7 @@ class Meters(Scene):
         # 1.20 radii above the centre and the frequency 0.78 below it, so
         # the two together decide how big the arc can be - which is why the
         # faces used to run off the top of the window.
-        radius = min(inner.width() / 2.55, inner.height() / 2.30)
+        radius = min(inner.width() / 2.55, inner.height() / 2.46)
         # A face is 2.30 radii tall. On a tall cell the width caps the
         # radius, so that block has to be centred in what is left or every
         # dial sits jammed against the top with empty space underneath.
@@ -725,21 +746,28 @@ class Meters(Scene):
         painter.setPen(QPen(colour, max(1.4, radius * 0.030)))
         painter.drawArc(span, int(self.START * 16), int(self.SWEEP * 16))
 
-        # Long marks at the numbered stops, short ones between.
-        for _value, fraction in self.DB_MARKS:
+        # A small face drops what it cannot show legibly rather than
+        # printing it on top of itself. Ten meters in a strip two hundred
+        # pixels tall leaves each one about forty pixels of radius, and
+        # everything a full face carries will not fit in that.
+        roomy = radius >= self.ROOMY
+        marks = self.DB_MARKS if roomy else self.SPARSE_MARKS
+
+        for _value, fraction in marks:
             self._tick(painter, centre, radius, fraction, colour,
                        0.88, 1.0, max(1.2, radius * 0.026))
-        painter.setPen(QPen(dim, max(0.8, radius * 0.014)))
-        for fraction in self.MINOR:
-            self._tick(painter, centre, radius, fraction, dim,
-                       0.94, 1.0, max(0.8, radius * 0.014))
+        if roomy:
+            painter.setPen(QPen(dim, max(0.8, radius * 0.014)))
+            for fraction in self.MINOR:
+                self._tick(painter, centre, radius, fraction, dim,
+                           0.94, 1.0, max(0.8, radius * 0.014))
 
         font = painter.font()
         font.setPointSizeF(max(5.5, radius * 0.155))
         font.setBold(False)
         painter.setFont(font)
         painter.setPen(QPen(colour))
-        for value, fraction in self.DB_MARKS:
+        for value, fraction in marks:
             self._label(painter, centre, radius * 1.20, fraction, str(value))
         # The per-cent row shares the arc with the dB row. Ten faces across
         # a window leaves it about a hundred pixels of arc for six numbers,
@@ -756,12 +784,13 @@ class Meters(Scene):
         painter.setFont(font)
 
         painter.setPen(QPen(colour))
-        font.setPointSizeF(max(5.5, radius * 0.150))
-        painter.setFont(font)
-        painter.drawText(
-            QRectF(centre.x() - radius * 0.5, centre.y() + radius * 0.14,
-                   radius, radius * 0.28),
-            Qt.AlignmentFlag.AlignCenter, "dB")
+        if roomy:
+            font.setPointSizeF(max(5.5, radius * 0.150))
+            painter.setFont(font)
+            painter.drawText(
+                QRectF(centre.x() - radius * 0.5, centre.y() + radius * 0.14,
+                       radius, radius * 0.28),
+                Qt.AlignmentFlag.AlignCenter, "dB")
         if label:
             font.setPointSizeF(max(6.0, radius * 0.175))
             painter.setFont(font)
@@ -955,10 +984,14 @@ class Waterfall(Scene):
         flash = self.flash(state)
         width, height = rect.width(), rect.height()
         # The plot sits in the lower left, leaning up and to the right.
-        plot_w = width * (1.0 - self.SKEW_X) * 0.94
-        plot_h = height * (1.0 - self.SKEW_Y) * 0.72
-        origin_x = width * 0.03
-        origin_y = height * 0.90
+        # Gutters for the axes, so the numbers sit beside the plot rather
+        # than on top of the data.
+        left = max(38.0, width * 0.05)
+        foot = max(30.0, height * 0.075)
+        plot_w = (width - left) * (1.0 - self.SKEW_X) * 0.98
+        plot_h = (height - foot) * (1.0 - self.SKEW_Y) * 0.80
+        origin_x = left
+        origin_y = height - foot
         rise = plot_h * (1.0 + flash * 0.22)
 
         self._floorplan(painter, rect, origin_x, origin_y, plot_w, flash)
@@ -999,8 +1032,8 @@ class Waterfall(Scene):
         self._axis(painter, rect, state, origin_x, origin_y, plot_w, rise)
 
     def _floorplan(self, painter, rect, origin_x, origin_y, plot_w, flash) -> None:
-        """The two axes the landscape stands on."""
-        faint = QColor(150, 170, 210, int(50 + flash * 60))
+        """The floor the landscape stands on."""
+        faint = QColor(150, 170, 210, int(38 + flash * 50))
         painter.setPen(QPen(faint, 1.0))
         back_x = origin_x + rect.width() * self.SKEW_X
         back_y = origin_y - rect.height() * self.SKEW_Y
@@ -1009,35 +1042,31 @@ class Waterfall(Scene):
         painter.drawLine(QPointF(origin_x, origin_y), QPointF(back_x, back_y))
         painter.drawLine(QPointF(origin_x + plot_w, origin_y),
                          QPointF(back_x + plot_w, back_y))
+        painter.drawLine(QPointF(back_x, back_y),
+                         QPointF(back_x + plot_w, back_y))
 
     def _axis(self, painter, rect, state, origin_x, origin_y, plot_w,
               rise) -> None:
-        """Frequency along the front, level up the side, time going back."""
-        if rect.width() < 420:
+        """Frequency along the front, level up the side, time going back.
+
+        Everything sits in a gutter outside the plot. It used to be
+        written over the data with stub ticks floating in mid-air, which
+        read as debris rather than as a scale.
+        """
+        if rect.width() < 380 or rect.height() < 220:
             return
         font = painter.font()
-        size = max(6.5, min(9.0, rect.width() / 130.0))
+        size = max(7.0, min(10.0, rect.width() / 115.0))
         font.setPointSizeF(size)
         painter.setFont(font)
-        ink = QColor(190, 200, 220, 165)
-        dim = QColor(150, 165, 195, 110)
+        ink = QColor(205, 214, 232, 190)
+        dim = QColor(150, 165, 195, 130)
+        line = QColor(150, 170, 210, 90)
 
-        # Across the front: the frequency of each band, every fourth.
-        labels = state.labels
-        if labels:
-            painter.setPen(QPen(ink))
-            step = plot_w / max(1, len(labels) - 1)
-            for index in range(0, len(labels), 4):
-                painter.drawText(
-                    QRectF(origin_x + index * step - 26, origin_y + 3, 52, 13),
-                    Qt.AlignmentFlag.AlignCenter, labels[index])
-            painter.setPen(QPen(dim))
-            painter.drawText(
-                QRectF(origin_x, origin_y + 16, plot_w, 13),
-                Qt.AlignmentFlag.AlignCenter, "frequency")
-
-        # Up the left: how loud, against the track's own peak, using the
-        # same numbers the equaliser's scale is drawn from.
+        # Up the left, with a real axis line and the ticks on the outside.
+        painter.setPen(QPen(line, 1.0))
+        painter.drawLine(QPointF(origin_x, origin_y),
+                         QPointF(origin_x, origin_y - rise))
         calibration = getattr(state, "calibration", None)
         painter.setPen(QPen(ink))
         for db in (0, -6, -12, -24):
@@ -1050,23 +1079,50 @@ class Waterfall(Scene):
             if not 0.0 <= where <= 1.0:
                 continue
             y = origin_y - where * rise
-            painter.drawLine(QPointF(origin_x - 4, y), QPointF(origin_x, y))
-            painter.drawText(QRectF(origin_x - 38, y - 7, 32, 14),
+            painter.setPen(QPen(line, 1.0))
+            painter.drawLine(QPointF(origin_x - 5, y), QPointF(origin_x, y))
+            painter.setPen(QPen(ink))
+            painter.drawText(QRectF(origin_x - 40, y - 8, 33, 16),
                              Qt.AlignmentFlag.AlignRight
-                             | Qt.AlignmentFlag.AlignVCenter, f"{db}")
+                             | Qt.AlignmentFlag.AlignVCenter, str(db))
         painter.setPen(QPen(dim))
-        painter.drawText(QRectF(origin_x - 40, origin_y - rise - 16, 44, 13),
-                         Qt.AlignmentFlag.AlignRight, "dB")
+        painter.drawText(QRectF(origin_x - 40, origin_y - rise - 19, 33, 16),
+                         Qt.AlignmentFlag.AlignRight
+                         | Qt.AlignmentFlag.AlignVCenter, "dB")
 
-        # Into the distance: older frames, with how far back the far edge is.
+        # Along the front. Every fourth band, and never two in the same
+        # place however narrow the frame gets.
+        labels = state.labels
+        if labels:
+            room = max(1, int(len(labels) * 54.0 / max(1.0, plot_w)))
+            every = max(4, room)
+            painter.setPen(QPen(ink))
+            step = plot_w / max(1, len(labels) - 1)
+            for index in range(0, len(labels), every):
+                x = origin_x + index * step
+                painter.setPen(QPen(line, 1.0))
+                painter.drawLine(QPointF(x, origin_y),
+                                 QPointF(x, origin_y + 4))
+                painter.setPen(QPen(ink))
+                painter.drawText(QRectF(x - 27, origin_y + 5, 54, 15),
+                                 Qt.AlignmentFlag.AlignCenter, labels[index])
+            painter.setPen(QPen(dim))
+            painter.drawText(QRectF(origin_x, origin_y + 20, plot_w, 15),
+                             Qt.AlignmentFlag.AlignCenter, "frequency")
+
+        # Into the distance, written along the depth edge and outside it.
         back_x = origin_x + rect.width() * self.SKEW_X
         back_y = origin_y - rect.height() * self.SKEW_Y
+        # One caption, in the empty triangle left of the depth edge. The
+        # duration used to be written separately at the far end, which put
+        # it on top of the landscape.
         painter.setPen(QPen(dim))
         seconds = self.DEPTH / 60.0
         painter.drawText(
-            QRectF((origin_x + back_x) / 2.0 - 30,
-                   (origin_y + back_y) / 2.0 - 4, 84, 13),
-            Qt.AlignmentFlag.AlignLeft, f"time  −{seconds:.1f}s")
+            QRectF((origin_x + back_x) / 2.0 - 104,
+                   (origin_y + back_y) / 2.0 - 8, 96, 15),
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+            f"time  −{seconds:.1f}s")
 
 
 #: Every theme, in the order the picker offers them.
@@ -1093,14 +1149,27 @@ def by_name(name: str) -> Scene:
 #: grain     film noise, which hides banding in the gradients
 #: aberration how far the red and blue channels separate, in pixels
 POST = {
-    "Vaporwave city": {"bloom": 0.55, "scanlines": 0.18, "vignette": 0.40,
+    # A CRT showing a sunset: bloom for the neon, scanlines and a little
+    # lens error for the tube, grain to hide banding in the sky gradient.
+    "Vaporwave city": {"bloom": 0.60, "scanlines": 0.16, "vignette": 0.42,
                        "grain": 0.05, "aberration": 1.2},
-    "Neon tunnel": {"bloom": 0.70, "vignette": 0.55, "aberration": 1.8},
-    "Oscilloscope": {"bloom": 0.85, "scanlines": 0.26, "vignette": 0.30},
-    "Equaliser": {"bloom": 0.30, "vignette": 0.22},
-    "VU meters": {"bloom": 0.40, "vignette": 0.45, "grain": 0.07},
-    "Ambience": {"bloom": 0.80, "vignette": 0.35, "aberration": 1.0},
-    "Waterfall": {"bloom": 0.55, "vignette": 0.40},
+    # Glass and neon, no tube: heavy bloom, a strong vignette to sell the
+    # depth, and the colour fringing a wide lens gives at the edges.
+    "Neon tunnel": {"bloom": 0.75, "vignette": 0.58, "aberration": 1.8},
+    # Phosphor: the glow is most of the look, and the scanlines are the
+    # screen it is painted on.
+    "Oscilloscope": {"bloom": 0.88, "scanlines": 0.22, "vignette": 0.34},
+    # A hardware meter under a lamp. Enough bloom that the lit segments
+    # spill, not so much that the unlit ones wash out.
+    "Equaliser": {"bloom": 0.34, "vignette": 0.26, "grain": 0.03},
+    # Glass over a lit dial: grain reads as the texture of the face.
+    "VU meters": {"bloom": 0.42, "vignette": 0.46, "grain": 0.07},
+    # The overlaps do the work here, so the bloom is high and everything
+    # else stays out of the way.
+    "Ambience": {"bloom": 0.82, "vignette": 0.32, "aberration": 1.0},
+    # An instrument, not a light show: enough bloom to lift the ridges off
+    # the background and a vignette to keep the eye in the plot.
+    "Waterfall": {"bloom": 0.50, "vignette": 0.38, "grain": 0.03},
 }
 
 

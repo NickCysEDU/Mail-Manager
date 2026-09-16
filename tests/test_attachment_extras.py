@@ -396,21 +396,53 @@ class TestTheSpectrumArrivesAndLeaves:
         assert spectrum._timer.isActive()
         assert spectrum._flow.state() != 0 or spectrum._reveal > 0
 
-    def test_pausing_keeps_it_moving_and_starts_the_countdown(self, qtbot):
+    def test_pausing_keeps_it_moving_and_does_not_start_a_countdown(self,
+                                                                    qtbot):
+        """Pausing used to begin a thirty second slide to nothing.
+
+        Whoever was listening then came back to a pane that had changed
+        shape under them, and the seek bar had moved. It idles instead:
+        still drawing, still there, until the tick box says otherwise.
+        """
         spectrum = self._loaded(qtbot)
         spectrum.set_playing(True)
         spectrum._reveal_changed(1.0)
         spectrum.set_playing(False)
         assert spectrum._idling, "a paused spectrum should breathe, not freeze"
-        assert spectrum._away.isActive()
         assert spectrum._timer.isActive()
+        assert not spectrum._away.isActive(), (
+            "nothing should be counting down to hiding it")
         spectrum._tick()
         spectrum.grab()
 
-    def test_the_countdown_is_thirty_seconds(self, qtbot):
+    def test_it_is_still_there_long_after_it_was_paused(self, qtbot):
         spectrum = self._loaded(qtbot)
-        assert spectrum.IDLE_SECONDS == 30
-        assert spectrum._away.interval() == 30_000
+        spectrum.set_playing(True)
+        # Let the reveal animation finish rather than forcing a value it
+        # is still animating towards - it would overwrite the forced one a
+        # few milliseconds later and the test would be reading the slide,
+        # not the resting state.
+        qtbot.waitUntil(lambda: spectrum._flow.state()
+                        != spectrum._flow.State.Running, timeout=3000)
+        tall = spectrum.maximumHeight()
+        assert tall > 100
+        spectrum.set_playing(False)
+        # Well past the countdown that used to hide it.
+        qtbot.wait(150)
+        for _ in range(40):
+            spectrum._tick()
+        assert spectrum.maximumHeight() >= tall, (
+            f"it shrank on its own after being paused: {tall} -> "
+            f"{spectrum.maximumHeight()}")
+
+    def test_only_the_owner_puts_it_away(self, qtbot):
+        """clear() is the pane putting a file down, and that still hides
+        it - the strip belongs to the file, not to the playback state."""
+        spectrum = self._loaded(qtbot)
+        spectrum.set_playing(True)
+        spectrum._reveal_changed(1.0)
+        spectrum.clear()
+        assert spectrum.maximumHeight() == 0
 
     def test_concealing_stops_everything(self, qtbot):
         spectrum = self._loaded(qtbot)
