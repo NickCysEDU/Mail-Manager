@@ -44,7 +44,7 @@ import shiboken6
 
 import attachment_meta
 import attachments
-from attachment_widgets import SeekBar, Spectrum
+from attachment_widgets import FlowRow, SeekBar, Spectrum
 from widgets import _html, system_font
 
 #: Text longer than this is truncated on screen. A log file attached to a bug
@@ -94,6 +94,9 @@ def _combo(options, tip: str) -> QComboBox:
 
 #: Transport symbols. Both are plain text, so they take the button's own
 #: colour and scale with its font instead of needing a themed icon set.
+#: How far J and L jump.
+SKIP_MS = 10_000
+
 PLAY_GLYPH = "\u25b6"
 PAUSE_GLYPH = "\u275a\u275a"
 
@@ -361,20 +364,46 @@ class AudioPane(QWidget):
         self.full_button.clicked.connect(self._go_full_screen)
         self.spectrum.set_labels([_hz(c) for c in attachment_audio.CENTRES])
 
-        self.visual_row = QHBoxLayout()
-        self.visual_row.addWidget(self.enable_box)
-        self.visual_row.addWidget(self.scene_box)
-        self.visual_row.addWidget(self.strobe_box)
-        self.visual_row.addWidget(self.colour_button)
-        self.visual_row.addWidget(self.full_button)
-        self.visual_row.addStretch(1)
+        from attachment_widgets import Spectrum as _Spectrum
+
+        self.shape_box = _combo(
+            [name for name, _ in _Spectrum.SHAPES],
+            "How tall the visualiser is. Portrait suits the dials and the "
+            "tunnel; the strip keeps it out of the way.")
+        self.shape_box.currentTextChanged.connect(self._shape_chosen)
+
+        self.flash_label = QLabel("Flash")
+        self.flash = QSlider(Qt.Orientation.Horizontal)
+        self.flash.setRange(0, 100)
+        self.flash.setValue(50)
+        self.flash.setFixedWidth(96)
+        self.flash.setToolTip(
+            "How often the strobe is allowed to fire, from every few bars "
+            "to every beat it can find.")
+        self.flash.valueChanged.connect(
+            lambda value: self.spectrum.set_strobe_rate(value / 100.0))
+
+        # A row that wraps. These controls come and go with what is chosen,
+        # and in one fixed line they overlapped each other and then ran off
+        # the pane.
+        self.visual_row = FlowRow(spacing=10)
+        # Grouped: what to draw, how it reacts, then what to do with it.
+        groups = ((self.enable_box, self.scene_box, self.shape_box),
+                  (self.strobe_box, self.flash_label, self.flash),
+                  (self.colour_button, self.full_button))
+        for index, group in enumerate(groups):
+            if index:
+                self.visual_row.add_gap(26)
+            for widget in group:
+                self.visual_row.addWidget(widget)
         self.visual_holder = QWidget()
         self.visual_holder.setLayout(self.visual_row)
+        self._visual_controls = (self.scene_box, self.shape_box, self.strobe_box,
+                                 self.flash_label, self.flash,
+                                 self.full_button, self.colour_button)
         # Everything except the tick box starts unavailable, because the
         # visualiser starts off.
-        for widget in (self.scene_box, self.strobe_box, self.full_button,
-                       self.colour_button):
-            widget.setEnabled(False)
+        self._grey_visual_controls(False)
 
         self._playing = False
         self._full_play = None
@@ -487,6 +516,14 @@ class AudioPane(QWidget):
             Qt.TransformationMode.SmoothTransformation))
         self.art.show()
 
+    def _cancel_analysis(self) -> None:
+        """Stop any analysis in flight and forget it."""
+        handle, self._decoder = self._decoder, None
+        if handle is not None:
+            cancel = getattr(handle, "cancel", None)
+            if cancel is not None:
+                cancel()
+
     def _start_analysis(self, path: Path) -> None:
         """Decode and analyse in the background, and survive being closed.
 
@@ -515,14 +552,24 @@ class AudioPane(QWidget):
         def done(frames) -> None:
             if not alive():
                 return
+            self.spectrum.set_working(None)
             self.spectrum.set_frames(frames, attachment_audio.RATE)
             self._decoder = None
 
         def failed(_detail: str) -> None:
             if alive():
                 self._decoder = None
+                self.spectrum.set_working(None)
 
-        self._decoder = attachment_audio.decode(path, done, failed)
+        def progress(fraction: float) -> None:
+            if alive():
+                self.spectrum.set_working(fraction)
+
+        # Any earlier analysis is told to stop rather than left to finish a
+        # file nobody is looking at.
+        self._cancel_analysis()
+        self.spectrum.set_working(0.0)
+        self._decoder = attachment_audio.decode(path, done, failed, progress)
 
     # -- transport --------------------------------------------------------
     @Slot()
@@ -559,6 +606,23 @@ class AudioPane(QWidget):
         self._show_clock(self.position.value())
 
     @Slot(bool)
+    def _grey_visual_controls(self, on: bool) -> None:
+        """Off should look off.
+
+        Disabling alone still reads as available on this platform, so the
+        whole group is dimmed as well - there is no point offering a full
+        screen button for something that is not being drawn.
+        """
+        for widget in self._visual_controls:
+            widget.setEnabled(on)
+            widget.setGraphicsEffect(None)
+            if not on:
+                from PySide6.QtWidgets import QGraphicsOpacityEffect
+
+                faded = QGraphicsOpacityEffect(widget)
+                faded.setOpacity(0.35)
+                widget.setGraphicsEffect(faded)
+
     def _enable_visualiser(self, on: bool) -> None:
         """Off means off: no decode, no timer, no widget with a height.
 
@@ -566,12 +630,11 @@ class AudioPane(QWidget):
         kilobytes. Nobody should pay that for something they have switched
         off, so the decode only starts when this is ticked.
         """
-        for widget in (self.scene_box, self.strobe_box, self.full_button):
-            widget.setEnabled(on)
-        self.colour_button.setEnabled(on)
+        self._grey_visual_controls(on)
         if not on:
             self._analysis_token += 1
-            self._decoder = None
+            self._cancel_analysis()
+            self.spectrum.set_working(None)
             self.spectrum.set_playing(False)
             self.spectrum.clear()
             return
@@ -582,6 +645,15 @@ class AudioPane(QWidget):
                     and self._player.playbackState()
                     == QMediaPlayer.PlaybackState.PlayingState):
                 self.spectrum.set_playing(True)
+
+    @Slot(str)
+    def _shape_chosen(self, name: str) -> None:
+        from attachment_widgets import Spectrum as _Spectrum
+
+        for label, ratio in _Spectrum.SHAPES:
+            if label == name:
+                self.spectrum.set_aspect(ratio)
+                return
 
     @Slot(str)
     def _scene_chosen(self, name: str) -> None:
@@ -602,6 +674,18 @@ class AudioPane(QWidget):
         window.changed.connect(
             lambda d, b: self.spectrum.set_colours(dial=d, background=b))
         window.exec()
+
+    def transport(self, action: str) -> None:
+        """J, K and L, wherever they were pressed."""
+        if action == "toggle":
+            if self.play.isEnabled():
+                self._toggle()
+            return
+        delta = SKIP_MS if action == "forward" else -SKIP_MS
+        target = max(0, min(self.position.maximum(),
+                            self.position.value() + delta))
+        self.position.setValue(target)
+        self._seek(target)
 
     def _sync_visual_controls(self) -> None:
         """Available whenever there is a sound file, analysed or not."""
@@ -634,10 +718,19 @@ class AudioPane(QWidget):
         seek.seeked.connect(self.position.setValue)
         self.position.valueChanged.connect(seek.report)
 
+        clock = QLabel(self.clock.text())
+        clock.setFont(system_font())
+        clock.setMinimumWidth(104)
+        clock.setStyleSheet("color: #e8e8ee;")
+        self.position.valueChanged.connect(
+            lambda value: clock.setText(
+                f"{_mmss(value)} / {_mmss(self.position.maximum())}"))
+
         volume = QSlider(Qt.Orientation.Horizontal)
         volume.setRange(0, 100)
         volume.setValue(self.volume.value())
         volume.setFixedWidth(110)
+        volume.setToolTip("Volume")
         volume.valueChanged.connect(self.volume.setValue)
 
         import visualizers
@@ -657,9 +750,13 @@ class AudioPane(QWidget):
         leave = QPushButton("Close")
         leave.clicked.connect(full.close)
 
-        for widget in (play, seek, volume, scene, strobe, colours):
+        full.add_control(play)
+        full.add_control(seek, stretch=1)
+        full.add_control(clock)
+        full.add_control(QLabel("Vol"))
+        full.add_control(volume)
+        for widget in (scene, strobe, colours):
             full.add_control(widget)
-        full.add_stretch()
         full.add_control(leave)
 
         full.showFullScreen()
@@ -695,11 +792,26 @@ class AudioPane(QWidget):
         # Anything still decoding is for a file nobody is looking at now.
         self._analysis_token += 1
         self.spectrum.set_playing(False)
+        self.spectrum.set_working(None)
         self.spectrum.clear()
-        self._decoder = None
+        # cancel(), not just forget: the analysis runs on a QThread, and Qt
+        # calls qFatal if one is destroyed while it is still running.
+        self._cancel_analysis()
         if self._player is not None:
             self._player.stop()
             self._player.setSource(QUrl())
+
+    def event(self, incoming) -> bool:
+        """Last stop before Qt deletes this pane and the thread under it."""
+        from PySide6.QtCore import QEvent
+
+        if incoming.type() == QEvent.Type.DeferredDelete:
+            self._cancel_analysis()
+        return super().event(incoming)
+
+    def closeEvent(self, incoming) -> None:      # noqa: N802 - Qt's name
+        self._cancel_analysis()
+        super().closeEvent(incoming)
 
 
 def _mmss(ms: int) -> str:
@@ -823,8 +935,8 @@ class AttachmentViewer(QDialog):
         self.hint = _muted(
             "Click an attachment to open it. Nothing here is ever run, and "
             "nothing is saved unless you say so.\n"
-            "Space plays audio · arrow keys move and scrub · Info shows "
-            "details · Save keeps a copy.")
+            "K or space plays · J and L jump ten seconds · arrow keys move "
+            "and scrub · Info shows details · Save keeps a copy.")
 
         self.image = ImagePane()
         self.audio = AudioPane()
@@ -926,6 +1038,12 @@ class AttachmentViewer(QDialog):
             self.addAction(action)
 
         add("Space", self._space)
+        # The transport keys a media player is expected to have. J and L
+        # jump ten seconds, K plays and pauses - the same three keys, in
+        # the same places, whether or not the visualiser is on.
+        add("J", lambda: self._nudge(-SKIP_MS))
+        add("K", self._space)
+        add("L", lambda: self._nudge(SKIP_MS))
         add(QKeySequence.StandardKey.Save, self._save_current)
         add("Ctrl+I", lambda: self.info_button.toggle())
         add("Down", lambda: self._step_row(1))

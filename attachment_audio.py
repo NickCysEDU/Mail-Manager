@@ -25,6 +25,17 @@ import math
 from array import array
 from typing import List, Optional
 
+try:      # pragma: no cover - exercised wherever Qt is present
+    from PySide6.QtCore import QObject as QObject_base
+    from PySide6.QtCore import QThread as _QThread_base
+    from PySide6.QtCore import Signal as _Signal
+except ImportError:      # pragma: no cover - the analysis half still imports
+    QObject_base = object
+    _QThread_base = object
+
+    def _Signal(*_args, **_kwargs):      # noqa: N802 - matches Qt's name
+        return None
+
 #: Points per analysis window. At 48 kHz this is 23.4 Hz a bin, which
 #: separates 73 Hz from 120 Hz. Smaller windows put the whole bottom of the
 #: spectrum into one or two bins and every bass band moves together, which
@@ -107,10 +118,16 @@ def _band_edges(sample_rate: int) -> List[tuple]:
     return edges
 
 
-def analyse(samples: array, sample_rate: int, channels: int = 1) -> List[array]:
+def analyse(samples: array, sample_rate: int, channels: int = 1,
+            should_stop=None, on_progress=None) -> List[array]:
     """Band energies per frame, each 0..1.
 
     ``samples`` is interleaved 16-bit PCM as an array("h").
+
+    ``should_stop`` is polled every so often and, if it returns true, the
+    work is abandoned and an empty list comes back: a track nobody is
+    waiting for should not keep a core busy. ``on_progress`` is called with
+    a fraction so something on screen can move.
     """
     if not samples or sample_rate <= 0:
         return []
@@ -125,7 +142,18 @@ def analyse(samples: array, sample_rate: int, channels: int = 1) -> List[array]:
     scale = 1.0 / 32768.0
 
     at = 0
+    # Checked about forty times over the whole track: often enough to quit
+    # promptly, rarely enough that the polling costs nothing.
+    checkpoint = max(hop, (total // 40) // hop * hop or hop)
+    since = 0
     while at + WINDOW <= total:
+        since += hop
+        if since >= checkpoint:
+            since = 0
+            if should_stop is not None and should_stop():
+                return []
+            if on_progress is not None:
+                on_progress(min(0.99, at / total))
         block: List[complex] = []
         if channels == 1:
             for i in range(WINDOW):
@@ -174,11 +202,153 @@ def analyse(samples: array, sample_rate: int, channels: int = 1) -> List[array]:
     return frames
 
 
-def decode(path, on_done, on_fail) -> Optional[object]:
+#: Every analysis still in flight. A pane destroyed as somebody's child
+#: never sees a DeferredDelete of its own, so it cannot be relied on to
+#: cancel its own work - and Qt aborts the process if a running QThread is
+#: destroyed. This is the backstop that runs when the application quits.
+_LIVE: "set" = set()
+
+
+def stop_all() -> None:
+    """Cancel every analysis still running. Safe at any time."""
+    for handle in list(_LIVE):
+        try:
+            handle.cancel()
+        except Exception:      # noqa: BLE001 - shutting down regardless
+            pass
+    _LIVE.clear()
+
+
+def _arm_shutdown() -> None:
+    """Make sure stop_all runs however the process ends."""
+    import atexit
+
+    global _ARMED
+    if _ARMED:
+        return
+    _ARMED = True
+    atexit.register(stop_all)
+    try:
+        from PySide6.QtCore import QCoreApplication
+
+        app = QCoreApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(stop_all)
+    except Exception:      # noqa: BLE001 - atexit alone still covers it
+        pass
+
+
+_ARMED = False
+
+
+class _AnalysisThread(_QThread_base):
+    """analyse() on its own thread, reporting through signals.
+
+    Signals rather than a posted callback: a QThread runs no event loop of
+    its own once run() returns, so a QTimer created there never fires and
+    the result never arrives. A signal connected across threads is queued
+    onto the receiver's thread, which is the one that owns the widgets.
+    """
+
+    done = _Signal(object)
+    failed = _Signal(str)
+    progress = _Signal(float)
+
+    def __init__(self, samples, rate: int, channels: int) -> None:
+        super().__init__()
+        self._samples = samples
+        self._rate = rate
+        self._channels = channels
+        self._stop = False
+
+    def stop(self) -> None:
+        self._stop = True
+
+    def run(self) -> None:
+        try:
+            frames = analyse(self._samples, self._rate, self._channels,
+                             should_stop=lambda: self._stop,
+                             on_progress=self.progress.emit)
+        except Exception as exc:      # noqa: BLE001
+            if not self._stop:
+                self.failed.emit(str(exc))
+            return
+        if not self._stop:
+            self.done.emit(frames)
+
+
+class _Analysis(QObject_base):
+    """Owns the decoder and the analysis thread.
+
+    One object for the caller to keep alive, and one to cancel.
+    """
+
+    def __init__(self, decoder, on_done, on_fail, on_progress=None) -> None:
+        super().__init__()
+        self._decoder = decoder
+        self._on_done = on_done
+        self._on_fail = on_fail
+        self._on_progress = on_progress
+        self._thread = None
+        self._stop = False
+        _LIVE.add(self)
+        _arm_shutdown()
+
+    # -- lifetime ---------------------------------------------------------
+    def cancel(self) -> None:
+        """Abandon the work. Safe to call more than once."""
+        self._stop = True
+        decoder, self._decoder = self._decoder, None
+        if decoder is not None:
+            try:
+                decoder.stop()
+            except Exception:      # noqa: BLE001 - already gone
+                pass
+        thread, self._thread = self._thread, None
+        if thread is not None:
+            thread.stop()
+            if thread.isRunning():
+                # A running QThread destroyed by Qt is fatal, so wait for it.
+                thread.wait(4000)
+        _LIVE.discard(self)
+
+    @property
+    def cancelled(self) -> bool:
+        return self._stop
+
+    # -- the work ---------------------------------------------------------
+    def start_analysis(self, samples, rate: int, channels: int) -> None:
+        if self._stop:
+            return
+        thread = _AnalysisThread(samples, rate, channels)
+        thread.done.connect(self._finished)
+        thread.failed.connect(self._failed)
+        if self._on_progress is not None:
+            thread.progress.connect(self._report)
+        self._thread = thread
+        thread.start()
+
+    def _report(self, fraction: float) -> None:
+        if not self._stop and self._on_progress is not None:
+            self._on_progress(fraction)
+
+    def _finished(self, frames) -> None:
+        _LIVE.discard(self)
+        if not self._stop:
+            self._on_done(frames)
+
+    def _failed(self, detail: str) -> None:
+        _LIVE.discard(self)
+        if not self._stop:
+            self._on_fail(detail)
+
+
+def decode(path, on_done, on_fail, on_progress=None) -> Optional[object]:
     """Decode a file to PCM with Qt, then hand the frames back.
 
-    Returns the decoder, which the caller must keep alive. Qt does the
-    decoding on its own thread; only the arithmetic happens here.
+    Returns a handle the caller must keep alive and may ``cancel()``. Qt
+    decodes on its own thread and the arithmetic runs on another, so the
+    UI thread only ever copies buffers.
     """
     try:
         from PySide6.QtCore import QLoggingCategory, QUrl
@@ -219,13 +389,13 @@ def decode(path, on_done, on_fail) -> Optional[object]:
             pass
 
     def finished() -> None:
-        try:
-            frames = analyse(collected, state["rate"], state["channels"])
-        except Exception as exc:      # noqa: BLE001
-            on_fail(str(exc))
-            return
-        on_done(frames)
+        # Off the UI thread. This used to run here, and a three minute
+        # track spent five and a half seconds inside analyse() with the
+        # event loop stopped - the window went grey and the pointer became
+        # a beachball, which reads as a crash rather than as work.
+        handle.start_analysis(collected, state["rate"], state["channels"])
 
+    handle = _Analysis(decoder, on_done, on_fail, on_progress)
     decoder.bufferReady.connect(buffer_ready)
     decoder.finished.connect(finished)
     # The signal is named differently across Qt 6 point releases, and a
@@ -240,7 +410,7 @@ def decode(path, on_done, on_fail) -> Optional[object]:
                 continue
     decoder.setSource(QUrl.fromLocalFile(str(path)))
     decoder.start()
-    return decoder
+    return handle
 
 
 _QUIET = False

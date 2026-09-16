@@ -23,11 +23,13 @@ import math as _math
 
 import visualizers
 
-from PySide6.QtCore import (QEasingCurve, QPointF, QRectF, QSize, Qt,
+from PySide6.QtCore import (QEasingCurve, QPoint, QPointF, QRect, QRectF, QSize, Qt,
                             QTimer, QVariantAnimation, Signal)
-from PySide6.QtGui import (QColor, QLinearGradient, QPainter, QPainterPath,
+from PySide6.QtGui import (QColor, QImage, QLinearGradient, QPainter, QPainterPath,
+                           QPixmap,
                            QPen, QRadialGradient)
 from PySide6.QtWidgets import (QGraphicsOpacityEffect, QHBoxLayout, QLabel,
+                               QLayout,
                                QSlider, QStyle, QStyleOptionSlider,
                                QVBoxLayout, QWidget)
 
@@ -169,6 +171,14 @@ class Spectrum(QWidget):
 
     HEIGHT = 240
 
+    #: Shapes the strip can take, as width-to-height. None keeps the fixed
+    #: strip. Portrait is genuinely taller than it is wide, which several
+    #: of the scenes suit better than a letterbox.
+    SHAPES = (("Strip", None), ("Cinema 21:9", 21 / 9), ("Wide 16:9", 16 / 9),
+              ("Square", 1.0), ("Portrait 3:4", 3 / 4))
+    #: However tall a shape asks for, never more than this.
+    MAX_HEIGHT = 900
+
     #: Which bands feed which aggregate, as fractions of the band count.
     BASS = (0.00, 0.16)
     MID = (0.20, 0.52)
@@ -197,6 +207,16 @@ class Spectrum(QWidget):
         self._target = 0.0
         self._unbounded = False
         self._reserve = 0
+        #: None when idle, else 0..1 while the track is being analysed.
+        self._working = None
+        self._post = True
+        self._effects = PostProcess()
+        self._buffer = None
+        #: None for the fixed strip, else width-to-height.
+        self._aspect = None
+        #: Middle of the slider until somebody moves it.
+        self._strobe_rate = 0.5
+        self._since_hit = 99
         self._timer = QTimer(self)
         # Sixty a second. Every scene paints in well under a frame at
         # 1080p, so the limit is the display rather than the drawing.
@@ -226,6 +246,38 @@ class Spectrum(QWidget):
 
     def set_strobe(self, on: bool) -> None:
         self._state.strobe = bool(on)
+
+    def set_post(self, on: bool) -> None:
+        """Turn the polish pass off, for a slower machine."""
+        self._post = bool(on)
+        if not on:
+            self._buffer = None
+        self.update()
+
+    def set_aspect(self, ratio) -> None:
+        """Choose the strip's shape, or None to keep the fixed height."""
+        self._aspect = None if ratio is None else max(0.2, float(ratio))
+        self.updateGeometry()
+        if not self._unbounded:
+            self._reveal_changed(self._reveal)
+        self.update()
+
+    def _full_height(self) -> int:
+        """How tall the strip wants to be when fully revealed."""
+        if self._aspect is None:
+            return self.HEIGHT
+        width = self.width() or self.sizeHint().width() or 420
+        return max(120, min(self.MAX_HEIGHT, int(width / self._aspect)))
+
+    def set_strobe_rate(self, rate: float) -> None:
+        """How willing the strobe is to fire, 0 sparing to 1 eager.
+
+        Two things move together: how big a jump in the bass counts as a
+        hit, and how long the scene waits before it will call another one.
+        Driving only the threshold makes a busy track strobe continuously
+        at one end of the slider and never at the other.
+        """
+        self._strobe_rate = max(0.0, min(1.0, float(rate)))
 
     def set_labels(self, labels) -> None:
         self._state.labels = list(labels or [])
@@ -314,7 +366,7 @@ class Spectrum(QWidget):
 
     # -- arriving and leaving ---------------------------------------------
     def reveal(self) -> None:
-        if self._reveal >= 1.0 and self.maximumHeight() >= self.HEIGHT:
+        if self._reveal >= 1.0 and self.maximumHeight() >= self._full_height():
             return
         self._animate_to(1.0)
 
@@ -328,6 +380,28 @@ class Spectrum(QWidget):
         self._flow.setStartValue(float(self._reveal))
         self._flow.setEndValue(float(target))
         self._flow.start()
+
+    def set_working(self, fraction) -> None:
+        """Show that analysis is running, and roughly how far along.
+
+        Analysis takes a few seconds on a long track. Without this the
+        strip is blank for all of it, which reads as nothing happening -
+        or, when it ran on the UI thread, as the app having died.
+        """
+        self._working = None
+        self._post = True
+        self._effects = PostProcess()
+        self._buffer = None
+        #: None for the fixed strip, else width-to-height.
+        self._aspect = None
+        #: Middle of the slider until somebody moves it.
+        self._strobe_rate = 0.5
+        self._since_hit = 99 if fraction is None else max(0.0, min(1.0, float(fraction)))
+        if self._working is not None:
+            self.reveal()
+            if not self._timer.isActive():
+                self._timer.start()
+        self.update()
 
     def set_reserve(self, pixels: int) -> None:
         """Leave this many pixels clear at the bottom of the scene."""
@@ -352,7 +426,7 @@ class Spectrum(QWidget):
 
     def _reveal_changed(self, value) -> None:
         self._reveal = max(0.0, min(1.0, float(value)))
-        height = int(self.HEIGHT * self._reveal)
+        height = int(self._full_height() * self._reveal)
         if self._unbounded:
             if self._reveal <= 0.001 and self._target <= 0.0:
                 self._timer.stop()
@@ -374,15 +448,24 @@ class Spectrum(QWidget):
         self.updateGeometry()
         self.update()
 
+    def resizeEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        super().resizeEvent(event)
+        if self._aspect is not None and not self._unbounded:
+            wanted = int(self._full_height() * self._reveal)
+            if abs(self.maximumHeight() - wanted) > 1:
+                self.setMinimumHeight(wanted)
+                self.setMaximumHeight(wanted)
+                self.updateGeometry()
+
     def sizeHint(self) -> QSize:      # noqa: N802 - Qt's name
         if self._unbounded:
             return QSize(1280, 720)
-        return QSize(420, int(self.HEIGHT * self._reveal))
+        return QSize(420, int(self._full_height() * self._reveal))
 
     def minimumSizeHint(self) -> QSize:      # noqa: N802 - Qt's name
         if self._unbounded:
             return QSize(0, 0)
-        return QSize(0, int(self.HEIGHT * self._reveal))
+        return QSize(0, int(self._full_height() * self._reveal))
 
     # -- the numbers ------------------------------------------------------
     def _row(self) -> Optional[List[float]]:
@@ -446,8 +529,13 @@ class Spectrum(QWidget):
             self._spawn(min(4, int((high - self._last_high) * 22)))
         self._last_high = high
         state.hit = max(0.0, state.hit - 0.16)
-        if bass - self._last_bass > 0.10:
+        rate = self._strobe_rate
+        jump = 0.22 - rate * 0.17          # 0.22 sparing, 0.05 eager
+        wait = int(34 - rate * 32)         # frames to wait before the next
+        self._since_hit += 1
+        if bass - self._last_bass > jump and self._since_hit >= wait:
             state.hit = 1.0
+            self._since_hit = 0
         self._last_bass = bass
 
         state.scroll = (state.scroll + 0.012 + state.bass * 0.05) % 1.0
@@ -497,9 +585,22 @@ class Spectrum(QWidget):
 
     # -- painting ---------------------------------------------------------
     def paintEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        """Paint, and never leave the painter open.
+
+        An exception raised out of a paintEvent does not propagate: Qt
+        catches it, prints it, and carries on with a painter still active
+        on the backing store, which then crashes the process. Whatever
+        goes wrong in a scene, the painter has to be closed.
+        """
         painter = QPainter(self)
+        try:
+            self._paint(painter)
+        finally:
+            painter.end()
+
+    def _paint(self, painter) -> None:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        rect = self.rect()
+        rect = QRectF(self.rect())
         if self._reserve:
             # The strip is part of the picture, not a gap in it, so it takes
             # the scene's own background - including a picked one.
@@ -508,8 +609,8 @@ class Spectrum(QWidget):
             # permanently rather than while the bar shows means the scene
             # never has a button sitting on top of it, and never resizes
             # underneath the viewer when the bar fades.
-            rect = rect.adjusted(0, 0, 0, -min(self._reserve,
-                                               rect.height() // 3))
+            rect = rect.adjusted(0.0, 0.0, 0.0,
+                                 -min(float(self._reserve), rect.height() / 3.0))
         if self._reveal <= 0.001:
             return
         if self._reveal < 0.999:
@@ -517,11 +618,66 @@ class Spectrum(QWidget):
             painter.translate(0.0, (1.0 - self._reveal) * rect.height() * 0.45)
         if not self._level:
             painter.fillRect(rect, QColor(8, 6, 18))
+            if self._working is not None:
+                self._draw_working(painter, rect)
+                return
             painter.setPen(QPen(QColor(150, 150, 170, 120)))
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter,
                              "the spectrum appears when something is playing")
             return
-        self._scene.paint(painter, rect, self._state)
+        self._paint_scene(painter, rect)
+
+    def _paint_scene(self, painter, rect) -> None:
+        """The scene, then whatever polish it asks for.
+
+        A scene that wants no post-processing is drawn straight onto the
+        widget, exactly as before - the buffer and the extra passes only
+        exist for the ones that do.
+        """
+        import visualizers
+
+        recipe = visualizers.post_for(self._scene) if self._post else {}
+        if not recipe or rect.width() < 8.0 or rect.height() < 8.0:
+            self._scene.paint(painter, rect, self._state)
+            return
+
+        ratio = self.devicePixelRatioF()
+        pixels = rect.width() * ratio * rect.height() * ratio
+        # Past about a megapixel the per-pixel passes cost more than the
+        # detail is worth, so the buffer is built smaller and stretched.
+        shrink = 1.0 if pixels <= 1_200_000 else max(0.5, (1_200_000 / pixels) ** 0.5)
+        wanted = QSize(max(1, int(rect.width() * ratio * shrink)),
+                       max(1, int(rect.height() * ratio * shrink)))
+        if self._buffer is None or self._buffer.size() != wanted:
+            self._buffer = QPixmap(wanted)
+            self._buffer.setDevicePixelRatio(ratio * shrink)
+        self._buffer.fill(QColor(0, 0, 0, 0))
+        inner = QPainter(self._buffer)
+        inner.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        side = self._buffer.size() / self._buffer.devicePixelRatio()
+        self._scene.paint(inner, QRectF(0, 0, side.width(), side.height()),
+                          self._state)
+        inner.end()
+        self._effects.apply(painter, rect, self._buffer, recipe)
+
+    def _draw_working(self, painter, rect) -> None:
+        """A bar that fills, and a line saying what is happening."""
+        painter.setPen(QPen(QColor(150, 150, 170, 150)))
+        painter.drawText(rect.adjusted(0, 0, 0, -int(rect.height() * 0.18)),
+                         Qt.AlignmentFlag.AlignCenter,
+                         "listening to the track…")
+        width = min(rect.width() * 0.5, 320.0)
+        track = QRectF(rect.center().x() - width / 2,
+                       rect.center().y() + rect.height() * 0.14,
+                       width, 5.0)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(90, 90, 110, 110))
+        painter.drawRoundedRect(track, 2.5, 2.5)
+        filled = QRectF(track)
+        filled.setWidth(max(4.0, track.width() * float(self._working or 0.0)))
+        painter.setBrush(QColor(150, 190, 255, 210))
+        painter.drawRoundedRect(filled, 2.5, 2.5)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
 
 
 class FullScreenSpectrum(QWidget):
@@ -583,9 +739,9 @@ class FullScreenSpectrum(QWidget):
         self._idle.start()
 
     # -- what goes in the bar ---------------------------------------------
-    def add_control(self, widget) -> None:
+    def add_control(self, widget, stretch: int = 0) -> None:
         widget.setMouseTracking(True)
-        self._bar_layout.addWidget(widget)
+        self._bar_layout.addWidget(widget, stretch)
 
     def add_stretch(self) -> None:
         self._bar_layout.addStretch(1)
@@ -614,6 +770,29 @@ class FullScreenSpectrum(QWidget):
         self._fade.start()
         self.setCursor(Qt.CursorShape.BlankCursor)
 
+    def keyPressEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        """Escape leaves; J, K and L work the transport.
+
+        One method, deliberately. There were two, and the later one won,
+        so the transport keys were dead the whole time - pressing them
+        did nothing but wake the control bar.
+        """
+        self._show_controls()
+        keys = {Qt.Key.Key_J: "back", Qt.Key.Key_K: "toggle",
+                Qt.Key.Key_L: "forward", Qt.Key.Key_Space: "toggle"}
+        action = keys.get(event.key())
+        if action is not None:
+            handler = getattr(self._owner, "transport", None)
+            if handler is not None:
+                handler(action)
+                event.accept()
+                return
+        if event.key() == Qt.Key.Key_Escape:
+            self.close()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
     def mouseMoveEvent(self, event) -> None:      # noqa: N802 - Qt's name
         self._show_controls()
         super().mouseMoveEvent(event)
@@ -628,19 +807,15 @@ class FullScreenSpectrum(QWidget):
 
     def _place_bar(self) -> None:
         wanted = self.bar.sizeHint()
-        width = min(max(wanted.width(), 520), self.width() - 60)
+        # Wide enough that the seek bar is obviously the long one and the
+        # volume slider obviously the short one.
+        width = min(max(wanted.width(), int(self.width() * 0.72), 900),
+                    self.width() - 80)
         height = max(wanted.height(), 48)
         self.bar.setGeometry(int((self.width() - width) / 2),
                              int(self.height() - height - 34), width, height)
         self.bar.raise_()
         self._spectrum.set_reserve(height + 52)
-
-    def keyPressEvent(self, event) -> None:      # noqa: N802 - Qt's name
-        self._show_controls()
-        if event.key() == Qt.Key.Key_Escape:
-            self.close()
-            return
-        super().keyPressEvent(event)
 
     def closeEvent(self, event) -> None:      # noqa: N802 - Qt's name
         """Put the spectrum back exactly where it was."""
@@ -661,3 +836,271 @@ class FullScreenSpectrum(QWidget):
         if self._owner is not None:
             self._owner._full = None
         super().closeEvent(event)
+
+
+class FlowRow(QLayout):
+    """A row of controls that wraps instead of running off the edge.
+
+    The visualiser controls grow and shrink with what is selected - the
+    colour button only exists for the meters - and a plain QHBoxLayout
+    keeps laying them out in one line however narrow the pane gets, so
+    they overlap each other and then leave the window. This puts what
+    fits on a line and moves the rest down.
+    """
+
+    def __init__(self, parent=None, spacing: int = 10) -> None:
+        super().__init__(parent)
+        self._items: list = []
+        self._gaps: dict = {}
+        self._gap = spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    # -- the bits QLayout insists on ---------------------------------------
+    def addItem(self, item) -> None:      # noqa: N802 - Qt's name
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index):      # noqa: N802 - Qt's name
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index):      # noqa: N802 - Qt's name
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self):      # noqa: N802 - Qt's name
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:      # noqa: N802 - Qt's name
+        return True
+
+    def heightForWidth(self, width: int) -> int:      # noqa: N802 - Qt's name
+        return self._lay(QRect(0, 0, width, 0), apply=False)
+
+    def setGeometry(self, rect) -> None:      # noqa: N802 - Qt's name
+        super().setGeometry(rect)
+        self._lay(rect, apply=True)
+
+    def sizeHint(self) -> QSize:      # noqa: N802 - Qt's name
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:      # noqa: N802 - Qt's name
+        size = QSize(0, 0)
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        return size
+
+    def add_gap(self, pixels: int) -> None:
+        """A wider space, to separate one group of controls from the next."""
+        self._gaps[len(self._items)] = int(pixels)
+
+    # -- the actual placing ------------------------------------------------
+    def _rows(self, rect):
+        """Split the items into lines that fit, keeping each one's size."""
+        rows, current, x, tallest = [], [], rect.x(), 0
+        for index, item in enumerate(self._items):
+            widget = item.widget()
+            if widget is not None and widget.isHidden():
+                continue
+            wanted = item.sizeHint()
+            lead = self._gaps.get(index, 0) if current else 0
+            if current and x + lead + wanted.width() > rect.right():
+                rows.append((current, tallest))
+                current, x, tallest = [], rect.x(), 0
+                lead = 0
+            x += lead
+            current.append((item, QRect(QPoint(x, 0), wanted)))
+            x += wanted.width() + self._gap
+            tallest = max(tallest, wanted.height())
+        if current:
+            rows.append((current, tallest))
+        return rows
+
+    def _lay(self, rect, apply: bool) -> int:
+        y = rect.y()
+        for index, (row, tallest) in enumerate(self._rows(rect)):
+            if index:
+                y += self._gap
+            for item, box in row:
+                if apply:
+                    # Centred on the line rather than hung from the top: a
+                    # combo box is taller than a tick box, and left flush
+                    # they read as two rows of controls rather than one.
+                    placed = QRect(box)
+                    placed.moveTop(y + (tallest - box.height()) // 2)
+                    item.setGeometry(placed)
+            y += tallest
+        return y - rect.y()
+
+
+class PostProcess:
+    """Cheap screen-space polish applied after a scene has drawn itself.
+
+    No shaders are available here, so each effect is something Qt can do
+    quickly and the expensive one - bloom - is done at a fraction of the
+    resolution and scaled back up, which is what a blur is anyway. The
+    overlays that never change are drawn once into tiles and repeated.
+
+    Everything is optional per scene, and the whole pass is skipped when a
+    scene asks for nothing, so the fast path stays exactly as fast.
+    """
+
+    #: Bloom is computed at this fraction of the frame. Small enough that
+    #: the cost barely moves between a strip and a full screen.
+    BLOOM_DIVISOR = 8
+    #: Never build a bloom buffer smaller than this.
+    BLOOM_MIN = 32
+
+    #: Effects in the order they are given up when there is not time for
+    #: them. Bloom and the vignette carry most of the look, so they go last.
+    ORDER = ("aberration", "grain", "scanlines", "bloom", "vignette")
+    #: The pass may have this long. The rest of the frame needs the other
+    #: ten milliseconds of a sixty-a-second budget.
+    BUDGET_MS = 6.5
+
+    def __init__(self) -> None:
+        self._lines: dict = {}
+        self._grain: dict = {}
+        self._cost = 0.0
+        self._allow = len(self.ORDER)
+        #: Frames to leave alone after a change, so a decision is given a
+        #: chance to show its effect before the next one is made.
+        self._settle = 0
+
+    def _permitted(self, recipe: dict) -> dict:
+        """The recipe minus whatever there is no time for.
+
+        Measured rather than guessed from the pixel count: the same frame
+        costs very different amounts on different machines, and a rule
+        written against this one would be wrong on any other.
+        """
+        if self._allow >= len(self.ORDER):
+            return recipe
+        dropped = set(self.ORDER[:len(self.ORDER) - self._allow])
+        return {k: v for k, v in recipe.items() if k not in dropped}
+
+    def _record(self, taken_ms: float) -> None:
+        self._cost = self._cost * 0.8 + taken_ms * 0.2
+        if self._settle > 0:
+            self._settle -= 1
+            return
+        if self._cost > self.BUDGET_MS and self._allow > 1:
+            self._allow -= 1
+            # Seeded at the budget rather than zero. Zeroing it made the
+            # next frame look instantly cheap, which put the effect
+            # straight back and left the whole thing oscillating between
+            # four and five effects for ever.
+            self._cost = self.BUDGET_MS
+            self._settle = 30
+        elif (self._cost < self.BUDGET_MS * 0.45
+              and self._allow < len(self.ORDER)):
+            self._allow += 1
+            self._cost = self.BUDGET_MS
+            self._settle = 120
+
+    def apply(self, painter, rect, frame, recipe: dict) -> None:
+        """Draw ``frame`` into ``painter`` with ``recipe`` applied."""
+        import time as _time
+
+        started = _time.perf_counter()
+        recipe = self._permitted(recipe)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        # Both rectangles floating point. Qt has no overload taking a QRect
+        # target with a QRectF source, and the mismatch raised out of
+        # paintEvent, which is fatal rather than merely wrong.
+        painter.drawPixmap(QRectF(rect), frame, QRectF(frame.rect()))
+        bloom = float(recipe.get("bloom", 0.0))
+        shift = float(recipe.get("aberration", 0.0))
+        halo = self._halo(rect, frame) if (bloom > 0.01 or shift > 0.05) else None
+        if bloom > 0.01:
+            self._bloom(painter, rect, halo, bloom)
+        if shift > 0.05:
+            self._aberration(painter, rect, halo, shift)
+        lines = float(recipe.get("scanlines", 0.0))
+        if lines > 0.01:
+            self._scanlines(painter, rect, lines)
+        grain = float(recipe.get("grain", 0.0))
+        if grain > 0.01:
+            self._noise(painter, rect, grain)
+        fade = float(recipe.get("vignette", 0.0))
+        if fade > 0.01:
+            self._vignette_over(painter, rect, fade)
+        self._record((_time.perf_counter() - started) * 1000.0)
+
+    # -- the expensive one, kept cheap -------------------------------------
+    def _halo(self, rect, frame):
+        """A small, blurred copy of the frame.
+
+        Small is the whole trick: the blur is the downscale, and every
+        later pass reads this instead of the full frame, so the cost barely
+        moves between a strip and a full screen.
+        """
+        small = QSize(max(self.BLOOM_MIN, int(rect.width() / self.BLOOM_DIVISOR)),
+                      max(self.BLOOM_MIN, int(rect.height() / self.BLOOM_DIVISOR)))
+        return frame.scaled(small, Qt.AspectRatioMode.IgnoreAspectRatio,
+                            Qt.TransformationMode.SmoothTransformation)
+
+    def _bloom(self, painter, rect, halo, amount: float) -> None:
+        painter.save()
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Plus)
+        painter.setOpacity(min(0.85, amount))
+        # Scaled during the blit. Building a full-size blurred copy first
+        # cost thirty milliseconds a frame at full screen, which is most of
+        # the frame gone for something nobody can see the edges of anyway.
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        painter.drawPixmap(QRectF(rect), halo, QRectF(halo.rect()))
+        painter.restore()
+
+    def _aberration(self, painter, rect, halo, shift: float) -> None:
+        """Red and blue pulled apart, the way a cheap lens does it."""
+        painter.save()
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Plus)
+        painter.setOpacity(0.16)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        source = QRectF(halo.rect())
+        target = QRectF(rect)
+        painter.drawPixmap(target.translated(shift, 0.0), halo, source)
+        painter.drawPixmap(target.translated(-shift, 0.0), halo, source)
+        painter.restore()
+
+    # -- the cached overlays -----------------------------------------------
+    def _scanlines(self, painter, rect, amount: float) -> None:
+        key = int(amount * 100)
+        tile = self._lines.get(key)
+        if tile is None:
+            tile = QPixmap(4, 4)
+            tile.fill(QColor(0, 0, 0, 0))
+            inner = QPainter(tile)
+            inner.fillRect(0, 0, 4, 2, QColor(0, 0, 0, int(150 * amount)))
+            inner.end()
+            self._lines[key] = tile
+        painter.drawTiledPixmap(rect, tile)
+
+    def _noise(self, painter, rect, amount: float) -> None:
+        key = int(amount * 100)
+        tile = self._grain.get(key)
+        if tile is None:
+            import random
+
+            side = 64
+            image = QImage(side, side, QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(0)
+            spots = random.Random(11)
+            strength = int(90 * amount)
+            for y in range(side):
+                for x in range(side):
+                    value = spots.randint(0, strength)
+                    image.setPixelColor(x, y, QColor(255, 255, 255, value))
+            tile = QPixmap.fromImage(image)
+            self._grain[key] = tile
+        painter.save()
+        painter.setOpacity(0.5)
+        painter.drawTiledPixmap(rect, tile)
+        painter.restore()
+
+    def _vignette_over(self, painter, rect, amount: float) -> None:
+        shade = QRadialGradient(rect.center(), max(rect.width(), rect.height()) * 0.72)
+        shade.setColorAt(0.0, QColor(0, 0, 0, 0))
+        shade.setColorAt(0.65, QColor(0, 0, 0, int(30 * amount)))
+        shade.setColorAt(1.0, QColor(0, 0, 0, int(230 * amount)))
+        painter.fillRect(rect, shade)
