@@ -125,7 +125,14 @@ def _draw_cycle(painter: QPainter, tiny: bool) -> None:
     # Qt measures from three o'clock anticlockwise, so half the gap either
     # side of 90 is where the arc starts and ends.
     gap_deg = 60.0
-    start_deg = 90.0 - gap_deg / 2.0
+    # The arrowhead is a triangle sticking out past the end of the arc, into
+    # the opening, so centring the *arc's* gap on twelve o'clock still left
+    # the visible opening off to the right by half the head's length. Both
+    # ends rotate by half that, which puts the tail and the tip of the head
+    # the same distance either side of vertical.
+    radius = ring.width() / 2.0
+    head_deg = math.degrees((stroke * 2.3) / radius)
+    start_deg = 90.0 - gap_deg / 2.0 + head_deg / 2.0
     span_deg = -(360.0 - gap_deg)
     painter.drawArc(ring, int(start_deg * 16), int(span_deg * 16))
 
@@ -135,7 +142,6 @@ def _draw_cycle(painter: QPainter, tiny: bool) -> None:
     # wide: anything cleverer turns into a bird at small sizes.
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(QBrush(PAPER))
-    radius = ring.width() / 2.0
     angle = math.radians(start_deg + span_deg)
     base = QPointF(ring.center().x() + radius * math.cos(angle),
                    ring.center().y() - radius * math.sin(angle))
