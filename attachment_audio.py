@@ -25,11 +25,16 @@ import math
 from array import array
 from typing import List, Optional
 
-#: Points per analysis window. At 22 kHz this is 21.5 Hz a bin, which is
-#: what separating 50 Hz from 63 Hz needs. Smaller windows put the whole
-#: bottom of the spectrum in one or two bins and every bass band moves
-#: together, which does not read as an equaliser.
-WINDOW = 1024
+#: Points per analysis window. At 48 kHz this is 23.4 Hz a bin, which
+#: separates 73 Hz from 120 Hz. Smaller windows put the whole bottom of the
+#: spectrum into one or two bins and every bass band moves together, which
+#: does not read as an equaliser.
+WINDOW = 2048
+
+#: What the decoder is asked for. 48 kHz rather than 22 because the dial
+#: scene has bands at 18 kHz and 22 kHz, and half the sample rate is all
+#: that exists in a signal.
+DECODE_RATE = 48000
 
 #: Analyses per second of audio. The display interpolates between frames at
 #: thirty, so fifteen is indistinguishable and costs a quarter less.
@@ -37,11 +42,11 @@ RATE = 15
 
 #: Bands on screen. Third-octave centres from 31.5 Hz to 16 kHz, which is
 #: what a graphic equaliser shows and what the ear divides sound into.
-#: Stops at 10 kHz because the analysis decodes at 22 kHz, and half of that
-#: is the highest frequency that exists in the signal. Bands above it would
-#: be drawn from noise.
+#: Third-octave centres, 50 Hz to 20 kHz. The decoder runs at 48 kHz so
+#: everything here is below the Nyquist limit and none of it is noise.
 CENTRES = (50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500, 630, 800,
-           1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000)
+           1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000,
+           10000, 12500, 16000, 20000)
 BANDS = len(CENTRES)
 
 #: Refuse to analyse more than this; a long podcast is not worth the wait.
@@ -143,7 +148,10 @@ def analyse(samples: array, sample_rate: int, channels: int = 1) -> List[array]:
             # Decibels, floored at -70, because loudness is logarithmic and a
             # linear bar spends its whole height on the loudest thing.
             db = 20.0 * math.log10(rms + 1e-9)
-            row[band] = max(0.0, (db + 70.0) / 70.0)
+            # A 55 dB window rather than 70. Seventy put ordinary music in
+            # the top third of the range and nothing appeared to move; this
+            # spends the whole height on the part anybody can hear.
+            row[band] = max(0.0, (db + 55.0) / 55.0)
         frames.append(row)
         at += hop
 
@@ -153,11 +161,16 @@ def analyse(samples: array, sample_rate: int, channels: int = 1) -> List[array]:
     if frames:
         everything = sorted(value for row in frames for value in row)
         high = everything[int(len(everything) * 0.97)] or 1.0
-        if high > 0:
-            gain = 0.92 / high
-            for row in frames:
-                for index in range(len(row)):
-                    row[index] = min(1.0, row[index] * gain)
+        low = everything[int(len(everything) * 0.30)]
+        floor = min(low, high * 0.5)
+        reach = max(0.05, high - floor)
+        for row in frames:
+            for index in range(len(row)):
+                # Stretch the band the music actually occupies across the
+                # whole height, then bend it so quiet detail still shows.
+                scaled = (row[index] - floor) / reach
+                scaled = max(0.0, min(1.0, scaled))
+                row[index] = scaled ** 0.72
     return frames
 
 
@@ -184,18 +197,18 @@ def decode(path, on_done, on_fail) -> Optional[object]:
     wanted = QAudioFormat()
     wanted.setSampleFormat(QAudioFormat.SampleFormat.Int16)
     wanted.setChannelCount(1)
-    wanted.setSampleRate(22050)
+    wanted.setSampleRate(DECODE_RATE)
     decoder.setAudioFormat(wanted)
 
     collected = array("h")
-    state = {"rate": 22050, "channels": 1}
+    state = {"rate": DECODE_RATE, "channels": 1}
 
     def buffer_ready() -> None:
         buffer = decoder.read()
         if not buffer.isValid():
             return
         fmt = buffer.format()
-        state["rate"] = fmt.sampleRate() or 22050
+        state["rate"] = fmt.sampleRate() or DECODE_RATE
         state["channels"] = fmt.channelCount() or 1
         raw = buffer.constData()
         try:
@@ -255,3 +268,36 @@ def _quieten() -> None:
             "qt.multimedia.audiodecoder=false\n")
     except Exception:      # noqa: BLE001 - quiet is a courtesy, not a feature
         pass
+
+
+#: The bands the dial scene shows, which are not third-octave and are asked
+#: for by name in the design it copies.
+DIAL_CENTRES = (73, 120, 300, 576, 1400, 2400, 6000, 9000, 18000, 22000)
+
+
+def regroup(frames: List[array], centres, source=CENTRES) -> List[array]:
+    """Re-read existing frames against a different set of centres.
+
+    The analysis is expensive and the dial scene wants ten bands that are
+    not the twenty-seven the equaliser uses. Rather than analysing twice,
+    each wanted centre takes the loudest of the source bands that fall
+    within a third of an octave of it.
+    """
+    if not frames:
+        return []
+    picks = []
+    for centre in centres:
+        low, high = centre / 1.26, centre * 1.26
+        chosen = [i for i, hz in enumerate(source) if low <= hz <= high]
+        if not chosen:
+            # Nothing that close: take the nearest single band.
+            chosen = [min(range(len(source)),
+                          key=lambda i: abs(math.log2(source[i] / centre)))]
+        picks.append(chosen)
+    out = []
+    for row in frames:
+        made = array("f", [0.0]) * len(centres)
+        for index, chosen in enumerate(picks):
+            made[index] = max(row[i] for i in chosen)
+        out.append(made)
+    return out

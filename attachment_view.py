@@ -40,6 +40,8 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
                                QPushButton, QScrollArea, QSizePolicy,
                                QSlider, QStackedWidget, QVBoxLayout, QWidget)
 
+import shiboken6
+
 import attachment_meta
 import attachments
 from attachment_widgets import SeekBar, Spectrum
@@ -88,6 +90,20 @@ def _combo(options, tip: str) -> QComboBox:
         view.setMinimumWidth(widest + 32)
         view.setTextElideMode(Qt.TextElideMode.ElideNone)
     return box
+
+
+#: Transport symbols. Both are plain text, so they take the button's own
+#: colour and scale with its font instead of needing a themed icon set.
+PLAY_GLYPH = "\u25b6"
+PAUSE_GLYPH = "\u275a\u275a"
+
+
+def _name_transport(button, playing: bool) -> None:
+    """Symbol on the button, word everywhere a word is still needed."""
+    button.setText(PAUSE_GLYPH if playing else PLAY_GLYPH)
+    word = "Pause" if playing else "Play"
+    button.setToolTip(word)
+    button.setAccessibleName(word)
 
 
 class _FetchThread(QThread):
@@ -302,6 +318,8 @@ class AudioPane(QWidget):
         self._audio = None
         self._decoder = None
         self._path: Optional[Path] = None
+        #: Bumped per file, so a late analysis for an earlier one is dropped.
+        self._analysis_token = 0
 
         self.art = QLabel()
         self.art.setFixedSize(112, 112)
@@ -320,13 +338,23 @@ class AudioPane(QWidget):
         self.scene_box = _combo(
             [scene.name for scene in visualizers.SCENES],
             "Which visualiser to draw. All of them read the same equaliser.")
-        self.scene_box.currentTextChanged.connect(
-            lambda name: self.spectrum.set_scene(visualizers.by_name(name)))
+        self.scene_box.currentTextChanged.connect(self._scene_chosen)
+        self.enable_box = QCheckBox("Visualiser")
+        self.enable_box.setToolTip(
+            "Draw the music while it plays. Off by default: it is decoration, "
+            "and with it off nothing is analysed and nothing is drawn.")
+        self.enable_box.toggled.connect(self._enable_visualiser)
         self.strobe_box = QCheckBox("Strobe")
         self.strobe_box.setToolTip(
             "Flash the scene on a bass hit. Off by default, because a "
             "flashing screen is not for everybody.")
         self.strobe_box.toggled.connect(self.spectrum.set_strobe)
+        self.colour_button = QPushButton("Colours…")
+        self.colour_button.setToolTip(
+            "Set the dial and background colours, from a wheel or by taking "
+            "one out of a picture.")
+        self.colour_button.clicked.connect(self._choose_colours)
+        self.colour_button.hide()
         self.full_button = QPushButton("Full screen")
         self.full_button.setToolTip(
             "Fill the screen with the visualiser. Escape returns.")
@@ -334,17 +362,25 @@ class AudioPane(QWidget):
         self.spectrum.set_labels([_hz(c) for c in attachment_audio.CENTRES])
 
         self.visual_row = QHBoxLayout()
-        self.visual_row.addWidget(QLabel("Visualiser"))
+        self.visual_row.addWidget(self.enable_box)
         self.visual_row.addWidget(self.scene_box)
         self.visual_row.addWidget(self.strobe_box)
+        self.visual_row.addWidget(self.colour_button)
         self.visual_row.addWidget(self.full_button)
         self.visual_row.addStretch(1)
         self.visual_holder = QWidget()
         self.visual_holder.setLayout(self.visual_row)
-        self.visual_holder.hide()
+        # Everything except the tick box starts unavailable, because the
+        # visualiser starts off.
+        for widget in (self.scene_box, self.strobe_box, self.full_button,
+                       self.colour_button):
+            widget.setEnabled(False)
 
-        self.play = QPushButton("Play")
-        self.play.setFixedWidth(84)
+        self._playing = False
+        self._full_play = None
+        self.play = QPushButton(PLAY_GLYPH)
+        self.play.setFixedWidth(52)
+        _name_transport(self.play, False)
         self.position = SeekBar()
         self.clock = QLabel("0:00 / 0:00")
         self.clock.setFont(system_font())
@@ -374,8 +410,12 @@ class AudioPane(QWidget):
         layout = QVBoxLayout(self)
         layout.addLayout(header)
         layout.addWidget(self.spectrum)
-        layout.addWidget(self.visual_holder)
         layout.addLayout(controls)
+        # Below the transport, outside the picture. Putting them inside the
+        # visualiser frame meant they were hidden whenever it was, and they
+        # were hidden by a one-shot timer that fired before the analysis
+        # finished - so they never came back.
+        layout.addWidget(self.visual_holder)
         layout.addWidget(_muted(
             "Playback is local. Nothing about this file leaves the machine."))
         layout.addStretch(1)
@@ -423,7 +463,9 @@ class AudioPane(QWidget):
         self._player.setSource(QUrl.fromLocalFile(str(path)))
         self.spectrum.follow(lambda: self._player.position() if self._player else 0)
         self.play.setEnabled(True)
-        self._start_analysis(path)
+        self._sync_visual_controls()
+        if self.enable_box.isChecked():
+            self._start_analysis(path)
         return "ready"
 
     def _show_art(self, art: Optional[bytes]) -> None:
@@ -446,16 +488,39 @@ class AudioPane(QWidget):
         self.art.show()
 
     def _start_analysis(self, path: Path) -> None:
+        """Decode and analyse in the background, and survive being closed.
+
+        The decoder finishes on its own schedule, which may be after the
+        window has gone. Calling into a deleted widget from that callback
+        raises out of Qt's event loop, so both ends are checked: a token
+        that changes when another file is loaded, and shiboken's own
+        liveness check on the widget itself.
+        """
         import attachment_audio
 
         self.spectrum.clear()
+        self._analysis_token += 1
+        token = self._analysis_token
+
+        def alive() -> bool:
+            if token != self._analysis_token:
+                return False
+            try:
+                import shiboken6
+
+                return shiboken6.isValid(self) and shiboken6.isValid(self.spectrum)
+            except Exception:      # noqa: BLE001 - assume alive without it
+                return True
 
         def done(frames) -> None:
+            if not alive():
+                return
             self.spectrum.set_frames(frames, attachment_audio.RATE)
             self._decoder = None
 
         def failed(_detail: str) -> None:
-            self._decoder = None
+            if alive():
+                self._decoder = None
 
         self._decoder = attachment_audio.decode(path, done, failed)
 
@@ -493,17 +558,111 @@ class AudioPane(QWidget):
         self.position.setRange(0, value)
         self._show_clock(self.position.value())
 
+    @Slot(bool)
+    def _enable_visualiser(self, on: bool) -> None:
+        """Off means off: no decode, no timer, no widget with a height.
+
+        Analysing a track costs a few seconds of one core and a few hundred
+        kilobytes. Nobody should pay that for something they have switched
+        off, so the decode only starts when this is ticked.
+        """
+        for widget in (self.scene_box, self.strobe_box, self.full_button):
+            widget.setEnabled(on)
+        self.colour_button.setEnabled(on)
+        if not on:
+            self._analysis_token += 1
+            self._decoder = None
+            self.spectrum.set_playing(False)
+            self.spectrum.clear()
+            return
+        if self._path is not None:
+            self._start_analysis(self._path)
+            from PySide6.QtMultimedia import QMediaPlayer
+            if (self._player is not None
+                    and self._player.playbackState()
+                    == QMediaPlayer.PlaybackState.PlayingState):
+                self.spectrum.set_playing(True)
+
+    @Slot(str)
+    def _scene_chosen(self, name: str) -> None:
+        import visualizers
+
+        scene = visualizers.by_name(name)
+        self.spectrum.set_scene(scene)
+        # Only the meters have colours to set, so the button only appears
+        # when there is something for it to do.
+        self.colour_button.setVisible(scene.name == "VU meters")
+
+    @Slot()
+    def _choose_colours(self) -> None:
+        from colour_picker import ColourWindow
+
+        dial, background = self.spectrum.colours
+        window = ColourWindow(dial, background, self)
+        window.changed.connect(
+            lambda d, b: self.spectrum.set_colours(dial=d, background=b))
+        window.exec()
+
     def _sync_visual_controls(self) -> None:
-        self.visual_holder.setVisible(self.spectrum.ready
-                                      and self.spectrum.maximumHeight() > 0)
+        """Available whenever there is a sound file, analysed or not."""
+        self.visual_holder.setVisible(self._path is not None)
 
     @Slot()
     def _go_full_screen(self) -> None:
-        """Hand the scene a window of its own, until Escape."""
+        """The scene on the whole screen, with the controls it needs.
+
+        Play, seek, volume, theme, strobe and colours all come along -
+        leaving the window to change any of them would defeat the point.
+        The bar fades after a few seconds of stillness and comes back on
+        the first movement.
+        """
         from attachment_widgets import FullScreenSpectrum
 
-        self._full = FullScreenSpectrum(self.spectrum, self)
-        self._full.showFullScreen()
+        full = FullScreenSpectrum(self.spectrum, self)
+        self._full = full
+
+        play = QPushButton()
+        play.setFixedWidth(52)
+        _name_transport(play, self._playing)
+        play.clicked.connect(self._toggle)
+        self._full_play = play
+
+        seek = SeekBar()
+        seek.setRange(0, self.position.maximum())
+        seek.setValue(self.position.value())
+        seek.seeked.connect(self._seek)
+        seek.seeked.connect(self.position.setValue)
+        self.position.valueChanged.connect(seek.report)
+
+        volume = QSlider(Qt.Orientation.Horizontal)
+        volume.setRange(0, 100)
+        volume.setValue(self.volume.value())
+        volume.setFixedWidth(110)
+        volume.valueChanged.connect(self.volume.setValue)
+
+        import visualizers
+        scene = _combo([s.name for s in visualizers.SCENES],
+                       "Which visualiser to draw.")
+        scene.setCurrentText(self.scene_box.currentText())
+        scene.currentTextChanged.connect(self.scene_box.setCurrentText)
+        scene.currentTextChanged.connect(self._scene_chosen)
+
+        strobe = QCheckBox("Strobe")
+        strobe.setChecked(self.strobe_box.isChecked())
+        strobe.toggled.connect(self.strobe_box.setChecked)
+
+        colours = QPushButton("Colours…")
+        colours.clicked.connect(self._choose_colours)
+
+        leave = QPushButton("Close")
+        leave.clicked.connect(full.close)
+
+        for widget in (play, seek, volume, scene, strobe, colours):
+            full.add_control(widget)
+        full.add_stretch()
+        full.add_control(leave)
+
+        full.showFullScreen()
 
     def _state(self, *_args) -> None:
         try:
@@ -512,9 +671,12 @@ class AudioPane(QWidget):
                        == QMediaPlayer.PlaybackState.PlayingState)
         except Exception:      # noqa: BLE001
             playing = False
-        self.play.setText("Pause" if playing else "Play")
-        self.spectrum.set_playing(playing)
-        QTimer.singleShot(950, self._sync_visual_controls)
+        self._playing = playing
+        _name_transport(self.play, playing)
+        twin = getattr(self, "_full_play", None)
+        if twin is not None and shiboken6.isValid(twin):
+            _name_transport(twin, playing)
+        self.spectrum.set_playing(playing and self.enable_box.isChecked())
 
     def _error(self, *_args) -> None:
         self.title.setText(self.title.text() + "  (this file will not play)")
@@ -529,7 +691,9 @@ class AudioPane(QWidget):
         if full is not None:
             full.close()
             self._full = None
-        self.visual_holder.hide()
+        self.visual_holder.setVisible(False)
+        # Anything still decoding is for a file nobody is looking at now.
+        self._analysis_token += 1
         self.spectrum.set_playing(False)
         self.spectrum.clear()
         self._decoder = None
