@@ -117,28 +117,36 @@ def _draw_cycle(painter: QPainter, tiny: bool) -> None:
     pen.setCapStyle(Qt.PenCapStyle.RoundCap)
     painter.setPen(pen)
     painter.setBrush(Qt.BrushStyle.NoBrush)
-    # Open at the top right, where the arrowhead goes.
-    start_deg, span_deg = 58.0, -298.0
+    # Open at the top right, where the arrowhead goes. The arc stops short
+    # of the head so the two do not pile up into one thick blob.
+    start_deg, span_deg = 38.0, -300.0
     painter.drawArc(ring, int(start_deg * 16), int(span_deg * 16))
 
-    # The head sits at the start of the sweep, pointing along the tangent so
-    # the ring reads as turning rather than as a broken circle.
+    # The head goes where the travel arrives, not where it sets off. It was
+    # on the near end pointing back into the arc, which is why it read as a
+    # lump rather than as direction. A plain triangle, longer than it is
+    # wide: anything cleverer turns into a bird at small sizes.
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(QBrush(PAPER))
     radius = ring.width() / 2.0
-    angle = math.radians(start_deg)
-    centre = QPointF(ring.center().x() + radius * math.cos(angle),
-                     ring.center().y() - radius * math.sin(angle))
-    # Clockwise tangent at that point.
-    tangent = angle - math.pi / 2.0
-    size = stroke * 1.45
+    angle = math.radians(start_deg + span_deg)
+    base = QPointF(ring.center().x() + radius * math.cos(angle),
+                   ring.center().y() - radius * math.sin(angle))
+    # Clockwise motion at that point, in screen coordinates.
+    along = QPointF(math.sin(angle), math.cos(angle))
+    across = QPointF(along.y(), -along.x())
+
+    length = stroke * 2.3
+    half = stroke * 1.08
+
+    def at(forward: float, sideways: float) -> QPointF:
+        return QPointF(base.x() + along.x() * forward + across.x() * sideways,
+                       base.y() + along.y() * forward + across.y() * sideways)
+
     head = QPainterPath()
-    for offset, distance in ((0.0, size * 1.15), (2.4, size), (-2.4, size)):
-        point = QPointF(
-            centre.x() + distance * math.cos(tangent + offset),
-            centre.y() - distance * math.sin(tangent + offset),
-        )
-        head.moveTo(point) if head.elementCount() == 0 else head.lineTo(point)
+    head.moveTo(at(length, 0.0))               # the point
+    head.lineTo(at(-length * 0.34, half))      # one corner
+    head.lineTo(at(-length * 0.34, -half))     # the other
     head.closeSubpath()
     painter.drawPath(head)
 
