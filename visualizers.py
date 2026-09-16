@@ -300,72 +300,128 @@ class Tunnel(Scene):
 
 
 class Oscilloscope(Scene):
-    """Green on black. The oldest way of looking at a signal."""
+    """A real scope: the waveform itself, on a phosphor that takes its time.
+
+    What was here before derived a shape from band energies, which is a
+    picture of a spectrum pretending to be a waveform. This draws the
+    signal - the same samples that are in the file, triggered on a rising
+    zero crossing so the trace stands still instead of crawling.
+
+    The persistence is the point. Old traces are kept and drawn fainter,
+    the way a CRT's phosphor keeps glowing after the beam has gone, and how
+    long they last is the decay control. Short reads like a modern digital
+    scope; long smears several cycles together and shows how a sound moves.
+    """
 
     name = "Oscilloscope"
-    blurb = "phosphor green, a trace and a grid"
+    blurb = "the waveform itself, on a phosphor you can set the decay of"
 
-    def _steps(self, painter, rect, state) -> None:
-        """A stepped outline along the foot, drawn like a plotted signal.
+    #: Traces kept at the longest decay. At sixty a second this is about a
+    #: second and a half of history, which is longer than anybody sets it.
+    MAX_HISTORY = 90
+    #: Seconds of persistence at each end of the slider.
+    MIN_DECAY = 0.03
+    MAX_DECAY = 1.50
 
-        Not a bar graph: one continuous line that jumps between levels, the
-        way a scope draws a sampled waveform.
+    def __init__(self) -> None:
+        self._decay = 0.28
+
+    # -- the control ------------------------------------------------------
+    @property
+    def decay(self) -> float:
+        return self._decay
+
+    def set_decay(self, seconds: float) -> None:
+        self._decay = max(self.MIN_DECAY, min(self.MAX_DECAY, float(seconds)))
+
+    # -- drawing ----------------------------------------------------------
+    def paint(self, painter, rect, state) -> None:
+        painter.fillRect(rect, QColor(2, 8, 4))
+        flash = self.flash(state)
+        self._grid(painter, rect, flash)
+
+        trace = getattr(state, "trace", None)
+        if trace is None:
+            trace = self._from_levels(state)
+        if trace is None:
+            return
+
+        # How many frames are worth keeping for the decay that is set.
+        keep = max(1, min(self.MAX_HISTORY, int(self._decay * 60.0)))
+        kept = getattr(state, "trace_history", None) or [list(trace)]
+        kept = kept[-keep:]
+
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        total = len(kept)
+        for age, old in enumerate(kept):
+            # Newest last, so it is drawn over the faded ones.
+            fresh = (age + 1) / total
+            # Squared, because a phosphor does not fade in a straight line.
+            alpha = fresh ** 2.2
+            if alpha < 0.02:
+                continue
+            width = 1.0 + fresh * (1.8 + flash * 2.4)
+            green = QColor.fromHsvF(0.33 - flash * 0.08,
+                                    0.85 - flash * 0.5,
+                                    1.0,
+                                    min(1.0, alpha * (0.85 + flash * 0.4)))
+            painter.setPen(QPen(green, width, Qt.PenStyle.SolidLine,
+                                Qt.PenCapStyle.RoundCap,
+                                Qt.PenJoinStyle.RoundJoin))
+            painter.drawPath(self._path(rect, old, state, flash))
+
+    def _path(self, rect, trace, state, flash):
+        """One sweep, left to right."""
+        path = QPainterPath()
+        count = len(trace)
+        middle = rect.center().y()
+        # The flash drives the gain, so a kick makes the beam jump off the
+        # top of the screen the way an overdriven scope does.
+        height = rect.height() * (0.40 + flash * 0.16)
+        for index, value in enumerate(trace):
+            x = rect.left() + rect.width() * (index / max(1, count - 1))
+            y = middle - value * height
+            if index:
+                path.lineTo(x, y)
+            else:
+                path.moveTo(x, y)
+        return path
+
+    def _from_levels(self, state):
+        """A fallback shape when no waveform was captured.
+
+        Older analyses have no traces; rather than draw nothing, the bands
+        are folded into something that at least moves with the music.
         """
         levels = state.levels
+        if not levels:
+            return None
         count = len(levels)
-        if not count:
-            return
-        flash = self.flash(state)
-        foot = rect.height() * 0.97
-        tall = rect.height() * 0.26
-        left, bar, gap = self.geometry(rect, count, 0.96)
-        path = QPainterPath()
-        path.moveTo(QPointF(left, foot))
-        for index, value in enumerate(levels):
-            x = left + index * (bar + gap)
-            y = foot - value * tall
-            path.lineTo(QPointF(x, y))
-            path.lineTo(QPointF(x + bar, y))
-        path.lineTo(QPointF(left + count * (bar + gap), foot))
-        painter.setPen(QPen(QColor(150, 255, 170, int(200 + flash * 55)),
-                            1.6 + flash * 2.0))
-        painter.setBrush(QColor(60, 200, 90, int(38 + flash * 60)))
-        painter.drawPath(path)
+        out = []
+        for index in range(128):
+            share = index / 127.0
+            band = levels[min(count - 1, int(share * count))]
+            out.append(math.sin(share * math.tau * 6.0 + state.phase * 3.0)
+                       * band)
+        return out
 
-    def paint(self, painter, rect, state) -> None:
-        width, height = rect.width(), rect.height()
-        middle = height / 2.0
-        flash = self.flash(state)
-        # The strobe here is the tube blooming, which is what an overdriven
-        # phosphor screen actually does.
-        painter.fillRect(rect, QColor(2, int(10 + flash * 40), 4))
-
-        painter.setPen(QPen(QColor(40, 120, 60, int(90 + flash * 90)), 1.0))
-        for index in range(1, 10):
-            x = width * index / 10.0
-            painter.drawLine(QPointF(x, 0), QPointF(x, height))
-        for index in range(1, 6):
-            y = height * index / 6.0
-            painter.drawLine(QPointF(0, y), QPointF(width, y))
-
-        levels = state.levels
-        if levels:
-            # The trace is the spectrum read as a waveform, which is not what
-            # a scope shows but is what there is - and it moves like one.
-            painter.setPen(QPen(QColor(120, 255, 150, 230),
-                                2.0 + flash * 3.0))
-            path = QPainterPath()
-            points = max(2, len(levels) * 4)
-            for step in range(points + 1):
-                t = step / points
-                band = levels[min(len(levels) - 1, int(t * len(levels)))]
-                wobble = math.sin(t * 22.0 + state.phase * 14.0)
-                y = middle - wobble * band * middle * 0.86
-                point = QPointF(t * width, y)
-                path.moveTo(point) if step == 0 else path.lineTo(point)
-            painter.drawPath(path)
-
-        self._steps(painter, rect, state)
+    def _grid(self, painter, rect, flash) -> None:
+        """Ten divisions across and eight down, as a scope's screen has."""
+        faint = QColor.fromHsvF(0.33, 0.6, 1.0, 0.10 + flash * 0.18)
+        painter.setPen(QPen(faint, 1.0))
+        for step in range(1, 10):
+            x = rect.left() + rect.width() * step / 10.0
+            painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
+        for step in range(1, 8):
+            y = rect.top() + rect.height() * step / 8.0
+            painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
+        # The centre lines, brighter, as they are on a real graticule.
+        centre = QColor.fromHsvF(0.33, 0.5, 1.0, 0.22 + flash * 0.35)
+        painter.setPen(QPen(centre, 1.2))
+        painter.drawLine(QPointF(rect.center().x(), rect.top()),
+                         QPointF(rect.center().x(), rect.bottom()))
+        painter.drawLine(QPointF(rect.left(), rect.center().y()),
+                         QPointF(rect.right(), rect.center().y()))
 
 
 class Bars(Scene):
@@ -412,12 +468,64 @@ class Bars(Scene):
                 painter.fillRect(QRectF(x, top, bar, block * 0.64),
                                  QColor(255, 255, 255, 190))
 
+    #: Where the level marks go, in decibels below the track's own peak.
+    DB_MARKS = (0, -3, -6, -12, -24, -40)
+
+    @staticmethod
+    def _height_for(db: float, calibration: dict) -> float:
+        """Where a given level sits, 0 at the foot and 1 at the top.
+
+        Undoes exactly what the analysis did. The bars are stretched to
+        fill the display, which makes a quiet recording watchable but
+        leaves a bar's height meaning nothing on its own; with the numbers
+        that did the stretching the scale can be drawn truthfully.
+
+        Relative to the loudest the track gets rather than to full scale,
+        because the analysis is not calibrated against an absolute
+        reference and a scale claiming otherwise would be made up.
+        """
+        reach = float(calibration.get("reach", 0.0))
+        gamma = float(calibration.get("gamma", 0.72))
+        span = float(calibration.get("range_db", 55.0))
+        if reach <= 0.0 or span <= 0.0:
+            return -1.0
+        share = (reach + db / span) / reach
+        if share <= 0.0:
+            return 0.0
+        return min(1.0, share) ** gamma
+
+    def _scale(self, painter, rect, state, baseline, height) -> None:
+        """Level marks up the left-hand side, and a line across at each."""
+        calibration = getattr(state, "calibration", None)
+        if not calibration or rect.width() < 420:
+            return
+        font = painter.font()
+        font.setPointSizeF(max(6.5, min(9.5, rect.width() / 110.0)))
+        painter.setFont(font)
+        for db in self.DB_MARKS:
+            where = self._height_for(db, calibration)
+            if where < 0.0:
+                return
+            y = baseline - where * height
+            if y < rect.top() + 2:
+                continue
+            painter.setPen(QPen(QColor(255, 255, 255, 26), 1.0))
+            painter.drawLine(QPointF(rect.left() + 34, y),
+                             QPointF(rect.right(), y))
+            painter.setPen(QPen(QColor(200, 200, 210, 140)))
+            painter.drawText(QRectF(rect.left(), y - 7, 30, 14),
+                             Qt.AlignmentFlag.AlignRight
+                             | Qt.AlignmentFlag.AlignVCenter,
+                             f"{db}" if db else "0")
+
     def paint(self, painter, rect, state) -> None:
         width, height = rect.width(), rect.height()
         flash = self.flash(state)
         painter.fillRect(rect, QColor(10, 10, 14))
         baseline = height * 0.86
         self._segments(painter, rect, state, baseline, baseline * 0.9, flash)
+
+        self._scale(painter, rect, state, baseline, baseline * 0.9)
 
         labels = state.labels
         if not labels or width < 360:
@@ -802,9 +910,168 @@ class Ambience(Scene):
         painter.drawLine(QPointF(0.0, middle), QPointF(width, middle))
 
 
+class Waterfall(Scene):
+    """A spectrum analyser plotted as a landscape, seen from one corner.
+
+    Frequency runs left to right, time runs away from you, and how loud a
+    band was is how high the surface stands. Each new frame is laid down
+    at the front and the whole field slides back, so a sustained note
+    reads as a ridge running into the distance and a drum as a row of
+    peaks marching away.
+
+    Drawn with an oblique projection rather than a real camera: it costs
+    two multiplications a point and, for a plot seen from a fixed corner,
+    looks the same as the arithmetic nobody can afford sixty times a
+    second.
+
+    Colour is the height, quantised into a few bands and stroked one band
+    at a time - six paths a frame rather than a pen change per segment,
+    which is what makes it cheap enough to keep.
+    """
+
+    name = "Waterfall"
+    blurb = "the spectrum as a landscape, running away from you"
+
+    #: Frames kept on screen. At sixty a second the field turns over in
+    #: about three quarters of a second, which reads as motion without
+    #: smearing everything into one lump.
+    DEPTH = 44
+    #: How far each step back moves, as a fraction of the frame.
+    SKEW_X = 0.30
+    SKEW_Y = 0.42
+    #: Colour buckets, low to high.
+    SHADES = ((0.62, 0.75), (0.50, 0.85), (0.33, 0.90),
+              (0.16, 0.95), (0.08, 1.00), (0.00, 1.00))
+
+    def paint(self, painter, rect, state) -> None:
+        painter.fillRect(rect, QColor(4, 4, 10))
+        levels = state.levels
+        if not levels:
+            return
+
+        field = getattr(state, "history", None) or [list(levels)]
+        field = field[-self.DEPTH:]
+
+        flash = self.flash(state)
+        width, height = rect.width(), rect.height()
+        # The plot sits in the lower left, leaning up and to the right.
+        plot_w = width * (1.0 - self.SKEW_X) * 0.94
+        plot_h = height * (1.0 - self.SKEW_Y) * 0.72
+        origin_x = width * 0.03
+        origin_y = height * 0.90
+        rise = plot_h * (1.0 + flash * 0.22)
+
+        self._floorplan(painter, rect, origin_x, origin_y, plot_w, flash)
+
+        buckets = [QPainterPath() for _ in self.SHADES]
+        total = len(field)
+        for depth, row in enumerate(field):
+            # Oldest at the back, so it is drawn first and sits behind.
+            back = (total - 1 - depth) / max(1, self.DEPTH - 1)
+            offset_x = back * width * self.SKEW_X
+            offset_y = back * height * self.SKEW_Y
+            count = len(row)
+            previous = None
+            for index, value in enumerate(row):
+                x = origin_x + offset_x + plot_w * (index / max(1, count - 1))
+                y = origin_y - offset_y - value * rise
+                here = QPointF(x, y)
+                if previous is not None:
+                    bucket = min(len(self.SHADES) - 1,
+                                 int(value * len(self.SHADES)))
+                    buckets[bucket].moveTo(previous)
+                    buckets[bucket].lineTo(here)
+                previous = here
+
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for index, path in enumerate(buckets):
+            if path.isEmpty():
+                continue
+            hue, value = self.SHADES[index]
+            share = index / max(1, len(self.SHADES) - 1)
+            colour = QColor.fromHsvF(hue, 0.85 - flash * 0.45, value,
+                                     0.35 + share * 0.55 + flash * 0.15)
+            painter.setPen(QPen(colour, 1.0 + share * 1.4 + flash * 1.2,
+                                Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+                                Qt.PenJoinStyle.RoundJoin))
+            painter.drawPath(path)
+
+        self._axis(painter, rect, state, origin_x, origin_y, plot_w, rise)
+
+    def _floorplan(self, painter, rect, origin_x, origin_y, plot_w, flash) -> None:
+        """The two axes the landscape stands on."""
+        faint = QColor(150, 170, 210, int(50 + flash * 60))
+        painter.setPen(QPen(faint, 1.0))
+        back_x = origin_x + rect.width() * self.SKEW_X
+        back_y = origin_y - rect.height() * self.SKEW_Y
+        painter.drawLine(QPointF(origin_x, origin_y),
+                         QPointF(origin_x + plot_w, origin_y))
+        painter.drawLine(QPointF(origin_x, origin_y), QPointF(back_x, back_y))
+        painter.drawLine(QPointF(origin_x + plot_w, origin_y),
+                         QPointF(back_x + plot_w, back_y))
+
+    def _axis(self, painter, rect, state, origin_x, origin_y, plot_w,
+              rise) -> None:
+        """Frequency along the front, level up the side, time going back."""
+        if rect.width() < 420:
+            return
+        font = painter.font()
+        size = max(6.5, min(9.0, rect.width() / 130.0))
+        font.setPointSizeF(size)
+        painter.setFont(font)
+        ink = QColor(190, 200, 220, 165)
+        dim = QColor(150, 165, 195, 110)
+
+        # Across the front: the frequency of each band, every fourth.
+        labels = state.labels
+        if labels:
+            painter.setPen(QPen(ink))
+            step = plot_w / max(1, len(labels) - 1)
+            for index in range(0, len(labels), 4):
+                painter.drawText(
+                    QRectF(origin_x + index * step - 26, origin_y + 3, 52, 13),
+                    Qt.AlignmentFlag.AlignCenter, labels[index])
+            painter.setPen(QPen(dim))
+            painter.drawText(
+                QRectF(origin_x, origin_y + 16, plot_w, 13),
+                Qt.AlignmentFlag.AlignCenter, "frequency")
+
+        # Up the left: how loud, against the track's own peak, using the
+        # same numbers the equaliser's scale is drawn from.
+        calibration = getattr(state, "calibration", None)
+        painter.setPen(QPen(ink))
+        for db in (0, -6, -12, -24):
+            if calibration:
+                where = Bars._height_for(db, calibration)
+                if where < 0.0:
+                    break
+            else:
+                where = 1.0 + db / 48.0
+            if not 0.0 <= where <= 1.0:
+                continue
+            y = origin_y - where * rise
+            painter.drawLine(QPointF(origin_x - 4, y), QPointF(origin_x, y))
+            painter.drawText(QRectF(origin_x - 38, y - 7, 32, 14),
+                             Qt.AlignmentFlag.AlignRight
+                             | Qt.AlignmentFlag.AlignVCenter, f"{db}")
+        painter.setPen(QPen(dim))
+        painter.drawText(QRectF(origin_x - 40, origin_y - rise - 16, 44, 13),
+                         Qt.AlignmentFlag.AlignRight, "dB")
+
+        # Into the distance: older frames, with how far back the far edge is.
+        back_x = origin_x + rect.width() * self.SKEW_X
+        back_y = origin_y - rect.height() * self.SKEW_Y
+        painter.setPen(QPen(dim))
+        seconds = self.DEPTH / 60.0
+        painter.drawText(
+            QRectF((origin_x + back_x) / 2.0 - 30,
+                   (origin_y + back_y) / 2.0 - 4, 84, 13),
+            Qt.AlignmentFlag.AlignLeft, f"time  −{seconds:.1f}s")
+
+
 #: Every theme, in the order the picker offers them.
 SCENES = (Vaporwave(), Tunnel(), Oscilloscope(), Bars(), Meters(),
-          Ambience())
+          Ambience(), Waterfall())
 
 
 def by_name(name: str) -> Scene:
@@ -833,6 +1100,7 @@ POST = {
     "Equaliser": {"bloom": 0.30, "vignette": 0.22},
     "VU meters": {"bloom": 0.40, "vignette": 0.45, "grain": 0.07},
     "Ambience": {"bloom": 0.80, "vignette": 0.35, "aberration": 1.0},
+    "Waterfall": {"bloom": 0.55, "vignette": 0.40},
 }
 
 

@@ -141,7 +141,8 @@ class SpectrumState:
 
     __slots__ = ("levels", "peaks", "bass", "mid", "synth", "high", "hit",
                  "hue", "phase", "scroll", "strobe", "sparks", "labels",
-                 "dials", "dial_labels", "dial_colour", "background")
+                 "dials", "dial_labels", "dial_colour", "background",
+                 "trace", "calibration", "history", "trace_history")
 
     def __init__(self) -> None:
         self.levels: List[float] = []
@@ -154,6 +155,11 @@ class SpectrumState:
         self.strobe = False
         self.sparks: List[List[float]] = []
         self.labels: List[str] = []
+        self.trace = None
+        self.calibration: dict = {}
+        #: Recent frames, oldest first, for the scenes that show time.
+        self.history: List = []
+        self.trace_history: List = []
         self.dials: List[float] = []
         self.dial_labels: List[str] = []
         #: The reference these are copied from is red on near black.
@@ -174,10 +180,21 @@ class Spectrum(QWidget):
     #: Shapes the strip can take, as width-to-height. None keeps the fixed
     #: strip. Portrait is genuinely taller than it is wide, which several
     #: of the scenes suit better than a letterbox.
-    SHAPES = (("Strip", None), ("Cinema 21:9", 21 / 9), ("Wide 16:9", 16 / 9),
-              ("Square", 1.0), ("Portrait 3:4", 3 / 4))
+    SHAPES = (("Strip", None),
+               ("Cinema 21:9", 21 / 9), ("Wide 16:9", 16 / 9),
+               ("Photo 3:2", 3 / 2), ("Classic 4:3", 4 / 3),
+               ("Square", 1.0),
+               ("Portrait 4:5", 4 / 5), ("Portrait 3:4", 3 / 4),
+               ("Portrait 2:3", 2 / 3), ("Portrait 9:16", 9 / 16))
     #: However tall a shape asks for, never more than this.
     MAX_HEIGHT = 900
+
+    #: Frames of history kept for the scenes that plot time.
+    HISTORY = 96
+
+    #: The least it will ever take. Below this it is not worth drawing,
+    #: but it still must not push anything else off the pane.
+    FLOOR = 56
 
     #: Frames up to this many pixels are drawn at their real size. Above
     #: it the scene is drawn into a smaller buffer and stretched, because
@@ -209,6 +226,8 @@ class Spectrum(QWidget):
         #: Which frequency each meter reads. Chosen by the user; starts at
         #: the ten from the photograph the scene was copied from.
         self._dial_centres = None
+        #: One slice of the real waveform per frame, for the scope.
+        self._traces: List = []
         self._state = SpectrumState()
         self._scene = visualizers.SCENES[0]
         self._sparks = [[0.0, 0.0, 0.0, 0.0, 0.0] for _ in range(self.SPARKS)]
@@ -230,6 +249,7 @@ class Spectrum(QWidget):
         self._budget = None
         #: Middle of the slider until somebody moves it.
         self._strobe_rate = 0.5
+        self._strobe_sense = 0.5
         self._since_hit = 99
         self._timer = QTimer(self)
         # Sixty a second. Every scene paints in well under a frame at
@@ -299,14 +319,19 @@ class Spectrum(QWidget):
         return max(60, wanted)
 
     def set_strobe_rate(self, rate: float) -> None:
-        """How willing the strobe is to fire, 0 sparing to 1 eager.
-
-        Two things move together: how big a jump in the bass counts as a
-        hit, and how long the scene waits before it will call another one.
-        Driving only the threshold makes a busy track strobe continuously
-        at one end of the slider and never at the other.
-        """
+        """How soon after a flash the next one may fire, 0 rare to 1 often."""
         self._strobe_rate = max(0.0, min(1.0, float(rate)))
+
+    def set_strobe_sense(self, sense: float) -> None:
+        """How big a jump in the bass counts as a hit, 0 fussy to 1 eager."""
+        self._strobe_sense = max(0.0, min(1.0, float(sense)))
+
+    def set_decay(self, seconds: float) -> None:
+        """Pass the phosphor decay to whichever scene has one."""
+        setter = getattr(self._scene, "set_decay", None)
+        if setter is not None:
+            setter(seconds)
+        self.update()
 
     def set_labels(self, labels) -> None:
         self._state.labels = list(labels or [])
@@ -360,6 +385,14 @@ class Spectrum(QWidget):
     @property
     def colours(self):
         return self._state.dial_colour, self._state.background
+
+    def set_calibration(self, calibration) -> None:
+        """What is needed to read a bar's height back as a level."""
+        self._state.calibration = dict(calibration or {})
+
+    def set_traces(self, shapes) -> None:
+        """The waveform slices that go with the frames."""
+        self._traces = list(shapes or [])
 
     def set_frames(self, frames: List, rate: int) -> None:
         """The analysis, which lands a moment after playback starts."""
@@ -419,6 +452,8 @@ class Spectrum(QWidget):
         self._frames = []
         self._level = []
         self._peak = []
+        self._state.history = []
+        self._state.trace_history = []
         for spark in self._sparks:
             spark[4] = 0.0
         self.updateGeometry()
@@ -465,6 +500,7 @@ class Spectrum(QWidget):
         self._budget = None
         #: Middle of the slider until somebody moves it.
         self._strobe_rate = 0.5
+        self._strobe_sense = 0.5
         self._since_hit = 99 if fraction is None else max(0.0, min(1.0, float(fraction)))
         if self._working is not None:
             self.reveal()
@@ -502,11 +538,16 @@ class Spectrum(QWidget):
                 self._idling = False
             self.update()
             return
-        # Minimum, maximum and both hints together. A maximum on its own
-        # leaves the minimum at zero and the hint at -1, so a layout hands
-        # out whatever is spare - which in a full pane is nothing.
-        self.setMinimumHeight(height)
+        # The maximum is the height it wants; the minimum is small enough
+        # that it can always give way.
+        #
+        # Both were set to the same value, which forced the height. In a
+        # pane too short to hold everything the layout then had nowhere to
+        # put the transport and drew it over the scene - the scrub bar
+        # inside the picture, unclickable, at any window under about a
+        # thousand pixels tall. A widget that can shrink cannot do that.
         self.setMaximumHeight(height)
+        self.setMinimumHeight(min(height, self.FLOOR))
         # Only a slide that is heading for zero means "gone". The first
         # frame of a slide *away* from zero also reports about zero, and
         # stopping on that killed the scene every time it opened - which
@@ -534,7 +575,7 @@ class Spectrum(QWidget):
     def minimumSizeHint(self) -> QSize:      # noqa: N802 - Qt's name
         if self._unbounded:
             return QSize(0, 0)
-        return QSize(0, int(self._full_height() * self._reveal))
+        return QSize(0, min(int(self._full_height() * self._reveal), self.FLOOR))
 
     # -- the numbers ------------------------------------------------------
     def _row(self) -> Optional[List[float]]:
@@ -550,6 +591,14 @@ class Spectrum(QWidget):
             blend = exact - index
             return [a + (b - a) * blend for a, b in zip(first, second)]
         return list(first)
+
+    def _trace_now(self):
+        """The waveform slice for wherever the track is now."""
+        if not self._traces:
+            return None
+        exact = (self._position / 1000.0) * self._rate
+        index = min(len(self._traces) - 1, max(0, int(exact)))
+        return self._traces[index]
 
     def _idle_row(self) -> List[float]:
         count = len(self._level) or 24
@@ -598,9 +647,11 @@ class Spectrum(QWidget):
             self._spawn(min(4, int((high - self._last_high) * 22)))
         self._last_high = high
         state.hit = max(0.0, state.hit - 0.16)
-        rate = self._strobe_rate
-        jump = 0.22 - rate * 0.17          # 0.22 sparing, 0.05 eager
-        wait = int(34 - rate * 32)         # frames to wait before the next
+        # Sensitivity decides what counts as a hit; rate decides how soon
+        # another may follow. They were one slider, which meant a busy
+        # track either strobed constantly or never.
+        jump = 0.22 - self._strobe_sense * 0.17    # 0.22 fussy, 0.05 eager
+        wait = int(34 - self._strobe_rate * 32)    # frames before the next
         self._since_hit += 1
         if bass - self._last_bass > jump and self._since_hit >= wait:
             state.hit = 1.0
@@ -612,6 +663,17 @@ class Spectrum(QWidget):
         state.hue = (state.phase * 0.5) % 1.0
         state.levels = self._level
         state.peaks = self._peak
+        state.trace = self._trace_now()
+        # History belongs to the clock, not to the paint. Scenes used to
+        # collect it themselves inside paint(), which tied how much they
+        # remembered to how often they happened to be redrawn.
+        state.history.append(list(self._level))
+        if len(state.history) > self.HISTORY:
+            del state.history[:len(state.history) - self.HISTORY]
+        if state.trace is not None:
+            state.trace_history.append(list(state.trace))
+            if len(state.trace_history) > self.HISTORY:
+                del state.trace_history[:len(state.trace_history) - self.HISTORY]
         state.sparks = self._sparks
 
         if self._dial_frames and not self._idling:
@@ -789,8 +851,11 @@ class FullScreenSpectrum(QWidget):
         self._layout_index = None
 
         parent_layout = self._home.layout() if self._home else None
+        self._stretch = 0
         if parent_layout is not None:
             self._layout_index = parent_layout.indexOf(spectrum)
+            if self._layout_index >= 0 and hasattr(parent_layout, "stretch"):
+                self._stretch = parent_layout.stretch(self._layout_index)
         self._min, self._max = spectrum.minimumHeight(), spectrum.maximumHeight()
 
         layout = QVBoxLayout(self)
@@ -801,8 +866,13 @@ class FullScreenSpectrum(QWidget):
 
         self.bar = QWidget(self)
         self.bar.setMouseTracking(True)
+        # Scoped by object name. An unscoped rule cascades to every child,
+        # so each slider and label got its own dark rounded box and the
+        # tops of the knobs were clipped by it.
+        self.bar.setObjectName("visualiserBar")
         self.bar.setStyleSheet(
-            "background: rgba(12,10,18,215); border-radius: 10px;")
+            "QWidget#visualiserBar { background: rgba(12,10,18,215); "
+            "border-radius: 10px; }")
         # The same wrapping row the window uses. A fixed line squeezed its
         # controls into nothing on a small screen rather than taking a
         # second line.
@@ -824,8 +894,15 @@ class FullScreenSpectrum(QWidget):
         self._idle.start()
 
     # -- what goes in the bar ---------------------------------------------
+    #: The bar's rows are sized from each control's hint, and a slider's
+    #: hint describes its groove rather than its handle - so the tops of
+    #: the knobs were cut off by the bar's own background.
+    CONTROL_HEIGHT = 30
+
     def add_control(self, widget, stretch: int = 0) -> None:
         widget.setMouseTracking(True)
+        if widget.sizeHint().height() < self.CONTROL_HEIGHT:
+            widget.setMinimumHeight(self.CONTROL_HEIGHT)
         self._bar_layout.addWidget(widget)
         if stretch:
             self._bar_layout.set_stretch(widget)
@@ -904,9 +981,10 @@ class FullScreenSpectrum(QWidget):
         self.bar.setGeometry(int((self.width() - width) / 2),
                              int(self.height() - height - 28), width, height)
         self.bar.raise_()
-        # Exactly what the bar occupies, so the scene stops above it rather
-        # than being drawn underneath and reading as a cut-off control.
-        self._spectrum.set_reserve(height + 44)
+        # No strip kept clear. Full screen means the whole screen, and the
+        # bar fades out when it is not being used, so the scene running
+        # behind it is the point rather than a problem.
+        self._spectrum.set_reserve(0)
 
     def closeEvent(self, event) -> None:      # noqa: N802 - Qt's name
         """Put the spectrum back exactly where it was."""
@@ -915,12 +993,18 @@ class FullScreenSpectrum(QWidget):
         spectrum = self._spectrum
         spectrum.setParent(None)
         spectrum.set_reserve(0)
+        # set_unbounded recomputes the height from the shape and the
+        # budget. Putting back the minimum and maximum that were saved on
+        # the way in restored a forced height instead, which is what made
+        # the transport appear inside the picture after a trip through
+        # full screen and back.
         spectrum.set_unbounded(False)
-        spectrum.setMinimumHeight(self._min)
-        spectrum.setMaximumHeight(self._max)
         parent_layout = self._home.layout() if self._home else None
         if parent_layout is not None and self._layout_index is not None:
-            parent_layout.insertWidget(self._layout_index, spectrum)
+            # With the stretch it had. insertWidget defaults to zero, so
+            # the scene came back unable to claim any spare room.
+            parent_layout.insertWidget(self._layout_index, spectrum,
+                                       self._stretch)
         elif self._home is not None:
             spectrum.setParent(self._home)
         spectrum.show()
@@ -1248,3 +1332,53 @@ class PostProcess:
         shade.setColorAt(0.65, QColor(0, 0, 0, int(30 * amount)))
         shade.setColorAt(1.0, QColor(0, 0, 0, int(230 * amount)))
         painter.fillRect(rect, shade)
+
+
+class Spinner(QWidget):
+    """A small turning arc, shown while something is being worked out.
+
+    Ticking a box and having nothing happen for several seconds reads as
+    the application ignoring you, even when it is busy. This costs one
+    repaint of twenty pixels every eighty milliseconds and only exists
+    while there is something to wait for.
+    """
+
+    SIDE = 16
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setFixedSize(self.SIDE, self.SIDE)
+        self._angle = 0
+        self._timer = QTimer(self)
+        self._timer.setInterval(80)
+        self._timer.timeout.connect(self._turn)
+        self.hide()
+
+    def start(self) -> None:
+        if not self._timer.isActive():
+            self._timer.start()
+        self.show()
+
+    def stop(self) -> None:
+        self._timer.stop()
+        self.hide()
+
+    def _turn(self) -> None:
+        self._angle = (self._angle + 30) % 360
+        self.update()
+
+    def paintEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            tint = self.palette().windowText().color()
+            pen = QPen(tint, 2.0)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            box = QRectF(2.0, 2.0, self.SIDE - 4.0, self.SIDE - 4.0)
+            # Three quarters of a circle, turning: the gap is what makes
+            # the movement readable at this size.
+            painter.drawArc(box, int(-self._angle * 16), int(270 * 16))
+        finally:
+            painter.end()

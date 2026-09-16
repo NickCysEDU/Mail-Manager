@@ -119,7 +119,7 @@ def _band_edges(sample_rate: int) -> List[tuple]:
 
 
 def analyse(samples: array, sample_rate: int, channels: int = 1,
-            should_stop=None, on_progress=None) -> List[array]:
+            should_stop=None, on_progress=None, calibration=None) -> List[array]:
     """Band energies per frame, each 0..1.
 
     ``samples`` is interleaved 16-bit PCM as an array("h").
@@ -128,6 +128,12 @@ def analyse(samples: array, sample_rate: int, channels: int = 1,
     work is abandoned and an empty list comes back: a track nobody is
     waiting for should not keep a core busy. ``on_progress`` is called with
     a fraction so something on screen can move.
+
+    The returned numbers are stretched to fill the display, which makes a
+    quiet recording watchable but means a bar's height is no longer a
+    level. Pass a dict as ``calibration`` and it is filled with what is
+    needed to get back to decibels, so a scene that prints a scale can
+    print a true one.
     """
     if not samples or sample_rate <= 0:
         return []
@@ -179,7 +185,7 @@ def analyse(samples: array, sample_rate: int, channels: int = 1,
             # A 55 dB window rather than 70. Seventy put ordinary music in
             # the top third of the range and nothing appeared to move; this
             # spends the whole height on the part anybody can hear.
-            row[band] = max(0.0, (db + 55.0) / 55.0)
+            row[band] = max(0.0, (db + RANGE_DB) / RANGE_DB)
         frames.append(row)
         at += hop
 
@@ -198,7 +204,12 @@ def analyse(samples: array, sample_rate: int, channels: int = 1,
                 # whole height, then bend it so quiet detail still shows.
                 scaled = (row[index] - floor) / reach
                 scaled = max(0.0, min(1.0, scaled))
-                row[index] = scaled ** 0.72
+                row[index] = scaled ** GAMMA
+        if calibration is not None:
+            # Enough to undo all of it: raw = floor + reach * shown ** (1/g),
+            # and dB = raw * RANGE_DB - RANGE_DB.
+            calibration.update({"floor": floor, "reach": reach,
+                                "gamma": GAMMA, "range_db": RANGE_DB})
     return frames
 
 
@@ -266,15 +277,21 @@ class _AnalysisThread(_QThread_base):
 
     def run(self) -> None:
         try:
+            calibration: dict = {}
             frames = analyse(self._samples, self._rate, self._channels,
                              should_stop=lambda: self._stop,
-                             on_progress=self.progress.emit)
+                             on_progress=lambda f: self.progress.emit(f * 0.85),
+                             calibration=calibration)
+            # The waveform the oscilloscope draws, on the same schedule as
+            # the bands so one index reads both.
+            shapes = traces(self._samples, self._rate, self._channels,
+                            should_stop=lambda: self._stop)
         except Exception as exc:      # noqa: BLE001
             if not self._stop:
                 self.failed.emit(str(exc))
             return
         if not self._stop:
-            self.done.emit(frames)
+            self.done.emit((frames, shapes, calibration))
 
 
 class _Analysis(QObject_base):
@@ -443,6 +460,82 @@ def _quieten() -> None:
 #: The bands the dial scene shows, which are not third-octave and are asked
 #: for by name in the design it copies.
 DIAL_CENTRES = (73, 120, 300, 576, 1400, 2400, 6000, 9000, 18000, 22000)
+
+
+#: The window of level the bands are spread across, in decibels, and the
+#: bend applied afterwards so quiet detail still shows.
+RANGE_DB = 55.0
+GAMMA = 0.72
+
+#: Points in one oscilloscope trace. Enough to show a waveform's shape at
+#: any width the scene is drawn at, small enough that a three minute track
+#: costs about a megabyte of them.
+TRACE_POINTS = 256
+
+
+def traces(samples: array, sample_rate: int, channels: int = 1,
+           should_stop=None) -> List[array]:
+    """One short slice of the actual waveform per frame, -1 to 1.
+
+    The oscilloscope was drawing a shape derived from band energies, which
+    is a picture of a spectrum pretending to be a waveform. This is the
+    signal itself, decimated to a fixed number of points, so what is on
+    screen is what is in the file.
+
+    Each trace starts at a zero crossing where one can be found nearby,
+    which is what a scope's trigger does and what stops the waveform
+    sliding sideways from frame to frame.
+    """
+    if not samples or sample_rate <= 0:
+        return []
+    channels = max(1, channels)
+    total = len(samples) // channels
+    if total <= WINDOW:
+        return []
+
+    hop = max(1, sample_rate // RATE)
+    # One cycle of 80 Hz at the decode rate, which shows a bass waveform
+    # whole and a treble one as several cycles.
+    span = min(total, max(TRACE_POINTS, sample_rate // 80))
+    step = max(1, span // TRACE_POINTS)
+    scale = 1.0 / 32768.0
+    out: List[array] = []
+    at = 0
+    checked = 0
+    while at + span <= total:
+        checked += 1
+        if should_stop is not None and not checked % 40 and should_stop():
+            return []
+        start = _trigger(samples, at, min(span, hop), channels)
+        row = array("f", [0.0]) * TRACE_POINTS
+        for point in range(TRACE_POINTS):
+            index = (start + point * step) * channels
+            if index + channels <= len(samples):
+                value = samples[index]
+                if channels > 1:
+                    value = (value + samples[index + 1]) * 0.5
+                row[point] = max(-1.0, min(1.0, value * scale))
+        out.append(row)
+        at += hop
+    return out
+
+
+def _trigger(samples: array, at: int, window: int, channels: int) -> int:
+    """The first rising zero crossing near ``at``, or ``at`` itself.
+
+    Without this the trace starts wherever the frame happens to land and
+    the waveform crawls across the screen instead of standing still.
+    """
+    previous = samples[at * channels]
+    for offset in range(1, window):
+        index = (at + offset) * channels
+        if index >= len(samples):
+            break
+        value = samples[index]
+        if previous < 0 <= value:
+            return at + offset
+        previous = value
+    return at
 
 
 def regroup(frames: List[array], centres, source=CENTRES) -> List[array]:
