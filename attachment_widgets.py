@@ -268,10 +268,10 @@ class Spectrum(QWidget):
         self._flow.setEasingCurve(QEasingCurve.Type.InOutCubic)
         self._flow.valueChanged.connect(self._reveal_changed)
 
+        # Kept, and never started: conceal() is still reachable by hand
+        # for the pane that is putting a file away.
         self._away = QTimer(self)
         self._away.setSingleShot(True)
-        self._away.setInterval(self.IDLE_SECONDS * 1000)
-        self._away.timeout.connect(self.conceal)
 
     # -- what it shows ----------------------------------------------------
     def set_scene(self, scene) -> None:
@@ -302,6 +302,25 @@ class Spectrum(QWidget):
         if not self._unbounded:
             self._reveal_changed(self._reveal)
         self.updateGeometry()
+
+    def _scene_box(self, rect):
+        """The part of the widget the scene is drawn in.
+
+        Whole widget for the plain strip; otherwise the largest rectangle
+        of the chosen ratio that fits, centred.
+        """
+        if self._aspect is None or rect.width() <= 0 or rect.height() <= 0:
+            return rect
+        wide = rect.width() / rect.height()
+        if abs(wide - self._aspect) < 0.01:
+            return rect
+        if wide > self._aspect:
+            width = rect.height() * self._aspect
+            return QRectF(rect.left() + (rect.width() - width) / 2.0,
+                          rect.top(), width, rect.height())
+        height = rect.width() / self._aspect
+        return QRectF(rect.left(), rect.top() + (rect.height() - height) / 2.0,
+                      rect.width(), height)
 
     def _full_height(self) -> int:
         """How tall the strip wants to be when fully revealed.
@@ -432,9 +451,12 @@ class Spectrum(QWidget):
             self._timer.start()
             return
         if self._reveal > 0.0 and self._frames:
+            # Idling, not leaving. It used to slide itself shut after a
+            # few seconds of not playing, so pausing made the whole thing
+            # vanish and the pane jump; it stays until the tick box says
+            # otherwise.
             self._idling = True
             self._timer.start()
-            self._away.start()
             return
         self._timer.stop()
         self.update()
@@ -744,6 +766,15 @@ class Spectrum(QWidget):
                                  -min(float(self._reserve), rect.height() / 3.0))
         if self._reveal <= 0.001:
             return
+        # The chosen shape, fitted inside whatever room there is. Height
+        # alone could not express it: every ratio wanted more height than
+        # the pane had, so they were all clamped to the same number and
+        # choosing between them did nothing at all. Fitting the ratio in
+        # the box and filling the sides is what a video player does.
+        scene_box = self._scene_box(rect)
+        if scene_box != rect:
+            painter.fillRect(rect, self._state.background)
+            rect = scene_box
         if self._reveal < 0.999:
             painter.setOpacity(self._reveal)
             painter.translate(0.0, (1.0 - self._reveal) * rect.height() * 0.45)
@@ -1009,7 +1040,11 @@ class FullScreenSpectrum(QWidget):
             spectrum.setParent(self._home)
         spectrum.show()
         if self._owner is not None:
-            self._owner._full = None
+            release = getattr(self._owner, "release_full_screen", None)
+            if release is not None:
+                release()
+            else:
+                self._owner._full = None
         super().closeEvent(event)
 
 

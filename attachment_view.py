@@ -380,8 +380,9 @@ class AudioPane(QWidget):
         self.enable_box.toggled.connect(self._enable_visualiser)
         self.strobe_box = QCheckBox("Strobe")
         self.strobe_box.setToolTip(
-            "Flash the scene on a bass hit. Off by default, because a "
-            "flashing screen is not for everybody.")
+            "Flash the scene on a bass hit, in whatever way the scene "
+            "flashes. Off by default: a flashing screen is not for "
+            "everybody.")
         self.strobe_box.toggled.connect(self.spectrum.set_strobe)
         self.colour_button = QPushButton("Meters…")
         self.colour_button.setToolTip(
@@ -437,10 +438,19 @@ class AudioPane(QWidget):
         self.decay.valueChanged.connect(
             lambda value: self.spectrum.set_decay(value / 100.0))
 
-        self.sense_box = _labelled("Sensitivity", self.sense)
-        self.rate_box = _labelled("Rate", self.flash)
-        self.decay_box = _labelled("Decay", self.decay)
+        self.sense_box = _labelled("fires at", self.sense)
+        self.rate_box = _labelled("as often as", self.flash)
+        self.decay_box = _labelled("Trace decay", self.decay)
         self.decay_box.hide()
+        # The tick box and the two sliders that shape it, as one block: on
+        # their own the sliders said "Sensitivity" and "Rate" with nothing
+        # to say what of.
+        self.strobe_group = QWidget()
+        strobe_row = QHBoxLayout(self.strobe_group)
+        strobe_row.setContentsMargins(0, 0, 0, 0)
+        strobe_row.setSpacing(8)
+        for widget in (self.strobe_box, self.sense_box, self.rate_box):
+            strobe_row.addWidget(widget)
 
         # A row that wraps. These controls come and go with what is chosen,
         # and in one fixed line they overlapped each other and then ran off
@@ -448,7 +458,7 @@ class AudioPane(QWidget):
         self.visual_row = FlowRow(spacing=10)
         # Grouped: what to draw, how it reacts, then what to do with it.
         groups = ((self.enable_box, self.busy, self.scene_box, self.shape_box),
-                  (self.strobe_box, self.sense_box, self.rate_box),
+                  (self.strobe_group,),
                   (self.decay_box,),
                   (self.colour_button, self.full_button))
         for index, group in enumerate(groups):
@@ -463,8 +473,7 @@ class AudioPane(QWidget):
         # text should be, and side by side in one row that reads as a mess.
         _match_text(self.visual_holder)
         self._visual_controls = (self.scene_box, self.shape_box,
-                                 self.strobe_box, self.sense_box,
-                                 self.rate_box, self.decay_box,
+                                 self.strobe_group, self.decay_box,
                                  self.full_button, self.colour_button)
         # Everything except the tick box starts unavailable, because the
         # visualiser starts off.
@@ -783,6 +792,22 @@ class AudioPane(QWidget):
         window.bands_changed.connect(self.spectrum.set_dial_centres)
         window.exec()
 
+    def release_full_screen(self) -> None:
+        """Undo everything the full-screen view wired into this pane.
+
+        Signals outlive the widgets they were connected to, and a lambda
+        holding a label that Qt has destroyed raises out of the next
+        emission - which is every time the position moves.
+        """
+        for signal, handle in getattr(self, "_full_links", []):
+            try:
+                signal.disconnect(handle)
+            except (RuntimeError, TypeError):      # already gone
+                pass
+        self._full_links = []
+        self._full = None
+        self._full_play = None
+
     def transport(self, action: str) -> None:
         """J, K and L, wherever they were pressed."""
         if action == "toggle":
@@ -824,15 +849,21 @@ class AudioPane(QWidget):
         seek.setValue(self.position.value())
         seek.seeked.connect(self._seek)
         seek.seeked.connect(self.position.setValue)
-        self.position.valueChanged.connect(seek.report)
+        # Connections from the pane's own widgets to widgets that only
+        # exist while full screen does. They have to be undone when it
+        # closes, or the next seek calls into a deleted label.
+        self._full_links = [
+            (self.position.valueChanged, self.position.valueChanged.connect(
+                seek.report))]
 
         clock = QLabel(self.clock.text())
         clock.setFont(system_font())
         clock.setMinimumWidth(104)
         clock.setStyleSheet("color: #e8e8ee;")
-        self.position.valueChanged.connect(
-            lambda value: clock.setText(
-                f"{_mmss(value)} / {_mmss(self.position.maximum())}"))
+        self._full_links.append(
+            (self.position.valueChanged, self.position.valueChanged.connect(
+                lambda value: clock.setText(
+                    f"{_mmss(value)} / {_mmss(self.position.maximum())}"))))
 
         volume = QSlider(Qt.Orientation.Horizontal)
         volume.setRange(0, 100)
