@@ -498,10 +498,12 @@ class Oscilloscope(Scene):
         side = min(rect.width(), rect.height()) * (0.44 + flash * 0.08)
         centre = rect.center()
         count = len(trace) // 2
+        # Stored as int16 so a long track's worth fits in memory.
+        scale = side / 32768.0
         for index in range(count):
-            x = centre.x() + trace[index * 2] * side
+            x = centre.x() + trace[index * 2] * scale
             # Screen y grows downwards and a scope's does not.
-            y = centre.y() - trace[index * 2 + 1] * side
+            y = centre.y() - trace[index * 2 + 1] * scale
             if index:
                 path.lineTo(x, y)
             else:

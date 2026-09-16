@@ -2105,11 +2105,37 @@ class TestOscilloscopeMusic:
         vectors = attachment_audio.vector_traces(pcm, rate, 2)
         assert vectors, "nothing to plot"
         first = vectors[0]
-        radii = [math.hypot(first[i * 2], first[i * 2 + 1])
+        # Stored as int16, so a long track's worth fits in memory.
+        radii = [math.hypot(first[i * 2], first[i * 2 + 1]) / 32768.0
                  for i in range(len(first) // 2)]
         assert max(radii) - min(radii) < 0.05, (
             f"a circle came back as something else: {min(radii):.2f} to "
             f"{max(radii):.2f}")
+
+    def test_the_points_are_consecutive_samples(self):
+        """Every sample in the window is part of the drawing.
+
+        The sweep takes every eighth sample, which is fine for a waveform
+        and turns a detailed figure into a scribble. A picture cut at
+        audio rate needs all of them.
+        """
+        from array import array
+
+        import attachment_audio
+
+        rate = attachment_audio.DECODE_RATE
+        # A ramp, so each sample is identifiable by its value.
+        pcm = array("h")
+        for index in range(rate):
+            pcm.append(index % 1000)
+            pcm.append((index % 1000) * -1)
+        vectors = attachment_audio.vector_traces(pcm, rate, 2)
+        assert vectors
+        left = vectors[0][0::2]
+        steps = {left[i + 1] - left[i] for i in range(len(left) - 1)
+                 if left[i + 1] > left[i]}
+        assert steps == {1}, (
+            f"samples are being skipped: {sorted(steps)[:5]}")
 
     def test_the_scope_plots_the_picture_not_a_sweep(self, qapp):
         """The X-Y path has to follow the samples, not a clock."""
@@ -2123,8 +2149,9 @@ class TestOscilloscopeMusic:
         assert scope.mode == "X-Y"
 
         state = SpectrumState()
-        # A square, as four corners.
-        state.vector = [-1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, 1.0]
+        # A square, as four corners, in the int16 the analysis produces.
+        full = 32767
+        state.vector = [-full, -full, full, -full, full, full, -full, full]
         scope._drawing = True
         path = scope._path(QRectF(0, 0, 200, 200), state.vector, state, 0.0)
         assert path.elementCount() == 4

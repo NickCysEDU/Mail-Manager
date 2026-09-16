@@ -79,6 +79,19 @@ class RunRecord:
             backend=str(data.get("backend", "")),
         )
 
+    #: A menu item is one line. An IMAP failure is not: it arrives with a
+    #: traceback's worth of server chatter, and putting that straight into
+    #: a menu made the menu as tall as the screen.
+    SUMMARY_LIMIT = 58
+
+    def summary(self) -> str:
+        """One line, short enough for a menu."""
+        text = self.describe()
+        first = text.splitlines()[0] if text else ""
+        if len(first) <= self.SUMMARY_LIMIT:
+            return first
+        return first[:self.SUMMARY_LIMIT - 1].rstrip() + "…"
+
     def describe(self) -> str:
         if self.error:
             return f"Last background run failed: {self.error}"
