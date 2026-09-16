@@ -1008,12 +1008,26 @@ class Waterfall(Scene):
         levels = state.levels
         if not levels:
             return
+        width, height = rect.width(), rect.height()
 
         field = getattr(state, "history", None) or [list(levels)]
         field = field[-self.DEPTH:]
+        # Every row is a line across the whole plot, so the cost is the
+        # number of rows times the number of bands - about twelve hundred
+        # antialiased segments at full depth, which is more than a slow
+        # machine can draw sixty times a second. On a big frame every
+        # other row is dropped: the ridges are wider there anyway and the
+        # landscape reads the same.
+        # Every other row at most. A third of them left fifteen ridges
+        # with gaps between, which reads as tangled lines rather than as
+        # a surface - the saving was not worth what it cost to look at.
+        stride = 2 if rect.width() * rect.height() > 480_000 else 1
+        if stride > 1:
+            # Keep the newest row whatever the stride, so the front edge
+            # is always the current frame.
+            field = field[::-1][::stride][::-1]
 
         flash = self.flash(state)
-        width, height = rect.width(), rect.height()
         # The plot sits in the lower left, leaning up and to the right.
         # Gutters for the axes, so the numbers sit beside the plot rather
         # than on top of the data.
