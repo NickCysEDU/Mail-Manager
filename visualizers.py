@@ -136,6 +136,7 @@ class Vaporwave(Scene):
             return
         block = width / count
         windows = QPainterPath()
+        roofs = QPainterPath()
         for index, value in enumerate(levels):
             tall = horizon * (0.10 + value * 0.42)
             x = index * block
@@ -145,11 +146,11 @@ class Vaporwave(Scene):
             painter.fillRect(QRectF(x, horizon - tall, block * 0.92, tall),
                              QColor.fromHsvF(shade, 0.88, 0.13, 1.0))
             # A lit roof edge. This is what makes the city read against a
-            # bright sun instead of dissolving into it.
-            painter.fillRect(QRectF(x, horizon - tall, block * 0.92,
-                                    max(1.0, horizon * 0.006)),
-                             QColor.fromHsvF((shade + 0.08) % 1.0, 0.45, 1.0,
-                                             0.55 + value * 0.45))
+            # bright sun instead of dissolving into it. Collected and
+            # filled once, like the windows: one fillRect per tower was
+            # twenty-seven brush changes a frame.
+            roofs.addRect(QRectF(x, horizon - tall, block * 0.92,
+                                 max(1.0, horizon * 0.006)))
             # Lit windows. Collected into one path and filled once at the
             # end: several hundred drawRect calls with a brush change each
             # was most of what this scene cost at 1080p.
@@ -164,6 +165,8 @@ class Vaporwave(Scene):
                             block * 0.2, max(2.0, spacing * 0.3)))
         painter.setPen(Qt.PenStyle.NoPen)
         # Windows brighten together on a hit, like a block losing its blinds.
+        painter.fillPath(roofs, QColor.fromHsvF(
+            (state.hue + 0.68) % 1.0, 0.45, 1.0, 0.80))
         painter.fillPath(windows, QColor.fromHsvF(
             (state.hue + 0.6) % 1.0, 0.30 - self.flash(state) * 0.25, 1.0,
             0.42 + self.flash(state) * 0.45))
@@ -209,16 +212,18 @@ class Vaporwave(Scene):
         """
         painter.setPen(Qt.PenStyle.NoPen)
         shade = (state.hue + 0.5) % 1.0
+        # One path, one fill. Fourteen brush changes a frame is not much on
+        # its own, but this scene was already the most expensive of the set.
+        sky = QPainterPath()
         for index in range(14):
             # Deterministic placement, so they do not crawl about.
             x = ((index * 97) % 100) / 100.0 * width
             y = ((index * 37) % 100) / 100.0 * horizon * 0.52
             twinkle = 0.35 + 0.65 * abs(math.sin(state.phase * 1.6 + index))
             size = 0.8 + state.high * 1.8 * twinkle
-            painter.setBrush(QColor.fromHsvF(shade, 0.10, 1.0,
-                                             0.25 + state.high * 0.55 * twinkle))
-            painter.drawEllipse(QPointF(x, y), size, size)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
+            sky.addEllipse(QPointF(x, y), size, size)
+        painter.fillPath(sky, QColor.fromHsvF(shade, 0.10, 1.0,
+                                              0.30 + state.high * 0.45))
 
 
 class Tunnel(Scene):
@@ -721,7 +726,7 @@ class Ambience(Scene):
     #: How many ribbons, and how many points along each. Sixty points is
     #: past the width of a pixel at any size this is drawn at.
     RIBBONS = 5
-    STEPS = 60
+    STEPS = 44
 
     def paint(self, painter, rect, state) -> None:
         width, height = rect.width(), rect.height()
@@ -746,8 +751,12 @@ class Ambience(Scene):
             shade = (state.hue + share * 0.42 + 0.1) % 1.0
             colour = QColor.fromHsvF(shade, 0.72 - flash * 0.35, 1.0,
                                      0.30 + band * 0.45 + flash * 0.2)
+            # Capped. Additive compositing charges per pixel of stroke,
+            # and an uncapped width put a sixteen pixel ribbon across a
+            # 1080p frame ten times over - seventeen milliseconds before
+            # any polish, which is the whole frame gone.
             painter.setPen(QPen(colour,
-                                max(1.6, height * 0.010 * (0.6 + band)),
+                                max(1.6, min(9.0, height * 0.010 * (0.6 + band))),
                                 Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
                                 Qt.PenJoinStyle.RoundJoin))
             self._ribbon(painter, width, middle, reach, turn, ribbon, +1)

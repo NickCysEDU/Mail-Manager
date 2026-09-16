@@ -1299,6 +1299,17 @@ class TestTheVisualiserCanBeSwitchedOff:
         viewer._sweep()
 
 
+def _scene_count():
+    """Every scene, not the five that existed when this was written.
+
+    The count was hard-coded, so the sixth - which turned out to be the
+    most expensive of the set by a wide margin - was never measured.
+    """
+    import visualizers
+
+    return visualizers.SCENES
+
+
 class TestItHoldsSixtyFramesASecond:
     """Every scene, at the sizes a screen actually is."""
 
@@ -1325,13 +1336,18 @@ class TestItHoldsSixtyFramesASecond:
         spectrum.set_position(900)
         return spectrum
 
-    def test_the_timer_asks_for_sixty(self):
+    def test_the_timer_asks_for_sixty(self, qapp):
+        """qapp, because a QWidget without a QApplication aborts.
+
+        This passed only because something earlier in the file happened to
+        build one first; run on its own it took the process down.
+        """
         from attachment_widgets import Spectrum
 
         spectrum = Spectrum()
         assert spectrum._timer.interval() <= 17, "that is not sixty a second"
 
-    @pytest.mark.parametrize("index", range(5))
+    @pytest.mark.parametrize("index", range(len(_scene_count())))
     def test_each_scene_fits_a_frame_at_1080p(self, qtbot, index):
         import time
 
