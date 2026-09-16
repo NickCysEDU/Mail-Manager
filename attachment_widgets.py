@@ -179,6 +179,12 @@ class Spectrum(QWidget):
     #: However tall a shape asks for, never more than this.
     MAX_HEIGHT = 900
 
+    #: Frames up to this many pixels are drawn at their real size. Above
+    #: it the scene is drawn into a smaller buffer and stretched, because
+    #: antialiased strokes are charged by area and a full screen of them
+    #: does not fit in a sixtieth of a second.
+    SHARP_PIXELS = 600_000
+
     #: Which bands feed which aggregate, as fractions of the band count.
     BASS = (0.00, 0.16)
     MID = (0.20, 0.52)
@@ -700,15 +706,22 @@ class Spectrum(QWidget):
         import visualizers
 
         recipe = visualizers.post_for(self._scene) if self._post else {}
-        if not recipe or rect.width() < 8.0 or rect.height() < 8.0:
-            self._scene.paint(painter, rect, self._state)
-            return
-
         ratio = self.devicePixelRatioF()
         pixels = rect.width() * ratio * rect.height() * ratio
-        # Past about a megapixel the per-pixel passes cost more than the
-        # detail is worth, so the buffer is built smaller and stretched.
-        shrink = 1.0 if pixels <= 1_200_000 else max(0.5, (1_200_000 / pixels) ** 0.5)
+        # Antialiasing is what these scenes cost, and it is charged per
+        # pixel of every stroke: Ambience measured 10.3 ms a frame at 1080p
+        # with it on and 1.6 ms with it off. Rather than give it up and
+        # draw jagged curves, big frames are drawn smaller and stretched,
+        # which costs the same as turning it off and still looks smooth.
+        # Floored at a fifth rather than a half: on a retina screen the
+        # physical frame is four times the logical one, and a half-scale
+        # floor left the buffer at nearly three times the target however
+        # low the target was set.
+        shrink = 1.0 if pixels <= self.SHARP_PIXELS else max(
+            0.20, (self.SHARP_PIXELS / pixels) ** 0.5)
+        if (not recipe and shrink >= 0.999) or rect.width() < 8.0 or rect.height() < 8.0:
+            self._scene.paint(painter, rect, self._state)
+            return
         wanted = QSize(max(1, int(rect.width() * ratio * shrink)),
                        max(1, int(rect.height() * ratio * shrink)))
         if self._buffer is None or self._buffer.size() != wanted:
@@ -721,7 +734,13 @@ class Spectrum(QWidget):
         self._scene.paint(inner, QRectF(0, 0, side.width(), side.height()),
                           self._state)
         inner.end()
-        self._effects.apply(painter, rect, self._buffer, recipe)
+        if recipe:
+            self._effects.apply(painter, rect, self._buffer, recipe)
+        else:
+            painter.setRenderHint(
+                QPainter.RenderHint.SmoothPixmapTransform, True)
+            painter.drawPixmap(QRectF(rect), self._buffer,
+                               QRectF(self._buffer.rect()))
 
     def _draw_working(self, painter, rect) -> None:
         """A bar that fills, and a line saying what is happening."""
@@ -1061,6 +1080,7 @@ class PostProcess:
         self._grain: dict = {}
         self._cost = 0.0
         self._allow = len(self.ORDER)
+        self._area = 0.0
         #: Frames to leave alone after a change, so a decision is given a
         #: chance to show its effect before the next one is made.
         self._settle = 0
@@ -1097,32 +1117,58 @@ class PostProcess:
             self._settle = 120
 
     def apply(self, painter, rect, frame, recipe: dict) -> None:
-        """Draw ``frame`` into ``painter`` with ``recipe`` applied."""
+        """Draw ``frame`` into ``painter`` with ``recipe`` applied.
+
+        Every pass runs on the buffer, at the buffer's own size, and the
+        result is stretched to the frame once at the end. Doing it the
+        other way round - stretching first, then shading the full output -
+        charged every pass for the whole screen: six milliseconds a frame
+        at 1080p on a retina display, against a budget of sixteen for
+        everything.
+        """
         import time as _time
 
         started = _time.perf_counter()
+        area = rect.width() * rect.height()
+        if area > self._area * 1.3 or area < self._area * 0.7:
+            self._area = area
+            self._allow = (5 if area <= 500_000 else
+                           4 if area <= 1_200_000 else
+                           3 if area <= 2_400_000 else 2)
+            self._cost = self.BUDGET_MS * 0.7
+            self._settle = 8
         recipe = self._permitted(recipe)
+
+        inner = QPainter(frame)
+        inner.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        scale = frame.devicePixelRatio() or 1.0
+        box = QRectF(0.0, 0.0, frame.width() / scale, frame.height() / scale)
+        try:
+            bloom = float(recipe.get("bloom", 0.0))
+            shift = float(recipe.get("aberration", 0.0))
+            if bloom > 0.01 or shift > 0.05:
+                halo = self._halo(box, frame)
+                if bloom > 0.01:
+                    self._bloom(inner, box, halo, bloom)
+                if shift > 0.05:
+                    # In buffer pixels, so the effect looks the same
+                    # whatever the buffer was scaled to.
+                    self._aberration(inner, box, halo,
+                                     shift * box.width() / max(1.0, rect.width()))
+            lines = float(recipe.get("scanlines", 0.0))
+            if lines > 0.01:
+                self._scanlines(inner, box, lines)
+            grain = float(recipe.get("grain", 0.0))
+            if grain > 0.01:
+                self._noise(inner, box, grain)
+            fade = float(recipe.get("vignette", 0.0))
+            if fade > 0.01:
+                self._vignette_over(inner, box, fade)
+        finally:
+            inner.end()
+
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        # Both rectangles floating point. Qt has no overload taking a QRect
-        # target with a QRectF source, and the mismatch raised out of
-        # paintEvent, which is fatal rather than merely wrong.
         painter.drawPixmap(QRectF(rect), frame, QRectF(frame.rect()))
-        bloom = float(recipe.get("bloom", 0.0))
-        shift = float(recipe.get("aberration", 0.0))
-        halo = self._halo(rect, frame) if (bloom > 0.01 or shift > 0.05) else None
-        if bloom > 0.01:
-            self._bloom(painter, rect, halo, bloom)
-        if shift > 0.05:
-            self._aberration(painter, rect, halo, shift)
-        lines = float(recipe.get("scanlines", 0.0))
-        if lines > 0.01:
-            self._scanlines(painter, rect, lines)
-        grain = float(recipe.get("grain", 0.0))
-        if grain > 0.01:
-            self._noise(painter, rect, grain)
-        fade = float(recipe.get("vignette", 0.0))
-        if fade > 0.01:
-            self._vignette_over(painter, rect, fade)
         self._record((_time.perf_counter() - started) * 1000.0)
 
     # -- the expensive one, kept cheap -------------------------------------
