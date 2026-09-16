@@ -175,7 +175,10 @@ class Spectrum(QWidget):
     nothing. Nothing runs while nothing is playing.
     """
 
-    HEIGHT = 240
+    #: How tall the plain strip wants to be. The scenes have detail worth
+    #: room - a dial's numbers, a landscape's depth - and at 240 they were
+    #: squashed into a letterbox.
+    HEIGHT = 320
 
     #: Shapes the strip can take, as width-to-height. None keeps the fixed
     #: strip. Portrait is genuinely taller than it is wide, which several
@@ -252,6 +255,9 @@ class Spectrum(QWidget):
         self._strobe_sense = 0.5
         #: Which part of the sound the strobe listens to.
         self._strobe_source = "Bass"
+        #: 0 while a track is playing, 1 while the scene is drifting on
+        #: its own. Everything in between is the crossfade.
+        self._settle = 0.0
         self._last_watched = 0.0
         self._since_hit = 99
         self._timer = QTimer(self)
@@ -536,6 +542,9 @@ class Spectrum(QWidget):
         self._strobe_sense = 0.5
         #: Which part of the sound the strobe listens to.
         self._strobe_source = "Bass"
+        #: 0 while a track is playing, 1 while the scene is drifting on
+        #: its own. Everything in between is the crossfade.
+        self._settle = 0.0
         self._last_watched = 0.0
         self._since_hit = 99 if fraction is None else max(0.0, min(1.0, float(fraction)))
         if self._working is not None:
@@ -655,10 +664,30 @@ class Spectrum(QWidget):
             except Exception:      # noqa: BLE001 - a dead player is not fatal
                 pass
         self._drift += 0.035
-        row = self._idle_row() if self._idling else self._row()
-        if row is None:
+        # Ease between the track and the idle drift rather than swapping
+        # one for the other. Switching outright made the scene lurch the
+        # moment a track ended or was paused, which is the jump you see
+        # when the last bar of a song stops.
+        target = 1.0 if self._idling else 0.0
+        if self._settle < target:
+            self._settle = min(target, self._settle + 0.045)
+        elif self._settle > target:
+            self._settle = max(target, self._settle - 0.045)
+
+        live = self._row()
+        drift = self._idle_row() if self._settle > 0.001 else None
+        if live is None and drift is None:
             self.update()
             return
+        if live is None:
+            row = drift
+        elif drift is None:
+            row = live
+        else:
+            share = self._settle
+            width = min(len(live), len(drift))
+            row = [live[i] * (1.0 - share) + drift[i] * share
+                   for i in range(width)]
 
         for i, value in enumerate(row):
             if i >= len(self._level):
@@ -926,7 +955,7 @@ class FullScreenSpectrum(QWidget):
         # The same wrapping row the window uses. A fixed line squeezed its
         # controls into nothing on a small screen rather than taking a
         # second line.
-        self._bar_layout = FlowRow(spacing=10)
+        self._bar_layout = FlowRow(spacing=16)
         self._bar_layout.setContentsMargins(14, 10, 14, 10)
         self.bar.setLayout(self._bar_layout)
 
@@ -1077,7 +1106,13 @@ class FlowRow(QLayout):
     fits on a line and moves the rest down.
     """
 
-    def __init__(self, parent=None, spacing: int = 10) -> None:
+    #: Widgets on this platform can draw outside the rectangle a layout
+    #: gives them - a combo box reserves about eleven pixels for its focus
+    #: ring - so a gap narrower than that lets one draw over the label
+    #: before it. Wide enough that it cannot.
+    BLEED = 14
+
+    def __init__(self, parent=None, spacing: int = 16) -> None:
         super().__init__(parent)
         self._items: list = []
         self._gaps: dict = {}

@@ -1569,6 +1569,15 @@ class MainWindow(QMainWindow):
 
         view_menu = menubar.addMenu("&View")
 
+        visualise_action = QAction("Visualise an audio file…", self)
+        visualise_action.setShortcut(QKeySequence("Ctrl+Shift+V"))
+        visualise_action.setStatusTip(
+            "Open any sound file from this machine and watch it. Nothing "
+            "is sent anywhere and nothing is kept.")
+        visualise_action.triggered.connect(self._visualise_a_file)
+        view_menu.addAction(visualise_action)
+        view_menu.addSeparator()
+
         self.menu_bar_action = QAction("Show in the menu bar", self)
         self.menu_bar_action.setCheckable(True)
         self.menu_bar_action.setChecked(self.settings.menu_bar_icon)
@@ -3243,6 +3252,46 @@ class MainWindow(QMainWindow):
         box.exec()
 
     @Slot(int)
+    def _visualise_a_file(self) -> None:
+        """Play a sound file from this machine, for the look of it.
+
+        It goes through the same viewer an attachment does, so the file is
+        read once into memory and nothing about it leaves the machine -
+        the same promise the rest of the viewer makes.
+        """
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        import attachments as _attachments
+        from attachment_view import AttachmentViewer
+
+        chosen, _ = QFileDialog.getOpenFileName(
+            self, "Choose a sound file", "",
+            "Audio (*.mp3 *.m4a *.aac *.wav *.aiff *.aif *.flac *.ogg "
+            "*.oga *.opus *.wma *.alac);;Any file (*)")
+        if not chosen:
+            return
+        path = Path(chosen)
+        try:
+            data = path.read_bytes()
+        except OSError as exc:
+            QMessageBox.warning(self, "Cannot read that file", str(exc))
+            return
+        kind, mime = _attachments.sniff(data[:4096], name=path.name)
+        if kind != "audio":
+            QMessageBox.information(
+                self, "Not a sound file",
+                f"{path.name} reads as {kind or 'something else'}, so there "
+                "is nothing to listen to.")
+            return
+        item = _attachments.Attachment(part="1", name=path.name,
+                                       content_type=mime, size=len(data),
+                                       data=data)
+        viewer = AttachmentViewer([item], path.name, self)
+        self._attachment_window = viewer
+        viewer.show()
+        viewer.list.setCurrentRow(0)
+        viewer.audio.enable_box.setChecked(True)
+
     def _open_attachments(self, row: int) -> None:
         """Fetch what was attached to one message, then show it.
 

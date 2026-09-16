@@ -16,7 +16,8 @@ import math
 from typing import List
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import (QColor, QLinearGradient, QPainter, QPainterPath,
+from PySide6.QtGui import (QColor, QImage, QLinearGradient, QPainter,
+                           QPainterPath,
                            QPen, QRadialGradient)
 
 
@@ -50,6 +51,65 @@ class Scene:
         return left, bar, gap
 
 
+class Plasma:
+    """The morphing coloured field the old media player drew behind things.
+
+    Sums of sines over a coarse grid, stretched up smooth. At full size
+    this would be millions of evaluations a frame; at 44 by 26 it is about
+    a thousand, and stretched with a smooth transform nobody can tell -
+    the thing being drawn has no hard edges in it anywhere.
+    """
+
+    COLUMNS = 36
+    ROWS = 22
+    #: Frames between recomputes. The field morphs over seconds, so
+    #: redrawing it thirty times a second rather than sixty is not
+    #: something anybody can see, and it is half the arithmetic.
+    EVERY = 2
+
+    def __init__(self) -> None:
+        self._image = None
+        self._countdown = 0
+
+    def paint(self, painter, rect, state, strength: float = 1.0) -> None:
+        if rect.width() < 4 or rect.height() < 4:
+            return
+        if self._image is None:
+            self._image = QImage(self.COLUMNS, self.ROWS,
+                                 QImage.Format.Format_RGB32)
+            self._countdown = 0
+        self._countdown -= 1
+        if self._countdown > 0:
+            painter.setRenderHint(
+                QPainter.RenderHint.SmoothPixmapTransform, True)
+            painter.drawImage(rect, self._image)
+            return
+        self._countdown = self.EVERY
+        phase = state.phase * 1.6
+        swell = 0.55 + state.bass * 0.8 + self.flash_of(state) * 0.9
+        hue_shift = state.hue
+        image = self._image
+        for row in range(self.ROWS):
+            y = row / self.ROWS
+            for column in range(self.COLUMNS):
+                x = column / self.COLUMNS
+                # Three waves at angles to each other, which is what makes
+                # the field fold through itself instead of scrolling.
+                value = (math.sin((x * 3.1 + phase) * math.pi)
+                         + math.sin((y * 2.7 - phase * 0.8) * math.pi)
+                         + math.sin(((x + y) * 2.3 + phase * 0.6) * math.pi))
+                shade = (value / 6.0 + 0.5 + hue_shift) % 1.0
+                level = 0.10 + 0.5 * swell * (0.5 + value / 6.0)
+                image.setPixelColor(column, row, QColor.fromHsvF(
+                    shade, 0.85, max(0.0, min(1.0, level * strength))))
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        painter.drawImage(rect, image)
+
+    @staticmethod
+    def flash_of(state) -> float:
+        return state.hit if state.strobe else 0.0
+
+
 class Vaporwave(Scene):
     """A grid, a sun, a skyline. The one everybody pictures."""
 
@@ -70,7 +130,7 @@ class Vaporwave(Scene):
         # The strobe belongs to the sun here: a kick makes it flare and
         # widen rather than washing the whole frame white.
         flash = self.flash(state)
-        radius = horizon * (0.46 + state.bass * 0.26 + flash * 0.30)
+        radius = horizon * (0.46 + state.bass * 0.26 + flash * 0.85)
         sun = QRadialGradient(QPointF(width / 2.0, horizon), radius)
         sun.setColorAt(0.0, QColor.fromHsvF(hue, 0.50 - flash * 0.4, 1.0,
                                             0.60 + state.bass * 0.3 + flash * 0.35))
@@ -239,8 +299,12 @@ class Tunnel(Scene):
         centre = QPointF(width / 2.0, height * 0.5)
         painter.fillRect(rect, QColor(6, 4, 14))
 
-        # A hit shoves every ring a step down the corridor at once.
-        rush = self.flash(state) * 0.45
+        # A hit no longer shoves every ring down the corridor at once -
+        # that made the whole field jump and read as a glitch. It fires a
+        # shockwave instead: one bright ring thrown outwards, drawn after
+        # the corridor.
+        flash = self.flash(state)
+        rush = 0.0
         for index in range(self.RINGS, 0, -1):
             t = ((index + state.scroll + rush) % self.RINGS) / self.RINGS
             # Perspective: near rings are large and bright, far ones small.
@@ -259,7 +323,23 @@ class Tunnel(Scene):
             painter.drawEllipse(centre, radius, radius)
 
         self._spokes(painter, centre, min(width, height) * 0.5, state)
+        self._shockwave(painter, centre, width, height, flash)
         self._sparks(painter, state)
+
+    def _shockwave(self, painter, centre, width, height, flash) -> None:
+        """One ring thrown out of the middle on a hit, fading as it goes."""
+        if flash <= 0.02:
+            return
+        # Newest hits are small and bright; as the flash decays the ring
+        # is further out and fainter, which reads as one thing travelling.
+        travel = 1.0 - flash
+        radius = 20.0 + travel * max(width, height) * 0.75
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for step, (width_scale, alpha) in enumerate(((3.0, 0.9), (7.0, 0.35))):
+            painter.setPen(QPen(
+                QColor.fromHsvF(0.12, 0.25, 1.0, alpha * flash),
+                width_scale * (0.4 + flash)))
+            painter.drawEllipse(centre, radius + step * 4, radius + step * 4)
 
     def _spokes(self, painter, centre, reach, state) -> None:
         """The bands as rays out of the middle, not a row along the bottom.
@@ -325,6 +405,7 @@ class Oscilloscope(Scene):
 
     def __init__(self) -> None:
         self._decay = 0.28
+        self._plasma = Plasma()
 
     # -- the control ------------------------------------------------------
     @property
@@ -338,6 +419,13 @@ class Oscilloscope(Scene):
     def paint(self, painter, rect, state) -> None:
         painter.fillRect(rect, QColor(2, 8, 4))
         flash = self.flash(state)
+        # A dim field behind the graticule, so the screen looks lit from
+        # within rather than painted on black. Kept faint and tinted
+        # towards the phosphor, because the trace is the subject.
+        painter.save()
+        painter.setOpacity(0.32 + flash * 0.25)
+        self._plasma.paint(painter, rect, state, strength=0.45)
+        painter.restore()
         self._grid(painter, rect, flash)
 
         trace = getattr(state, "trace", None)
@@ -385,7 +473,7 @@ class Oscilloscope(Scene):
         count = len(trace)
         centre = rect.center()
         base = min(rect.width(), rect.height()) * 0.30
-        swing = min(rect.width(), rect.height()) * (0.17 + flash * 0.07)
+        swing = min(rect.width(), rect.height()) * (0.17 + flash * 0.26)
         first = None
         for index, value in enumerate(trace):
             angle = (index / count) * math.tau - math.pi / 2.0
@@ -490,7 +578,7 @@ class Bars(Scene):
                 top = baseline - (step + 1) * block + block * 0.18
                 share = step / self.SEGMENTS
                 if step < lit:
-                    hue = 0.33 - share * 0.33          # green up into red
+                    hue = 0.33 - share * 0.33 - flash * 0.18   # green up into red
                     colour = QColor.fromHsvF(max(0.0, hue), 0.85, 1.0,
                                              0.95 if share < 0.9 else 1.0)
                     if flash > 0.02 and share > 0.72:
@@ -702,7 +790,7 @@ class Meters(Scene):
             # over the top of it.
             glow = QRadialGradient(geometry["pivot"], geometry["radius"] * 1.5)
             tint = QColor(state.dial_colour)
-            tint.setAlphaF(0.20 * flash)
+            tint.setAlphaF(0.55 * flash)
             glow.setColorAt(0.0, tint)
             glow.setColorAt(1.0, QColor(0, 0, 0, 0))
             painter.fillRect(QRectF(0, 0, box.width(), box.height()), glow)
@@ -896,10 +984,16 @@ class Ambience(Scene):
     RIBBONS = 5
     STEPS = 44
 
+    def __init__(self) -> None:
+        self._plasma = Plasma()
+
     def paint(self, painter, rect, state) -> None:
         width, height = rect.width(), rect.height()
         middle = height * 0.5
         painter.fillRect(rect, QColor(3, 2, 8))
+        # The morphing field, behind everything and dim enough that the
+        # ribbons still read as the bright thing.
+        self._plasma.paint(painter, rect, state, strength=0.55)
         levels = state.levels
         if not levels:
             return
@@ -914,7 +1008,7 @@ class Ambience(Scene):
             # Each ribbon listens to its own quarter of the spectrum.
             low = int(share * (len(levels) - 1) * 0.75)
             band = sum(levels[low:low + 4]) / max(1, len(levels[low:low + 4]))
-            reach = middle * (0.18 + band * 0.74 + flash * 0.20)
+            reach = middle * (0.18 + band * 0.74 + flash * 0.55)
             turn = state.phase * (0.7 + ribbon * 0.23)
             shade = (state.hue + share * 0.42 + 0.1) % 1.0
             colour = QColor.fromHsvF(shade, 0.72 - flash * 0.35, 1.0,
@@ -1037,7 +1131,7 @@ class Waterfall(Scene):
         plot_h = (height - foot) * (1.0 - self.SKEW_Y) * 0.80
         origin_x = left
         origin_y = height - foot
-        rise = plot_h * (1.0 + flash * 0.22)
+        rise = plot_h * (1.0 + flash * 0.60)
 
         self._floorplan(painter, rect, origin_x, origin_y, plot_w, flash)
 
