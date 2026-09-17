@@ -275,17 +275,26 @@ class TriageTableModel(QAbstractTableModel):
         return [index for index, other in enumerate(self._items)
                 if other.thread_key == item.thread_key]
 
-    def set_approved(self, rows: Sequence[int], approved: bool) -> int:
+    def set_approved(self, rows: Sequence[int], approved: bool,
+                     only_high_confidence: bool = False) -> int:
         """Tick or untick a set of rows. Returns how many actually changed.
 
         Rows that cannot be actioned - nothing to move them to, or already
         moved - are skipped rather than refused, so a selection that mixes
         the two does the sensible thing with the half that can.
+
+        Every tick in the app comes through here, and every caller passes
+        the rows it means. Ticking used to have a second path that walked
+        the whole mailbox: pressing a button in front of forty job emails
+        silently ticked six hundred more that the filter was hiding, and
+        no amount of looking at the screen would tell you it had happened.
         """
         changed = 0
         for row in rows:
             item = self.item_at(row)
             if item is None or not item.is_actionable:
+                continue
+            if only_high_confidence and not item.is_high_confidence:
                 continue
             if item.approved != approved:
                 item.approved = approved
@@ -295,8 +304,23 @@ class TriageTableModel(QAbstractTableModel):
             self.selectionChanged.emit()
         return changed
 
+    def restore_suggested_rows(self, rows) -> int:
+        """Put particular rows back to what the sorter proposed."""
+        changed = 0
+        for row in rows:
+            item = self.item_at(row)
+            if item is None:
+                continue
+            if item.approved != item.default_approved:
+                item.approved = item.default_approved
+                changed += 1
+        if changed:
+            self._refresh_column(self.COL_SELECT)
+            self.selectionChanged.emit()
+        return changed
+
     def set_all_approved(self, approved: bool, only_high_confidence: bool = False) -> None:
-        """Tick or untick everything, optionally only what the sorter is sure of.
+        """Tick or untick every row in the model, filter or no filter.
 
         "Sure of" means the confidence bar, not ``default_approved``. Those
         are two different questions and conflating them made the button lie:
@@ -305,17 +329,13 @@ class TriageTableModel(QAbstractTableModel):
         button labelled "tick every message the analysis was confident about"
         has asked for it, and a 99%-confident receipt that is on its way to a
         folder is exactly what they meant.
+
+        Nothing the user can press calls this any more - the window passes
+        the rows the table is showing instead. It stays for tests and for
+        code that genuinely means the whole model.
         """
-        if not self._items:
-            return
-        for item in self._items:
-            if not item.is_actionable:
-                continue
-            if only_high_confidence and not item.is_high_confidence:
-                continue
-            item.approved = approved
-        self._refresh_column(self.COL_SELECT)
-        self.selectionChanged.emit()
+        self.set_approved(range(len(self._items)), approved,
+                          only_high_confidence=only_high_confidence)
 
     def reset_to_defaults(self) -> None:
         for item in self._items:

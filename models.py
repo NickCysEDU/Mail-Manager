@@ -152,6 +152,11 @@ COLLAPSED_JOB_LEAF = "Job Search"
 
 #: Root mailbox for filed non-job mail (only used when the user opts in).
 DEFAULT_OTHER_ROOT = "Sorted Mail"
+#: The leaf of the folder rules bin things into. "To Delete" rather than
+#: "Trash": Trash is the server's own, some providers empty it on a
+#: schedule, and mail the app put somewhere should not disappear on a timer
+#: nobody set here.
+BIN_LEAF = "To Delete"
 
 
 class OtherCategory(str, Enum):
@@ -363,6 +368,18 @@ class FolderPlan:
     @property
     def review_folder(self) -> str:
         return self.path(REVIEW_LEAF)
+
+    @property
+    def bin_folder(self) -> str:
+        """Where mail goes when a rule decides it is not worth keeping.
+
+        A folder rather than a delete. Rules are written by people, people
+        write them wrong the first time, and a rule that deleted straight
+        off the server would turn a typo into lost mail. Everything a rule
+        bins is still there to be looked at until somebody empties the
+        folder, and emptying it is one command however much is in it.
+        """
+        return self.other_path(BIN_LEAF)
 
     @property
     def leaf_folders(self) -> Tuple[str, ...]:

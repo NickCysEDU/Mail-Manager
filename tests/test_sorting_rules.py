@@ -121,6 +121,49 @@ class TestRunningThem:
         assert rows[0].override_folder is None
         assert rows[0].approved is False
 
+    def test_binning_points_the_row_at_the_bin_and_ticks_it(self, worker):
+        """One action, both halves. A rule that filed but did not tick
+        looked like it had worked and did nothing when you pressed Apply."""
+        scan = worker(rule(Action("bin_it")))
+        rows = [item()]
+        rows[0].approved = False
+        scan._apply_sorting_rules(rows)
+        assert rows[0].target_folder == rows[0].folders.bin_folder
+        assert rows[0].approved is True
+        assert rows[0].rule_name == "Test rule"
+
+    def test_the_bin_comes_from_the_account_not_the_rule(self, worker):
+        """So one rule works across mailboxes whose roots are named
+        differently, which is why bin_it takes no folder to type."""
+        from dataclasses import replace
+        scan = worker(rule(Action("bin_it")))
+        rows = [item()]
+        rows[0].folders = replace(rows[0].folders, other_root="Filed Away")
+        scan._apply_sorting_rules(rows)
+        assert rows[0].target_folder.startswith("Filed Away")
+
+    def test_leave_beats_bin_it(self, worker):
+        """Later rules win, and "leave it alone" has to mean it."""
+        scan = worker(rule(Action("bin_it")), rule(Action("leave"),
+                                                   name="Second"))
+        rows = [item()]
+        scan._apply_sorting_rules(rows)
+        assert rows[0].override_folder is None
+        assert rows[0].approved is False
+
+    def test_binning_is_a_sorting_action_so_it_runs_after_a_scan(self):
+        assert rule(Action("bin_it")).sorts_only
+
+    def test_nothing_is_deleted_by_a_rule(self, worker):
+        """The bin is a folder. A rule that deleted from the server would
+        turn a mistyped condition into lost mail, with no way back."""
+        scan = worker(rule(Action("bin_it")))
+        rows = [item()]
+        scan._apply_sorting_rules(rows)
+        assert rows[0].moved is False
+        assert "delete" not in rows[0].target_folder.lower() or (
+            rows[0].target_folder.endswith("To Delete"))
+
     def test_a_drafting_rule_never_runs_here(self, worker):
         scan = worker(rule(Action("draft", "Hello there")))
         rows = [item()]

@@ -1213,6 +1213,14 @@ class MainWindow(QMainWindow):
         self.show_combo.addItem("Show: everything", SHOW_ALL)
         self.show_combo.addItem("Show: job mail only", SHOW_JOB_ONLY)
         self.show_combo.addItem("Show: ticked only", SHOW_SELECTED)
+        # Wide enough for its longest entry, popup included. Left to size
+        # itself it elided them, so "Show: job mail only" arrived as
+        # "Show: job mail..." and the menu looked truncated.
+        metrics = self.show_combo.fontMetrics()
+        widest = max(metrics.horizontalAdvance(self.show_combo.itemText(i))
+                     for i in range(self.show_combo.count()))
+        self.show_combo.setMinimumWidth(widest + 46)
+        self.show_combo.view().setMinimumWidth(widest + 28)
         self.show_combo.setCurrentIndex(1 if self.settings.hide_non_job else 0)
         self.show_combo.currentIndexChanged.connect(self._show_filter_changed)
         row.addWidget(self.show_combo)
@@ -1240,21 +1248,20 @@ class MainWindow(QMainWindow):
         row.addWidget(self.columns_button)
         # The table does not exist yet; both menus are filled in once it does.
 
-        self.select_high_button = QPushButton("Tick high confidence")
-        self.select_high_button.setToolTip(
-            "Tick every message the analysis was confident about (⌘⇧A)"
-        )
-        self.select_high_button.clicked.connect(
-            lambda: self.model.set_all_approved(True, only_high_confidence=True)
-        )
-        row.addWidget(self.select_high_button)
-
-        self.deselect_button = QPushButton("Clear ticks")
-        self.deselect_button.setToolTip(
-            "Untick every message. Nothing has moved, so this only changes "
-            "what Apply would do.")
-        self.deselect_button.clicked.connect(lambda: self.model.set_all_approved(False))
-        row.addWidget(self.deselect_button)
+        # One menu rather than two buttons that each did something to every
+        # message in the mailbox regardless of what was on screen. Every
+        # entry here acts on the rows the table is showing, and says so.
+        self.ticks_button = QToolButton()
+        self.ticks_button.setText("Ticks")
+        self.ticks_button.setToolTip(
+            "Tick or untick the rows the table is showing. Nothing has "
+            "moved, so this only changes what Apply would do.")
+        self.ticks_button.setPopupMode(
+            QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.ticks_menu = QMenu(self)
+        self.ticks_button.setMenu(self.ticks_menu)
+        row.addWidget(self.ticks_button)
+        self._build_ticks_menu()
 
         row.addWidget(Spacer(8))
         self.help_button = helpmode.HelpButton()
@@ -1446,6 +1453,53 @@ class MainWindow(QMainWindow):
         self._rebuild_columns_menu()
 
     @Slot()
+    def _shown_rows(self) -> List[int]:
+        """Source rows the table is currently showing, in view order."""
+        proxy = self.proxy
+        return [proxy.mapToSource(proxy.index(row, 0)).row()
+                for row in range(proxy.rowCount())]
+
+    def _ticks(self, what: str) -> None:
+        """Every tick operation, scoped to what is on screen."""
+        rows = self._shown_rows()
+        if what == "all":
+            changed = self.model.set_approved(rows, True)
+            said = f"Ticked {changed} of {len(rows)} shown"
+        elif what == "confident":
+            self.model.set_approved(rows, False)
+            changed = self.model.set_approved(
+                rows, True, only_high_confidence=True)
+            said = f"Ticked {changed} confident of {len(rows)} shown"
+        elif what == "none":
+            changed = self.model.set_approved(rows, False)
+            said = f"Unticked {changed} of {len(rows)} shown"
+        else:
+            changed = self.model.restore_suggested_rows(rows)
+            said = f"Put {changed} of {len(rows)} shown back as suggested"
+        self._set_status(said)
+
+    def _build_ticks_menu(self) -> None:
+        """Written as what it does to what you can see."""
+        self.ticks_menu.clear()
+        for label, what, shortcut in (
+                ("Tick everything shown", "all", "Ctrl+A"),
+                ("Tick only the confident ones shown", "confident",
+                 "Ctrl+Shift+A"),
+                ("Untick everything shown", "none", "Ctrl+D"),
+                (None, None, None),
+                ("Put the suggested ticks back", "suggested", "Ctrl+Shift+R")):
+            if label is None:
+                self.ticks_menu.addSeparator()
+                continue
+            action = QAction(label, self)
+            if shortcut:
+                action.setShortcut(QKeySequence(shortcut))
+                action.setShortcutContext(
+                    Qt.ShortcutContext.ApplicationShortcut)
+                self.addAction(action)
+            action.triggered.connect(lambda _=False, w=what: self._ticks(w))
+            self.ticks_menu.addAction(action)
+
     def _show_filter_changed(self) -> None:
         mode = self.show_combo.currentData()
         self.proxy.set_hide_non_job(mode == SHOW_JOB_ONLY)
@@ -1517,6 +1571,23 @@ class MainWindow(QMainWindow):
         settings_action.triggered.connect(self.open_settings)
         file_menu.addAction(settings_action)
 
+        file_menu.addSeparator()
+
+        clear_action = QAction("Clear out mail…", self)
+        clear_action.setStatusTip(
+            "Delete mail by sender, subject or age - thousands at a time, "
+            "with the count from the server before anything goes.")
+        clear_action.triggered.connect(self._clear_out_mail)
+        file_menu.addAction(clear_action)
+
+        empty_action = QAction("Empty a folder…", self)
+        empty_action.setStatusTip(
+            "Delete everything in one folder on the server in one go, "
+            "rather than a few hundred messages at a time.")
+        empty_action.triggered.connect(self._empty_a_folder)
+        file_menu.addAction(empty_action)
+        file_menu.addSeparator()
+
         quit_action = QAction("&Quit", self)
         quit_action.setShortcut(QKeySequence.StandardKey.Quit)
         quit_action.setMenuRole(QAction.MenuRole.QuitRole)
@@ -1526,18 +1597,18 @@ class MainWindow(QMainWindow):
         file_menu.addAction(quit_action)
 
         edit_menu = menubar.addMenu("&Edit")
-        for label, slot, shortcut in (
-            ("Select all movable", lambda: self.model.set_all_approved(True), "Ctrl+A"),
-            ("Select high confidence only",
-             lambda: (self.model.set_all_approved(False), self.model.set_all_approved(True, True)),
-             "Ctrl+Shift+A"),
-            ("Deselect all", lambda: self.model.set_all_approved(False), "Ctrl+D"),
-            ("Reset to AI suggestions", self.model.reset_to_defaults, None),
+        # The same four things the Ticks button offers, worded the same
+        # way and scoped the same way. They used to act on the whole
+        # mailbox while the button beside them acted on the whole mailbox
+        # too, which is how ticking became impossible to predict.
+        for label, what in (
+            ("Tick everything shown", "all"),
+            ("Tick only the confident ones shown", "confident"),
+            ("Untick everything shown", "none"),
+            ("Put the suggested ticks back", "suggested"),
         ):
             action = QAction(label, self)
-            if shortcut:
-                action.setShortcut(QKeySequence(shortcut))
-            action.triggered.connect(slot)
+            action.triggered.connect(lambda _=False, w=what: self._ticks(w))
             edit_menu.addAction(action)
 
         schedule_menu = menubar.addMenu("&Schedule")
@@ -3288,6 +3359,105 @@ class MainWindow(QMainWindow):
 
     def _forget_visualiser(self) -> None:
         self._visualiser_window = None
+
+    def _clear_out_mail(self) -> None:
+        """Open the window for deleting mail in bulk.
+
+        The rows already on screen go in with it, so the dialog can point out
+        the piles the last scan noticed - but only as suggestions, and only
+        ever as text typed into its filters. What it deletes is what the
+        server matches, counted first and confirmed by number.
+
+        Senders the app has been taught about are handed over as protected.
+        Taking the trouble to correct a sender is the clearest signal anybody
+        gives that their mail matters, and the suggestion list should not
+        then offer to delete it.
+        """
+        from PySide6.QtWidgets import QMessageBox
+
+        from cleanup_dialog import ClearOutDialog
+
+        account = self.settings.primary_account
+        if account is None:
+            QMessageBox.information(
+                self, "No mailbox", "Add a mailbox in Settings first.")
+            return
+        password = self._mailbox_passwords().get(account.id, "")
+        if not password:
+            QMessageBox.information(
+                self, "No password",
+                f"There is no saved password for {account.label}. Add one in "
+                "Settings, then try again.")
+            return
+
+        protected = []
+        try:
+            import corrections
+            protected = [c.sender for c in corrections.Memory.load().entries]
+        except Exception as exc:      # noqa: BLE001 - a missing file, not a stop
+            log.info("Could not read the corrections memory (%s).", exc)
+
+        dialog = ClearOutDialog(account, password,
+                                items=list(getattr(self.model, "items", [])),
+                                protected=protected, parent=self)
+        dialog.cleared.connect(
+            lambda removed: self._set_status(
+                f"Cleared out {removed:,} message(s)."))
+        dialog.exec()
+
+    def _empty_a_folder(self) -> None:
+        """Clear one folder on the server, after saying how many that is.
+
+        Deleting a few thousand messages by hand is a few thousand round
+        trips to the server. This is a handful of commands whatever the
+        number, which is the difference between minutes and seconds.
+
+        Nothing is guessed: the folder is typed or chosen, the count is
+        read back from the server, and the number is in the question.
+        """
+        from PySide6.QtWidgets import QInputDialog, QMessageBox
+
+        account = self.settings.primary_account
+        if account is None:
+            QMessageBox.information(self, "No mailbox",
+                                    "Add a mailbox in Settings first.")
+            return
+        # The bin is offered because it is the one folder that exists to be
+        # emptied: rules put mail there so it can go in one command, and
+        # having to remember its exact path would undo most of the point.
+        plan = self.folder_plan or self.settings.folder_plan()
+        folder, said = QInputDialog.getText(
+            self, "Empty a folder",
+            "Which folder should be emptied?\n"
+            "Everything in it is deleted from the server. The folder stays.",
+            text=plan.bin_folder if plan else "")
+        folder = (folder or "").strip()
+        if not said or not folder:
+            return
+
+        passwords = self._mailbox_passwords()
+        password = passwords.get(account.id, "")
+        answer = QMessageBox.warning(
+            self, "Empty this folder?",
+            f"Everything in “{folder}” on {account.label} will be deleted "
+            "from the server.\n\nThis cannot be undone.",
+            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
+            QMessageBox.StandardButton.Cancel)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        from workers import EmptyFolderWorker
+
+        worker = EmptyFolderWorker(account, password, folder, parent=self)
+        self._empty_worker = worker
+        worker.progress.connect(
+            lambda done, total, text: self._set_status(text))
+        worker.failed.connect(
+            lambda title, detail: QMessageBox.warning(self, title, detail))
+        worker.finished_ok.connect(
+            lambda removed: self._set_status(
+                f"Removed {removed} message(s) from “{folder}”."))
+        worker.start()
 
     def _open_attachments(self, row: int) -> None:
         """Fetch what was attached to one message, then show it.

@@ -13,9 +13,9 @@ cheap enough to run at thirty frames a second beside a mail sorter.
 from __future__ import annotations
 
 import math
-from typing import List
+import time
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt
 from PySide6.QtGui import (QColor, QImage, QLinearGradient, QPainter,
                            QPainterPath,
                            QPen, QRadialGradient)
@@ -70,6 +70,9 @@ class Plasma:
     def __init__(self) -> None:
         self._image = None
         self._countdown = 0
+        self._drift_a = 0.0
+        self._drift_b = 0.0
+        self._drift_c = 0.0
 
     def paint(self, painter, rect, state, strength: float = 1.0) -> None:
         if rect.width() < 4 or rect.height() < 4:
@@ -85,7 +88,15 @@ class Plasma:
             painter.drawImage(rect, self._image)
             return
         self._countdown = self.EVERY
-        phase = state.phase * 1.6
+        # The field used to slide one way at one speed. Three clocks
+        # running at different rates, each turning a wave in a different
+        # direction, make it fold and drift instead - and the music drives
+        # both how fast they run and how deep the folds are, so a loud
+        # passage churns and a quiet one barely moves.
+        pace = 0.55 + state.bass * 1.9 + state.mid * 0.8
+        self._drift_a += 0.016 * pace
+        self._drift_b -= 0.011 * pace + state.high * 0.02
+        self._drift_c += 0.007 * pace
         swell = 0.55 + state.bass * 0.8 + self.flash_of(state) * 0.9
         hue_shift = state.hue
         image = self._image
@@ -95,9 +106,11 @@ class Plasma:
                 x = column / self.COLUMNS
                 # Three waves at angles to each other, which is what makes
                 # the field fold through itself instead of scrolling.
-                value = (math.sin((x * 3.1 + phase) * math.pi)
-                         + math.sin((y * 2.7 - phase * 0.8) * math.pi)
-                         + math.sin(((x + y) * 2.3 + phase * 0.6) * math.pi))
+                # One wave across, one down, one diagonal - each on its
+                # own clock, so no single direction dominates.
+                value = (math.sin((x * 3.1 + self._drift_a) * math.pi)
+                         + math.sin((y * 2.7 + self._drift_b) * math.pi)
+                         + math.sin(((x - y) * 2.3 + self._drift_c) * math.pi))
                 shade = (value / 6.0 + 0.5 + hue_shift) % 1.0
                 level = 0.10 + 0.5 * swell * (0.5 + value / 6.0)
                 image.setPixelColor(column, row, QColor.fromHsvF(
@@ -351,7 +364,10 @@ class Tunnel(Scene):
         count = len(levels)
         if not count:
             return
-        flash = self.flash(state)
+        # The spokes do not take the strobe. They are the bars, and flashing
+        # them at the same moment as the rings and the shockwave made three
+        # things move on one beat, which reads as a mess rather than a hit.
+        flash = 0.0
         painter.setBrush(Qt.BrushStyle.NoBrush)
         for index, value in enumerate(levels):
             angle = (index / count) * math.tau + state.phase * 0.6
@@ -387,20 +403,32 @@ class Oscilloscope(Scene):
     signal - the same samples that are in the file, triggered on a rising
     zero crossing so the trace stands still instead of crawling.
 
-    The persistence is the point. Old traces are kept and drawn fainter,
-    the way a CRT's phosphor keeps glowing after the beam has gone, and how
-    long they last is the decay control. Short reads like a modern digital
-    scope; long smears several cycles together and shows how a sound moves.
+    The persistence is the point, and it is done the way the tube does it
+    rather than the way a drawing program would. There is a screen - an
+    image that survives between frames - and each frame dims what is
+    already on it and lays one new trace over the top. How fast it dims is
+    the decay control. Short reads like a modern digital scope; long smears
+    several cycles together and shows how a sound moves.
+
+    The first version of this kept a list of old traces and redrew all of
+    them every frame, fainter each time. That is a picture of persistence
+    rather than persistence, and it cost what it looked like it cost: at
+    the top of the decay slider, ninety antialiased thousand-point paths a
+    frame, which was around 120ms - eight frames a second on a machine
+    asked for sixty. A screen that fades costs one path a frame at any
+    decay setting, which is why the slider is now free to go anywhere.
     """
 
     name = "Oscilloscope"
     blurb = "the waveform swept round a circle, on a phosphor you can set"
 
-    #: Traces kept at the longest decay. At sixty a second this is about a
-    #: second and a half of history, which is longer than anybody sets it.
-    MAX_HISTORY = 90
-    #: And in X-Y, where every frame is a complete figure.
-    MAX_XY_HISTORY = 6
+    #: How faint a trace is when its decay time is up. Not zero: the decay
+    #: is exponential, like a phosphor's, so "gone" has to be a number.
+    FADED = 0.02
+    #: The longest step the fade will take in one go. Coming back from a
+    #: paused window or a stalled frame, the real gap can be seconds, and
+    #: fading by seconds in one step wipes the screen with a visible jolt.
+    MAX_STEP = 0.25
     #: Seconds of persistence at each end of the slider.
     MIN_DECAY = 0.03
     MAX_DECAY = 1.50
@@ -410,10 +438,31 @@ class Oscilloscope(Scene):
     #: written for a scope expects and what draws the picture in it.
     MODES = ("Sweep", "X-Y")
 
+    #: How far the trace swings either side of the zero ring, as a share
+    #: of that ring's radius. Fixed, so the shape of a trace does not
+    #: depend on anything that changes between frames - which is what
+    #: makes a built path worth keeping.
+    SWING = 0.42
+    #: How much the strobe pumps the gain. The whole figure grows, the way
+    #: a scope's does when you turn the volts per division down, rather
+    #: than only the peaks moving - and a uniform scale is a transform, so
+    #: it costs nothing and does not invalidate a cached path.
+    FLASH_GAIN = 0.03
+
     def __init__(self) -> None:
         self._decay = 0.28
         self._mode = "Sweep"
         self._plasma = Plasma()
+        #: The screen itself: what the beam has drawn and not yet lost.
+        self._screen = None
+        #: When it was last dimmed, so the decay is in seconds rather than
+        #: in frames - the same slider then means the same thing whether
+        #: the window is managing sixty a second or fifteen.
+        self._last = None
+        #: The last trace burned in. A paused track hands the same one
+        #: back every frame, and drawing it again would pile brightness on
+        #: brightness until the screen was a solid disc.
+        self._burned = None
 
     @property
     def mode(self) -> str:
@@ -448,102 +497,191 @@ class Oscilloscope(Scene):
         drawing = self._mode == "X-Y" and vector is not None
         if drawing:
             trace = vector
-            kept = getattr(state, "vector_history", None)
         else:
             trace = getattr(state, "trace", None)
             if trace is None:
                 trace = self._from_levels(state)
-            kept = getattr(state, "trace_history", None)
         if trace is None:
             return
-        self._drawing = drawing
 
-        # How many frames are worth keeping for the decay that is set.
+        # How many real pixels one unit of this rect is worth. The pane
+        # draws big frames into a smaller buffer and stretches them, so
+        # the rect a scene is handed is in logical units that can be
+        # nearly twice the pixels underneath. Sizing the tube from the
+        # rect alone built a 1920-wide screen to be squeezed into a
+        # 1030-wide buffer, which cost the full frame and then threw half
+        # of it away - and was most of what this scene cost.
+        dpr = abs(painter.combinedTransform().m11()) or 1.0
+        screen = self._tube(rect, trace, drawing, flash, dpr)
+        if screen is not None:
+            painter.drawImage(rect, screen, QRectF(screen.rect()))
+
+    # -- the tube ---------------------------------------------------------
+    def _tube(self, rect, trace, drawing: bool, flash: float, dpr: float = 1.0):
+        """Dim what is on the screen, lay the new trace over it, hand it back.
+
+        Everything that makes this cheap is here. The screen is one image
+        that outlives the frame, so however long the phosphor is set to
+        glow, a frame is one fade and one path - not one path per frame of
+        history. The fade is a ``DestinationIn`` fill, which multiplies
+        what is already there by an alpha and touches nothing else, so the
+        graticule and the field behind it stay crisp: they are drawn live,
+        underneath, and never go into the tube at all.
+        """
+        size = QSize(max(0, int(rect.width() * dpr)),
+                     max(0, int(rect.height() * dpr)))
+        if size.width() < 2 or size.height() < 2:
+            return None
+        screen = self._fit(size)
+
+        now = time.monotonic()
+        step = self.MAX_STEP if self._last is None else min(
+            self.MAX_STEP, max(0.0, now - self._last))
+        self._last = now
+
+        # A paused track hands back the trace it handed back last frame.
+        # Neither fading nor redrawing it is right - the picture should
+        # simply sit there - so a repeat is left alone entirely.
+        if trace is self._burned:
+            return screen
+        self._burned = trace
+
+        beam = QPainter(screen)
+        try:
+            beam.setCompositionMode(
+                QPainter.CompositionMode.CompositionMode_DestinationIn)
+            # How much survives this step. Exponential, so the trace is
+            # down to FADED of its brightness after `decay` seconds
+            # whatever the frame rate happens to be.
+            keep = self.FADED ** (step / max(1e-3, self._decay))
+            beam.fillRect(screen.rect(),
+                          QColor(0, 0, 0, max(0, min(255, int(keep * 255)))))
+            beam.setCompositionMode(
+                QPainter.CompositionMode.CompositionMode_SourceOver)
+            beam.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            beam.setBrush(Qt.BrushStyle.NoBrush)
+            self._strike(beam, screen, trace, drawing, flash, dpr)
+        finally:
+            beam.end()
+        return screen
+
+    def _fit(self, size):
+        """The screen at this size, keeping what was on the old one.
+
+        Scaled rather than cleared. Dragging a window edge is a stream of
+        sizes, and starting from black on every one of them means the
+        trace disappears for as long as the drag lasts.
+        """
+        screen = self._screen
+        if screen is not None and screen.size() == size:
+            return screen
+        fresh = QImage(size, QImage.Format.Format_ARGB32_Premultiplied)
+        fresh.fill(Qt.GlobalColor.transparent)
+        if screen is not None and not screen.isNull():
+            copier = QPainter(fresh)
+            try:
+                copier.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform,
+                                     True)
+                copier.drawImage(QRectF(fresh.rect()), screen,
+                                 QRectF(screen.rect()))
+            finally:
+                copier.end()
+        self._screen = fresh
+        return fresh
+
+    def _strike(self, beam, screen, trace, drawing: bool, flash: float,
+                dpr: float = 1.0) -> None:
+        """One pass of the beam: one stroke, and the bloom makes it glow.
+
+        The glow used to be three strokes - a wide translucent green under
+        a narrower one under a hot core - which is a reasonable way to draw
+        a lit phosphor and a bad way to pay for one. A real trace is not a
+        smooth curve: a thousand consecutive samples of music reverse
+        direction constantly, and a wide round-joined pen over a thousand
+        reversals costs four times what the same pen costs over a smooth
+        line. Measured at the size the pane actually draws, the three
+        strokes were 21ms of a 16ms frame, and the widest of them was half
+        of that on its own.
+
+        So the beam is struck once, hot, and the scene's bloom pass turns
+        it into a glow - which is what a bloom is for, and what it was
+        already doing to the old halo anyway.
+        """
+        side = min(screen.width(), screen.height())
         if drawing:
-            # A drawing is a whole picture per frame, and each frame is a
-            # different moment of it. Stacking sixteen of them does not
-            # read as persistence, it reads as a scribble - so X-Y keeps a
-            # handful at most, and the slider chooses between one and six.
-            keep = max(1, min(self.MAX_XY_HISTORY,
-                              int(round(self._decay * 4.0)) + 1))
+            scale = side * (0.44 + flash * 0.08)
         else:
-            keep = max(1, min(self.MAX_HISTORY, int(self._decay * 60.0)))
-        kept = (kept or [list(trace)])[-keep:]
+            scale = side * 0.30 * (1.0 + flash * self.FLASH_GAIN)
+        beam.translate(screen.width() / 2.0, screen.height() / 2.0)
+        beam.scale(scale, scale)
+        path = self._path(trace, drawing)
+        # A figure has detail in it that a fat beam fills in, so X-Y is
+        # struck finer than a sweep.
+        # In the tube's own pixels, so the beam ends up the same thickness
+        # against the graticule however much the pane is shrinking the
+        # frame it draws into.
+        core = ((1.3 if drawing else 1.9) + flash * 1.2) * dpr
+        colour = QColor.fromHsvF(0.34 - flash * 0.08,
+                                 max(0.0, 0.42 - flash * 0.3), 1.0, 0.92)
+        pen = QPen(colour, core, Qt.PenStyle.SolidLine,
+                   Qt.PenCapStyle.FlatCap, Qt.PenJoinStyle.BevelJoin)
+        # In device pixels, so the scale above does not turn a two pixel
+        # beam into a hundred pixel stripe. Bevelled and flat-capped
+        # because a trace made of a thousand short segments has a join at
+        # every one of them, and a round join there is an arc nobody can
+        # see and everybody pays for.
+        pen.setCosmetic(True)
+        beam.setPen(pen)
+        beam.drawPath(path)
 
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        total = len(kept)
-        for age, old in enumerate(kept):
-            # Newest last, so it is drawn over the faded ones.
-            fresh = (age + 1) / total
-            # Squared, because a phosphor does not fade in a straight line.
-            alpha = fresh ** 2.2
-            if alpha < 0.02:
-                continue
-            # A figure has detail in it that a fat beam fills in, so the
-            # X-Y trace is drawn finer than a sweep's.
-            if drawing:
-                width = 0.7 + fresh * fresh * (1.1 + flash * 0.9)
-            else:
-                width = 0.8 + fresh * fresh * (2.4 + flash * 2.6)
-            # The live sweep is near white at its centre and the trail
-            # falls back to a deep phosphor green, which is what makes
-            # persistence read as persistence rather than as many lines.
-            green = QColor.fromHsvF(0.34 - flash * 0.09,
-                                    0.95 - fresh * 0.55 - flash * 0.3,
-                                    0.75 + fresh * 0.25,
-                                    min(1.0, alpha * (0.9 + flash * 0.4)))
-            painter.setPen(QPen(green, width, Qt.PenStyle.SolidLine,
-                                Qt.PenCapStyle.RoundCap,
-                                Qt.PenJoinStyle.RoundJoin))
-            painter.drawPath(self._path(rect, old, state, flash))
+    # -- paths -------------------------------------------------------------
+    def _path(self, trace, drawing: bool):
+        """One trace, in a box that does not depend on the window.
 
-    def _path(self, rect, trace, state, flash):
-        if getattr(self, "_drawing", False):
-            return self._vector_path(rect, trace, flash)
-        return self._sweep_path(rect, trace, state, flash)
+        Built at unit scale so that resizing, and the strobe pumping the
+        gain, are a transform rather than a rebuild.
+        """
+        return self._vector_path(trace) if drawing else self._sweep_path(trace)
 
-    def _vector_path(self, rect, trace, flash):
-        """Left against right, plotted straight.
+    def _vector_path(self, trace):
+        """Left against right, plotted straight, in a unit box.
 
         No trigger and no clock: where the beam is, is what the record
         says. A disc cut for a scope draws a picture here; an ordinary mix
         draws the blob a vectorscope shows, leaning with the stereo image.
         """
         path = QPainterPath()
-        side = min(rect.width(), rect.height()) * (0.44 + flash * 0.08)
-        centre = rect.center()
         count = len(trace) // 2
         # Stored as int16 so a long track's worth fits in memory.
-        scale = side / 32768.0
+        scale = 1.0 / 32768.0
         for index in range(count):
-            x = centre.x() + trace[index * 2] * scale
+            x = trace[index * 2] * scale
             # Screen y grows downwards and a scope's does not.
-            y = centre.y() - trace[index * 2 + 1] * scale
+            y = -trace[index * 2 + 1] * scale
             if index:
                 path.lineTo(x, y)
             else:
                 path.moveTo(x, y)
         return path
 
-    def _sweep_path(self, rect, trace, state, flash):
+    def _sweep_path(self, trace):
         """One sweep, swept around a circle rather than across.
 
         The beam starts at twelve o'clock and goes round once; how far
         the signal is from zero is how far the trace is from the ring.
         A steady tone draws a closed flower, and the trace joins up with
         itself because the capture is triggered on a zero crossing.
+
+        Built with the zero ring at radius one, so the caller scales it to
+        whatever the window is now.
         """
         path = QPainterPath()
         count = len(trace)
-        centre = rect.center()
-        base = min(rect.width(), rect.height()) * 0.30
-        swing = min(rect.width(), rect.height()) * (0.17 + flash * 0.26)
         first = None
         for index, value in enumerate(trace):
             angle = (index / count) * math.tau - math.pi / 2.0
-            reach = base + value * swing
-            point = QPointF(centre.x() + math.cos(angle) * reach,
-                            centre.y() + math.sin(angle) * reach)
+            reach = 1.0 + value * self.SWING
+            point = QPointF(math.cos(angle) * reach, math.sin(angle) * reach)
             if index:
                 path.lineTo(point)
             else:
@@ -927,7 +1065,7 @@ class Meters(Scene):
         span = QRectF(centre.x() - radius, centre.y() - radius,
                       radius * 2, radius * 2)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(colour, max(1.4, radius * 0.030)))
+        painter.setPen(QPen(colour, max(1.2, radius * 0.024)))
         painter.drawArc(span, int(self.START * 16), int(self.SWEEP * 16))
 
         # A small face drops what it cannot show legibly rather than
@@ -939,7 +1077,7 @@ class Meters(Scene):
 
         for _value, fraction in marks:
             self._tick(painter, centre, radius, fraction, colour,
-                       0.88, 1.0, max(1.2, radius * 0.026))
+                       0.86, 1.0, max(1.1, radius * 0.022))
         if roomy:
             painter.setPen(QPen(dim, max(0.8, radius * 0.014)))
             for fraction in self.MINOR:
@@ -947,8 +1085,10 @@ class Meters(Scene):
                            0.94, 1.0, max(0.8, radius * 0.014))
 
         font = painter.font()
-        font.setPointSizeF(max(5.5, radius * 0.155))
-        font.setBold(False)
+        # A shade larger and a little bolder: at forty pixels of radius
+        # thin numbers at five and a half points are a smudge.
+        font.setPointSizeF(max(6.5, radius * 0.175))
+        font.setBold(True)
         painter.setFont(font)
         painter.setPen(QPen(colour))
         for value, fraction in marks:
@@ -1202,7 +1342,11 @@ class Waterfall(Scene):
         plot_h = (height - foot) * (1.0 - self.SKEW_Y) * 0.80
         origin_x = left
         origin_y = height - foot
-        rise = plot_h * (1.0 + flash * 0.60)
+        # The landscape used to rear up on a hit, which moves every ridge
+        # at once and reads as the plot glitching rather than as a beat.
+        # The strobe lights it instead: the floor brightens and the ridges
+        # gain colour, and the geometry stays where it was.
+        rise = plot_h
 
         self._floorplan(painter, rect, origin_x, origin_y, plot_w, flash)
 
@@ -1215,6 +1359,16 @@ class Waterfall(Scene):
             offset_y = back * height * self.SKEW_Y
             count = len(row)
             previous = None
+            # Which bucket the previous segment went into. Neighbouring
+            # bands are nearly always the same loudness, so this is how a
+            # row gets drawn as a handful of joined-up runs instead of
+            # forty-seven separate ones. It is worth doing because a
+            # subpath is stroked with a cap at each end, and forty-seven
+            # of them meant ninety-four round caps per row - measured at
+            # a third of what this scene cost on a big frame, for
+            # something nobody can see: the caps are drawn on top of each
+            # other at the joins.
+            was = None
             for index, value in enumerate(row):
                 x = origin_x + offset_x + plot_w * (index / max(1, count - 1))
                 y = origin_y - offset_y - value * rise
@@ -1223,7 +1377,8 @@ class Waterfall(Scene):
                     bucket = min(len(self.SHADES) - 1,
                                  int(value * len(self.SHADES)))
                     path = buckets[bucket]
-                    path.moveTo(previous)
+                    if bucket != was:
+                        path.moveTo(previous)
                     # A curve between the two, with the control points
                     # level with each end. Straight segments made every
                     # ridge a zig-zag; this rounds the peaks the way a
@@ -1231,6 +1386,7 @@ class Waterfall(Scene):
                     half = (previous.x() + here.x()) * 0.5
                     path.cubicTo(QPointF(half, previous.y()),
                                  QPointF(half, here.y()), here)
+                    was = bucket
                 previous = here
 
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -1239,9 +1395,15 @@ class Waterfall(Scene):
                 continue
             hue, value = self.SHADES[index]
             share = index / max(1, len(self.SHADES) - 1)
-            colour = QColor.fromHsvF(hue, 0.85 - flash * 0.45, value,
-                                     0.35 + share * 0.55 + flash * 0.15)
-            painter.setPen(QPen(colour, 1.0 + share * 1.4 + flash * 1.2,
+            colour = QColor.fromHsvF(hue, 0.85 - flash * 0.5, value,
+                                     min(1.0, 0.35 + share * 0.55
+                                         + flash * 0.45))
+            # The strobe used to add more than a pixel to every ridge at
+            # once, which is the whole plot drawn wider on the beat: the
+            # frames that hit cost twice what the quiet ones did, and they
+            # are exactly the frames nobody wants to see stutter. It
+            # brightens instead, above, which costs nothing.
+            painter.setPen(QPen(colour, 1.0 + share * 1.4 + flash * 0.4,
                                 Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
                                 Qt.PenJoinStyle.RoundJoin))
             painter.drawPath(path)

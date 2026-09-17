@@ -42,6 +42,8 @@ want, and it does the whole job on your Mac unless you tell it otherwise.
 - **It creates its own folders.** You do not touch Mail.
 - **Read-only until you say otherwise.** Messages are fetched with `BODY.PEEK`,
   so nothing is marked as read.
+- **And it will clear the rest out.** Deleting thousands of messages by sender,
+  subject or age takes a handful of commands rather than a round trip each.
 
 ## Install
 
@@ -294,6 +296,7 @@ pattern, is at least...). A rule matches on **all** conditions or **any**.
 | Draft a reply with the model | Hands the message to the model with your guidance |
 | File it into a folder | Points the row at a folder; nothing moves until Apply |
 | Tick it / Leave it unticked | Sets the checkbox, so Apply picks it up or skips it |
+| Put it in the To Delete folder | Points the row at `To Delete` and ticks it. Nothing is deleted until you empty that folder |
 | Mark it as read | `\Seen` on the server |
 | Flag it | `\Flagged` on the server |
 | Leave it where it is | Cancels any filing an earlier rule asked for |
@@ -354,7 +357,7 @@ them. **Attachments** opens them.
 | | |
 |---|---|
 | **Images** | Any format Qt decodes. Fit, Fill, 100%, 200%, 400%, and Copy image |
-| **Audio** | Play, seek, volume, cover art, tags, and a spectrum that follows the music |
+| **Audio** | Play, seek, volume, cover art, tags |
 | **PDF** | Fit width, whole page or actual size |
 | **Text** | Wrap on or off, five font sizes |
 | **Anything else** | Described, and saved if you want it |
@@ -367,19 +370,7 @@ Space plays and pauses, the arrow keys move between attachments and scrub
 five seconds, Cmd-S saves, Cmd-I is Info. The window sits beside the main one
 rather than on top of it, so the app can still be quit while it is open.
 
-Press play on a sound file and a visualiser rises into view. The bars are a
-real equaliser: twenty-four third-octave bands from 50 Hz to 10 kHz, on a
-decibel scale, normalised to the track so a quiet recording fills the display
-like a loud one. A tone lands in its own band, and there is a test that says so.
-
-Four themes to pick from - a vaporwave city whose skyline is the equaliser, a
-neon tunnel, an oscilloscope, and the bars on their own with their
-frequencies written under them. Strobe is a checkbox, off by default. Full
-screen is a button, Escape comes back.
-
-Pause and it keeps breathing; leave it and it flows away after thirty
-seconds. Between a third of a millisecond and three and a half a frame
-depending on the theme, and nothing at all when nothing is playing.
+Sound files have something else in them. Press play and see.
 
 **Only the part you open is downloaded.** Listing costs about a fifth of a
 second; a six megabyte message used to cost six megabytes to see the first
@@ -403,6 +394,34 @@ deliberate:
 
 Saved files get the quarantine flag a download gets, and a name that exists
 becomes `report (2).pdf` rather than overwriting anything.
+
+## Clearing out a full mailbox
+
+**File → Clear out mail…** Deleting four thousand messages a page at a time is
+slow because each one is a round trip to the server. This asks the server for
+the ones that match, then flags a hundred at a time and expunges. A mailbox of
+five thousand is about a hundred commands rather than five thousand.
+
+Pick a folder, then narrow it: senders (an address, or a domain for everyone at
+it), words in the subject, older than so many days, only mail you have already
+read, only mail sent to a list. Down the left are piles the last scan noticed -
+the sender you have four hundred newsletters from - and ticking one fills the
+filters in. They are suggestions and nothing more; job mail is never among
+them, nor is anything from a sender you have corrected the app about, nor
+receipts, bank mail or security notices.
+
+Then **Count**. The number comes back from the server, against exactly the
+filters the delete will use, and the Delete button is dead until it does -
+and dead again the moment you change anything, because a count that was true
+about a different question is worse than no count. The confirmation names the
+folder, the filters and the number, and so does the button in it.
+
+**File → Empty a folder…** does the whole folder in one go, and offers the
+`To Delete` folder by default, because that is the folder that exists to be
+emptied: a rule that bins something puts it there rather than deleting it, so a
+mistyped rule costs you a folder to look through rather than your mail.
+
+This talks to the server, and deletion on IMAP is permanent. There is no undo.
 
 ## Undo
 
@@ -519,7 +538,7 @@ notice, and contribution terms.
 
 ```bash
 ./dev demo      # the app with sample mail, no setup
-./dev test      # 2,836 tests, about three minutes on four workers
+./dev test      # 2,893 tests, about three minutes on four workers
 ./dev eval      # sorter accuracy (needs a labelled set of your own)
 ./dev fake      # the whole pipeline in the terminal, offline
 ```

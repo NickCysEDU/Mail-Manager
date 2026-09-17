@@ -93,6 +93,9 @@ ACTION_HELP: Dict[str, str] = {
     "untick": "Unticks the row, so Apply will skip it.",
     "mark_read": "Marks it read on the server, straight away.",
     "flag": "Flags it on the server, straight away.",
+    "bin_it": "Points the row at the To Delete folder and ticks it, so "
+              "Apply moves it there. Nothing is deleted until you empty "
+              "that folder yourself.",
     "leave": "Cancels any folder an earlier rule chose for it.",
     "stop": "Skips every later rule for this message.",
 }
@@ -502,6 +505,7 @@ ACTION_KINDS: Tuple[Tuple[str, str, str], ...] = (
     ("file_into", "File it into a folder", "folder"),
     ("tick", "Tick it, ready to file", "none"),
     ("untick", "Leave it unticked", "none"),
+    ("bin_it", "Put it in the To Delete folder", "none"),
     ("mark_read", "Mark it as read", "none"),
     ("flag", "Flag it", "none"),
     ("leave", "Leave it where it is", "none"),
@@ -593,7 +597,8 @@ class Rule:
     #: Actions that only rearrange the table. They need no network, write
     #: nothing to the server, and can therefore run at the end of every scan
     #: rather than waiting for somebody to ask for replies.
-    SORTING_ACTIONS = frozenset({"file_into", "tick", "untick", "leave", "stop"})
+    SORTING_ACTIONS = frozenset({"file_into", "tick", "untick", "bin_it",
+                                 "leave", "stop"})
 
     # -- what it is -------------------------------------------------------
     @property
@@ -807,6 +812,11 @@ class Outcome:
     mark_read: bool = False
     flag: bool = False
     leave: bool = False
+    #: Send it to the To Delete folder. Kept apart from ``file_into``
+    #: because the folder is not known here - it depends on the account's
+    #: folder plan - and because the caller needs to be able to tell "a rule
+    #: chose a folder" from "a rule gave up on this message".
+    bin_it: bool = False
 
     @property
     def rule_name(self) -> str:
@@ -820,7 +830,7 @@ class Outcome:
     @property
     def does_anything(self) -> bool:
         return bool(self.draft or self.file_into or self.tick is not None
-                    or self.mark_read or self.flag or self.leave)
+                    or self.mark_read or self.flag or self.leave or self.bin_it)
 
     def describe(self) -> str:
         parts = []
@@ -828,6 +838,8 @@ class Outcome:
             parts.append("draft a reply")
         if self.leave:
             parts.append("leave it where it is")
+        elif self.bin_it:
+            parts.append("put it in To Delete")
         elif self.file_into:
             parts.append(f"file into {self.file_into}")
         if self.tick is True:
@@ -870,6 +882,10 @@ def apply_rules(rules: Sequence[Rule], message, classification, me: str = "",
             elif kind == "file_into":
                 outcome.file_into = action.value.strip()
                 outcome.leave = False
+            elif kind == "bin_it":
+                outcome.bin_it = True
+                outcome.tick = True
+                outcome.leave = False
             elif kind == "tick":
                 outcome.tick = True
             elif kind == "untick":
@@ -881,6 +897,11 @@ def apply_rules(rules: Sequence[Rule], message, classification, me: str = "",
             elif kind == "leave":
                 outcome.leave = True
                 outcome.file_into = ""
+                outcome.bin_it = False
+                # Not just "do not file it": a tick an earlier rule put
+                # there would otherwise survive and Apply would move the
+                # message anyway, which is the opposite of what this says.
+                outcome.tick = False
             elif kind == "stop":
                 stop = True
         if stop:
