@@ -20,6 +20,7 @@ import math
 from typing import List, Optional
 
 import math as _math
+import time as _time
 
 import visualizers
 
@@ -208,6 +209,15 @@ class Spectrum(QWidget):
     #: it the scene is drawn into a smaller buffer and stretched, because
     #: antialiased strokes are charged by area and a full screen of them
     #: does not fit in a sixtieth of a second.
+    #:
+    #: It is a floor, not the rule: a scene that says it can afford more
+    #: gets more (``Scene.sharp_pixels``). The dials are the case that
+    #: made this necessary - their faces are drawn once into a pixmap and
+    #: blitted after that, so they cost almost nothing per frame, and
+    #: putting them through a budget set for scenes that stroke thousands
+    #: of curves meant a screenful of instrument panels rendered at half
+    #: size and stretched, with every number softened for no saving at
+    #: all.
     SHARP_PIXELS = 600_000
 
     #: Which bands feed which aggregate, as fractions of the band count.
@@ -231,6 +241,10 @@ class Spectrum(QWidget):
         self._last_bass = 0.0
         self._dial_frames: List = []
         self._dial_level: List[float] = []
+        #: How fast each needle is moving, and when it last moved. A
+        #: movement with no momentum is a bar graph.
+        self._dial_speed: List[float] = []
+        self._dial_clock = None
         #: Which frequency each meter reads. Chosen by the user; starts at
         #: the ten from the photograph the scene was copied from.
         self._dial_centres = None
@@ -267,6 +281,12 @@ class Spectrum(QWidget):
         self._settle = 0.0
         self._last_watched = 0.0
         self._since_hit = 99
+        #: The beats found before playback started, one map per source.
+        self._beats: dict = {}
+        #: How far through the map the playhead has got, so each frame
+        #: only looks at what has happened since the last one.
+        self._beat_at = 0
+        self._beat_seen = -1.0
         self._timer = QTimer(self)
         # Sixty a second. Every scene paints in well under a frame at
         # 1080p, so the limit is the display rather than the drawing.
@@ -364,6 +384,16 @@ class Spectrum(QWidget):
     #: What the strobe can be told to listen to.
     STROBE_SOURCES = ("Bass", "Mids", "Treble", "Synths")
 
+    def set_beats(self, maps) -> None:
+        """The beat maps the analysis found, one per thing to listen to."""
+        self._beats = dict(maps or {})
+        self._beat_at = 0
+        self._beat_seen = -1.0
+
+    def beat_map(self):
+        """The map for whatever the strobe is listening to now."""
+        return self._beats.get(self._strobe_source)
+
     def set_strobe_source(self, name: str) -> None:
         """Which part of the sound sets the strobe off."""
         if name in self.STROBE_SOURCES:
@@ -427,6 +457,7 @@ class Spectrum(QWidget):
         centres = self._dial_centres or attachment_audio.DIAL_CENTRES
         self._dial_frames = attachment_audio.regroup(self._frames, centres)
         self._dial_level = [0.0] * len(centres)
+        self._dial_speed = [0.0] * len(centres)
         self._state.dial_labels = [_hz_label(c) for c in centres]
 
     def set_colours(self, dial=None, background=None) -> None:
@@ -753,12 +784,9 @@ class Spectrum(QWidget):
         # is allowed to.
         watched = {"Bass": bass, "Mids": state.mid, "Treble": high,
                    "Synths": state.synth}.get(self._strobe_source, bass)
-        jump = 0.40 - self._strobe_sense * 0.39    # 0.40 fussy, 0.01 eager
-        wait = int(75 - self._strobe_rate * 73)    # frames before the next
         self._since_hit += 1
-        if watched - self._last_watched > jump and self._since_hit >= wait:
-            state.hit = 1.0
-            self._since_hit = 0
+        if not self._fire_from_the_map(state):
+            self._fire_from_the_frame(state, watched)
         self._last_watched = watched
         self._last_bass = bass
 
@@ -788,18 +816,10 @@ class Spectrum(QWidget):
         if self._dial_frames and not self._idling:
             exact = self._position / 1000.0 * self._rate
             index = min(len(self._dial_frames) - 1, max(0, int(exact)))
-            wanted = self._dial_frames[index]
-            for i, value in enumerate(wanted):
-                if i >= len(self._dial_level):
-                    break
-                current = self._dial_level[i]
-                # A moving coil has mass: quick to rise, slow to fall back.
-                self._dial_level[i] = (value if value > current
-                                       else current * 0.86 + value * 0.14)
+            self._swing(self._dial_frames[index])
         elif self._idling and self._dial_level:
-            for i in range(len(self._dial_level)):
-                self._dial_level[i] = (0.10 + 0.08 * _math.sin(
-                    self._drift * 1.6 + i * 0.6)) 
+            self._swing([0.10 + 0.08 * _math.sin(self._drift * 1.6 + i * 0.6)
+                         for i in range(len(self._dial_level))])
         state.dials = self._dial_level
 
         for spark in self._sparks:
@@ -810,6 +830,124 @@ class Spectrum(QWidget):
             spark[3] += 0.045
             spark[4] -= 0.028
         self.update()
+
+    #: What a VU movement does, as the standard describes it: 300ms to
+    #: reach 99% of a step, and a percent or so of overshoot on the way.
+    #: Modelled rather than eyeballed because those two numbers are the
+    #: whole character of the instrument - it is a mass on a spring in a
+    #: magnetic field, and anything that snaps to its reading is a bar
+    #: graph wearing a needle.
+    VU_SECONDS = 0.30
+    #: Damping, chosen for that overshoot rather than picked by eye:
+    #: exp(-pi*z/sqrt(1-z*z)) is how far a second-order system goes past
+    #: its target, and 0.83 puts that at one per cent. Softer damping
+    #: looks livelier and is wrong - at 0.62 the needle sails eight per
+    #: cent past every reading and slaps the zero pin on the way down.
+    VU_DAMPING = 0.83
+
+    def _swing(self, wanted) -> None:
+        """Move every needle towards its reading, the way a coil moves.
+
+        The old rule was "instant up, slow down". Up being instant is what
+        made this jumpy: a band that jumps ten decibels between one frame
+        and the next threw the needle across the face in a single frame,
+        which no meter has ever done. Here it accelerates towards the
+        reading and is slowed in proportion to how fast it is already
+        going, so it arrives, overshoots very slightly, and settles.
+        """
+        now = _time.monotonic()
+        # One frame on the first call. Taking the whole settling time
+        # there put every needle at its reading before anybody saw it
+        # move, which is the thing this exists to stop.
+        step = (1.0 / 60.0 if self._dial_clock is None
+                else min(0.1, max(0.0, now - self._dial_clock)))
+        self._dial_clock = now
+        if step <= 0.0:
+            return
+        # 4.6 / (zeta * omega) is the time to settle inside one per cent.
+        omega = 4.6 / (self.VU_DAMPING * self.VU_SECONDS)
+        if len(self._dial_speed) != len(self._dial_level):
+            self._dial_speed = [0.0] * len(self._dial_level)
+        # Several small steps rather than one big one when a frame runs
+        # late: the simple integrator below is only stable while the step
+        # is short against the swing, and a stalled window would otherwise
+        # throw the needles off the face.
+        slices = max(1, int(step / 0.02) + 1)
+        piece = step / slices
+        for index in range(len(self._dial_level)):
+            target = wanted[index] if index < len(wanted) else 0.0
+            here = self._dial_level[index]
+            speed = self._dial_speed[index]
+            for _ in range(slices):
+                speed += (omega * omega * (target - here)
+                          - 2.0 * self.VU_DAMPING * omega * speed) * piece
+                here += speed * piece
+            # Off the end of the scale is a reading, not a position: a real
+            # needle stops against the pin rather than leaving the face.
+            if here < 0.0:
+                here, speed = 0.0, max(0.0, speed)
+            elif here > 1.15:
+                here, speed = 1.15, min(0.0, speed)
+            self._dial_level[index] = here
+            self._dial_speed[index] = speed
+
+    def _fire_from_the_map(self, state) -> bool:
+        """Flash because a beat is due. Returns whether the map was used.
+
+        The map is the whole track's beats, found before anything played,
+        so this is not detection - it is a lookup against the playhead.
+        That is what makes it steady: the flash lands on the beat rather
+        than a frame or two after whatever transient set it off, and a bar
+        where the drummer left a gap is still lit, because the grid
+        carries on through it.
+
+        Sensitivity picks how hard a beat has to have been hit before it
+        counts, and rate sets how close together flashes may come. Both
+        act on a list of known beats rather than on a threshold, so
+        turning one down thins the lighting instead of switching it off.
+        """
+        found = self._beats.get(self._strobe_source)
+        beats = getattr(found, "beats", ())
+        if not beats:
+            return False
+        now = self._position / 1000.0
+        # A seek, either way, means starting again from where the playhead
+        # landed rather than walking there one beat at a time.
+        if now < self._beat_seen or now - self._beat_seen > 1.0:
+            import beatmap
+            nxt = beatmap.next_after(beats, now)
+            self._beat_at = beats.index(nxt) if nxt is not None else len(beats)
+            self._beat_seen = now
+            return True
+        floor = 0.06 + (1.0 - self._strobe_sense) * 0.72
+        gap = 0.08 + (1.0 - self._strobe_rate) * 1.60
+        while (self._beat_at < len(beats)
+               and beats[self._beat_at].at <= now):
+            beat = beats[self._beat_at]
+            self._beat_at += 1
+            if beat.strength < floor:
+                continue
+            if self._since_hit / 60.0 < gap:
+                continue
+            state.hit = min(1.0, 0.55 + beat.strength * 0.45)
+            self._since_hit = 0
+        self._beat_seen = now
+        return True
+
+    def _fire_from_the_frame(self, state, watched: float) -> None:
+        """Flash on a jump in one band, for when there is no map yet.
+
+        This is what the strobe used to be, and it is kept for the seconds
+        before the analysis finishes and for anything it could not read.
+        It cannot be consistent - the threshold is an absolute number, so
+        a quiet track never reaches it and a loud one is always past it -
+        which is why it is now the fallback rather than the mechanism.
+        """
+        jump = 0.40 - self._strobe_sense * 0.39    # 0.40 fussy, 0.01 eager
+        wait = int(75 - self._strobe_rate * 73)    # frames before the next
+        if watched - self._last_watched > jump and self._since_hit >= wait:
+            state.hit = 1.0
+            self._since_hit = 0
 
     def _spawn(self, count: int) -> None:
         width = max(1, self.width())
@@ -897,8 +1035,10 @@ class Spectrum(QWidget):
         # physical frame is four times the logical one, and a half-scale
         # floor left the buffer at nearly three times the target however
         # low the target was set.
-        shrink = 1.0 if pixels <= self.SHARP_PIXELS else max(
-            0.20, (self.SHARP_PIXELS / pixels) ** 0.5)
+        budget = max(self.SHARP_PIXELS,
+                     int(getattr(self._scene, "sharp_pixels", 0) or 0))
+        shrink = 1.0 if pixels <= budget else max(
+            0.20, (budget / pixels) ** 0.5)
         if (not recipe and shrink >= 0.999) or rect.width() < 8.0 or rect.height() < 8.0:
             self._scene.paint(painter, rect, self._state)
             return

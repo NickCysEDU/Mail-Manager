@@ -52,7 +52,11 @@ FIELDS: Tuple[Tuple[str, str, str], ...] = (
     ("age_days", "Age in days", "number"),
     ("is_bulk", "Bulk mail", "flag"),
     ("has_attachment", "Has an attachment", "flag"),
+    ("attachment_name", "Attachment's name", "text"),
     ("is_reply", "Is a reply", "flag"),
+    ("recipients", "Who it was sent to", "text"),
+    ("to_me_directly", "Addressed to me", "flag"),
+    ("is_automated", "Sent by a machine", "flag"),
 )
 _FIELD_KIND = {name: kind for name, _label, kind in FIELDS}
 
@@ -76,6 +80,18 @@ FIELD_HELP: Dict[str, str] = {
                "or the internal id.",
     "age_days": "How long ago it arrived, counted from now rather than from "
                 "the start of the scan.",
+    "attachment_name": "The filenames of anything attached, joined "
+                       "together. Use “contains” with an extension to catch "
+                       "a kind of file.",
+    "recipients": "The To line as it arrived, so a rule can tell mail sent "
+                  "to you from mail sent to a list you are on.",
+    "to_me_directly": "Whether your own address is in the To line rather "
+                      "than only in Cc, or nowhere at all because the "
+                      "message went to a list.",
+    "is_automated": "Whether this came from a machine: a no-reply address, "
+                    "a bounce, a mailer daemon, or a message carrying the "
+                    "headers a robot sets. Nothing that answers to this "
+                    "can be replied to usefully.",
     "is_bulk": "Whether it carries an unsubscribe header: a newsletter, a "
                "mailing list, a marketing send.",
     "has_attachment": "Whether anything was attached.",
@@ -419,6 +435,18 @@ class Condition:
             return bool(message.attachments)
         if self.field == "is_reply":
             return (message.subject or "").strip()[:3].lower() == "re:"
+        if self.field == "attachment_name":
+            return " ".join(message.attachments or ())
+        if self.field == "recipients":
+            return message.to or ""
+        if self.field == "to_me_directly":
+            me = ((context or {}).get("me")
+                  or message.account_address or "").strip().lower()
+            if not me:
+                return False
+            return me in (message.to or "").lower()
+        if self.field == "is_automated":
+            return is_automated(message)
         return ""
 
     def matches(self, message, classification, context=None) -> bool:
@@ -559,6 +587,63 @@ class Action:
         known = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in (raw or {}).items() if k in known})
 
+#: Local parts that are never a person. Mail from any of these is a
+#: machine talking, and drafting an answer to it is at best noise and at
+#: worst a loop: two autoresponders can keep each other busy for as long
+#: as the mail server lets them.
+ROBOT_NAMES = frozenset({
+    "no-reply", "noreply", "no_reply", "donotreply", "do-not-reply",
+    "do_not_reply", "mailer-daemon", "mailerdaemon", "postmaster",
+    "bounce", "bounces", "notification", "notifications", "automated",
+    "auto-reply", "autoreply", "root", "daemon", "nobody",
+})
+
+#: Headers a machine sets on its own mail. RFC 3834 exists precisely so
+#: that an autoresponder can recognise another autoresponder and shut up;
+#: honouring it is the difference between a reply feature and an outage.
+ROBOT_HEADERS = (
+    ("auto_submitted", lambda v: v.strip().lower() not in ("", "no")),
+    ("precedence", lambda v: v.strip().lower() in ("bulk", "list", "junk")),
+    ("x_auto_response_suppress", lambda v: bool(v.strip())),
+)
+
+
+def is_automated(message) -> bool:
+    """Whether a machine sent this, by address or by header.
+
+    Checked before anything is drafted, whatever the rule says, and not
+    offered as an option to turn off. An autoresponder that answers a
+    bounce produces another bounce, and the loop only stops when somebody
+    notices - which, for mail that is written to Drafts rather than sent,
+    means a Drafts folder with four hundred things in it.
+    """
+    address = (getattr(message, "sender_email", "") or "").strip().lower()
+    local = address.rpartition("@")[0] or address
+    if local in ROBOT_NAMES:
+        return True
+    # Hyphenated variants: "no-reply-1234@" and "bounces+tag@" are the
+    # same senders wearing a tag, which is how most senders do it.
+    stem = local.split("+", 1)[0]
+    if stem in ROBOT_NAMES:
+        return True
+    for prefix in ("no-reply", "noreply", "donotreply", "mailer-daemon",
+                   "bounce"):
+        if not stem.startswith(prefix):
+            continue
+        rest = stem[len(prefix):]
+        # A boundary, not just a prefix. "no-reply-4821@" and "noreply.2@"
+        # are the same sender with a tag on it; "noreplygroup@" is a word
+        # that happens to start the same way, and a mailing list called
+        # that is full of people.
+        if not rest or rest[0] in "-_.0123456789":
+            return True
+    for attribute, says_yes in ROBOT_HEADERS:
+        value = getattr(message, attribute, "") or ""
+        if value and says_yes(str(value)):
+            return True
+    return False
+
+
 @dataclass
 class Rule:
     """When these conditions hold, do these things.
@@ -579,10 +664,33 @@ class Rule:
     skip_bulk: bool = True
     #: Stop looking at later rules once this one has matched.
     stop_after: bool = False
+    #: Draft to the same sender at most once in this many days. Zero means
+    #: no limit. The single most important setting on an autoresponder:
+    #: without it, somebody who writes four times in a morning gets four
+    #: identical drafts, and a mailing list you are on gets one per post.
+    once_per_sender_days: int = 0
+    #: The hours of the day this rule may draft in, as (from, to) on a
+    #: 24-hour clock. (0, 24) means any time. Replies written at three in
+    #: the morning are read as three in the morning, and a rule that files
+    #: mail has no business being limited this way - so this only gates
+    #: the actions that write something.
+    active_from: int = 0
+    active_to: int = 24
+    #: Days of the week it may draft on, Monday is 0. Empty means any.
+    active_days: Tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         self.name = (self.name or "").strip() or "New rule"
         self.match = "any" if str(self.match).lower() == "any" else "all"
+        self.once_per_sender_days = max(0, int(self.once_per_sender_days or 0))
+        self.active_from = max(0, min(24, int(self.active_from or 0)))
+        self.active_to = max(0, min(24, int(self.active_to or 24)))
+        if self.active_to <= self.active_from:
+            # A window that ends before it starts would never open. Nobody
+            # means that, so it reads as "any time" rather than "never".
+            self.active_from, self.active_to = 0, 24
+        self.active_days = tuple(sorted(
+            {int(d) for d in (self.active_days or ()) if 0 <= int(d) <= 6}))
         self.conditions = [
             c if isinstance(c, Condition) else Condition.from_dict(c)
             for c in (self.conditions or []) if isinstance(c, (Condition, Mapping))
@@ -663,6 +771,43 @@ class Rule:
         # in lower case like the rest of them.
         said = missed.describe()
         return False, f"{said[0].lower()}{said[1:]} did not hold"
+
+    # -- may this one write anything just now ------------------------------
+    def may_draft(self, message, context=None) -> Tuple[bool, str]:
+        """Whether this rule is allowed to draft for this message now.
+
+        Kept apart from :meth:`matches` on purpose. Matching is about the
+        message; this is about everything else - whether a machine sent
+        it, whether this person was already written to, whether it is the
+        middle of the night. A rule can match perfectly and still have
+        nothing to say, and the reason is worth having in words, because
+        "why did it not reply" is the question people actually ask.
+
+        Only drafting is gated. A rule that files a message into a folder
+        has not spoken to anybody, and holding that until nine in the
+        morning would be a bug rather than a courtesy.
+        """
+        context = context or {}
+        if is_automated(message):
+            return False, ("it was sent by a machine, and answering one is "
+                           "how mail loops start")
+        now = context.get("now") or datetime.now(timezone.utc)
+        local = now.astimezone()
+        if self.active_days and local.weekday() not in self.active_days:
+            return False, f"this rule does not draft on {local:%A}s"
+        if not (self.active_from <= local.hour < self.active_to):
+            return False, (f"this rule only drafts between "
+                           f"{self.active_from:02d}:00 and "
+                           f"{self.active_to:02d}:00")
+        log = context.get("reply_log")
+        if log is not None and self.once_per_sender_days:
+            address = getattr(message, "sender_email", "") or ""
+            if log.too_soon(address, self.name,
+                            self.once_per_sender_days, now):
+                days = self.once_per_sender_days
+                return False, (f"this rule already wrote to them inside the "
+                               f"last {days} day{'' if days == 1 else 's'}")
+        return True, ""
 
     def problems(self) -> List[str]:
         """Everything wrong with this rule, in words, worst first.
@@ -812,6 +957,15 @@ class Outcome:
     mark_read: bool = False
     flag: bool = False
     leave: bool = False
+    #: Why a draft was not written, when a rule matched but was held back.
+    #: Kept so the window can say "it matched, and here is why it said
+    #: nothing" rather than looking as though the rule simply failed.
+    held: List[str] = field(default_factory=list)
+    #: Which rule wrote the draft, and who it is addressed to, so the
+    #: reply log can be told after the draft is actually saved rather
+    #: than when it was composed.
+    drafted_by: str = ""
+    drafted_to: str = ""
     #: Send it to the To Delete folder. Kept apart from ``file_into``
     #: because the folder is not known here - it depends on the account's
     #: folder plan - and because the caller needs to be able to tell "a rule
@@ -872,13 +1026,21 @@ def apply_rules(rules: Sequence[Rule], message, classification, me: str = "",
             continue
         outcome.rule_names.append(rule.name)
         stop = rule.stop_after
+        may_draft, why_not = rule.may_draft(message, context)
         for action in rule.actions:
             kind = action.kind
             if kind in ("draft", "draft_ai"):
+                if not may_draft:
+                    if why_not not in outcome.held:
+                        outcome.held.append(why_not)
+                    continue
                 if outcome.draft is None:
                     outcome.draft = draft_for(
                         rule, message, classification, me,
                         engine if kind == "draft_ai" else None, action)
+                    outcome.drafted_by = rule.name
+                    outcome.drafted_to = (
+                        getattr(message, "sender_email", "") or "")
             elif kind == "file_into":
                 outcome.file_into = action.value.strip()
                 outcome.leave = False
@@ -906,7 +1068,13 @@ def apply_rules(rules: Sequence[Rule], message, classification, me: str = "",
                 stop = True
         if stop:
             break
-    return outcome if outcome.does_anything else None
+    # Held reasons count as something to say. A rule that matched and then
+    # kept quiet looks identical to a rule that did not match, from
+    # outside, and they mean opposite things - "why did it not reply" is
+    # the question people actually ask about this feature.
+    if outcome.does_anything or outcome.held:
+        return outcome
+    return None
 
 
 SYSTEM_PROMPT = """\

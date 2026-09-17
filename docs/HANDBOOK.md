@@ -745,7 +745,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 2,900 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,003 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1065,6 +1065,10 @@ in the [README](../README.md).
 | `pipeline.py` | The producer/consumer pair that lets fetching and classifying overlap |
 | `verdict_cache.py` | Verdicts kept between scans, keyed on mailbox, UID and a settings hash |
 | `corrections.py` | What the app has learned from being corrected, and when it may act on it |
+| `briefing.py` | A scan read back as a briefing: what needs you, what arrived, where it is going |
+| `reply_log.py` | Who has already been written to, so a rule does not write to them twice |
+| `briefing_dialog.py` | That briefing on screen, with the flagged messages clickable |
+| `beatmap.py` | Where the beats are, found once before playback so the strobe can sit on them |
 | `cleanup.py` | What to clear out, as terms a server answers in one command, and the piles worth offering |
 | `cleanup_dialog.py` | The window for it: count from the server first, delete only what was counted |
 | `conversations.py` | Threading: which messages are the same conversation |
@@ -1101,7 +1105,7 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 2,900 tests, about three minutes
+./dev test        # 3,003 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```
@@ -1119,6 +1123,9 @@ and replays scripted responses.
 | `test_llm_engine.py` | Prompt shape, schema, retries, degradation, refusals, batch ordering |
 | `test_config.py` | Settings round-trip, clamping, Keychain wrapper |
 | `test_workers.py` | Move planning, folder requirements |
+| `test_briefing.py` | What the briefing puts first, and what it must never claim |
+| `test_reply_safety.py` | Loop protection, the once-per-sender window, and the hours a rule may write in |
+| `test_beatmap.py` | Finding the beat, and refusing to find one that is not there |
 | `test_cleanup.py` | What the server is asked to delete, and everything that is never offered |
 | `test_gui.py` | Table model, filters, delegate, window wiring |
 | `test_gui_dialogs.py` | Settings dialog, preview rendering, export, apply confirmation |

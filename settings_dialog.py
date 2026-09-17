@@ -1669,6 +1669,18 @@ class SettingsDialog(QDialog):
         order_note.setWordWrap(True)
         left.addWidget(order_note)
 
+        # A box to narrow the list by. Twenty rules is a normal number
+        # once somebody is using this properly, and twenty names in a
+        # column two hundred pixels wide is a list nobody reads.
+        self.rule_search = QLineEdit()
+        self.rule_search.setPlaceholderText("Find a rule…")
+        self.rule_search.setClearButtonEnabled(True)
+        self.rule_search.setToolTip(
+            "Matches the rule's name and what it does, so typing “draft” "
+            "finds every rule that writes something.")
+        self.rule_search.textChanged.connect(self._refresh_rule_list)
+        left.addWidget(self.rule_search)
+
         self.rule_list = WrappingList()
         self.rule_list.setMinimumWidth(150)
         self.rule_list.setMaximumWidth(230)
@@ -1695,6 +1707,14 @@ class SettingsDialog(QDialog):
                 self.remove_rule_button = button
         buttons.addStretch(1)
         left.addLayout(buttons)
+
+        # The same line the mailbox list carries: how many there are and
+        # how many of them would actually do something. A list of rules
+        # with no count is a list somebody has to audit by eye.
+        self.rules_summary = QLabel("")
+        self.rules_summary.setWordWrap(True)
+        self.rules_summary.setProperty("dim", "true")
+        left.addWidget(self.rules_summary)
         body.addLayout(left)
 
         # -- right: the rule itself ----------------------------------------
@@ -1781,6 +1801,68 @@ class SettingsDialog(QDialog):
         switches.addStretch(1)
         right.addLayout(switches)
 
+        # -- the limits that only apply to writing -------------------------
+        # In a box of their own, shown only for rules that draft, because
+        # they mean nothing to a rule that files. A rule that moves a
+        # message has not spoken to anybody, so holding it until nine in
+        # the morning would be a bug rather than a courtesy.
+        self.reply_limits = QGroupBox("When this rule may write")
+        limits = QFormLayout(self.reply_limits)
+        limits.setSpacing(6)
+
+        self.rule_once_days = QSpinBox()
+        self.rule_once_days.setRange(0, 366)
+        self.rule_once_days.setSpecialValueText("every time")
+        self.rule_once_days.setSuffix(" days")
+        self.rule_once_days.setToolTip(
+            "Write to the same person at most once in this long. Without "
+            "it, somebody who sends four messages in a morning gets four "
+            "identical drafts, and a list you are on gets one per post.")
+        self.rule_once_days.valueChanged.connect(self._rule_edited)
+        limits.addRow("At most once in", self.rule_once_days)
+
+        hours = QHBoxLayout()
+        self.rule_from_hour = QSpinBox()
+        self.rule_from_hour.setRange(0, 23)
+        self.rule_from_hour.setSuffix(":00")
+        self.rule_to_hour = QSpinBox()
+        self.rule_to_hour.setRange(1, 24)
+        self.rule_to_hour.setSuffix(":00")
+        for spin in (self.rule_from_hour, self.rule_to_hour):
+            spin.setToolTip(
+                "Drafts are written while you are awake. A reply composed "
+                "at three in the morning reads as three in the morning, "
+                "even though you send it yourself later.")
+            spin.valueChanged.connect(self._rule_edited)
+        hours.addWidget(self.rule_from_hour)
+        hours.addWidget(QLabel("to"))
+        hours.addWidget(self.rule_to_hour)
+        hours.addStretch(1)
+        limits.addRow("Between", hours)
+
+        days = QHBoxLayout()
+        days.setSpacing(2)
+        self.rule_days = []
+        for number, name in enumerate(("Mon", "Tue", "Wed", "Thu", "Fri",
+                                       "Sat", "Sun")):
+            box = QCheckBox(name)
+            box.setToolTip("Leave every day ticked for no restriction.")
+            box.toggled.connect(self._rule_edited)
+            days.addWidget(box)
+            self.rule_days.append(box)
+        days.addStretch(1)
+        limits.addRow("On", days)
+
+        self.loop_note = QLabel(
+            "Mail from a machine is never answered, whatever this says: a "
+            "no-reply address, a bounce, or anything carrying the headers "
+            "an automatic reply sets. Two responders talking to each "
+            "other is how this feature goes wrong.")
+        self.loop_note.setWordWrap(True)
+        self.loop_note.setProperty("dim", "true")
+        limits.addRow("", self.loop_note)
+        right.addWidget(self.reply_limits)
+
         self.rule_summary = QLabel("")
         self.rule_summary.setWordWrap(True)
         right.addWidget(self.rule_summary)
@@ -1811,23 +1893,52 @@ class SettingsDialog(QDialog):
         self.signature_edit.setText(settings.reply_signature)
         self._refresh_rule_list()
 
+    def _rule_matches_search(self, rule) -> bool:
+        wanted = self.rule_search.text().strip().lower()
+        if not wanted:
+            return True
+        return wanted in f"{rule.name} {rule.describe()}".lower()
+
     def _refresh_rule_list(self) -> None:
         """Redraw the list on the left without disturbing what is being edited."""
         self.rule_list.blockSignals(True)
         self.rule_list.clear()
-        for rule in self._rules:
+        self._rule_rows: List[int] = []
+        for index, rule in enumerate(self._rules):
+            if not self._rule_matches_search(rule):
+                continue
             entry = QListWidgetItem(self._rule_label(rule))
             entry.setFlags(entry.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             entry.setCheckState(Qt.CheckState.Checked if rule.enabled
                                 else Qt.CheckState.Unchecked)
             entry.setToolTip(self._rule_tooltip(rule))
             self.rule_list.addItem(entry)
+            self._rule_rows.append(index)
         self._rule_index = max(0, min(self._rule_index, len(self._rules) - 1))
-        self.rule_list.setCurrentRow(self._rule_index)
+        if self._rule_index in self._rule_rows:
+            self.rule_list.setCurrentRow(
+                self._rule_rows.index(self._rule_index))
         self.rule_list.blockSignals(False)
         self.rule_list.measure()
         self.remove_rule_button.setEnabled(len(self._rules) > 1)
+        self._describe_rules()
         self._show_rule(self._rule_index)
+
+    def _describe_rules(self) -> None:
+        """How many rules there are, and how many would do anything."""
+        total = len(self._rules)
+        armed = sum(1 for r in self._rules if r.enabled and not r.problems())
+        drafting = sum(1 for r in self._rules
+                       if r.enabled and not r.problems() and r.drafts_a_reply)
+        said = [f"{total} rule{'' if total == 1 else 's'}",
+                f"{armed} ready to run"]
+        if drafting:
+            said.append(f"{drafting} write{'s' if drafting == 1 else ''} "
+                        "a draft")
+        hidden = total - len(getattr(self, "_rule_rows", range(total)))
+        if hidden > 0:
+            said.append(f"{hidden} hidden by the search")
+        self.rules_summary.setText(", ".join(said) + ".")
 
     def _show_rule(self, index: int) -> None:
         if not (0 <= index < len(self._rules)):
@@ -1840,6 +1951,15 @@ class SettingsDialog(QDialog):
         self.rule_match.setCurrentIndex(max(0, self.rule_match.findData(rule.match)))
         self.rule_skip_bulk.setChecked(rule.skip_bulk)
         self.rule_stop_after.setChecked(rule.stop_after)
+        self.rule_once_days.setValue(rule.once_per_sender_days)
+        self.rule_from_hour.setValue(rule.active_from)
+        self.rule_to_hour.setValue(rule.active_to)
+        chosen = set(rule.active_days)
+        for number, box in enumerate(self.rule_days):
+            # No days chosen means every day, so that is what is shown -
+            # seven empty boxes would read as "never", which is not a
+            # thing this can be set to.
+            box.setChecked(not chosen or number in chosen)
         self._rebuild_condition_rows(rule)
         self._rebuild_action_rows(rule)
         self._loading_rule = False
@@ -1961,6 +2081,14 @@ class SettingsDialog(QDialog):
         rule.match = self.rule_match.currentData() or "all"
         rule.skip_bulk = self.rule_skip_bulk.isChecked()
         rule.stop_after = self.rule_stop_after.isChecked()
+        rule.once_per_sender_days = self.rule_once_days.value()
+        rule.active_from = self.rule_from_hour.value()
+        rule.active_to = self.rule_to_hour.value()
+        ticked = tuple(n for n, box in enumerate(self.rule_days)
+                       if box.isChecked())
+        # Every day ticked is the same as no restriction, and storing it
+        # as "all seven" would freeze the rule if a day were ever added.
+        rule.active_days = () if len(ticked) == 7 else ticked
         rule.conditions = [row.value() for row in self._condition_rows]
         rule.actions = [row.value() for row in self._action_rows]
 
@@ -1978,6 +2106,7 @@ class SettingsDialog(QDialog):
         rule = self._rules[self._rule_index]
         drafts = rule.drafts_a_reply
         self.template_note.setVisible(drafts)
+        self.reply_limits.setVisible(drafts)
         problems = rule.problems()
         if problems:
             self.rule_summary.setText(
@@ -1993,7 +2122,11 @@ class SettingsDialog(QDialog):
         self.rule_summary.style().polish(self.rule_summary)
 
     def _refresh_current_list_item(self) -> None:
-        entry = self.rule_list.item(self._rule_index)
+        rows = getattr(self, "_rule_rows", None)
+        listed = (rows.index(self._rule_index)
+                  if rows is not None and self._rule_index in rows
+                  else (self._rule_index if rows is None else -1))
+        entry = self.rule_list.item(listed) if listed >= 0 else None
         if entry is None:
             return
         rule = self._rules[self._rule_index]
@@ -2004,10 +2137,31 @@ class SettingsDialog(QDialog):
                             else Qt.CheckState.Unchecked)
         entry.setToolTip(self._rule_tooltip(rule))
         self.rule_list.blockSignals(False)
+        self._describe_rules()
+
+    def _rule_status(self, rule) -> str:
+        """What this rule is doing, or what it still needs, in a few words.
+
+        The same shape as the mailbox list: a name is not enough to audit
+        a list by, and "ready" against "needs a folder" is the difference
+        between reading the list and opening every entry in it.
+        """
+        problems = rule.problems()
+        if problems:
+            first = problems[0].rstrip(".")
+            return first[0].lower() + first[1:] if first else "not ready"
+        if not rule.enabled:
+            return "off"
+        if rule.drafts_a_reply:
+            return "drafts a reply"
+        if rule.sorts_only:
+            return "sorts"
+        return "ready"
 
     def _rule_label(self, rule) -> str:
-        """The name, marked when the rule is not finished enough to run."""
-        return ("⚠ " if rule.problems() else "") + menu_text(rule.name)
+        """The name and what it is doing, marked when it cannot run."""
+        mark = "⚠ " if rule.problems() else ""
+        return f"{mark}{menu_text(rule.name)}   —   {self._rule_status(rule)}"
 
     def _rule_tooltip(self, rule) -> str:
         """The whole name, which the list is too narrow to show, and the gist."""
@@ -2025,7 +2179,7 @@ class SettingsDialog(QDialog):
 
     def _rule_ticked(self, entry) -> None:
         """The checkbox in the list, which is the fastest way to turn one off."""
-        index = self.rule_list.row(entry)
+        index = self._rule_row(self.rule_list.row(entry))
         if not (0 <= index < len(self._rules)):
             return
         self._rules[index].enabled = entry.checkState() == Qt.CheckState.Checked
@@ -2035,8 +2189,22 @@ class SettingsDialog(QDialog):
             self._loading_rule = False
             self._describe_rule()
 
-    def _rule_selected(self, index: int) -> None:
-        if index == self._rule_index:
+    def _rule_row(self, listed: int) -> int:
+        """Which rule a row in the list is, now that the list can be filtered.
+
+        The two were the same number until the search box arrived, and a
+        row number used as a rule index while a filter is on edits
+        whichever rule happens to sit at that position in the full list -
+        which is a silent, wrong edit rather than a visible failure.
+        """
+        rows = getattr(self, "_rule_rows", None)
+        if rows is None:
+            return listed
+        return rows[listed] if 0 <= listed < len(rows) else -1
+
+    def _rule_selected(self, listed: int) -> None:
+        index = self._rule_row(listed)
+        if index < 0 or index == self._rule_index:
             return
         self._capture_rule()
         self._show_rule(index)

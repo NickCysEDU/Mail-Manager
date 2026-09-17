@@ -667,10 +667,11 @@ class AudioPane(QWidget):
         def done(result) -> None:
             if not alive():
                 return
-            frames, shapes, vectors, calibration = result
+            frames, shapes, vectors, calibration, beats = result
             self.spectrum.set_calibration(calibration)
             self.busy.stop()
             self.spectrum.set_working(None)
+            self.spectrum.set_beats(beats)
             self.spectrum.set_traces(shapes, vectors)
             self.spectrum.set_frames(frames, attachment_audio.RATE)
             self._decoder = None
