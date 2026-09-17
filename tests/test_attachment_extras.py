@@ -1459,13 +1459,29 @@ class TestItHoldsSixtyFramesASecond:
         from attachment_widgets import Spectrum
 
         rate = attachment_audio.DECODE_RATE
-        pcm = array("h", [
-            int(10000 * (math.sin(2 * math.pi * 90 * i / rate)
-                         + 0.7 * math.sin(2 * math.pi * 1100 * i / rate)) / 1.7)
-            for i in range(rate * 2)])
+        # Two channels, because the scope plots one against the other and a
+        # mono track leaves it with nothing to draw.
+        pcm = array("h")
+        for index in range(rate * 2):
+            here = (math.sin(2 * math.pi * 90 * index / rate)
+                    + 0.7 * math.sin(2 * math.pi * 1100 * index / rate)
+                    + 0.25 * math.sin(2 * math.pi * 5200 * index / rate))
+            pcm.append(int(9000 * here / 1.95))
+            pcm.append(int(9000 * (here * 0.8
+                                   + 0.3 * math.sin(2 * math.pi * 310
+                                                    * index / rate)) / 1.95))
         spectrum = Spectrum()
         qtbot.addWidget(spectrum)
-        spectrum.set_frames(attachment_audio.analyse(pcm, rate, 1),
+        # The waveform slices as well as the bands, in that order, the way
+        # the viewer hands them over. Without these the oscilloscope falls
+        # back to a shape folded out of the band levels - a hundred and
+        # twenty-eight points instead of a thousand, with no history behind
+        # it - so it measured as one of the cheapest scenes while being by
+        # far the most expensive in the app.
+        spectrum.set_traces(
+            attachment_audio.traces(pcm, rate, 2),
+            attachment_audio.vector_traces(pcm, rate, 2))
+        spectrum.set_frames(attachment_audio.analyse(pcm, rate, 2),
                             attachment_audio.RATE)
         spectrum.set_labels([str(c) for c in attachment_audio.CENTRES])
         # Unbounded, or the strip's own maximum height clamps the widget
@@ -1476,9 +1492,14 @@ class TestItHoldsSixtyFramesASecond:
         spectrum.resize(width, height)
         spectrum._reveal_changed(1.0)
         spectrum.set_position(900)
+        # One turn of the clock, because that is what fills the state in.
+        spectrum._tick()
         assert spectrum.height() == height, (
             f"the widget is {spectrum.height()} tall, not {height}; this is "
             "not measuring what it says it is")
+        assert spectrum._state.trace, (
+            "no waveform reached the state, so the scope will draw its "
+            "cheap fallback and this measures nothing")
         return spectrum
 
     def test_the_timer_asks_for_sixty(self, qapp):
@@ -1526,6 +1547,103 @@ class TestItHoldsSixtyFramesASecond:
         assert each < budget, (
             f"{visualizers.SCENES[index].name} takes {each:.1f} ms a frame, "
             f"against {budget:.1f} ms for this machine")
+
+    @pytest.mark.parametrize("decay", [0.03, 0.75, 1.50])
+    def test_the_scope_holds_up_at_every_decay(self, qtbot, decay):
+        """The setting that was reported as laggy, at the size it lags at.
+
+        The scene budget above runs each scene at whatever it happens to
+        be set to, which for the scope is the middle of the decay slider.
+        The complaint was about the top of it, and the top of it was the
+        one place the old drawing fell over: it kept every trace of the
+        set persistence and redrew all of them, so a frame cost what the
+        slider said. Measured here it was 18ms with spikes past 30, on a
+        16.7ms budget.
+        """
+        import time
+
+        import visualizers
+
+        from PySide6.QtGui import QPainter, QPixmap
+
+        spectrum = self._spectrum(qtbot, 1920, 1080)
+        scope = visualizers.by_name("Oscilloscope")
+        was = scope.decay
+        scope.set_decay(decay)
+        spectrum.set_scene(scope)
+        canvas = QPixmap(1920, 1080)
+        canvas.setDevicePixelRatio(spectrum.devicePixelRatioF())
+        painter = QPainter(canvas)
+        try:
+            for _ in range(4):
+                spectrum._tick()
+                spectrum._paint(painter)
+            worst = 0.0
+            rounds = 24
+            started = time.monotonic()
+            for step in range(rounds):
+                spectrum.set_position(900 + step * 16)
+                spectrum._tick()
+                one = time.monotonic()
+                spectrum._paint(painter)
+                worst = max(worst, (time.monotonic() - one) * 1000)
+            each = (time.monotonic() - started) / rounds * 1000
+        finally:
+            painter.end()
+            scope.set_decay(was)
+        budget = 16.67 * _machine_factor()
+        assert each < budget, (
+            f"the scope takes {each:.1f} ms a frame at a decay of {decay}, "
+            f"against {budget:.1f} ms for this machine")
+        # And no single frame twice over, because a stutter every so often
+        # is what somebody actually notices.
+        assert worst < budget * 2, (
+            f"one frame took {worst:.1f} ms at a decay of {decay}")
+
+    def test_the_decay_does_not_change_what_a_frame_costs(self, qtbot):
+        """A screen that fades costs the same whatever it is set to.
+
+        This is the shape of the fix, not just its size: the old drawing
+        was linear in the persistence, so every step of the slider was a
+        step slower, and there was no setting at the top that was not.
+        """
+        import time
+
+        import visualizers
+
+        from PySide6.QtGui import QPainter, QPixmap
+
+        scope = visualizers.by_name("Oscilloscope")
+        was = scope.decay
+        spent = {}
+        try:
+            for decay in (scope.MIN_DECAY, scope.MAX_DECAY):
+                spectrum = self._spectrum(qtbot, 1920, 1080)
+                scope.set_decay(decay)
+                spectrum.set_scene(scope)
+                canvas = QPixmap(1920, 1080)
+                canvas.setDevicePixelRatio(spectrum.devicePixelRatioF())
+                painter = QPainter(canvas)
+                try:
+                    for _ in range(4):
+                        spectrum._tick()
+                        spectrum._paint(painter)
+                    started = time.monotonic()
+                    rounds = 24
+                    for step in range(rounds):
+                        spectrum.set_position(900 + step * 16)
+                        spectrum._tick()
+                        spectrum._paint(painter)
+                    spent[decay] = (time.monotonic() - started) / rounds * 1000
+                finally:
+                    painter.end()
+        finally:
+            scope.set_decay(was)
+        slowest, fastest = max(spent.values()), min(spent.values())
+        assert slowest < fastest * 1.8 + 2.0, (
+            f"the longest persistence costs {slowest:.1f} ms against "
+            f"{fastest:.1f} ms for the shortest, so it is still being paid "
+            f"for per frame of history")
 
     def test_nothing_is_drawn_when_it_is_not_revealed(self, qtbot):
         spectrum = self._spectrum(qtbot, 1920, 1080)
