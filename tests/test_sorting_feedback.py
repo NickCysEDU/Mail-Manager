@@ -106,14 +106,43 @@ class TestTickHighConfidence:
         assert other(confidence=0.99).default_approved is False
         assert job().default_approved is True
 
-    def test_the_button_reaches_the_model(self, window):
+    def test_the_menu_entry_reaches_the_model(self, window):
+        """The button became a menu, because the two buttons it replaced
+        each acted on every message in the mailbox regardless of what the
+        table was showing."""
         window._switch_routing(NonJobRouting.FILE)
         window.model.set_all_approved(False)
-        window.select_high_button.click()
+        window._ticks("confident")
         filed = [i for i in window.model.items if i.is_actionable
                  and i.is_high_confidence]
         assert filed, "the demo inbox should have some"
         assert all(i.approved for i in filed)
+
+    def test_it_only_touches_what_the_table_is_showing(self, window):
+        """The complaint that started this: ticking while looking at job
+        mail ticked hundreds of rows that were not on screen."""
+        from gui import SHOW_JOB_ONLY
+
+        window._switch_routing(NonJobRouting.FILE)
+        window.model.set_all_approved(False)
+        window.show_combo.setCurrentIndex(
+            window.show_combo.findData(SHOW_JOB_ONLY))
+        shown = set(window._shown_rows())
+        assert shown, "the job-only view should have rows"
+        window._ticks("all")
+        ticked = {row for row, item in enumerate(window.model.items)
+                  if item.approved}
+        assert ticked <= shown, (
+            f"{len(ticked - shown)} rows were ticked that nobody could see")
+
+    def test_the_suggested_ticks_can_be_put_back(self, window):
+        """Before this there was no way back to what the sorter proposed."""
+        window._switch_routing(NonJobRouting.FILE)
+        window._ticks("all")
+        window._ticks("none")
+        window._ticks("suggested")
+        for item in window.model.items:
+            assert item.approved == item.default_approved
 
 
 class TestGreyMeansNotSorted:

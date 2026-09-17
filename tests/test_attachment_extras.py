@@ -1736,6 +1736,89 @@ class TestTheVisualiserControlsFitTheirRow:
         assert len(rows) > 1, "nothing wrapped, so nothing was fixed"
         host.deleteLater()
 
+    def test_it_lays_out_inside_its_margins(self, qapp):
+        """A QLayout subclass insets the rectangle by its own contents
+        margins itself; nothing does it for one. This did not, so every
+        margin set on it was ignored - invisible while they were ten
+        pixels, and obvious the moment the control bar wanted room around
+        its panel for a shadow."""
+        from PySide6.QtWidgets import QPushButton, QWidget
+
+        from attachment_widgets import FlowRow
+
+        host = QWidget()
+        row = FlowRow(spacing=10)
+        row.setContentsMargins(30, 24, 30, 24)
+        host.setLayout(row)
+        for index in range(3):
+            row.addWidget(QPushButton(f"button {index}"))
+        host.resize(600, 200)
+        host.show()
+        qapp.processEvents()
+        boxes = [row.itemAt(i).widget().geometry() for i in range(row.count())]
+        assert min(b.left() for b in boxes) >= 30, "it drew over the left margin"
+        assert min(b.top() for b in boxes) >= 24, "it drew over the top margin"
+        assert max(b.right() for b in boxes) <= 600 - 30, "it overran the right"
+        host.deleteLater()
+
+    def test_the_height_it_asks_for_includes_its_margins(self, qapp):
+        """Counting them in one place and not the other is how a panel
+        ends up shorter than the things inside it."""
+        from PySide6.QtWidgets import QPushButton, QWidget
+
+        from attachment_widgets import FlowRow
+
+        host = QWidget()
+        bare = FlowRow(spacing=10)
+        host.setLayout(bare)
+        for index in range(2):
+            bare.addWidget(QPushButton(f"button {index}"))
+        without = bare.heightForWidth(600)
+
+        other = QWidget()
+        padded = FlowRow(spacing=10)
+        padded.setContentsMargins(30, 24, 30, 24)
+        other.setLayout(padded)
+        for index in range(2):
+            padded.addWidget(QPushButton(f"button {index}"))
+        assert padded.heightForWidth(600) == without + 48
+        host.deleteLater()
+        other.deleteLater()
+
+    def test_the_full_screen_bar_is_the_size_of_what_is_in_it(self, qapp):
+        """The panel is drawn inside the widget by the shadow's reach, and
+        the controls have to land inside the panel rather than over its
+        edge or floating above its floor."""
+        from PySide6.QtWidgets import QPushButton
+
+        from attachment_widgets import (FullScreenSpectrum, Spectrum,
+                                        _ControlBar)
+
+        spectrum = Spectrum()
+        full = FullScreenSpectrum(spectrum)
+        for label in ("Play", "Pause", "Leave full screen"):
+            full.add_control(QPushButton(label))
+        full.resize(1280, 800)
+        full.show()
+        qapp.processEvents()
+
+        panel = full.bar.rect().adjusted(
+            _ControlBar.SHADOW, _ControlBar.SHADOW,
+            -_ControlBar.SHADOW, -_ControlBar.SHADOW)
+        layout = full._bar_layout
+        boxes = [layout.itemAt(i).geometry() for i in range(layout.count())]
+        assert boxes, "no controls to check"
+        for box in boxes:
+            assert panel.contains(box), (
+                f"a control at {box.getRect()} is outside the panel at "
+                f"{panel.getRect()}")
+        slack = panel.height() - max(b.height() for b in boxes)
+        assert slack <= 30, (
+            f"the panel is {slack}px taller than its tallest control")
+        full.close()
+        full.deleteLater()
+        spectrum.deleteLater()
+
     def test_items_on_a_line_share_a_centre(self, qapp):
         from PySide6.QtWidgets import QCheckBox, QComboBox, QWidget
 
@@ -2139,8 +2222,6 @@ class TestOscilloscopeMusic:
 
     def test_the_scope_plots_the_picture_not_a_sweep(self, qapp):
         """The X-Y path has to follow the samples, not a clock."""
-        from PySide6.QtCore import QRectF
-
         import visualizers
         from attachment_widgets import SpectrumState
 
@@ -2152,15 +2233,77 @@ class TestOscilloscopeMusic:
         # A square, as four corners, in the int16 the analysis produces.
         full = 32767
         state.vector = [-full, -full, full, -full, full, full, -full, full]
-        scope._drawing = True
-        path = scope._path(QRectF(0, 0, 200, 200), state.vector, state, 0.0)
+        # Built in a unit box - the window size and the strobe are a
+        # transform applied when it is drawn, not part of the shape.
+        path = scope._path(state.vector, True)
         assert path.elementCount() == 4
-        xs = {round(path.elementAt(i).x) for i in range(4)}
-        ys = {round(path.elementAt(i).y) for i in range(4)}
+        xs = {round(path.elementAt(i).x, 3) for i in range(4)}
+        ys = {round(path.elementAt(i).y, 3) for i in range(4)}
         assert len(xs) == 2 and len(ys) == 2, (
             "the four corners did not land on two x values and two y values, "
             "so this is not plotting one channel against the other")
         scope.set_mode("Sweep")
+
+    def test_the_shape_does_not_depend_on_the_window(self):
+        """So a resize is a transform rather than a rebuild, and so the
+        screen the trace is burned into can be kept between frames."""
+        import visualizers
+
+        scope = visualizers.by_name("Oscilloscope")
+        trace = [0.4, -0.2, 0.9, -0.7, 0.1]
+        once = scope._path(trace, False)
+        twice = scope._path(trace, False)
+        assert once.elementCount() == twice.elementCount()
+        for index in range(once.elementCount()):
+            assert once.elementAt(index).x == twice.elementAt(index).x
+
+    def test_the_screen_is_kept_between_frames(self, qapp):
+        """The decay is a screen that fades, not a stack of redrawn
+        traces - which is what made the top of the slider unusable."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QPainter, QPixmap
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        scope = visualizers.Oscilloscope()
+        state = SpectrumState()
+        state.levels = [0.5] * 8
+        surface = QPixmap(200, 200)
+        for frame in range(3):
+            state.trace = [0.4, -0.2, 0.9, -0.7, 0.1, float(frame)]
+            painter = QPainter(surface)
+            try:
+                scope.paint(painter, QRectF(0, 0, 200, 200), state)
+            finally:
+                painter.end()
+        assert scope._screen is not None
+        assert scope._screen.size().width() == 200
+
+    def test_a_repeated_trace_is_not_burned_in_twice(self, qapp):
+        """A paused track hands back the same trace every frame. Drawing
+        it again each time piles brightness up until the screen is a
+        solid disc."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QPainter, QPixmap
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        scope = visualizers.Oscilloscope()
+        state = SpectrumState()
+        state.levels = [0.5] * 8
+        state.trace = [0.4, -0.2, 0.9, -0.7, 0.1]
+        strikes = []
+        scope._strike = lambda *a, **k: strikes.append(1)
+        surface = QPixmap(200, 200)
+        for _ in range(5):
+            painter = QPainter(surface)
+            try:
+                scope.paint(painter, QRectF(0, 0, 200, 200), state)
+            finally:
+                painter.end()
+        assert len(strikes) == 1, f"the beam struck {len(strikes)} times"
 
     def test_an_unknown_mode_is_ignored(self):
         import visualizers

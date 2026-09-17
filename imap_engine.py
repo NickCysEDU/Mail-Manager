@@ -1353,6 +1353,126 @@ class IMAPEngine:
             report.expunged = self._expunge(deleted_uids, report)
         return report
 
+    def empty_folder(self, folder: str, progress: Optional[ProgressCallback] = None,
+                     cancel: Optional[threading.Event] = None) -> int:
+        """Delete everything in one folder, in as few commands as possible.
+
+        Clearing thousands of messages one at a time is the slow way: each
+        one is a round trip to the server, and a mailbox with five thousand
+        in it takes as long as five thousand round trips. This flags them
+        a hundred UIDs at a time and expunges once, which is a handful of
+        commands however many messages there are.
+
+        Returns how many were removed. The folder itself stays.
+
+        Nothing here can touch another folder: the UIDs come from a SEARCH
+        of this one, and the STORE and EXPUNGE are addressed to those UIDs.
+        """
+        self.select(folder, readonly=False)
+        return self.delete_uids(self._search_all(), progress=progress,
+                                cancel=cancel)
+
+    def count_folder(self, folder: str) -> int:
+        """How many messages are in a folder, without fetching any of them."""
+        self.select(folder, readonly=True)
+        return len(self._search_all())
+
+    # -- clearing out by criteria ----------------------------------------
+    def search_criteria(self, criteria, readonly: bool = True) -> List[str]:
+        """UIDs matching a :class:`cleanup.Criteria`, in one command.
+
+        The server does the matching. That is the whole point: it already
+        indexes From, Subject and Date, so this costs one round trip against
+        a mailbox of any size, where fetching the headers and filtering them
+        here would cost one per message and be the slow thing all over again.
+
+        Non-ASCII is handled by asking for ``CHARSET UTF-8`` and sending the
+        terms as raw bytes. imaplib encodes ``str`` arguments as ASCII and
+        raises on anything else, so a search for a subject with an accent in
+        it would otherwise fail before it left the machine.
+        """
+        conn = self._require_conn()
+        self.select(criteria.folder, readonly=readonly)
+        tokens = criteria.search_tokens()
+        if any(not token.isascii() for token in tokens):
+            args = ["CHARSET", "UTF-8"] + [t.encode("utf-8") for t in tokens]
+        else:
+            args = tokens
+        data = self._cmd("Searching the folder", conn.uid, "SEARCH", None, *args)
+        found: List[str] = []
+        for chunk in data or ():
+            if isinstance(chunk, bytes):
+                found.extend(chunk.decode("ascii", "ignore").split())
+            elif isinstance(chunk, str):
+                found.extend(chunk.split())
+        return found
+
+    def count_matching(self, criteria) -> int:
+        """How many messages the criteria would delete. Changes nothing.
+
+        Its own read-only command rather than a number worked out from the
+        last scan, because the number in a "delete 4,312 messages?" question
+        has to be the server's answer to the same question that is about to
+        be asked destructively. A stale one is how somebody agrees to four
+        thousand and gets forty thousand.
+        """
+        return len(self.search_criteria(criteria, readonly=True))
+
+    def delete_matching(self, criteria, progress: Optional[ProgressCallback] = None,
+                        cancel: Optional[threading.Event] = None) -> int:
+        """Delete everything matching the criteria. Returns how many went.
+
+        Refuses criteria that ask for nothing. An unarmed one matches the
+        whole folder, and "the text box was empty" is not a thing anybody
+        should be able to mean by it - emptying a folder wholesale is
+        :meth:`empty_folder`, which says so in its name and asks first.
+        """
+        if not criteria.is_armed:
+            raise IMAPError(
+                "Nothing was chosen to clear out, so nothing was deleted.")
+        uids = self.search_criteria(criteria, readonly=False)
+        return self.delete_uids(uids, progress=progress, cancel=cancel)
+
+    def delete_uids(self, uids: Sequence[str],
+                    progress: Optional[ProgressCallback] = None,
+                    cancel: Optional[threading.Event] = None) -> int:
+        """Flag and expunge a set of UIDs in the selected mailbox.
+
+        A hundred per command. The mailbox has already been selected by
+        whoever found the UIDs, and they are addressed by UID throughout, so
+        this cannot reach a message in another folder however long it runs.
+        """
+        uids = list(uids)
+        total = len(uids)
+        if not total:
+            return 0
+        conn = self._require_conn()
+        done = 0
+        for batch in _chunks(uids, COMMAND_BATCH):
+            if cancel is not None and cancel.is_set():
+                break
+            self._cmd("Flagging for deletion", conn.uid, "STORE",
+                      ",".join(batch), "+FLAGS.SILENT", r"(\Deleted)")
+            done += len(batch)
+            if progress:
+                progress(done, total, f"Marked {done} of {total}\u2026")
+        if progress:
+            progress(total, total, "Removing them\u2026")
+        report = MoveReport()
+        self._expunge(uids[:done], report)
+        return done
+
+    def _search_all(self) -> List[str]:
+        conn = self._require_conn()
+        data = self._cmd("Listing the folder", conn.uid, "SEARCH", None, "ALL")
+        found: List[str] = []
+        for chunk in data or ():
+            if isinstance(chunk, bytes):
+                found.extend(chunk.decode("ascii", "ignore").split())
+            elif isinstance(chunk, str):
+                found.extend(chunk.split())
+        return found
+
     def _expunge(self, uids: Sequence[str], report: MoveReport) -> bool:
         conn = self._require_conn()
         if self.has_capability("UIDPLUS"):

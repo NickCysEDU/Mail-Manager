@@ -745,7 +745,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 2,836 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 2,893 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1065,6 +1065,8 @@ in the [README](../README.md).
 | `pipeline.py` | The producer/consumer pair that lets fetching and classifying overlap |
 | `verdict_cache.py` | Verdicts kept between scans, keyed on mailbox, UID and a settings hash |
 | `corrections.py` | What the app has learned from being corrected, and when it may act on it |
+| `cleanup.py` | What to clear out, as terms a server answers in one command, and the piles worth offering |
+| `cleanup_dialog.py` | The window for it: count from the server first, delete only what was counted |
 | `conversations.py` | Threading: which messages are the same conversation |
 | `lexicon.py` | World knowledge behind a lookup: sectors, brands, airports |
 | `lexicon_blob.py` | The memory-mapped form of that, so opening it costs nothing |
@@ -1099,7 +1101,7 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 2,836 tests, about three minutes
+./dev test        # 2,893 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```
@@ -1117,6 +1119,7 @@ and replays scripted responses.
 | `test_llm_engine.py` | Prompt shape, schema, retries, degradation, refusals, batch ordering |
 | `test_config.py` | Settings round-trip, clamping, Keychain wrapper |
 | `test_workers.py` | Move planning, folder requirements |
+| `test_cleanup.py` | What the server is asked to delete, and everything that is never offered |
 | `test_gui.py` | Table model, filters, delegate, window wiring |
 | `test_gui_dialogs.py` | Settings dialog, preview rendering, export, apply confirmation |
 | `test_worker_threads.py` | The QThread workers driven synchronously with fake engines |

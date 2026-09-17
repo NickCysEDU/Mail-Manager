@@ -569,6 +569,12 @@ class ScanWorker(_BaseWorker):
             if decision.leave:
                 item.override_folder = None
                 item.approved = False
+            elif decision.bin_it:
+                # The folder comes from the item's own plan rather than the
+                # rule, so one rule works across accounts whose roots are
+                # named differently.
+                item.override_folder = item.folders.bin_folder
+                item.rule_name = decision.rule_name
             elif decision.file_into:
                 item.override_folder = decision.file_into
                 item.rule_name = decision.rule_name
@@ -1282,6 +1288,12 @@ def required_folders(items: Sequence[TriageItem], plan: Optional[FolderPlan]) ->
             others.append(item.classification.other_category)
     needed = list(plan.other_folders(dict.fromkeys(others)))
     for folder in manual:
+        # Parents first. A server is only asked to create one mailbox at a
+        # time, and "Sorted Mail/To Delete" under a root that does not exist
+        # yet is a CREATE that some servers refuse outright.
+        parent = plan.other_root
+        if folder.startswith(parent + plan.delimiter) and parent not in needed:
+            needed.append(parent)
         if folder not in needed:
             needed.append(folder)
     return needed
@@ -1399,3 +1411,139 @@ class AttachmentSource:
                 engine.logout()
             except Exception:      # noqa: BLE001 - closing is best effort
                 pass
+
+
+class _FolderWorker(_BaseWorker):
+    """A connection of its own, for work that only touches one folder.
+
+    Its own engine rather than the scanner's, because these run while the
+    window is doing something else and an imaplib connection is not safe to
+    use from two threads. Connecting again costs one TLS handshake, which is
+    nothing against the thousands of messages this is here to shift.
+    """
+
+    #: The title on the message box when this fails.
+    trouble = "Could not reach the mailbox"
+
+    def __init__(self, account, password: str, parent=None) -> None:
+        super().__init__(parent)
+        self.account = account
+        self.password = password
+
+    def run(self) -> None:
+        engine = IMAPEngine(host=self.account.host, port=self.account.port)
+        try:
+            self._emit_progress(0, 1, f"Connecting to {self.account.label}…")
+            engine.connect(self.account.address, self.password)
+            self._work(engine)
+        except Exception as exc:      # noqa: BLE001 - reported, not raised
+            if not self.cancelled:
+                self.failed.emit(self.trouble, str(exc))
+        finally:
+            try:
+                engine.logout()
+            except Exception:      # noqa: BLE001 - already gone
+                pass
+
+    def _work(self, engine) -> None:
+        raise NotImplementedError
+
+
+class EmptyFolderWorker(_FolderWorker):
+    """Clears one folder on the server, without holding up the window.
+
+    The work is a handful of commands however many messages there are, but
+    each one is a round trip to a server that may be slow, so it does not
+    belong on the thread that draws.
+    """
+
+    finished_ok = Signal(int)
+    task_name = "emptying a folder"
+    trouble = "Could not empty the folder"
+
+    def __init__(self, account, password: str, folder: str, parent=None) -> None:
+        super().__init__(account, password, parent)
+        self.folder = folder
+
+    def _work(self, engine) -> None:
+        removed = engine.empty_folder(
+            self.folder, progress=self._emit_progress, cancel=self.cancel_event)
+        if not self.cancelled:
+            self.finished_ok.emit(removed)
+
+
+class FolderListWorker(_FolderWorker):
+    """Every folder on the server, with how full each one is.
+
+    The counts come from one SEARCH per folder, which is a round trip each -
+    fine for the twenty or so folders a mailbox has, and the reason the list
+    fills in rather than arriving at once. No message is fetched.
+    """
+
+    finished_ok = Signal(list)
+    task_name = "listing folders"
+    trouble = "Could not list the folders"
+
+    def _work(self, engine) -> None:
+        folders = [info.name for info in engine.list_folders() if info.selectable]
+        found = []
+        for index, name in enumerate(folders):
+            if self.cancelled:
+                return
+            try:
+                count = engine.count_folder(name)
+            except Exception:      # noqa: BLE001 - one odd folder, not the list
+                count = -1
+            found.append((name, count))
+            self._emit_progress(index + 1, len(folders),
+                                f"Read {index + 1} of {len(folders)} folders…")
+        if not self.cancelled:
+            self.finished_ok.emit(found)
+
+
+class CountMatchingWorker(_FolderWorker):
+    """How many messages a set of criteria would delete. Deletes nothing.
+
+    Separate from the worker that does the deleting, and always run first,
+    because the number in "delete 4,312 messages?" has to come from the
+    server answering the same question that is about to be asked
+    destructively.
+    """
+
+    finished_ok = Signal(int)
+    task_name = "counting what matches"
+    trouble = "Could not count the messages"
+
+    def __init__(self, account, password: str, criteria, parent=None) -> None:
+        super().__init__(account, password, parent)
+        self.criteria = criteria
+
+    def _work(self, engine) -> None:
+        self._emit_progress(0, 1, "Asking the server…")
+        count = engine.count_matching(self.criteria)
+        if not self.cancelled:
+            self.finished_ok.emit(count)
+
+
+class CleanOutWorker(_FolderWorker):
+    """Deletes everything matching a :class:`cleanup.Criteria`.
+
+    One SEARCH to find them, then a hundred UIDs per STORE and a batched
+    EXPUNGE. A mailbox of five thousand is about a hundred commands, which
+    is the difference between a few seconds and an afternoon.
+    """
+
+    finished_ok = Signal(int)
+    task_name = "clearing out mail"
+    trouble = "Could not clear out the mail"
+
+    def __init__(self, account, password: str, criteria, parent=None) -> None:
+        super().__init__(account, password, parent)
+        self.criteria = criteria
+
+    def _work(self, engine) -> None:
+        removed = engine.delete_matching(
+            self.criteria, progress=self._emit_progress,
+            cancel=self.cancel_event)
+        if not self.cancelled:
+            self.finished_ok.emit(removed)

@@ -289,11 +289,13 @@ def self_test(offline: bool = False) -> int:
             raise RuntimeError("PDF is not in this build")
         working.append("PDF")
 
+        # Checked, not named. This line ends up in a public build log, and
+        # what the player does with a sound file is meant to be found
+        # rather than read about.
         import visualizers
         if len(visualizers.SCENES) < 2:
-            raise RuntimeError("the visualisers are not in this build")
-        scenes = len(visualizers.SCENES)
-        return f"{', '.join(working)}; {scenes} visualisers"
+            raise RuntimeError("part of the audio pane is not in this build")
+        return ", ".join(working)
 
     check("attachment viewer", _attachment_viewer)
 

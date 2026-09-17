@@ -280,8 +280,12 @@ class Spectrum(QWidget):
         self._source = None
 
         self._flow = QVariantAnimation(self)
-        self._flow.setDuration(900)
-        self._flow.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        # Long enough to read as growing rather than appearing, short
+        # enough that turning the visualiser on feels like turning
+        # something on. It was nearly a second, which is a long time to
+        # watch a panel arrive when you have already decided you want it.
+        self._flow.setDuration(380)
+        self._flow.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._flow.valueChanged.connect(self._reveal_changed)
 
         # Kept, and never started: conceal() is still reachable by hand
@@ -938,6 +942,72 @@ class Spectrum(QWidget):
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
 
+class _ControlBar(QWidget):
+    """The floating strip of controls, drawn rather than stylesheeted.
+
+    A stylesheet can give a widget a colour and a corner radius and
+    nothing else, so the bar used to be a flat black rectangle with round
+    corners sitting on the picture - which reads as a hole in it. What
+    makes a floating panel look like it is floating is the edge: a
+    gradient so the top catches more light than the bottom, a hairline
+    highlight along that top edge, and a shadow under it that separates
+    it from whatever is behind. Qt has no box-shadow, and the bar already
+    spends its one allowed graphics effect on the fade, so all three are
+    painted here.
+    """
+
+    #: How far the shadow reaches past the panel, in pixels.
+    SHADOW = 18
+    RADIUS = 12
+
+    def paintEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        painter = QPainter(self)
+        try:
+            self._paint(painter)
+        finally:
+            painter.end()
+
+    def _paint(self, painter) -> None:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        # The panel sits inside the widget by exactly the shadow's reach on
+        # every side, and the layout's margins are set from the same
+        # number - so the controls land inside the panel rather than over
+        # its edge, whatever the shadow is changed to.
+        panel = QRectF(self.rect()).adjusted(
+            self.SHADOW, self.SHADOW, -self.SHADOW, -self.SHADOW)
+        if panel.width() < 8 or panel.height() < 8:
+            return
+
+        # The shadow, as a few rounded rectangles of falling opacity. A
+        # blur would be truer and costs a full-size image every frame the
+        # bar fades; four strokes look the same behind a panel this dark.
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for step in range(5, 0, -1):
+            spread = step * (self.SHADOW / 5.0)
+            painter.setPen(QPen(QColor(0, 0, 0, 30), spread * 1.6))
+            painter.drawRoundedRect(panel.adjusted(-spread * 0.4, -spread * 0.4,
+                                                   spread * 0.4, spread * 0.4),
+                                    self.RADIUS + spread * 0.4,
+                                    self.RADIUS + spread * 0.4)
+
+        # The panel: lit from above, like every other surface in the app.
+        fill = QLinearGradient(panel.topLeft(), panel.bottomLeft())
+        fill.setColorAt(0.0, QColor(34, 32, 44, 236))
+        fill.setColorAt(1.0, QColor(14, 13, 20, 232))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(fill)
+        painter.drawRoundedRect(panel, self.RADIUS, self.RADIUS)
+
+        # A hairline round the outside, and a brighter one along the top.
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor(255, 255, 255, 28), 1.0))
+        painter.drawRoundedRect(panel.adjusted(0.5, 0.5, -0.5, -0.5),
+                                self.RADIUS, self.RADIUS)
+        painter.setPen(QPen(QColor(255, 255, 255, 46), 1.0))
+        painter.drawLine(QPointF(panel.left() + self.RADIUS, panel.top() + 1.0),
+                         QPointF(panel.right() - self.RADIUS, panel.top() + 1.0))
+
+
 class FullScreenSpectrum(QWidget):
     """The scene alone, filling the screen, with controls that get out of it.
 
@@ -959,6 +1029,14 @@ class FullScreenSpectrum(QWidget):
         self.setWindowTitle("Visualiser")
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.setMouseTracking(True)
+        # Near black, not the theme's window colour. A scene that does not
+        # fill the screen - anything but 16:9 on a 16:9 display - shows
+        # this at the sides, and a light grey band either side of a dark
+        # picture is the one thing full screen is meant to avoid.
+        self.setAutoFillBackground(True)
+        palette = self.palette()
+        palette.setColor(self.backgroundRole(), QColor(6, 5, 9))
+        self.setPalette(palette)
         self._spectrum = spectrum
         self._owner = owner
         self._home = spectrum.parentWidget()
@@ -978,20 +1056,18 @@ class FullScreenSpectrum(QWidget):
         spectrum.setParent(self)
         layout.addWidget(spectrum)
 
-        self.bar = QWidget(self)
+        self.bar = _ControlBar(self)
         self.bar.setMouseTracking(True)
-        # Scoped by object name. An unscoped rule cascades to every child,
-        # so each slider and label got its own dark rounded box and the
-        # tops of the knobs were clipped by it.
         self.bar.setObjectName("visualiserBar")
-        self.bar.setStyleSheet(
-            "QWidget#visualiserBar { background: rgba(12,10,18,215); "
-            "border-radius: 10px; }")
         # The same wrapping row the window uses. A fixed line squeezed its
         # controls into nothing on a small screen rather than taking a
-        # second line.
-        self._bar_layout = FlowRow(spacing=16)
-        self._bar_layout.setContentsMargins(14, 10, 14, 10)
+        # second line. Its margins leave room for the shadow the bar
+        # paints outside the panel, so the controls still sit where the
+        # panel is rather than over its edge.
+        pad = _ControlBar.SHADOW
+        self._bar_layout = FlowRow(spacing=14)
+        self._bar_layout.setContentsMargins(pad + 16, pad + 11,
+                                            pad + 16, pad + 11)
         self.bar.setLayout(self._bar_layout)
 
         self._fade = QVariantAnimation(self)
@@ -1088,12 +1164,18 @@ class FullScreenSpectrum(QWidget):
         # volume slider obviously the short one, but never wider than the
         # screen it has to sit on.
         width = max(320, min(int(self.width() * 0.86), self.width() - 48))
-        margins = self._bar_layout.contentsMargins()
-        rows = self._bar_layout.heightForWidth(
-            width - margins.left() - margins.right())
-        height = max(48, rows + margins.top() + margins.bottom())
-        self.bar.setGeometry(int((self.width() - width) / 2),
-                             int(self.height() - height - 28), width, height)
+        # Margins included: the layout counts its own, and adding them
+        # here as well made the bar half as tall again as its contents.
+        height = max(48 + _ControlBar.SHADOW * 2,
+                     self._bar_layout.heightForWidth(width))
+        # The widget is the panel plus the shadow painted around it, so
+        # the gap at the bottom is measured to the panel rather than to
+        # the widget - otherwise the shadow reads as extra margin and the
+        # bar floats higher than it looks like it should.
+        self.bar.setGeometry(
+            int((self.width() - width) / 2),
+            int(self.height() - height - 30 + _ControlBar.SHADOW),
+            width, height)
         self.bar.raise_()
         # No strip kept clear. Full screen means the whole screen, and the
         # bar fades out when it is not being used, so the scene running
@@ -1175,11 +1257,32 @@ class FlowRow(QLayout):
         return True
 
     def heightForWidth(self, width: int) -> int:      # noqa: N802 - Qt's name
-        return self._lay(QRect(0, 0, width, 0), apply=False)
+        """How tall the controls are in this width, margins included.
+
+        Margins included because that is what a caller asking a layout how
+        much room it needs means, and because ``setGeometry`` now takes
+        them off again - counting them in one place and not the other is
+        how a panel ends up shorter than the things inside it.
+        """
+        margins = self.contentsMargins()
+        inner = max(0, width - margins.left() - margins.right())
+        rows = self._lay(QRect(0, 0, inner, 0), apply=False)
+        return rows + margins.top() + margins.bottom()
 
     def setGeometry(self, rect) -> None:      # noqa: N802 - Qt's name
+        """Lay the controls out inside the margins, not over them.
+
+        A QLayout subclass is handed the whole rectangle and has to inset
+        it by its own contents margins; nothing does that for it. This did
+        not, so every margin set on it was ignored - which was invisible
+        while the margins were ten pixels and obvious the moment the
+        control bar wanted room around its panel for a shadow.
+        """
         super().setGeometry(rect)
-        self._lay(rect, apply=True)
+        margins = self.contentsMargins()
+        self._lay(rect.adjusted(margins.left(), margins.top(),
+                                -margins.right(), -margins.bottom()),
+                  apply=True)
 
     def sizeHint(self) -> QSize:      # noqa: N802 - Qt's name
         return self.minimumSize()
