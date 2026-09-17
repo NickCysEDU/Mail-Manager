@@ -284,9 +284,11 @@ request for documents or times, declining a recruiter, filing security notices,
 and leaving colleagues alone. They are worked examples - open one and change it.
 
 **Conditions** test job category, everyday topic, sender, domain, subject,
-body, confidence, mailbox, age, and whether it is bulk, has an attachment or is
-a reply. Operators are the obvious ones (is, contains, starts with, matches a
-pattern, is at least...). A rule matches on **all** conditions or **any**.
+body, confidence, mailbox, age, who it was addressed to, the names of anything
+attached, and whether it is bulk, has an attachment, is a reply, was sent to
+you directly rather than to a list, or came from a machine. Operators are the
+obvious ones (is, contains, starts with, matches a pattern, is at least...).
+A rule matches on **all** conditions or **any**.
 
 **Actions:**
 
@@ -313,6 +315,26 @@ A half-written rule never runs; the editor lists what is missing rather than
 refusing to save. The same check refuses a pattern that would hang the app  - 
 `(a+)+` and `.*.*x` - because a regular expression cannot be interrupted once
 started.
+
+**A rule that writes has three limits of its own**, in a box that only
+appears for rules that draft:
+
+- **At most once in N days per person.** Without it, somebody who writes four
+  times in a morning gets four identical drafts and a list you are on gets one
+  per post. This is the setting that makes auto-reply usable.
+- **Only between these hours, on these days.** A reply composed at three in
+  the morning reads as three in the morning, even though you send it later.
+  Filing is never held back this way - moving a message has not spoken to
+  anybody.
+- **Never to a machine, and this one cannot be switched off.** A no-reply
+  address, a bounce, a mailer daemon, or anything carrying the headers an
+  automatic reply sets (`Auto-Submitted`, `Precedence: bulk`,
+  `X-Auto-Response-Suppress`). Two responders answering each other is how this
+  feature goes wrong, and RFC 3834 exists so that one can recognise the other.
+
+When a rule matches and then says nothing, the run says which of these held it
+back, because "it matched and kept quiet" looks identical to "it did not
+match" and they mean opposite things.
 
 **Nothing is ever sent.** Drafts go to your Drafts mailbox, threaded with
 `In-Reply-To` and `References`, and you press send yourself. The model is told
@@ -394,6 +416,28 @@ deliberate:
 
 Saved files get the quarantine flag a download gets, and a name that exists
 becomes `report (2).pdf` rather than overwriting anything.
+
+## The briefing
+
+**File → Briefing** (Ctrl-B). Forty rows across four mailboxes is four hundred
+glances, and the three that matter are somewhere in the middle. The scan has
+already read every message and decided what each one is; the briefing is that,
+read back in the order somebody would want to be told it.
+
+**Needs you** first: offers, interviews to arrange, next steps, security
+notices, and anything the sorter could not place - ranked by what it costs to
+miss rather than by when it arrived, so an interview invitation from Tuesday
+outranks a rejection from an hour ago. Click one and it is selected in the
+table, with any filter that was hiding it cleared.
+
+Then the counts: what came in, by kind, each naming the folder it is bound for;
+where it is all going, which is the question "what would Apply actually do";
+who wrote more than once; and what is still waiting - unticked rows, anything
+in Needs Review, and any mailbox that produced nothing at all.
+
+**Copy** puts the whole thing on the clipboard as text. Nothing in it opens a
+mailbox or calls a model: it is the rows already on screen, counted, so it
+cannot disagree with the table and costs nothing to ask for.
 
 ## Clearing out a full mailbox
 
@@ -538,7 +582,7 @@ notice, and contribution terms.
 
 ```bash
 ./dev demo      # the app with sample mail, no setup
-./dev test      # 2,900 tests, about three minutes on four workers
+./dev test      # 3,003 tests, about three minutes on four workers
 ./dev eval      # sorter accuracy (needs a labelled set of your own)
 ./dev fake      # the whole pipeline in the terminal, offline
 ```

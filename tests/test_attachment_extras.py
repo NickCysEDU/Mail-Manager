@@ -992,11 +992,37 @@ class TestTheBuildKeepsWhatTheViewerNeeds:
         assert "visualizers" in body
 
 
+class _FakeClock:
+    """A clock the test moves, for anything paced in seconds.
+
+    The needles take three hundred milliseconds of real time to reach a
+    reading, the way a moving coil does. A test loop calling _tick five
+    times takes microseconds, so without this the meters are measured
+    before they have moved and the answer is always "nothing happened".
+    """
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self.now = start
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def pass_time(self, seconds: float) -> None:
+        self.now += seconds
+
+
 class TestTheMeterScene:
     """Ten analogue dials, copied from a photograph of a rack of them."""
 
     @staticmethod
-    def _spectrum(qtbot, position=1500):
+    def _settle(spectrum, clock, seconds=1.0):
+        """Run the clock forward at sixty a second, ticking as it goes."""
+        for _ in range(int(seconds * 60)):
+            clock.pass_time(1.0 / 60.0)
+            spectrum._tick()
+
+    @staticmethod
+    def _spectrum(qtbot, position=1500, clock=None):
         import math
         from array import array
 
@@ -1017,8 +1043,11 @@ class TestTheMeterScene:
         spectrum.resize(1000, 520)
         spectrum._reveal_changed(1.0)
         spectrum.set_position(position)
-        for _ in range(5):
-            spectrum._tick()
+        if clock is None:
+            for _ in range(5):
+                spectrum._tick()
+        else:
+            TestTheMeterScene._settle(spectrum, clock)
         return spectrum
 
     def test_there_are_ten_bands_with_the_asked_for_labels(self, qtbot):
@@ -1028,12 +1057,118 @@ class TestTheMeterScene:
             "73Hz", "120Hz", "300Hz", "576Hz", "1.4kHz",
             "2.4kHz", "6kHz", "9kHz", "18kHz", "22kHz"]
 
-    def test_a_tone_moves_its_own_needle(self, qtbot):
-        spectrum = self._spectrum(qtbot)
+    def test_a_tone_moves_its_own_needle(self, qtbot, monkeypatch):
+        import attachment_widgets
+
+        clock = _FakeClock()
+        monkeypatch.setattr(attachment_widgets, "_time", clock)
+        spectrum = self._spectrum(qtbot, clock=clock)
         dials = spectrum._state.dials
         assert dials[0] > 0.5, "73 Hz did not move the 73 Hz needle"
         assert dials[4] > 0.4, "1.4 kHz did not move the 1.4 kHz needle"
         assert dials[8] < 0.4, "18 kHz moved with nothing there"
+
+    # -- how the needle moves ---------------------------------------------
+    @staticmethod
+    def _step_response(monkeypatch, target=1.0, seconds=1.0):
+        """One needle, driven from rest to `target`, sampled at sixty."""
+        import attachment_widgets
+        from attachment_widgets import Spectrum
+
+        clock = _FakeClock()
+        monkeypatch.setattr(attachment_widgets, "_time", clock)
+        spectrum = Spectrum()
+        spectrum._dial_level = [0.0]
+        spectrum._dial_speed = [0.0]
+        spectrum._dial_clock = None
+        track = []
+        for _ in range(int(seconds * 60)):
+            clock.pass_time(1.0 / 60.0)
+            spectrum._swing([target])
+            track.append(spectrum._dial_level[0])
+        return track
+
+    def test_the_needle_takes_about_three_hundred_milliseconds(
+            self, qapp, monkeypatch):
+        """Which is what makes it a VU meter rather than a bar graph.
+
+        The standard is 300ms from rest to 99% of a step. Anything much
+        faster is the jumpiness this replaced; much slower and it lags
+        behind the music it is supposed to be reading.
+        """
+        track = self._step_response(monkeypatch)
+        arrived = next((i for i, v in enumerate(track) if v >= 0.99), None)
+        assert arrived is not None, "the needle never reached its reading"
+        millis = (arrived + 1) / 60.0 * 1000
+        assert 200 <= millis <= 420, (
+            f"it took {millis:.0f} ms to reach 99%, against 300 ms")
+
+    def test_no_single_frame_throws_it_across_the_face(
+            self, qapp, monkeypatch):
+        """The complaint. The rule used to be "instant up, slow down", so
+        a band that jumped ten decibels between two frames moved the
+        needle the whole width of the scale in one of them."""
+        track = self._step_response(monkeypatch)
+        biggest = max(abs(track[i + 1] - track[i])
+                      for i in range(len(track) - 1))
+        assert biggest < 0.25, (
+            f"one frame moved the needle {biggest * 100:.0f}% of the scale")
+
+    def test_it_overshoots_a_little_and_not_a_lot(self, qapp, monkeypatch):
+        """A real movement sails just past and comes back - that is the
+        whole character of it. Past a couple of per cent it reads as a
+        wobble, and on the way down it slaps into the zero pin."""
+        track = self._step_response(monkeypatch)
+        assert max(track) <= 1.03, f"it overshot to {max(track):.3f}"
+        assert abs(track[-1] - 1.0) < 0.01, "it never settled"
+
+    def test_it_never_leaves_the_face(self, qapp, monkeypatch):
+        rising = self._step_response(monkeypatch, target=1.0)
+        assert min(rising) >= 0.0
+        assert max(rising) <= 1.15
+        # And coming back down, where an underdamped needle would swing
+        # below zero and be drawn off the bottom of the scale.
+        import attachment_widgets
+        from attachment_widgets import Spectrum
+
+        clock = _FakeClock()
+        monkeypatch.setattr(attachment_widgets, "_time", clock)
+        spectrum = Spectrum()
+        spectrum._dial_level = [1.0]
+        spectrum._dial_speed = [0.0]
+        spectrum._dial_clock = None
+        lowest = 1.0
+        for _ in range(60):
+            clock.pass_time(1.0 / 60.0)
+            spectrum._swing([0.0])
+            lowest = min(lowest, spectrum._dial_level[0])
+        assert lowest >= 0.0, f"the needle went to {lowest:.3f}"
+
+    def test_a_late_frame_does_not_fling_it(self, qapp, monkeypatch):
+        """A stalled window hands back a step measured in seconds. The
+        integrator is only stable while the step is short against the
+        swing, so a big one has to be walked rather than taken."""
+        import attachment_widgets
+        from attachment_widgets import Spectrum
+
+        clock = _FakeClock()
+        monkeypatch.setattr(attachment_widgets, "_time", clock)
+        spectrum = Spectrum()
+        spectrum._dial_level = [0.0]
+        spectrum._dial_speed = [0.0]
+        spectrum._dial_clock = None
+        spectrum._swing([1.0])
+        clock.pass_time(3.0)
+        spectrum._swing([1.0])
+        landed = spectrum._dial_level[0]
+        # The gap is clamped to a tenth of a second and then walked in
+        # short pieces, so what comes out is a tenth of a second of
+        # movement - about two thirds of the way. Taken in one piece the
+        # integrator diverges and the needle slams into its end stop,
+        # which is why "still on the face" is not a strong enough check.
+        assert 0.2 <= landed <= 0.9, (
+            f"a three second gap put the needle at {landed:.2f}, which is "
+            "not a tenth of a second of travel")
 
     def test_the_decoder_reaches_the_top_band(self):
         """22 kHz needs 48 kHz decoding; 22 kHz decoding would be noise."""

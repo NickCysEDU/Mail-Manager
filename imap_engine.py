@@ -432,6 +432,10 @@ def parse_message(
         to=_decode_header_value(message.get("To")),
         reply_to=_decode_header_value(message.get("Reply-To")),
         list_unsubscribe=_decode_header_value(message.get("List-Unsubscribe")),
+        auto_submitted=_decode_header_value(message.get("Auto-Submitted")),
+        precedence=_decode_header_value(message.get("Precedence")),
+        x_auto_response_suppress=_decode_header_value(
+            message.get("X-Auto-Response-Suppress")),
         size=size or len(raw),
         flags=tuple(flags),
         links=extracted.links,

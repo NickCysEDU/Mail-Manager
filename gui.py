@@ -1573,6 +1573,15 @@ class MainWindow(QMainWindow):
 
         file_menu.addSeparator()
 
+        brief_action = QAction("&Briefing…", self)
+        brief_action.setShortcut(QKeySequence("Ctrl+B"))
+        brief_action.setStatusTip(
+            "What the last scan found, in the order worth reading it: what "
+            "needs you, what arrived, and where it is all going.")
+        brief_action.triggered.connect(self._show_briefing)
+        file_menu.addAction(brief_action)
+        file_menu.addSeparator()
+
         clear_action = QAction("Clear out mail…", self)
         clear_action.setStatusTip(
             "Delete mail by sender, subject or age - thousands at a time, "
@@ -2375,6 +2384,10 @@ class MainWindow(QMainWindow):
         if outcome.folder_plan is not None:
             self.folder_plan = outcome.folder_plan
         self._has_scanned = True
+        # Kept for the briefing, which has to be able to say what window
+        # it is reporting on - "nothing needs you" means nothing without
+        # "in the last six hours" after it.
+        self._scanned_window = (outcome.window_start, outcome.window_end)
         self.model.set_items(outcome.items)
         self._view_accounts = []
         self._view_all = True
@@ -3359,6 +3372,40 @@ class MainWindow(QMainWindow):
 
     def _forget_visualiser(self) -> None:
         self._visualiser_window = None
+
+    def _show_briefing(self) -> None:
+        """What the last scan found, read back as a briefing.
+
+        Off the rows already on screen, so it costs nothing and cannot
+        disagree with the table - it is the same list, counted.
+        """
+        import briefing_dialog
+
+        items = list(getattr(self.model, "items", []))
+        start, end = getattr(self, "_scanned_window", (None, None))
+        briefing_dialog.show(
+            items, parent=self, window_start=start, window_end=end,
+            mailboxes=[a.label or a.address
+                       for a in self.settings.scan_accounts],
+            on_row=self._reveal_row)
+
+    def _reveal_row(self, row: int) -> None:
+        """Select a row the briefing pointed at, clearing any filter hiding it.
+
+        Clearing the filter first, because a briefing that says "this needs
+        you" and then selects nothing - because the row is hidden behind
+        "Show: job mail only" - is worse than one that says nothing at all.
+        """
+        items = getattr(self.model, "items", [])
+        if not (0 <= row < len(items)):
+            return
+        if not self.proxy.mapFromSource(self.model.index(row, 0)).isValid():
+            self._clear_filters()
+        self._select_rows([row])
+        index = self.proxy.mapFromSource(self.model.index(row, 0))
+        if index.isValid():
+            self.table.scrollTo(index)
+            self.table.setFocus()
 
     def _clear_out_mail(self) -> None:
         """Open the window for deleting mail in bulk.

@@ -508,6 +508,13 @@ class EmailMessage:
     to: str = ""
     reply_to: str = ""
     list_unsubscribe: str = ""
+    #: RFC 3834's header, set by anything that answered automatically, and
+    #: the older conventions that do the same job. Kept so a reply rule can
+    #: recognise another machine and say nothing - two autoresponders
+    #: talking to each other is the classic way this feature goes wrong.
+    auto_submitted: str = ""
+    precedence: str = ""
+    x_auto_response_suppress: str = ""
     size: int = 0
     flags: Tuple[str, ...] = ()
     links: Tuple[str, ...] = ()

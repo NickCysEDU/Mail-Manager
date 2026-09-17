@@ -27,6 +27,13 @@ class Scene:
     name = "scene"
     blurb = "a scene"
 
+    #: How many pixels this scene can afford to draw at their real size.
+    #: Zero means "whatever the pane's own floor is". A scene raises it
+    #: when most of its frame is a blit rather than a stroke, because the
+    #: pane's floor is set for the ones that stroke curves and applying it
+    #: to the others softens them for nothing.
+    sharp_pixels = 0
+
     def paint(self, painter: QPainter, rect, state) -> None:
         raise NotImplementedError
 
@@ -891,6 +898,13 @@ class Meters(Scene):
     name = "VU meters"
     blurb = "ten analogue dials, one per band, with a colour picker"
 
+    #: Four megapixels drawn sharp. A face is rendered once per size and
+    #: blitted after that, so a full screen of them is ten pixmap copies
+    #: and ten needles - the pane's usual budget would halve the
+    #: resolution of an instrument panel whose whole point is that the
+    #: numbers on it are readable.
+    sharp_pixels = 4_000_000
+
     #: The needle's travel, in degrees, measured the way Qt measures arcs.
     #: Centred on straight up, so the face sits square in its cell - the
     #: first attempt started at 202 and leaned the whole dial to the left.
@@ -911,7 +925,10 @@ class Meters(Scene):
     DB_MARKS = tuple((db, (10.0 ** (db / 20.0)) / (10.0 ** (3.0 / 20.0)))
                      for db in (-24, -12, -3, 0, 1, 2, 3))
     #: Below this face radius the per-cent row is dropped as unreadable.
-    PERCENT_RADIUS = 150.0
+    #: It used to be 150, which no cell on a 1080p screen ever reached
+    #: with ten meters on it, so the row that is half of what a VU face
+    #: looks like had never once been drawn outside a test.
+    PERCENT_RADIUS = 76.0
     #: And below this, the face shows only what it can show clearly.
     ROOMY = 62.0
     #: The three numbers worth keeping when there is no room for seven.
@@ -940,13 +957,21 @@ class Meters(Scene):
         cell_w = rect.width() / columns
         cell_h = rect.height() / rows
         flash = self.flash(state)
+        # How many real pixels one unit of this rect is worth, so a face
+        # is rendered at the resolution it will be shown at and no more.
+        # It used to be supersampled two to one whatever the pane was
+        # doing, which was right while the pane drew scenes at half size
+        # and stretched them, and pure waste once this one asked to be
+        # drawn sharp: ten faces at twice the size they are blitted at is
+        # four times the pixels to copy every frame.
+        dpr = abs(painter.combinedTransform().m11()) or 1.0
         for index in range(count):
             box = QRectF(rect.left() + (index % columns) * cell_w,
                          rect.top() + (index // columns) * cell_h,
                          cell_w, cell_h)
             label = (state.dial_labels[index]
                      if index < len(state.dial_labels) else "")
-            self._meter(painter, box, levels[index], label, state, flash)
+            self._meter(painter, box, levels[index], label, state, flash, dpr)
 
     @staticmethod
     def _grid(rect, count: int):
@@ -980,14 +1005,15 @@ class Meters(Scene):
         return best[0], best[1]
 
     # -- one meter --------------------------------------------------------
-    def _meter(self, painter, box, value, label, state, flash) -> None:
+    def _meter(self, painter, box, value, label, state, flash,
+               dpr: float = 1.0) -> None:
         key = (int(box.width()), int(box.height()), label,
-               state.dial_colour.rgba())
+               state.dial_colour.rgba(), round(dpr, 2))
         face = self._faces.get(key)
         if face is None:
             if len(self._faces) > 48:
                 self._faces.clear()
-            face = self._render_face(box, label, state)
+            face = self._render_face(box, label, state, dpr)
             self._faces[key] = face
         painter.drawPixmap(box.topLeft(), face)
 
@@ -1035,15 +1061,22 @@ class Meters(Scene):
         return {
             "radius": radius,
             "centre": QPointF(centre_x, centre_y),
-            # A real meter hinges the needle at the centre of its own arc.
-            "pivot": QPointF(centre_x, centre_y),
+            # Below the arc's centre, which is where a moving coil
+            # actually sits: the needle is a long arm swinging up into
+            # the scale, and hinging it at the centre made it a spoke
+            # about a third the length the instrument has.
+            "pivot": QPointF(centre_x, centre_y + radius * 0.62),
             "inner": inner,
         }
 
-    def _render_face(self, box, label, state):
+    def _render_face(self, box, label, state, dpr: float = 1.0):
         from PySide6.QtGui import QPixmap
 
-        ratio = 2.0
+        # One and a half times what it is shown at, capped. Rendering a
+        # face exactly to size leaves its thin strokes and small numbers
+        # aliased against the arc; going much past this buys nothing and
+        # costs a bigger blit on every frame.
+        ratio = max(1.0, min(2.0, dpr * 1.5))
         pixmap = QPixmap(max(1, int(box.width() * ratio)),
                          max(1, int(box.height() * ratio)))
         pixmap.setDevicePixelRatio(ratio)
@@ -1065,8 +1098,20 @@ class Meters(Scene):
         span = QRectF(centre.x() - radius, centre.y() - radius,
                       radius * 2, radius * 2)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(colour, max(1.2, radius * 0.024)))
-        painter.drawArc(span, int(self.START * 16), int(self.SWEEP * 16))
+        # Two arcs, because a real face has two. The scale is one weight
+        # from the bottom of the range up to 0 dB and heavier from there
+        # to the end of the travel - that heavier run is the red zone, and
+        # it is the one marking on the instrument that means anything at a
+        # glance.
+        zero = self._db_at(0.0)
+        painter.setPen(QPen(colour, max(1.4, radius * 0.030),
+                            Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
+        painter.drawArc(span, int(self.START * 16),
+                        int(self.SWEEP * zero * 16))
+        painter.setPen(QPen(colour, max(2.2, radius * 0.052),
+                            Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
+        painter.drawArc(span, int((self.START + self.SWEEP * zero) * 16),
+                        int(self.SWEEP * (1.0 - zero) * 16))
 
         # A small face drops what it cannot show legibly rather than
         # printing it on top of itself. Ten meters in a strip two hundred
@@ -1077,12 +1122,24 @@ class Meters(Scene):
 
         for _value, fraction in marks:
             self._tick(painter, centre, radius, fraction, colour,
-                       0.86, 1.0, max(1.1, radius * 0.022))
+                       0.84, 1.0, max(1.3, radius * 0.026))
         if roomy:
-            painter.setPen(QPen(dim, max(0.8, radius * 0.014)))
+            # Dots, not lines. Every meter of this kind puts a row of
+            # small points inside the arc between the numbered marks, and
+            # short strokes hanging off the scale read as a comb instead.
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(dim)
+            size = max(0.9, radius * 0.020)
+            numbered = {round(f, 4) for _v, f in marks}
             for fraction in self.MINOR:
-                self._tick(painter, centre, radius, fraction, dim,
-                           0.94, 1.0, max(0.8, radius * 0.014))
+                if round(fraction, 4) in numbered:
+                    continue
+                angle = self._angle(fraction)
+                painter.drawEllipse(
+                    QPointF(centre.x() + math.cos(angle) * radius * 0.90,
+                            centre.y() - math.sin(angle) * radius * 0.90),
+                    size, size)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
 
         font = painter.font()
         # A shade larger and a little bolder: at forty pixels of radius
@@ -1098,11 +1155,19 @@ class Meters(Scene):
         # which reads as a smudge, so it waits for a face big enough to
         # carry it - which is what full screen is for.
         if radius >= self.PERCENT_RADIUS:
-            font.setPointSizeF(max(5.0, radius * 0.115))
+            # Out near the arc and set small. The per-cent marks are
+            # bunched into the left two thirds of the travel - a hundred
+            # per cent is 0 dB, not the end of the scale - so the room
+            # between them is the arc length at whatever radius they are
+            # drawn at, and at 0.70 radii in a face this size the numbers
+            # were wider than the gaps and ran into each other.
+            font.setPointSizeF(max(4.5, radius * 0.105))
             painter.setFont(font)
-            painter.setPen(QPen(dim))
+            inside = QColor(colour)
+            inside.setAlphaF(0.78)
+            painter.setPen(QPen(inside))
             for value, fraction in self.PERCENT_MARKS:
-                self._label(painter, centre, radius * 0.84, fraction,
+                self._label(painter, centre, radius * 0.80, fraction,
                             str(value), tight=True)
         font.setPointSizeF(max(5.5, radius * 0.155))
         painter.setFont(font)
@@ -1142,9 +1207,16 @@ class Meters(Scene):
         angle = self._angle(fraction)
         point = QPointF(centre.x() + math.cos(angle) * distance,
                         centre.y() - math.sin(angle) * distance)
-        size = max(11.0, distance * (0.16 if tight else 0.26))
-        painter.drawText(QRectF(point.x() - size, point.y() - size * 0.45,
-                                size * 2, size * 0.9),
+        # The box the text is centred in. Narrower than the gap to its
+        # neighbour, or two numbers share pixels - which is why the inner
+        # row gets a much tighter one than the outer - but never narrower
+        # than the text, which is how "100" came out as "10(".
+        size = max(8.0, distance * (0.11 if tight else 0.26))
+        width = max(size * 2.0,
+                    painter.fontMetrics().horizontalAdvance(text) + 4.0)
+        height = max(size * 0.9, painter.fontMetrics().height())
+        painter.drawText(QRectF(point.x() - width / 2.0,
+                                point.y() - height / 2.0, width, height),
                          Qt.AlignmentFlag.AlignCenter, text)
 
     def _needle(self, painter, geometry, value, state) -> None:
@@ -1158,19 +1230,28 @@ class Meters(Scene):
         # movement sits. Short of the arc rather than through it - at 0.86
         # it crossed the scale it is reading and went through the number
         # at the top.
-        tip = centre + reach * (radius * 0.80)
+        tip = centre + reach * (radius * 0.82)
         tail = pivot
         halo = QColor(state.dial_colour)
         halo.setAlphaF(0.26)
-        painter.setPen(QPen(halo, max(3.0, radius * 0.085),
+        painter.setPen(QPen(halo, max(3.0, radius * 0.075),
                             Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
         painter.drawLine(tail, tip)
-        painter.setPen(QPen(state.dial_colour, max(1.4, radius * 0.030),
-                            Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        painter.drawLine(tail, tip)
+        # Tapered, in three strokes from the hinge out. A needle is
+        # broad where it is anchored and fine where it has to be read
+        # against a scale, and a line of one width is the one thing that
+        # makes a drawn meter look drawn.
+        for start, finish, width in ((0.0, 0.45, 0.032),
+                                     (0.40, 0.78, 0.023),
+                                     (0.74, 1.0, 0.015)):
+            painter.setPen(QPen(state.dial_colour, max(1.1, radius * width),
+                                Qt.PenStyle.SolidLine,
+                                Qt.PenCapStyle.RoundCap))
+            painter.drawLine(tail + (tip - tail) * start,
+                             tail + (tip - tail) * finish)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(state.dial_colour)
-        painter.drawEllipse(pivot, radius * 0.045, radius * 0.045)
+        painter.drawEllipse(pivot, radius * 0.050, radius * 0.050)
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
 

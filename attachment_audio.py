@@ -288,12 +288,19 @@ class _AnalysisThread(_QThread_base):
                             should_stop=lambda: self._stop)
             vectors = vector_traces(self._samples, self._rate, self._channels,
                                     should_stop=lambda: self._stop)
+            # Where the beats are. Off the frames that have just been
+            # computed, on this thread, because it is milliseconds of work
+            # against the seconds the analysis takes and doing it here
+            # means the strobe knows the whole track before a note plays -
+            # which is what lets it sit on the beat instead of chasing it.
+            import beatmap
+            beats = beatmap.build(frames, RATE)
         except Exception as exc:      # noqa: BLE001
             if not self._stop:
                 self.failed.emit(str(exc))
             return
         if not self._stop:
-            self.done.emit((frames, shapes, vectors, calibration))
+            self.done.emit((frames, shapes, vectors, calibration, beats))
 
 
 class _Analysis(QObject_base):

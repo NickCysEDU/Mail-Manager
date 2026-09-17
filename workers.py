@@ -769,6 +769,11 @@ class ReplyRun:
     saved: int = 0
     marked_read: int = 0
     flagged: int = 0
+    #: Reasons a rule matched and still wrote nothing - already answered
+    #: this person, the wrong time of day, a machine on the other end.
+    #: Kept because "it matched and said nothing" looks identical to "it
+    #: did not match" from outside, and they mean opposite things.
+    held: List[str] = field(default_factory=list)
 
     def add(self, item: TriageItem, outcome) -> None:
         self.outcomes.append((item, outcome))
@@ -799,6 +804,11 @@ class ReplyRun:
             parts.append(f"pointed {filed} at a different folder")
         if failed:
             parts.append(f"{len(failed)} could not be written")
+        if self.held:
+            reasons = sorted(set(self.held))
+            parts.append(f"held {len(self.held)} back ({reasons[0]})"
+                         if len(reasons) == 1
+                         else f"held {len(self.held)} back")
         return ", ".join(parts) + ". Nothing has been sent."
 
 
@@ -855,6 +865,19 @@ class ReplyWorker(_BaseWorker):
             )
 
         signature = self.settings.reply_signature
+        # Who has already been written to. Loaded once for the whole run
+        # rather than per message: a rule set to write once a week would
+        # otherwise not notice the three drafts it wrote in this same run,
+        # which is exactly the case it exists for.
+        import reply_log as _reply_log
+
+        try:
+            written = _reply_log.ReplyLog.load()
+        except Exception as exc:      # noqa: BLE001 - a log, not the mail
+            self._log(f"Could not read the reply log ({exc}).")
+            written = _reply_log.ReplyLog()
+        context = {"reply_log": written}
+
         total = len(self.items)
         for index, item in enumerate(self.items, start=1):
             if self.cancel_event.is_set():
@@ -865,7 +888,7 @@ class ReplyWorker(_BaseWorker):
             try:
                 outcome = autoreply.apply_rules(
                     rules, item.email, item.classification, signature,
-                    self._classifier)
+                    self._classifier, context=context)
             except Exception as exc:  # noqa: BLE001 - one bad rule, not a crash
                 # Named by position rather than by subject: this line goes
                 # to the log file, and the promise made in SECURITY.md is
@@ -874,8 +897,21 @@ class ReplyWorker(_BaseWorker):
                 continue
             if outcome is not None:
                 result.add(item, outcome)
+                # Written down as the draft is composed, not after it is
+                # saved, so that the next message in this same run already
+                # knows about it. A draft that then fails to save costs one
+                # missed reply; the other way round costs a duplicate for
+                # every message from that sender in the batch.
+                if outcome.draft is not None and outcome.drafted_to:
+                    written.remember(outcome.drafted_to, outcome.drafted_by)
+                for reason in outcome.held:
+                    result.held.append(reason)
 
         self._emit_progress(total, total, "Carrying out what the rules said.")
+        try:
+            written.save()
+        except Exception as exc:      # noqa: BLE001
+            self._log(f"Could not write the reply log ({exc}).")
         if not result.outcomes:
             self._log("No message matched a reply rule.")
             self.finished_ok.emit(result)
