@@ -1713,7 +1713,7 @@ class TestItHoldsSixtyFramesASecond:
             for _ in range(4):
                 spectrum._tick()
                 spectrum._paint(painter)
-            worst = 0.0
+            spent = []
             rounds = 24
             started = time.monotonic()
             for step in range(rounds):
@@ -1721,7 +1721,7 @@ class TestItHoldsSixtyFramesASecond:
                 spectrum._tick()
                 one = time.monotonic()
                 spectrum._paint(painter)
-                worst = max(worst, (time.monotonic() - one) * 1000)
+                spent.append((time.monotonic() - one) * 1000)
             each = (time.monotonic() - started) / rounds * 1000
         finally:
             painter.end()
@@ -1730,10 +1730,18 @@ class TestItHoldsSixtyFramesASecond:
         assert each < budget, (
             f"the scope takes {each:.1f} ms a frame at a decay of {decay}, "
             f"against {budget:.1f} ms for this machine")
-        # And no single frame twice over, because a stutter every so often
-        # is what somebody actually notices.
-        assert worst < budget * 2, (
-            f"one frame took {worst:.1f} ms at a decay of {decay}")
+        # And the slow frames, because an average inside the budget with a
+        # stutter every second is what somebody actually notices.
+        #
+        # The ninetieth percentile rather than the worst one: on a shared
+        # build machine a single frame gets descheduled and comes back at
+        # forty milliseconds, which says nothing about this code. Ten per
+        # cent of frames over the budget is a stutter; one is weather.
+        spent.sort()
+        ninety = spent[int(len(spent) * 0.9)]
+        assert ninety < budget * 1.5, (
+            f"a tenth of the frames take {ninety:.1f} ms or more at a decay "
+            f"of {decay}, against {budget:.1f} ms")
 
     def test_the_decay_does_not_change_what_a_frame_costs(self, qtbot):
         """A screen that fades costs the same whatever it is set to.
