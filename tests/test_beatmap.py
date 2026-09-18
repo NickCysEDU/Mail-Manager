@@ -325,3 +325,152 @@ class TestTheStrobeUsesIt:
         spectrum.set_position(15016)
         spectrum._tick()
         assert spectrum._beat_at - after <= 2
+
+
+class TestPickingTheKitApart:
+    """Kick, snare and hats, told from one another.
+
+    The thresholds come from a kit played to a known pattern; these check
+    they hold on patterns they were not fitted to, because a classifier
+    tuned until one recording passes is a lookup table.
+    """
+
+    @staticmethod
+    def _play(bpm, pattern, seconds=12, seed=7, kick_hz=52, snare_hz=190):
+        import math
+        import random
+        from array import array
+
+        import attachment_audio
+
+        rate = attachment_audio.DECODE_RATE
+        shake = random.Random(seed)
+        total = int(rate * seconds)
+        pcm = array("h", [0]) * (total * 2)
+        six = 60.0 / bpm / 4
+        want = {name: [] for name in pattern}
+
+        def add(at, make, length):
+            start = int(at * rate)
+            for step in range(int(rate * length)):
+                if not 0 <= start + step < total:
+                    continue
+                here = (start + step) * 2
+                value = int(make(step))
+                pcm[here] = max(-32768, min(32767, pcm[here] + value))
+                pcm[here + 1] = pcm[here]
+
+        bar = 0.0
+        while bar < seconds:
+            for step in range(16):
+                at = bar + step * six
+                if at >= seconds:
+                    break
+                if step in pattern.get("kick", []):
+                    add(at, lambda i: 22000 * math.exp(-i / (rate * 0.05))
+                        * math.sin(2 * math.pi
+                                   * (kick_hz + 40 * math.exp(-i / (rate * 0.02)))
+                                   * i / rate), 0.16)
+                    want["kick"].append(at)
+                if step in pattern.get("snare", []):
+                    add(at, lambda i: (9000 * math.exp(-i / (rate * 0.09))
+                                       * shake.uniform(-1, 1)
+                                       + 9000 * math.exp(-i / (rate * 0.05))
+                                       * math.sin(2 * math.pi * snare_hz * i / rate)),
+                        0.12)
+                    want["snare"].append(at)
+                if step in pattern.get("hats", []):
+                    add(at, lambda i: 6000 * math.exp(-i / (rate * 0.006))
+                        * shake.uniform(-1, 1), 0.03)
+                    want["hats"].append(at)
+            bar += six * 16
+        return pcm, want
+
+    @staticmethod
+    def _found(pcm):
+        import attachment_audio
+
+        fine = attachment_audio.onset_frames(
+            pcm, attachment_audio.DECODE_RATE, 2)
+        assert fine, "the onset pass produced nothing"
+        return beatmap.elements(fine, attachment_audio.ONSET_RATE)
+
+    @staticmethod
+    def _score(found, name, truth, tol=0.10):
+        got = [b.at for b in found[name].beats]
+        hit = sum(1 for t in truth if any(abs(t - g) < tol for g in got))
+        spurious = sum(1 for g in got
+                       if not any(abs(t - g) < tol for t in truth))
+        return hit / max(1, len(truth)), spurious
+
+    def test_a_kick_is_found_and_nothing_else_is_called_one(self):
+        pcm, want = self._play(120, {"kick": [0, 4, 8, 12],
+                                     "hats": [2, 6, 10, 14]})
+        found = self._found(pcm)
+        recall, spurious = self._score(found, "Kick", want["kick"])
+        assert recall > 0.85, f"only found {recall:.0%} of the kicks"
+        assert spurious <= 2, f"{spurious} things called a kick that were not"
+
+    def test_hats_alone_are_never_called_kicks(self):
+        pcm, want = self._play(120, {"hats": list(range(16))})
+        found = self._found(pcm)
+        assert len(found["Kick"].beats) <= 2
+        assert len(found["Snare"].beats) <= 2
+        recall, _ = self._score(found, "Hats", want["hats"])
+        assert recall > 0.85
+
+    def test_kicks_alone_are_never_called_hats(self):
+        """The one that decided where the hat threshold sits: with the
+        band detector trusted on its own, every kick came back as a hat
+        as well, and the two channels were the same channel."""
+        pcm, want = self._play(120, {"kick": [0, 4, 8, 12]})
+        found = self._found(pcm)
+        assert len(found["Hats"].beats) <= 3, (
+            f"{len(found['Hats'].beats)} hats in a track with no hats")
+
+    def test_a_kick_and_a_snare_do_not_land_on_each_other(self):
+        pcm, want = self._play(120, {"kick": [0, 8], "snare": [4, 12],
+                                     "hats": [2, 6, 10, 14]})
+        found = self._found(pcm)
+        kicks = [b.at for b in found["Kick"].beats]
+        snares = [b.at for b in found["Snare"].beats]
+        assert kicks and snares
+        together = sum(1 for k in kicks if any(abs(k - s) < 0.06
+                                               for s in snares))
+        assert together == 0, (
+            f"{together} of {len(kicks)} kicks were also called snares")
+
+    def test_a_snare_is_found_at_a_pitch_it_was_not_tuned_at(self):
+        pcm, want = self._play(120, {"kick": [0, 8], "snare": [4, 12]},
+                               snare_hz=250)
+        found = self._found(pcm)
+        recall, spurious = self._score(found, "Snare", want["snare"])
+        assert recall > 0.8, f"only found {recall:.0%} of the snares"
+
+    def test_the_bands_are_read_linearly_not_in_decibels(self):
+        """Decibels compress a hundred-to-one difference into twenty units
+        of seventy, so every band rises together and a kick, a snare and a
+        hat come out looking the same - measured, they agreed to within
+        four per cent and nothing could be told apart."""
+        import attachment_audio
+
+        pcm, _ = self._play(120, {"kick": [0, 4, 8, 12]})
+        fine = attachment_audio.onset_frames(
+            pcm, attachment_audio.DECODE_RATE, 2)
+        loudest = max(max(row) for row in fine)
+        quietest = min(min(row) for row in fine)
+        # Linear values span orders of magnitude; dB-scaled ones would sit
+        # in a narrow band near the top.
+        assert loudest > 0.9
+        assert quietest < 0.02
+
+    def test_the_finer_pass_can_see_the_bottom_of_the_range(self):
+        """At a 512-point window the lowest band a transform can report
+        starts at 93 Hz, which is above where a kick lives."""
+        import attachment_audio
+
+        bins = attachment_audio.ONSET_WINDOW // 2
+        hz = attachment_audio.DECODE_RATE / attachment_audio.ONSET_WINDOW
+        low, high = attachment_audio._onset_edges(bins)[0]
+        assert low * hz < 60.0, (
+            f"the lowest band starts at {low * hz:.0f} Hz, above a kick")

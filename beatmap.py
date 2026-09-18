@@ -61,6 +61,71 @@ SOURCES: Dict[str, Tuple[float, float]] = {
     "Treble": (0.55, 1.00),
 }
 
+#: The parts of a kit, and what each one looks like in a spectrum.
+#:
+#: These are not the band ranges above under different names. A band is a
+#: place; an instrument is a place *and* a shape. A kick is a short burst
+#: at the very bottom and almost nothing above it. A snare is a crack
+#: around two hundred hertz with a wash of noise over the whole top half,
+#: which is what tells it from a tom. A hat is the top of the range and
+#: nothing else, and it is over before a kick has finished starting.
+#:
+#: (low, high, needs_wide, how_fast) - needs_wide asks that the rest of
+#: the spectrum move too, which is what separates a snare from a bass
+#: note at the same moment; how_fast is the shortest gap between two of
+#: them, since a hat can repeat four times inside one kick.
+#: Ranges are fractions of the band index, and the bands are the twelve
+#: log-spaced ones the onset pass reports: 0 is 46-93 Hz, 2 is 93-234,
+#: 5 is 609-1078, and 11 runs to the top of hearing.
+ELEMENTS: Dict[str, Tuple[float, float, float]] = {
+    "Kick": (0.00, 0.19, 0.13),
+    "Snare": (0.25, 0.62, 0.14),
+    "Hats": (0.70, 1.00, 0.05),
+    "Bass": (0.00, 0.26, 0.11),
+    "Synth": (0.25, 0.75, 0.09),
+}
+
+#: The three places a hit can be, used to decide which instrument it was.
+#: Coarse on purpose: the question is only "bottom, middle or top", and a
+#: finer split makes the shares noisier without making them truer.
+LOW, MID, HIGH = (0.00, 0.25), (0.25, 0.64), (0.64, 1.00)
+
+#: What each instrument's rise looks like, as shares of bottom, middle
+#: and top. Measured off a kit played to a known pattern rather than
+#: chosen: with the bands read linearly the three are far apart, and
+#: these are the gaps between them.
+#:
+#:      kick   bottom 0.89-1.00  middle 0.00-0.09  top 0.00-0.02
+#:      snare  bottom 0.39-0.53  middle 0.36-0.50  top 0.11
+#:      hats   bottom 0.16-0.31  middle 0.36-0.49  top 0.33-0.44
+#:
+#: The top share is what separates all three, and the bottom share is
+#: what stops a snare being read as a kick: a snare has a two hundred
+#: hertz body, so half its energy really is down there, and the thing
+#: that makes it a snare is the sizzle over the top.
+#:
+#: Hats are the exception and are left almost unconstrained. When a hat
+#: lands on a kick the frame's rise is thirty times more kick than hat,
+#: so no share of it can recover the hat - and asking for one lost half
+#: of them, which reads as lighting that stops during the loud parts.
+#: The band-limited detector on its own finds 99 per cent of them for
+#: six false ones in ninety-five, which is the right trade for something
+#: driving a flicker.
+PROFILE = {
+    #        bottom >=  bottom <=  middle >=  top >=  top <=
+    "Kick":  (0.70, 1.01, 0.00, 0.00, 0.09),
+    "Snare": (0.04, 0.74, 0.26, 0.04, 0.20),
+    "Hats":  (0.00, 0.99, 0.00, 0.10, 1.01),
+    "Bass":  (0.55, 1.01, 0.00, 0.00, 0.14),
+    "Synth": (0.00, 0.62, 0.30, 0.02, 1.01),
+}
+
+#: Elements are found with a fussier setting than the strobe's own. At
+#: sixty frames a second every ripple is a local peak, and lighting that
+#: fires on all of them is not reacting to the drums, it is reacting to
+#: the noise floor.
+ELEMENT_SENSE = 0.22
+
 #: Pulses worth looking for, in beats per minute. The top of the range
 #: is well above any tempo anybody counts in, on purpose: what is being
 #: found is the fastest steady pulse, not the tempo. A 120 BPM track with
@@ -134,6 +199,30 @@ class BeatMap:
         return tuple(b for b in self.beats if b.strength >= strength)
 
 
+def spread(frames: Sequence, at: int, low: float, high: float) -> float:
+    """How much of the spectrum outside a band moved at this frame.
+
+    A snare and a bass note can land in the same place at the same
+    moment; what separates them is that the snare takes the whole top of
+    the spectrum with it.
+    """
+    if at <= 0 or at >= len(frames):
+        return 0.0
+    bands = len(frames[0])
+    start = max(0, min(bands - 1, int(bands * low)))
+    stop = max(start + 1, min(bands, int(math.ceil(bands * high))))
+    here, before = frames[at], frames[at - 1]
+    rose = 0
+    counted = 0
+    for index in range(bands):
+        if start <= index < stop:
+            continue
+        counted += 1
+        if here[index] - before[index] > 0.01:
+            rose += 1
+    return rose / max(1, counted)
+
+
 def flux(frames: Sequence, low: float, high: float) -> List[float]:
     """How much the spectrum rose per frame, over a slice of the bands.
 
@@ -180,7 +269,8 @@ def _local(values: Sequence[float], index: int, reach: int) -> Tuple[float, floa
 
 
 def onsets(envelope: Sequence[float], rate: float,
-           sensitivity: float = 0.5) -> List[Beat]:
+           sensitivity: float = 0.5,
+           gap: float = FLOOR_GAP) -> List[Beat]:
     """Peaks in the flux that stand out from the flux around them.
 
     ``sensitivity`` runs 0 to 1: at 0 only what is unmistakable, at 1
@@ -212,7 +302,7 @@ def onsets(envelope: Sequence[float], rate: float,
         shift = 0.0 if divisor == 0 else 0.5 * (before - after) / divisor
         shift = max(-0.5, min(0.5, shift))
         at = (index + shift) / rate
-        if at - last_at < FLOOR_GAP:
+        if at - last_at < max(0.02, gap):
             continue
         found.append(Beat(at=at, strength=min(1.0, here / loudest)))
         last_at = at
@@ -354,6 +444,78 @@ def _grid(beats: Sequence[Beat], bpm: float, span: float,
         out.append(Beat(at=at, strength=max(0.55, nearest)))
         at += period
     return out
+
+
+def shares(frames: Sequence, at: int) -> Tuple[float, float, float]:
+    """How a frame's rise divided between bottom, middle and top.
+
+    The three add to one when anything rose at all, so each is the share
+    of this moment that belongs to that part of the spectrum - which is
+    what says whether a hit was a kick, a snare or a hat.
+    """
+    if at <= 0 or at >= len(frames):
+        return 0.0, 0.0, 0.0
+    bands = len(frames[0])
+    here, before = frames[at], frames[at - 1]
+    totals = [0.0, 0.0, 0.0]
+    for index in range(bands):
+        rise = here[index] - before[index]
+        if rise <= 0.0:
+            continue
+        share = index / max(1, bands - 1)
+        which = 0 if share < LOW[1] else (1 if share < MID[1] else 2)
+        totals[which] += rise
+    everything = sum(totals)
+    if everything <= 0.0:
+        return 0.0, 0.0, 0.0
+    return (totals[0] / everything, totals[1] / everything,
+            totals[2] / everything)
+
+
+def elements(frames: Sequence, rate: float,
+             sensitivity: float = ELEMENT_SENSE) -> Dict[str, BeatMap]:
+    """One map per part of the kit, off a fine-grained onset pass.
+
+    Two steps, and the second is the one that matters. Finding where
+    something started in a band is easy; deciding *what* started is not,
+    because a kick has harmonics in the snare's range and a snare has body
+    in the kick's. Three detectors watching three bands find the same hit
+    three times, and lighting driven off that has nothing to tell apart -
+    everything flashes on everything.
+
+    So each candidate is weighed: how did the rise at that moment divide
+    between the bottom, the middle and the top of the spectrum? A kick
+    puts most of it at the bottom. A hat puts nearly all of it at the top.
+    A snare sits in the middle and, unlike a tom at the same pitch, takes
+    the top with it - which is the sizzle, and the test for it.
+
+    No tempo is fitted to any of these. A grid is the right answer for
+    lighting a room to the beat and the wrong one for following a
+    drummer: the whole point of knowing where the snare is, separately
+    from the kick, is to put something different on each.
+    """
+    found: Dict[str, BeatMap] = {}
+    if not frames or rate <= 0:
+        return {name: BeatMap() for name in ELEMENTS}
+    profiles: Dict[int, Tuple[float, float, float]] = {}
+    for name, (low, high, gap) in ELEMENTS.items():
+        envelope = flux(frames, low, high)
+        kept: List[Beat] = []
+        wants = PROFILE.get(name)
+        for beat in onsets(envelope, rate, sensitivity, gap=gap):
+            index = int(round(beat.at * rate))
+            if index not in profiles:
+                profiles[index] = shares(frames, index)
+            bottom, middle, top = profiles[index]
+            if wants is not None:
+                low_at_least, low_at_most, mid_at_least, top_at_least, top_at_most = wants
+                if not (low_at_least <= bottom <= low_at_most
+                        and middle >= mid_at_least
+                        and top_at_least <= top <= top_at_most):
+                    continue
+            kept.append(beat)
+        found[name] = BeatMap(beats=tuple(kept))
+    return found
 
 
 def build(frames: Sequence, rate: float,

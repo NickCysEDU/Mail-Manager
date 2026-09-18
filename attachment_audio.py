@@ -21,9 +21,12 @@ being looked at.
 from __future__ import annotations
 
 import cmath
+import logging
 import math
 from array import array
 from typing import List, Optional
+
+log = logging.getLogger(__name__)
 
 try:      # pragma: no cover - exercised wherever Qt is present
     from PySide6.QtCore import QObject as QObject_base
@@ -100,7 +103,8 @@ def _fft(values: List[complex]) -> List[complex]:
     return values
 
 
-def _two_real_ffts(first: List[float], second: List[float]) -> tuple:
+def _two_real_ffts(first: List[float], second: List[float] = None,
+                   transform=None, there: List[float] = None) -> tuple:
     """Two real spectra out of one complex transform.
 
     The signal being analysed is real, and a real transform throws half of
@@ -121,9 +125,11 @@ def _two_real_ffts(first: List[float], second: List[float]) -> tuple:
     Only the first half of each spectrum is returned, which is all the
     bands ever read.
     """
+    second = second if second is not None else there
+    transform = transform or _fft
     n = len(first)
     packed = [complex(first[i], second[i]) for i in range(n)]
-    spectrum = _fft(packed)
+    spectrum = transform(packed)
     half = n // 2
     a: List[complex] = [0j] * half
     b: List[complex] = [0j] * half
@@ -152,6 +158,170 @@ def _band_edges(sample_rate: int) -> List[tuple]:
         high = min(bins - 1, max(low + 1, int((centre * ratio) / hz_per_bin) + 1))
         edges.append((min(low, bins - 2), high))
     return edges
+
+
+#: A second, much finer pass, used only for finding drums.
+#:
+#: The display frames run at fifteen a second, which is a frame every
+#: sixty-seven milliseconds - longer than a whole drum hit. At that rate a
+#: kick and the snare after it are three and a half frames apart and a hat
+#: pattern is finer than the sampling, so no amount of cleverness
+#: afterwards can tell one from another: the information is not there.
+#:
+#: This pass is short windows taken often. Ten milliseconds is far too
+#: short to resolve a bass note and exactly right for catching the start
+#: of one, which is all an onset is. A 512-point transform is about a
+#: ninth of the work of a 2048-point one, so taking four times as many
+#: costs about half as much again in total.
+#: Twenty-one milliseconds. Not shorter: at 512 the lowest band a
+#: transform can report starts at 93 Hz, which is above where a kick
+#: lives, so the one instrument the bottom of the range exists for was
+#: invisible to it.
+ONSET_WINDOW = 1024
+ONSET_RATE = 60
+#: The coarse bands this pass reports, as fractions of the spectrum. Only
+#: enough to tell the bottom from the middle from the top, because that is
+#: all that separates a kick from a snare from a hat.
+ONSET_BANDS = 12
+
+_ONSET_TWIDDLE = _twiddles(ONSET_WINDOW)
+_ONSET_HANN = [0.5 - 0.5 * math.cos(2 * math.pi * i / (ONSET_WINDOW - 1))
+               for i in range(ONSET_WINDOW)]
+
+
+def _onset_fft(values: List[complex]) -> List[complex]:
+    """The same radix-2 as _fft, on the shorter window's twiddles."""
+    n = len(values)
+    j = 0
+    for i in range(1, n):
+        bit = n >> 1
+        while j & bit:
+            j ^= bit
+            bit >>= 1
+        j |= bit
+        if i < j:
+            values[i], values[j] = values[j], values[i]
+    length = 2
+    while length <= n:
+        step = n // length
+        half = length // 2
+        for start in range(0, n, length):
+            k = 0
+            for offset in range(start, start + half):
+                partner = offset + half
+                temp = values[partner] * _ONSET_TWIDDLE[k]
+                values[partner] = values[offset] - temp
+                values[offset] = values[offset] + temp
+                k += step
+        length <<= 1
+    return values
+
+
+def _onset_window_at(samples: array, at: int, channels: int,
+                     scale: float) -> List[float]:
+    """One short Hann-windowed frame of mono, for the onset pass."""
+    if channels == 1:
+        return [samples[at + i] * scale * _ONSET_HANN[i]
+                for i in range(ONSET_WINDOW)]
+    out = []
+    for i in range(ONSET_WINDOW):
+        base = (at + i) * channels
+        mono = (samples[base] + samples[base + 1]) * 0.5
+        out.append(mono * scale * _ONSET_HANN[i])
+    return out
+
+
+def _onset_edges(bins: int) -> List[tuple]:
+    """Log-spaced bin ranges, from the first bin to the last.
+
+    Each band is the same musical width as the one before it, which means
+    the bottom of the range gets narrow bands and the top gets wide ones.
+    Written as a ratio raised to a power rather than by halving from the
+    top - the first attempt did the latter, which made the *lowest* band
+    the widest and lumped everything under a few hundred hertz together,
+    so the one band a kick lives in was also the one a snare lives in.
+    """
+    span = bins / 1.0
+    edges = []
+    for band in range(ONSET_BANDS):
+        low = 1.0 * (span ** (band / ONSET_BANDS))
+        high = 1.0 * (span ** ((band + 1) / ONSET_BANDS))
+        lo = max(1, int(low))
+        hi = max(lo + 1, min(bins, int(math.ceil(high))))
+        edges.append((lo, hi))
+    return edges
+
+
+def onset_frames(samples: array, sample_rate: int, channels: int = 1,
+                 should_stop=None) -> List[array]:
+    """Coarse band energies at sixty a second, for finding drums.
+
+    Not for drawing. These are deliberately crude - twelve bands, a
+    ten-millisecond window - because what is being asked of them is
+    "did something start here, and where in the spectrum", and a finer
+    answer to that question costs more and says nothing extra.
+    """
+    if not samples or sample_rate <= 0:
+        return []
+    channels = max(1, channels)
+    total = len(samples) // channels
+    if total <= ONSET_WINDOW or total / sample_rate > MAX_SECONDS:
+        return []
+    hop = max(1, sample_rate // ONSET_RATE)
+    bins = ONSET_WINDOW // 2
+    edges = _onset_edges(bins)
+
+    out: List[array] = []
+    scale = 1.0 / 32768.0
+    at = 0
+    checkpoint = max(hop, (total // 20) // hop * hop or hop)
+    since = 0
+    while at + ONSET_WINDOW <= total:
+        since += hop
+        if since >= checkpoint:
+            since = 0
+            if should_stop is not None and should_stop():
+                return []
+        # Two frames per transform, the same trick the display pass uses.
+        here = _onset_window_at(samples, at, channels, scale)
+        second_at = at + hop
+        if second_at + ONSET_WINDOW <= total:
+            there = _onset_window_at(samples, second_at, channels, scale)
+            spectra = _two_real_ffts(there=there, first=here,
+                                     transform=_onset_fft)
+        else:
+            spectra = (_onset_fft([complex(v, 0.0) for v in here])[:bins],)
+        for spectrum in spectra:
+            row = array("f", [0.0]) * ONSET_BANDS
+            for band, (lo, hi) in enumerate(edges):
+                power = 0.0
+                for bin_index in range(lo, hi):
+                    value = spectrum[bin_index]
+                    power += value.real * value.real + value.imag * value.imag
+                row[band] = math.sqrt(power / max(1, hi - lo))
+            out.append(row)
+        at += hop * len(spectra)
+    # Linear, and scaled to the loudest band in the track rather than put
+    # through decibels.
+    #
+    # Decibels are right for a display and wrong for deciding what an
+    # instrument was. The whole question is "where did this hit put its
+    # energy", and a kick is a hundred times the power at the bottom that
+    # it is at the top - which in decibels is twenty units against a scale
+    # of seventy, so once every band is compressed that way they all rise
+    # together and a kick, a snare and a hat come out looking the same.
+    # Measured: their profiles agreed to within four per cent.
+    loudest = 0.0
+    for row in out:
+        for value in row:
+            if value > loudest:
+                loudest = value
+    if loudest > 0.0:
+        scale_to = 1.0 / loudest
+        for row in out:
+            for index in range(len(row)):
+                row[index] *= scale_to
+    return out
 
 
 def _window_at(samples: array, at: int, channels: int,
@@ -315,6 +485,15 @@ class _AnalysisThread(_QThread_base):
     """
 
     done = _Signal(object)
+    #: The drums, which arrive after the rest.
+    #:
+    #: Finding them needs a second, much finer pass over the samples, and
+    #: that pass costs about twice what the display frames cost. Making
+    #: the visualiser wait for it would mean the picture appeared later
+    #: than it does now, in exchange for something no scene needs in its
+    #: first second. So the frames go out as soon as they are ready and
+    #: the kit follows a few seconds later.
+    elements = _Signal(object)
     failed = _Signal(str)
     progress = _Signal(float)
 
@@ -352,8 +531,22 @@ class _AnalysisThread(_QThread_base):
             if not self._stop:
                 self.failed.emit(str(exc))
             return
+        if self._stop:
+            return
+        self.done.emit((frames, shapes, vectors, calibration, beats))
+
+        # Now the slow part, with the picture already on screen.
+        try:
+            import beatmap as _beatmap
+
+            fine = onset_frames(self._samples, self._rate, self._channels,
+                                should_stop=lambda: self._stop)
+            kit = _beatmap.elements(fine, ONSET_RATE)
+        except Exception as exc:      # noqa: BLE001 - lighting, not the mail
+            log.info("Could not pick the drums out (%s).", exc)
+            return
         if not self._stop:
-            self.done.emit((frames, shapes, vectors, calibration, beats))
+            self.elements.emit(kit)
 
 
 class _Analysis(QObject_base):
@@ -362,12 +555,14 @@ class _Analysis(QObject_base):
     One object for the caller to keep alive, and one to cancel.
     """
 
-    def __init__(self, decoder, on_done, on_fail, on_progress=None) -> None:
+    def __init__(self, decoder, on_done, on_fail, on_progress=None,
+                 on_elements=None) -> None:
         super().__init__()
         self._decoder = decoder
         self._on_done = on_done
         self._on_fail = on_fail
         self._on_progress = on_progress
+        self._on_elements = on_elements
         self._thread = None
         self._stop = False
         _LIVE.add(self)
@@ -402,10 +597,17 @@ class _Analysis(QObject_base):
         thread = _AnalysisThread(samples, rate, channels)
         thread.done.connect(self._finished)
         thread.failed.connect(self._failed)
+        if self._on_elements is not None:
+            thread.elements.connect(self._kit)
         if self._on_progress is not None:
             thread.progress.connect(self._report)
         self._thread = thread
         thread.start()
+
+    def _kit(self, elements) -> None:
+        """The drums, once the finer pass has finished."""
+        if not self._stop and self._on_elements is not None:
+            self._on_elements(elements)
 
     def _report(self, fraction: float) -> None:
         if not self._stop and self._on_progress is not None:
@@ -422,7 +624,8 @@ class _Analysis(QObject_base):
             self._on_fail(detail)
 
 
-def decode(path, on_done, on_fail, on_progress=None) -> Optional[object]:
+def decode(path, on_done, on_fail, on_progress=None,
+           on_elements=None) -> Optional[object]:
     """Decode a file to PCM with Qt, then hand the frames back.
 
     Returns a handle the caller must keep alive and may ``cancel()``. Qt
@@ -477,7 +680,7 @@ def decode(path, on_done, on_fail, on_progress=None) -> Optional[object]:
         # a beachball, which reads as a crash rather than as work.
         handle.start_analysis(collected, state["rate"], state["channels"])
 
-    handle = _Analysis(decoder, on_done, on_fail, on_progress)
+    handle = _Analysis(decoder, on_done, on_fail, on_progress, on_elements)
     decoder.bufferReady.connect(buffer_ready)
     decoder.finished.connect(finished)
     # The signal is named differently across Qt 6 point releases, and a
