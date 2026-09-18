@@ -716,15 +716,8 @@ class TestEveryKindOfSnare:
         zero. Measured before the floor was added: forty-three of the
         sixty-six snares found were in the gaps, on rises a hundredth the
         size of a real one."""
-        import attachment_audio
-        import drumkit
-
-        frames, truth, found = self._kit("bright")
-        rate = attachment_audio.ONSET_RATE
+        _frames, truth, found = self._kit("bright")
         real = sorted(truth["Kick"] + truth["Snare"] + truth["Hats"])
-        loudest = 0.0
-        for row in frames:
-            loudest = max(loudest, max(row))
         stray = []
         for name in ("Kick", "Snare"):
             for hit in found[name].beats:
