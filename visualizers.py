@@ -212,6 +212,34 @@ class Scene:
         """
         return state.hit if state.strobe else 0.0
 
+    #: How a smoothed strobe rises and falls. Quick up, slow down, about a
+    #: third of a second of tail.
+    BLOOM_RISE = 0.30
+    BLOOM_FALL = 0.055
+
+    def bloom(self, state) -> float:
+        """The strobe, smoothed, and advanced one frame.
+
+        The hit a scene is handed is a step: full height on the frame it
+        lands, then a linear decay over six. That is right for a scene
+        made of bars and wrong for anything with a shape in it, because a
+        step in the size of a shape is not a flash, it is a glitch - the
+        vaporwave sun nearly doubled its radius in one frame and sprang
+        back, which is what "it will flash huge and go back to normal
+        movement" was.
+
+        Call it once a frame. A scene that wants the raw step still has
+        ``flash``.
+        """
+        hit = self.flash(state)
+        was = getattr(self, "_bloom", 0.0)
+        speed = self.BLOOM_RISE if hit > was else self.BLOOM_FALL
+        now = was + (hit - was) * speed
+        if now < 0.002:
+            now = 0.0
+        self._bloom = now
+        return now
+
     @staticmethod
     def geometry(rect, count: int, width_fraction: float = 0.9):
         """(left, bar width, gap) for a row of ``count`` bars."""
@@ -319,9 +347,12 @@ class Vaporwave(Scene):
         sky.setColorAt(1.0, QColor.fromHsvF((hue + 0.78) % 1.0, 0.80, 0.46))
         painter.fillRect(QRectF(0, 0, width, horizon), sky)
 
-        # The strobe belongs to the sun here: a kick makes it flare and
-        # widen rather than washing the whole frame white.
-        flash = self.flash(state)
+        # The strobe belongs to the sun here: a kick makes it flare rather
+        # than washing the whole frame white. Smoothed, and it is mostly
+        # light: at a raw hit of one the radius grew by 0.85 of the
+        # horizon in a single frame and sprang back over six, which reads
+        # as the sun glitching rather than as a beat.
+        flash = self.bloom(state)
         self._sun(painter, width, horizon, hue, state.bass, flash)
 
         # No bar graph here on purpose: it stood in front of the city and
@@ -339,10 +370,15 @@ class Vaporwave(Scene):
     BAR_APART = 0.105
     BAR_TOP = 0.90
 
+    #: How much of a strobe reaches the sun's size. The rest of it is
+    #: brightness, which is what a flare actually is.
+    FLARE_SIZE = 0.08
+
     @staticmethod
     def sun_radius(horizon: float, bass: float, flash: float) -> float:
         """How big the sun is. Separate so it can be asked for."""
-        return horizon * (0.46 + bass * 0.26 + flash * 0.85)
+        return horizon * (0.46 + bass * 0.26
+                          + flash * Vaporwave.FLARE_SIZE)
 
     def _sun(self, painter, width, horizon, hue: float, bass: float,
              flash: float) -> None:
@@ -373,10 +409,12 @@ class Vaporwave(Scene):
         # The air around it, which is what makes it a sunset rather than a
         # circle on a background.
         glow = QRadialGradient(centre, radius * 1.55)
-        glow.setColorAt(0.0, QColor.fromHsvF(hue, 0.55, 1.0,
-                                             0.42 + bass * 0.22 + flash * 0.3))
-        glow.setColorAt(0.45, QColor.fromHsvF((hue + 0.04) % 1.0, 0.9, 1.0,
-                                              0.16 + flash * 0.2))
+        glow.setColorAt(0.0, QColor.fromHsvF(
+            hue, max(0.0, 0.55 - flash * 0.45), 1.0,
+            min(1.0, 0.42 + bass * 0.22 + flash * 0.52)))
+        glow.setColorAt(0.45, QColor.fromHsvF(
+            (hue + 0.04) % 1.0, max(0.0, 0.9 - flash * 0.4), 1.0,
+            min(1.0, 0.16 + flash * 0.46)))
         glow.setColorAt(1.0, QColor(0, 0, 0, 0))
         painter.fillRect(sky, glow)
 
@@ -1638,22 +1676,13 @@ class Ambience(Scene):
     RIBBONS = 5
     STEPS = 44
 
-    #: How the strobe reaches this scene.
+    #: How much of the strobe the shape gets. The rest is light.
     #:
-    #: The hit every scene is handed is a step: it arrives at full height
-    #: in one frame and decays linearly over six. That is right for a
-    #: scene made of bars, and wrong for this one, which is made of long
-    #: curves - a step in the shape of a long curve is a lurch, and the
-    #: ribbons used to jump half their height outwards and snap back
-    #: inside a tenth of a second.
-    #:
-    #: So the hit is put through an envelope of its own here: quick up,
-    #: slow down, about a third of a second of tail. And what it reaches
-    #: is mostly the light rather than the geometry - the ribbons brighten
-    #: and bloom where they cross, and barely move.
-    BLOOM_RISE = 0.30
-    BLOOM_FALL = 0.055
-    #: How much of the bloom the shape gets. The rest is light.
+    #: This scene is made of long curves, and a step in the shape of a
+    #: long curve is a lurch: the ribbons used to jump half their height
+    #: outwards and snap back inside a tenth of a second. They brighten
+    #: and bloom where they cross now, and barely move. The smoothing
+    #: itself is ``Scene.bloom``.
     BLOOM_SHAPE = 0.16
 
     def __init__(self) -> None:
@@ -1661,13 +1690,7 @@ class Ambience(Scene):
         self._bloom = 0.0
 
     def _ease(self, state) -> float:
-        """The strobe, smoothed, and advanced one frame."""
-        hit = self.flash(state)
-        speed = self.BLOOM_RISE if hit > self._bloom else self.BLOOM_FALL
-        self._bloom += (hit - self._bloom) * speed
-        if self._bloom < 0.002:
-            self._bloom = 0.0
-        return self._bloom
+        return self.bloom(state)
 
     def paint(self, painter, rect, state) -> None:
         width, height = rect.width(), rect.height()

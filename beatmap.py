@@ -131,12 +131,33 @@ LOW, MID, HIGH = (0.00, 0.25), (0.25, 0.64), (0.64, 1.00)
 #: does not. Removing it doubled the real track's snares, from 71 a
 #: minute to 151, and every one of the extras was a synth.
 #:
+#: The kick had the same shape of mistake in it, and it cost more.
+#: It asked for 0.70 of a frame's *whole* rise to be in the bottom third,
+#: which is a kick played on its own. In a mix something else is nearly
+#: always happening on the beat - a hat, a stab, the snare - so the kick
+#: owns well under two thirds of the moment while being unmistakably
+#: there. On a real track that threw away 227 of 309 candidates and left
+#: 44 kicks a minute where the pulse says there should be about 140,
+#: which is "kick detection is off, only gets one every once in a while".
+#:
+#: What is asked now is that the bottom *leads* - that it is the largest
+#: of the three - with nothing up top. That is what a kick is, and it
+#: needs no floor of its own: with the top capped at 0.09, leading
+#: already means the bottom has at least 0.455 of the rise, which is why
+#: every floor from 0.45 down made no difference to anything. It takes
+#: the same track from 44 a minute to 74 and changes nothing on eight
+#: written ones.
+#:
+#: Turning the sensitivity up does not do this. From 0.22 to 0.80 it
+#: found 309 candidates rather than 428 and kept 44 a minute rather than
+#: 49: the threshold was never what was in the way.
+#:
 #: Hats are the exception and are left almost unconstrained. When a hat
 #: lands on a kick the frame's rise is thirty times more kick than hat,
 #: so no share of it can recover the hat - and asking for one lost half
 #: of them, which reads as lighting that stops during the loud parts.
 PROFILE: Dict[str, dict] = {
-    "Kick":  {"bottom": (0.70, 1.01), "top": (0.00, 0.09)},
+    "Kick":  {"top": (0.00, 0.09), "leads": "bottom"},
     "Snare": {"bottom": (0.04, 0.74), "middle": (0.26, 1.01),
               "top": (0.04, 0.25)},
     "Hats":  {"top": (0.10, 1.01)},
@@ -153,13 +174,22 @@ def fits(profile: Optional[dict], bottom: float, middle: float,
     A table of named bounds rather than a five-tuple, because the tuple
     said ``(0.04, 0.74, 0.26, 0.04, 0.20)`` and nobody reading that could
     tell which number was the one doing the damage.
+
+    ``leads`` names a share that has to be the largest of the three. It
+    says what a bound cannot: that this is a hit the bottom carries,
+    whatever else is going on at the same moment.
     """
     if not profile:
         return True
-    for key, value in (("bottom", bottom), ("middle", middle), ("top", top)):
+    shares = {"bottom": bottom, "middle": middle, "top": top}
+    for key, value in shares.items():
         low, high = profile.get(key, (0.0, 1.01))
         if not low <= value <= high:
             return False
+    leads = profile.get("leads")
+    if leads and shares[leads] < max(v for k, v in shares.items()
+                                     if k != leads):
+        return False
     return True
 
 

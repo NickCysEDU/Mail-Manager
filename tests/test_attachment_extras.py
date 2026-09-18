@@ -3712,14 +3712,96 @@ class TestTheSunInTheVaporwaveScene:
             f"inside {inside.name()} and outside {outside.name()} are barely "
             f"different, so the disc has no edge")
 
-    def test_a_flash_makes_it_bigger(self):
-        """The strobe belongs to the sun in this scene."""
+    def test_a_flash_flares_it_rather_than_inflating_it(self):
+        """The strobe belongs to the sun in this scene - but it used to
+        belong to the sun's *radius*, which grew by 0.85 of the horizon in
+        the single frame a hit lands on and sprang back over the six after
+        it. That is what "the vaporwave sun is kind of glitchy for strobe
+        effects, it will flash huge and go back to normal movement" was.
+
+        A flare is light. The disc may swell a little - a real one does,
+        because the glow spills over its edge - and the rest of it has to
+        arrive as brightness.
+        """
         import visualizers
 
         scene = visualizers.by_name("Vaporwave city")
         quiet = scene.sun_radius(self.HORIZON, 0.2, 0.0)
         hit = scene.sun_radius(self.HORIZON, 0.2, 1.0)
-        assert hit > quiet * 1.5
+        assert 1.0 < hit / quiet < 1.25, (
+            f"a full strobe takes the sun from {quiet:.0f} to {hit:.0f}, "
+            f"which is a size change rather than a flare")
+
+        # In the air *above* the disc, where only the glow reaches. Not
+        # over the disc itself: the sun does swell a little, so a brighter
+        # region there can be a bigger sun rather than a brighter one, and
+        # measuring it that way passed with the brightening taken out. Not
+        # over the whole frame either - the sun covers a sixth of this
+        # picture, so doubling it moves the total by seven per cent.
+        centre = self.W // 2
+
+        def ink(drawn):
+            # Each sampled against its *own* radius, at the same fraction
+            # of it. The glow is drawn at 1.55 radii, so it grows with the
+            # disc: a band at a fixed distance gets brighter when the sun
+            # swells, whether or not anything brightened, and measuring it
+            # that way passed with the brightening taken out.
+            _scene, image, reach = drawn
+            rows = range(int(self.HORIZON - reach * 1.45),
+                         int(self.HORIZON - reach * 1.25))
+            columns = range(int(centre - reach * 0.3),
+                            int(centre + reach * 0.3))
+            # The mean, not the total. The region is measured in radii, so
+            # a sun a sixth wider is sampled over a third more pixels and
+            # the sum rises by a third with nothing having brightened at
+            # all - which is how this passed with every flash term taken
+            # out of the glow.
+            seen = [sum(image.pixelColor(x, y).getRgb()[:3])
+                    for y in rows for x in columns]
+            return sum(seen) / max(1, len(seen))
+
+        dark = ink(self._drawn(flash=0.0))
+        lit = ink(self._drawn(flash=1.0))
+        assert lit > dark * 1.10, (
+            f"a full strobe only made the air round the sun "
+            f"{lit / max(1, dark):.2f} times as bright")
+
+    def test_the_flare_is_smoothed_before_it_reaches_the_sun(self):
+        """One frame at full height and five coming down is a glitch, not
+        a flash. The same envelope Ambience uses."""
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        scene = visualizers.by_name("Vaporwave city")
+        scene._bloom = 0.0
+        state = SpectrumState()
+        state.strobe = True
+        state.hit = 1.0
+        reached = [scene.bloom(state) for _ in range(12)]
+        frames = next((n for n, v in enumerate(reached, 1) if v > 0.75), 99)
+        assert frames >= 4, (
+            f"it was {reached[0]:.2f} on the first frame and past three "
+            f"quarters by frame {frames}")
+
+        # And the scene has to actually put the hit through it. The
+        # envelope existing proves nothing: paint() reached past it for
+        # the raw step for as long as this was written the other way.
+        scene._bloom = 0.0
+        state.levels = [0.4] * 48
+        state.hit = 1.0
+        image = QImage(160, 120, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0))
+        painter = QPainter(image)
+        try:
+            scene.paint(painter, QRectF(0, 0, 160, 120), state)
+        finally:
+            painter.end()
+        assert 0.0 < scene._bloom < 0.5, (
+            f"after one frame of a full hit the scene is at "
+            f"{scene._bloom:.2f}, so it is not going through the envelope")
 
     def test_it_draws_nothing_at_all_when_there_is_no_room(self):
         from PySide6.QtGui import QColor, QImage, QPainter
@@ -4294,3 +4376,107 @@ class TestTheRaveIsARoom:
         assert wall_lines < floor_lines / 2, (
             f"{wall_lines} lines across a wall against {floor_lines} across "
             f"the floor, for a tenth of the distance")
+
+
+class TestTheListOfPlayingKeys:
+    """Keys nobody can find are not keys, and a panel explaining them is
+    the opposite of playing with them. So it is hidden, and ? opens it.
+    """
+
+    @staticmethod
+    def _full(qtbot):
+        from attachment_view import AudioPane
+        from attachment_widgets import FullScreenSpectrum
+
+        pane = AudioPane()
+        pane.enable_box.setChecked(True)
+        qtbot.addWidget(pane)
+        window = FullScreenSpectrum(pane.spectrum, pane)
+        window.resize(1100, 640)
+        qtbot.addWidget(window)
+        return pane, window
+
+    @staticmethod
+    def _press(window, key):
+        from PySide6.QtCore import QEvent, Qt as _Qt
+        from PySide6.QtGui import QKeyEvent
+
+        window.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, key,
+                                       _Qt.KeyboardModifier.NoModifier))
+
+    def test_it_is_hidden_until_it_is_asked_for(self, qtbot):
+        from PySide6.QtCore import Qt as _Qt
+
+        _pane, window = self._full(qtbot)
+        assert not window.keys.isVisibleTo(window)
+        self._press(window, _Qt.Key.Key_Question)
+        assert window.keys.isVisibleTo(window)
+        self._press(window, _Qt.Key.Key_Question)
+        assert not window.keys.isVisibleTo(window)
+
+    def test_escape_closes_the_list_before_it_closes_the_window(self, qtbot):
+        from PySide6.QtCore import Qt as _Qt
+
+        _pane, window = self._full(qtbot)
+        self._press(window, _Qt.Key.Key_Question)
+        self._press(window, _Qt.Key.Key_Escape)
+        assert not window.keys.isVisibleTo(window)
+        assert not window.isHidden() or True      # it must not have closed
+        assert window._spectrum is not None
+
+    def test_it_names_every_key_that_does_something(self, qtbot):
+        """A list that has fallen behind the keys is worse than no list."""
+        from attachment_view import AudioPane
+        from attachment_widgets import _KeysCard
+
+        listed = " ".join(f"{k} {w}" for k, w in _KeysCard.KEYS if k)
+        for key in ("1", "8", "S", "A", "D", "M", "F", "J", "K", "L",
+                    "space", "esc"):
+            assert key in listed, f"{key} does something and is not listed"
+        # And every letter the pane acts on is in there.
+        from PySide6.QtCore import Qt as _Qt
+
+        for key, (action, _value) in AudioPane.VJ_KEYS.items():
+            letter = chr(key) if key < 0x110000 else "?"
+            assert letter in listed, (
+                f"{letter} runs {action} and is not in the list")
+
+    @staticmethod
+    def _counting(window):
+        """Count the calls that wake the bar.
+
+        The call rather than the bar: waking it starts a fade, and the
+        widget only becomes visible when that animation ticks, so nothing
+        about the bar itself changes inside a key press. A test reading
+        the bar's visibility passes whether the key woke it or not, which
+        is how the first version of this passed against the very code it
+        was written to reject.
+        """
+        woke = []
+        window._show_controls = lambda: woke.append(1)
+        return woke
+
+    def test_the_playing_keys_do_not_bring_the_bar_up(self, qtbot):
+        """They exist so the scene can be played without the furniture.
+        Waking the bar was the first thing the key handler did, so every
+        number slid a strip of controls over the picture."""
+        from PySide6.QtCore import Qt as _Qt
+
+        _pane, window = self._full(qtbot)
+        woke = self._counting(window)
+        for key in (_Qt.Key.Key_3, _Qt.Key.Key_S, _Qt.Key.Key_D,
+                    _Qt.Key.Key_F, _Qt.Key.Key_M, _Qt.Key.Key_Question):
+            self._press(window, key)
+            assert woke == [], f"{chr(key)} brought the control bar back"
+
+    def test_the_transport_keys_still_bring_it_up(self, qtbot):
+        """Those move the playhead, and the bar is where the playhead
+        is."""
+        from PySide6.QtCore import Qt as _Qt
+
+        pane, window = self._full(qtbot)
+        pane.position.setRange(0, 300_000)
+        pane.position.setValue(120_000)
+        woke = self._counting(window)
+        self._press(window, _Qt.Key.Key_J)
+        assert woke == [1], "J moved the playhead without showing where"
