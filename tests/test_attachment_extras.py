@@ -1757,7 +1757,7 @@ class TestItHoldsSixtyFramesASecond:
         TestItHoldsSixtyFramesASecond._COSTS = found
         return found
 
-    #: How much more than the cheapest scene any one of them may cost.
+    #: How much more than the middle scene any one of them may cost.
     #:
     #: A relative check, because an absolute one in milliseconds is a
     #: measure of the machine rather than of the code. Calibrating it
@@ -1771,16 +1771,25 @@ class TestItHoldsSixtyFramesASecond:
     #: Comparing the scenes with each other cannot drift that way: they
     #: are all measured in the same session on the same machine, and a
     #: scene that gets slower relative to its neighbours still fails.
-    SPREAD = 3.0
+    #:
+    #: Against the middle of them rather than the cheapest, which is the
+    #: correction this needed. The cheapest is one reading, and making a
+    #: scene faster moves it: Waterfall dropped from 41 ms a frame to 8,
+    #: which is a fix, and it would have failed this test by lowering the
+    #: floor that every other scene is held against. The median of eight
+    #: does not move when one of them changes.
+    SPREAD = 2.6
 
     def test_no_scene_costs_far_more_than_the_others(self, qtbot):
+        import statistics
+
         costs = self._cost_of_every_scene(qtbot)
         assert len(costs) >= 2
-        cheapest = min(costs.values())
+        middle = statistics.median(costs.values())
         worst = max(costs, key=costs.get)
-        assert costs[worst] <= cheapest * self.SPREAD, (
-            f"{worst} takes {costs[worst]:.1f} ms against {cheapest:.1f} ms "
-            f"for the cheapest scene: "
+        assert costs[worst] <= middle * self.SPREAD, (
+            f"{worst} takes {costs[worst]:.1f} ms against {middle:.1f} ms "
+            f"for the middle scene: "
             + ", ".join(f"{n} {v:.1f}" for n, v in sorted(costs.items())))
 
     def test_the_whole_set_fits_a_frame_on_a_reasonable_machine(self, qtbot):
