@@ -381,9 +381,14 @@ class AudioPane(QWidget):
         self.enable_box.toggled.connect(self._enable_visualiser)
         self.strobe_box = QCheckBox("Strobe")
         self.strobe_box.setToolTip(
-            "Flash the scene on a bass hit, in whatever way the scene "
-            "flashes. Off by default: a flashing screen is not for "
-            "everybody.")
+            "Flash the scene on the beat, in whatever way the scene "
+            "flashes. Off by default.\n\n"
+            "With both Rate and Sensitivity turned most of the way up it "
+            "runs much faster through a held note - up to about ten "
+            "flashes a second. That is a rate some people with "
+            "photosensitive epilepsy react to, which is why it takes two "
+            "deliberate movements to reach and why this is off until you "
+            "switch it on.")
         self.strobe_box.toggled.connect(self.spectrum.set_strobe)
         self.colour_button = QPushButton("Colours")
         self.colour_button.setToolTip(
@@ -470,6 +475,9 @@ class AudioPane(QWidget):
         self.strobe_source.currentTextChanged.connect(
             self.spectrum.set_strobe_source)
         self.source_box = _labelled("on", self.strobe_source)
+        # When a scene sets the strobe up for itself, the controls have to
+        # move with it, or they show one thing while another happens.
+        self.spectrum.strobe_settings_changed.connect(self._show_strobe)
 
         self.strobe_group = QWidget()
         strobe_row = QHBoxLayout(self.strobe_group)
@@ -828,6 +836,24 @@ class AudioPane(QWidget):
                 return
 
     @Slot(str)
+    def _show_strobe(self, source: str, rate: float, sense: float) -> None:
+        """Move the controls to where a scene has just put the strobe.
+
+        Without blocking their signals this would come straight back as
+        "the user moved a slider", which is the one thing that stops a
+        scene setting itself up at all.
+        """
+        for widget, value in ((self.flash, int(round(rate * 100))),
+                              (self.sense, int(round(sense * 100)))):
+            widget.blockSignals(True)
+            widget.setValue(value)
+            widget.blockSignals(False)
+        index = self.strobe_source.findText(source)
+        if index >= 0:
+            self.strobe_source.blockSignals(True)
+            self.strobe_source.setCurrentIndex(index)
+            self.strobe_source.blockSignals(False)
+
     def _scene_chosen(self, name: str) -> None:
         import visualizers
 

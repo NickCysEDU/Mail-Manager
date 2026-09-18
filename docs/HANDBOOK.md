@@ -745,7 +745,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,034 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,163 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1069,6 +1069,7 @@ in the [README](../README.md).
 | `reply_log.py` | Who has already been written to, so a rule does not write to them twice |
 | `briefing_dialog.py` | That briefing on screen, with the flagged messages clickable |
 | `beatmap.py` | Where the beats are, and which of them are kicks, snares and hats |
+| `test_beatmap.py` also covers | the strobe: what it fires on, how fast, and the cap on that |
 | `cleanup.py` | What to clear out, as terms a server answers in one command, and the piles worth offering |
 | `cleanup_dialog.py` | The window for it: count from the server first, delete only what was counted |
 | `conversations.py` | Threading: which messages are the same conversation |
@@ -1105,7 +1106,7 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 3,034 tests, about three minutes
+./dev test        # 3,163 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```
@@ -1127,6 +1128,8 @@ and replays scripted responses.
 | `test_reply_safety.py` | Loop protection, the once-per-sender window, and the hours a rule may write in |
 | `test_beatmap.py` | Finding the beat, and refusing to find one that is not there |
 | `test_cleanup.py` | What the server is asked to delete, and everything that is never offered |
+| `test_stress_mailbox.py` | Deletion against twenty thousand awkward messages, on a server that really answers the search |
+| `test_stress_visualiser.py` | Every scene at every shape, with half-finished data and the playhead thrown around |
 | `test_gui.py` | Table model, filters, delegate, window wiring |
 | `test_gui_dialogs.py` | Settings dialog, preview rendering, export, apply confirmation |
 | `test_worker_threads.py` | The QThread workers driven synchronously with fake engines |

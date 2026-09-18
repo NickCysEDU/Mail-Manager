@@ -397,6 +397,12 @@ rather than on top of it, so the app can still be quit while it is open.
 
 Sound files have something else in them. Press play and see.
 
+One thing worth knowing before you do: there is a strobe in there, off
+until you switch it on, and with two of its controls turned most of the
+way up it runs much faster through a held note - up to about ten flashes
+a second. That is a rate some people with photosensitive epilepsy react
+to. It takes two deliberate movements to reach and the control says so.
+
 **Only the part you open is downloaded.** Listing costs about a fifth of a
 second; a six megabyte message used to cost six megabytes to see the first
 thing in it.
@@ -585,7 +591,7 @@ notice, and contribution terms.
 
 ```bash
 ./dev demo      # the app with sample mail, no setup
-./dev test      # 3,034 tests, about three minutes on four workers
+./dev test      # 3,163 tests, about three minutes on four workers
 ./dev eval      # sorter accuracy (needs a labelled set of your own)
 ./dev fake      # the whole pipeline in the terminal, offline
 ```

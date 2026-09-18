@@ -1955,3 +1955,45 @@ POST = {
 def post_for(scene) -> dict:
     """The recipe for this scene, or nothing if it wants none."""
     return POST.get(getattr(scene, "name", ""), {})
+
+
+#: What the strobe should be doing in each scene, as (source, rate,
+#: sensitivity), used when somebody picks a scene and has not set the
+#: controls themselves.
+#:
+#: One setting cannot suit all of them, because the scenes do quite
+#: different things with a flash. The meters brighten, so a fast strobe
+#: there is a lamp flickering; the tunnel lurches, so a fast one is
+#: motion sickness; the rave scene is built to be hit hard and a slow
+#: one leaves it looking asleep. These are starting points, not locks -
+#: touching either slider stops them being applied.
+STROBE_SETUP = {
+    # Hits the whole room, and is meant to: the eagerest of the set, and
+    # still short of the point where the strobe starts running through
+    # held notes. Reaching that is something somebody does with the two
+    # sliders, not something that happens because they picked a scene.
+    "Rave": ("Kick", 0.58, 0.58),
+    # Neon and glass: the flash is a lurch forward, so it wants to be
+    # rare enough to read as an event.
+    "Neon tunnel": ("Kick", 0.30, 0.45),
+    # A skyline lighting up. On the beat rather than on every drum.
+    "Vaporwave city": ("Bass", 0.45, 0.50),
+    # An instrument. The needles are the subject and the flash is the
+    # lamp behind them, so it stays out of the way.
+    "VU meters": ("Kick", 0.22, 0.40),
+    # The trace gains gain on a hit; the hats give it a shimmer without
+    # moving the picture.
+    "Oscilloscope": ("Hats", 0.55, 0.55),
+    # A graph. The flash brightens the bars and nothing moves.
+    "Equaliser": ("Snare", 0.40, 0.50),
+    # Overlapping washes: the synth is what it is made of.
+    "Ambience": ("Synth", 0.50, 0.55),
+    # A plot of the spectrum over time. Lit on the snare, which is the
+    # thing that shows up across the whole width of it.
+    "Waterfall": ("Snare", 0.35, 0.50),
+}
+
+
+def strobe_setup(scene) -> tuple:
+    """(source, rate, sensitivity) for this scene, or None."""
+    return STROBE_SETUP.get(getattr(scene, "name", ""))
