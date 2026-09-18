@@ -922,17 +922,25 @@ class Meters(Scene):
     #: the face. So the face is a wide, shallow thing - about two radii
     #: across and a quarter over one tall - and the code used to reserve
     #: 2.55 by 2.20, which is 1.76 times the height it ever draws in.
-    #: Wide enough for the labels that sit beyond the ends of the arc,
-    #: not just for the arc: at 2.05 the "-24" of one face and the "3" of
-    #: the one before it were touching.
-    FACE_WIDE = 2.34
-    #: And tall enough for the row of numbers above the arc, which reach
-    #: about a third of a radius past its apex. At 1.25 the top row of a
-    #: grid had its "-3" cut off by the edge of the frame.
-    FACE_TALL = 1.46
+    #: The face's size, in radii, measured off the reference rather than
+    #: adjusted towards it.
+    #:
+    #: Its cell is 562 by 339 and its arc runs from (55,192) to (500,192)
+    #: over an apex at y=75 - a chord of 445 rising 117, which is a
+    #: radius of 270 and a sweep of 111 degrees. Everything drawn fits in
+    #: 499 by 269 of that cell, which is 1.85 radii by 1.00, and the
+    #: centre of the arc sits 1.12 radii below the top of it: at the very
+    #: bottom, where the needle is hinged and just past what is drawn.
+    #:
+    #: The numbers here were 2.34 by 1.46. Being too wide is what made
+    #: the faces small - the radius is whichever of the two dimensions
+    #: runs out first, and asking for a quarter more width than the face
+    #: uses throws that quarter away.
+    FACE_WIDE = 1.95
+    FACE_TALL = 1.02
     #: How far below the top of the face the arc's centre sits. The
     #: difference between this and FACE_TALL is the room under the hub.
-    FACE_DROP = 1.36
+    FACE_DROP = 1.16
     #: Where the two lines of text sit, above the centre and inside the
     #: arc, which is where the reference puts them. They used to be below
     #: the centre, outside everything, which is what the extra height was
@@ -941,10 +949,17 @@ class Meters(Scene):
     LABEL_AT = 0.24
     #: Type sizes, as shares of the radius, in one place so a face keeps
     #: its proportions at every size it is drawn at.
+    #: How far out the dB numbers sit. The reference puts them at 1.07
+    #: radii - close in, almost touching the arc - and 1.20 is what made
+    #: the face taller than the reference's by the difference.
+    DB_AT_R = 1.07
     DB_TYPE = 0.125
-    PERCENT_TYPE = 0.082
-    UNIT_TYPE = 0.100
-    LABEL_TYPE = 0.115
+    #: Nearly as large as the dB row, which is what the reference has:
+    #: they read as two scales on one face rather than as a scale and a
+    #: footnote. At 0.082 they were a smudge under the arc.
+    PERCENT_TYPE = 0.105
+    UNIT_TYPE = 0.125
+    LABEL_TYPE = 0.130
 
     #: Where 0 dB - which is also 100 per cent - sits along the travel.
     #: A VU movement deflects in proportion to voltage, so per cent is
@@ -1191,7 +1206,8 @@ class Meters(Scene):
         painter.setFont(font)
         painter.setPen(QPen(colour))
         for value, fraction in marks:
-            self._label(painter, centre, radius * 1.20, fraction, str(value))
+            self._label(painter, centre, radius * self.DB_AT_R, fraction,
+                        str(value))
         # The per-cent row shares the arc with the dB row. Ten faces across
         # a window leaves it about a hundred pixels of arc for six numbers,
         # which reads as a smudge, so it waits for a face big enough to
@@ -1209,7 +1225,7 @@ class Meters(Scene):
             inside.setAlphaF(0.78)
             painter.setPen(QPen(inside))
             for value, fraction in self.PERCENT_MARKS:
-                self._label(painter, centre, radius * 0.80, fraction,
+                self._label(painter, centre, radius * 0.86, fraction,
                             str(value), tight=True)
         painter.setPen(QPen(colour))
         if roomy:
@@ -1272,10 +1288,13 @@ class Meters(Scene):
         # it crossed the scale it is reading and went through the number
         # at the top.
         tip = centre + reach * (radius * 0.90)
-        # From the hub outwards, not from the dead centre: a needle drawn
-        # through its own pivot has no hub, and the collar is the thing
-        # that makes it read as hinged rather than as a line.
-        tail = pivot + reach * (radius * 0.10)
+        # Stopped well short of the hinge, and with no collar drawn at
+        # it. The reference shows no hub at all: the needle simply runs
+        # off the bottom of the face, and the lowest thing on it is the
+        # frequency. Drawing a hub put the face's bottom edge a sixth of
+        # a radius lower than the reference's, which is what kept the
+        # proportions wrong however the rest was adjusted.
+        tail = pivot + reach * (radius * 0.15)
         halo = QColor(state.dial_colour)
         halo.setAlphaF(0.26)
         painter.setPen(QPen(halo, max(3.0, radius * 0.075),
@@ -1293,9 +1312,6 @@ class Meters(Scene):
                                 Qt.PenCapStyle.RoundCap))
             painter.drawLine(tail + (tip - tail) * start,
                              tail + (tip - tail) * finish)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(state.dial_colour)
-        painter.drawEllipse(pivot, radius * 0.050, radius * 0.050)
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
 
