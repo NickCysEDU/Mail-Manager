@@ -179,6 +179,13 @@ def sniff(head: bytes, declared: str = "", name: str = "") -> Tuple[str, str]:
         if head[8:12] == b"WAVE":
             return "audio", "audio/wav"
         return "image", "image/webp"
+    # AIFF, and its compressed cousin. The same shape as RIFF with the
+    # bytes the other way round, which is why it needs its own line: the
+    # name ".aif" was already in every list of audio extensions, and the
+    # rule here is that the bytes decide, so an AIFF was being called
+    # "some other file" and never reached the player.
+    if head[:4] == b"FORM" and head[8:12] in (b"AIFF", b"AIFC"):
+        return "audio", "audio/aiff"
     if head[4:8] == b"ftyp":
         brand = head[8:12]
         if brand in (b"M4A ", b"M4B ", b"M4P "):

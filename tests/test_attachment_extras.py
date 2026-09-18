@@ -1011,6 +1011,77 @@ class _FakeClock:
         self.now += seconds
 
 
+class TestWaitingForTheAnalysis:
+    """What the pane does while a track is being read.
+
+    All of this was broken by a block of the constructor that had been
+    pasted into the middle of set_working, and ran on every progress
+    callback for months.
+    """
+
+    @staticmethod
+    def _spectrum(qtbot):
+        from attachment_widgets import Spectrum
+
+        spectrum = Spectrum()
+        qtbot.addWidget(spectrum)
+        return spectrum
+
+    def test_progress_actually_reaches_the_pane(self, qtbot):
+        """It used to be thrown away, so the bar this exists to draw had
+        never once appeared."""
+        spectrum = self._spectrum(qtbot)
+        spectrum.set_working(0.4)
+        assert spectrum._working == pytest.approx(0.4)
+
+    def test_finishing_clears_it(self, qtbot):
+        spectrum = self._spectrum(qtbot)
+        spectrum.set_working(0.4)
+        spectrum.set_working(None)
+        assert spectrum._working is None
+
+    def test_it_slows_the_clock_down_while_it_waits(self, qtbot):
+        """The analysis and the scenes are both Python, so they take turns
+        holding the interpreter lock. A pane repainting sixty times a
+        second takes the processor away from the thing being waited for -
+        measured at 1.6 times slower."""
+        spectrum = self._spectrum(qtbot)
+        spectrum.set_working(0.1)
+        assert spectrum._timer.interval() >= 60
+        spectrum.set_working(None)
+        assert spectrum._timer.interval() == spectrum.FRAME_MS
+
+    def test_it_does_not_reset_what_the_user_chose(self, qtbot):
+        """It used to put the aspect ratio, the strobe rate, the strobe
+        sensitivity and the source it listens to back to their defaults,
+        several times a second, for as long as a track took to read."""
+        spectrum = self._spectrum(qtbot)
+        spectrum.set_aspect(16 / 9)
+        spectrum.set_strobe_rate(0.9)
+        spectrum.set_strobe_sense(0.2)
+        spectrum.set_strobe_source("Treble")
+        for step in range(6):
+            spectrum.set_working(step / 6.0)
+        assert spectrum._aspect == pytest.approx(16 / 9)
+        assert spectrum._strobe_rate == pytest.approx(0.9)
+        assert spectrum._strobe_sense == pytest.approx(0.2)
+        assert spectrum._strobe_source == "Treble"
+
+    def test_it_does_not_throw_the_render_buffer_away(self, qtbot):
+        """Rebuilding the post-processor and dropping the buffer on every
+        progress tick is work done during the one wait the user is
+        actually watching."""
+        from attachment_widgets import PostProcess
+
+        spectrum = self._spectrum(qtbot)
+        spectrum._buffer = object()
+        effects = spectrum._effects
+        for step in range(6):
+            spectrum.set_working(step / 6.0)
+        assert spectrum._buffer is not None
+        assert spectrum._effects is effects
+
+
 class TestTheMeterScene:
     """Ten analogue dials, copied from a photograph of a rack of them."""
 

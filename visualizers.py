@@ -908,8 +908,43 @@ class Meters(Scene):
     #: The needle's travel, in degrees, measured the way Qt measures arcs.
     #: Centred on straight up, so the face sits square in its cell - the
     #: first attempt started at 202 and leaned the whole dial to the left.
-    START = 143.0
-    SWEEP = -106.0
+    START = 145.0
+    SWEEP = -110.0
+
+    #: The face's own shape, in radii, and the only place it is written
+    #: down. Everything else measures against these, so the drawing and
+    #: the space reserved for it cannot disagree - which they did, and
+    #: which is what made the dials look stretched.
+    #:
+    #: Taken off the reference rather than chosen: its arc is a 460-wide
+    #: chord rising 120, which is a radius of 280 and a sweep of 110
+    #: degrees, and the centre of that circle sits at the very bottom of
+    #: the face. So the face is a wide, shallow thing - about two radii
+    #: across and a quarter over one tall - and the code used to reserve
+    #: 2.55 by 2.20, which is 1.76 times the height it ever draws in.
+    #: Wide enough for the labels that sit beyond the ends of the arc,
+    #: not just for the arc: at 2.05 the "-24" of one face and the "3" of
+    #: the one before it were touching.
+    FACE_WIDE = 2.34
+    #: And tall enough for the row of numbers above the arc, which reach
+    #: about a third of a radius past its apex. At 1.25 the top row of a
+    #: grid had its "-3" cut off by the edge of the frame.
+    FACE_TALL = 1.46
+    #: How far below the top of the face the arc's centre sits. The
+    #: difference between this and FACE_TALL is the room under the hub.
+    FACE_DROP = 1.36
+    #: Where the two lines of text sit, above the centre and inside the
+    #: arc, which is where the reference puts them. They used to be below
+    #: the centre, outside everything, which is what the extra height was
+    #: being reserved for.
+    DB_AT = 0.46
+    LABEL_AT = 0.24
+    #: Type sizes, as shares of the radius, in one place so a face keeps
+    #: its proportions at every size it is drawn at.
+    DB_TYPE = 0.125
+    PERCENT_TYPE = 0.082
+    UNIT_TYPE = 0.100
+    LABEL_TYPE = 0.115
 
     #: Where 0 dB - which is also 100 per cent - sits along the travel.
     #: A VU movement deflects in proportion to voltage, so per cent is
@@ -956,6 +991,8 @@ class Meters(Scene):
         columns, rows = self._grid(rect, count)
         cell_w = rect.width() / columns
         cell_h = rect.height() / rows
+        #: How many are on each row, so the last one can be centred.
+        on_row = [min(columns, count - r * columns) for r in range(rows)]
         flash = self.flash(state)
         # How many real pixels one unit of this rect is worth, so a face
         # is rendered at the resolution it will be shown at and no more.
@@ -966,8 +1003,13 @@ class Meters(Scene):
         # four times the pixels to copy every frame.
         dpr = abs(painter.combinedTransform().m11()) or 1.0
         for index in range(count):
-            box = QRectF(rect.left() + (index % columns) * cell_w,
-                         rect.top() + (index // columns) * cell_h,
+            row, column = divmod(index, columns)
+            # A short row is centred rather than left-aligned: three
+            # meters hanging off the left of a five-wide grid reads as
+            # two that failed to draw.
+            spare = (columns - on_row[row]) * cell_w / 2.0
+            box = QRectF(rect.left() + spare + column * cell_w,
+                         rect.top() + row * cell_h,
                          cell_w, cell_h)
             label = (state.dial_labels[index]
                      if index < len(state.dial_labels) else "")
@@ -975,33 +1017,35 @@ class Meters(Scene):
 
     @staticmethod
     def _grid(rect, count: int):
-        """Columns and rows that keep every cell on the screen.
+        """Columns and rows that make the faces as big as they can be.
 
-        The old version always used five across, so at anything narrow than
-        a wide window the faces ran past the edge and the labels went with
-        them. This picks the arrangement whose cells are closest to the
-        shape a meter wants, which is a little wider than it is tall.
+        Scored on the radius each arrangement yields rather than on how
+        square its cells come out. That sounds like the same thing and is
+        not: a face is twice as wide as it is tall, so the arrangement
+        with the tidiest cells is usually the one that wastes the most
+        room. Ten meters on a 16:9 screen in five columns of two gives
+        cells that are taller than they are wide, and the faces end up
+        limited by width with a third of every cell empty underneath.
+
+        Leaving a row short is allowed, and the short row is centred, so
+        the space it does not use sits at the ends where it reads as
+        margin rather than as a meter that failed to draw.
         """
-        # A fallback that is actually a layout. This used to start at one
-        # column by ten rows and keep it whenever nothing cleared the
-        # minimums - which in a short strip is every arrangement, so ten
-        # meters were stacked in a column six pixels tall.
-        widest = max(range(1, count + 1),
-                     key=lambda c: min(rect.width() / c,
-                                       rect.height() / ((count + c - 1) // c)))
-        best = (widest, (count + widest - 1) // widest, 1e9)
+        best = (1, count, 0.0)
         for columns in range(1, count + 1):
             rows = (count + columns - 1) // columns
             cell_w = rect.width() / columns
             cell_h = rect.height() / rows
-            if cell_w <= 60 or cell_h <= 54:
+            if cell_w <= 48 or cell_h <= 34:
                 continue
-            # Empty cells look like something failed to draw, so a grid that
-            # fills exactly is worth a lot more than a slightly better shape.
-            waste = columns * rows - count
-            score = waste * 2.0 + abs(cell_w / cell_h - 1.5)
-            if score < best[2]:
-                best = (columns, rows, score)
+            pad = min(cell_w, cell_h) * 0.05
+            radius = min((cell_w - 2 * pad) / Meters.FACE_WIDE,
+                         (cell_h - 2 * pad) / Meters.FACE_TALL)
+            # A small nudge towards filling the grid, so that when two
+            # arrangements give nearly the same size the tidy one wins.
+            radius *= 1.0 - 0.02 * (columns * rows - count)
+            if radius > best[2]:
+                best = (columns, rows, radius)
         return best[0], best[1]
 
     # -- one meter --------------------------------------------------------
@@ -1039,33 +1083,28 @@ class Meters(Scene):
         Worked out from the cell rather than assumed, so nothing can reach
         outside it however the window is shaped.
         """
-        pad = min(box.width(), box.height()) * 0.06
+        pad = min(box.width(), box.height()) * 0.05
         inner = box.adjusted(pad, pad, -pad, -pad)
-        # Worked backwards from what has to fit. The outermost label sits
-        # 1.20 radii above the centre and the frequency 0.78 below it, so
-        # the two together decide how big the arc can be - which is why the
-        # faces used to run off the top of the window.
-        # Sized to what is actually drawn. The outermost number sits 1.20
-        # radii from the centre and is about a quarter of a radius tall, so
-        # the face reaches 1.33 radii above the centre; the frequency ends
-        # 0.84 below it. Reserving 2.46 for a face 2.17 tall left a quarter
-        # of every cell empty and the dials looking lost in it.
-        radius = min(inner.width() / 2.55, inner.height() / 2.20)
-        # A face is 2.30 radii tall. On a tall cell the width caps the
-        # radius, so that block has to be centred in what is left or every
-        # dial sits jammed against the top with empty space underneath.
-        block = radius * 2.20
+        radius = min(inner.width() / Meters.FACE_WIDE,
+                     inner.height() / Meters.FACE_TALL)
+        # Centred in whatever is left over, in both directions. A face is
+        # much wider than it is tall, so on most cells the width caps the
+        # radius and there is spare height; hung from the top, every dial
+        # sits jammed against the ceiling with a gap underneath.
+        block = radius * Meters.FACE_TALL
         top = inner.top() + max(0.0, (inner.height() - block) / 2.0)
         centre_x = inner.center().x()
-        centre_y = top + radius * 1.30
+        centre_y = top + radius * Meters.FACE_DROP
         return {
             "radius": radius,
             "centre": QPointF(centre_x, centre_y),
-            # Below the arc's centre, which is where a moving coil
-            # actually sits: the needle is a long arm swinging up into
-            # the scale, and hinging it at the centre made it a spoke
-            # about a third the length the instrument has.
-            "pivot": QPointF(centre_x, centre_y + radius * 0.62),
+            # At the arc's own centre. It was moved below it on the
+            # reasoning that a moving coil hinges lower, which is true of
+            # the movement and not of the face: on the reference the
+            # needle is a radius of the arc it reads against, and hinging
+            # it lower made it half as long again and dragged the whole
+            # face taller to fit.
+            "pivot": QPointF(centre_x, centre_y),
             "inner": inner,
         }
 
@@ -1142,9 +1181,12 @@ class Meters(Scene):
             painter.setBrush(Qt.BrushStyle.NoBrush)
 
         font = painter.font()
-        # A shade larger and a little bolder: at forty pixels of radius
-        # thin numbers at five and a half points are a smudge.
-        font.setPointSizeF(max(6.5, radius * 0.175))
+        # Measured against the radius, and the same proportion at every
+        # size. These were all a half larger than the reference, which is
+        # what made a face look like a diagram of a meter rather than a
+        # meter: the numbers were competing with the scale instead of
+        # labelling it.
+        font.setPointSizeF(max(6.0, radius * self.DB_TYPE))
         font.setBold(True)
         painter.setFont(font)
         painter.setPen(QPen(colour))
@@ -1161,7 +1203,7 @@ class Meters(Scene):
             # between them is the arc length at whatever radius they are
             # drawn at, and at 0.70 radii in a face this size the numbers
             # were wider than the gaps and ran into each other.
-            font.setPointSizeF(max(4.5, radius * 0.105))
+            font.setPointSizeF(max(4.0, radius * self.PERCENT_TYPE))
             painter.setFont(font)
             inside = QColor(colour)
             inside.setAlphaF(0.78)
@@ -1169,22 +1211,21 @@ class Meters(Scene):
             for value, fraction in self.PERCENT_MARKS:
                 self._label(painter, centre, radius * 0.80, fraction,
                             str(value), tight=True)
-        font.setPointSizeF(max(5.5, radius * 0.155))
-        painter.setFont(font)
-
         painter.setPen(QPen(colour))
         if roomy:
-            font.setPointSizeF(max(5.5, radius * 0.150))
+            font.setPointSizeF(max(5.0, radius * self.UNIT_TYPE))
             painter.setFont(font)
             painter.drawText(
-                QRectF(centre.x() - radius * 0.5, centre.y() + radius * 0.14,
+                QRectF(centre.x() - radius * 0.5,
+                       centre.y() - radius * (self.DB_AT + 0.14),
                        radius, radius * 0.28),
                 Qt.AlignmentFlag.AlignCenter, "dB")
         if label:
-            font.setPointSizeF(max(6.0, radius * 0.175))
+            font.setPointSizeF(max(5.5, radius * self.LABEL_TYPE))
             painter.setFont(font)
             painter.drawText(
-                QRectF(centre.x() - radius * 0.95, centre.y() + radius * 0.52,
+                QRectF(centre.x() - radius * 0.95,
+                       centre.y() - radius * (self.LABEL_AT + 0.16),
                        radius * 1.9, radius * 0.32),
                 Qt.AlignmentFlag.AlignCenter, label)
 
@@ -1230,8 +1271,11 @@ class Meters(Scene):
         # movement sits. Short of the arc rather than through it - at 0.86
         # it crossed the scale it is reading and went through the number
         # at the top.
-        tip = centre + reach * (radius * 0.82)
-        tail = pivot
+        tip = centre + reach * (radius * 0.90)
+        # From the hub outwards, not from the dead centre: a needle drawn
+        # through its own pivot has no hub, and the collar is the thing
+        # that makes it read as hinged rather than as a line.
+        tail = pivot + reach * (radius * 0.10)
         halo = QColor(state.dial_colour)
         halo.setAlphaF(0.26)
         painter.setPen(QPen(halo, max(3.0, radius * 0.075),
