@@ -1675,6 +1675,8 @@ class Rave(Scene):
         self._rings: list = []
         self._beams: list = []
         self._spin = 0.0
+        self._haze_key = None
+        self._haze_image = None
 
     # -- the clock --------------------------------------------------------
     def _advance(self, state) -> float:
@@ -1720,19 +1722,58 @@ class Rave(Scene):
         self._core(painter, horizon, span, hue, bass, kick, synth, flash)
 
     # -- the parts --------------------------------------------------------
+    #: How big the haze is actually drawn before being stretched over the
+    #: frame. A gradient has no detail in it, so nobody can tell - and a
+    #: full-frame gradient is pure fill rate, which is the one thing a
+    #: machine without a graphics card is worst at. Measured on a build
+    #: runner, this scene cost four times what it costs here while the
+    #: others cost twice; painting the haze small is most of that gap.
+    HAZE = 96
+
     def _haze(self, painter, rect, horizon, bass, synth, flash) -> None:
         """The air in the room, lit from the far end."""
-        reach = min(rect.width(), rect.height()) * (0.45 + bass * 0.35)
-        glow = QRadialGradient(horizon, max(1.0, reach))
-        hot = QColor.fromHsvF((0.62 + synth * 0.3) % 1.0, 0.75,
-                              min(1.0, 0.22 + bass * 0.5 + flash * 0.4),
-                              min(1.0, 0.30 + bass * 0.45))
-        glow.setColorAt(0.0, hot)
+        small = self._haze_tile(rect, horizon, bass, synth, flash)
+        if small is None:
+            return
+        painter.drawImage(rect, small, QRectF(small.rect()))
+
+    def _haze_tile(self, rect, horizon, bass, synth, flash):
+        """The glow, painted into a small image and kept while it fits.
+
+        Rebuilt only when what it looks like changes enough to see, which
+        for a gradient is not often: the colour is quantised to a few
+        dozen steps and the rest of the time the same image is stretched
+        again.
+        """
+        if rect.width() < 2 or rect.height() < 2:
+            return None
+        key = (round((0.62 + synth * 0.3) % 1.0, 2),
+               round(min(1.0, 0.22 + bass * 0.5 + flash * 0.4), 2),
+               round(min(1.0, 0.30 + bass * 0.45), 2),
+               round(0.45 + bass * 0.35, 2),
+               round((horizon.x() - rect.left()) / rect.width(), 2),
+               round((horizon.y() - rect.top()) / rect.height(), 2))
+        if self._haze_key == key and self._haze_image is not None:
+            return self._haze_image
+        size = QSize(self.HAZE, max(2, int(self.HAZE * rect.height()
+                                           / max(1.0, rect.width()))))
+        image = QImage(size, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(Qt.GlobalColor.transparent)
+        middle = QPointF(key[4] * size.width(), key[5] * size.height())
+        reach = min(size.width(), size.height()) * key[3] * 2.0
+        glow = QRadialGradient(middle, max(1.0, reach))
+        glow.setColorAt(0.0, QColor.fromHsvF(key[0], 0.75, key[1], key[2]))
         glow.setColorAt(1.0, QColor(0, 0, 0, 0))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(glow)
-        painter.drawRect(rect)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
+        into = QPainter(image)
+        try:
+            into.setPen(Qt.PenStyle.NoPen)
+            into.setBrush(glow)
+            into.drawRect(QRectF(0, 0, size.width(), size.height()))
+        finally:
+            into.end()
+        self._haze_key = key
+        self._haze_image = image
+        return image
 
     def _project(self, horizon, focal, x: float, y: float, z: float):
         """One point of the world, on the glass."""
