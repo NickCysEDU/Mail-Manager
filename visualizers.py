@@ -12,13 +12,87 @@ cheap enough to run at thirty frames a second beside a mail sorter.
 
 from __future__ import annotations
 
+import logging
 import math
+import sys
 import time
+from pathlib import Path
+from typing import Optional
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt
 from PySide6.QtGui import (QColor, QImage, QLinearGradient, QPainter,
                            QPainterPath,
                            QPen, QRadialGradient)
+
+
+log = logging.getLogger(__name__)
+
+#: The face the meter dials are lettered in, and where it comes from.
+#:
+#: It ships with the app rather than being asked for by name, and that is
+#: the whole point of it. The dials are drawn from a photograph of a real
+#: meter whose numbers are set in a square, Eurostile-like face, and the
+#: code used to ask for one with a fallback list - Eurostile, Microgramma,
+#: Square721, Bank Gothic, then Verdana and DejaVu.
+#:
+#: None of the first four ship with macOS or with a build runner. Measured
+#: over the 181 families installed here, *nothing* installed has square
+#: digits. So Qt silently took the first name it recognised, which was
+#: Verdana: a humanist sans, round where the reference is square, and a
+#: different face again on Linux. That is why "the font does not match at
+#: all", and why a fallback list was never going to fix it.
+#:
+#: Michroma is a square techno face under the SIL Open Font License, which
+#: is what the licence is for. It is loaded once, by file, so that every
+#: machine draws the same dial.
+FONT_FILE = "Michroma-Regular.ttf"
+FONT_FAMILY = "Michroma"
+
+_LOADED: Optional[str] = None
+
+
+def dial_face() -> Optional[str]:
+    """The family the dials are lettered in, or None if it did not load.
+
+    Loaded once and remembered. A failure is not fatal - the dials fall
+    back to whatever Qt finds, which is what they did before - but it is
+    logged, because a face silently swapped for another is exactly the
+    thing this was written to stop.
+    """
+    global _LOADED
+    if _LOADED is not None:
+        return _LOADED or None
+    try:
+        from PySide6.QtGui import QGuiApplication
+
+        if QGuiApplication.instance() is None:
+            # Qt cannot register a font before there is an application,
+            # and the answer would be remembered for the life of the
+            # process. Ask again later rather than deciding now.
+            return None
+    except Exception:      # noqa: BLE001
+        return None
+    _LOADED = ""
+    here = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    for root in (here, Path(__file__).resolve().parent):
+        candidate = root / "assets" / "fonts" / FONT_FILE
+        if not candidate.exists():
+            continue
+        try:
+            from PySide6.QtGui import QFontDatabase
+
+            at = QFontDatabase.addApplicationFont(str(candidate))
+            families = QFontDatabase.applicationFontFamilies(at)
+        except Exception as exc:      # noqa: BLE001 - decoration, not mail
+            log.info("Could not load the dial face (%s).", exc)
+            return None
+        if families:
+            _LOADED = families[0]
+            return _LOADED
+        log.info("The dial face at %s loaded no families.", candidate)
+        return None
+    log.info("The dial face %s is not beside this module.", FONT_FILE)
+    return None
 
 
 #: The width, in real screen pixels, above which Qt stops being quick.
@@ -1220,8 +1294,18 @@ class Meters(Scene):
     #: the faces small - the radius is whichever of the two dimensions
     #: runs out first, and asking for a quarter more width than the face
     #: uses throws that quarter away.
-    FACE_WIDE = 1.95
-    FACE_TALL = 1.02
+    #: What a face actually draws in, measured rather than reasoned about.
+    #:
+    #: These were 1.95 by 1.02 and the drawing needs 1.89 by 1.10. Six per
+    #: cent of missing height does not sound like much and it is what put
+    #: the bottom row of a full screen off the bottom of it: every cell
+    #: overflowed by fourteen pixels, and the last row overflowed into
+    #: nothing. The needle is what does it - it hinges below the arc and
+    #: swings past the frequency label - so the reserved height has to
+    #: cover a face at rest and a face pinned, which is what the measuring
+    #: script checks at three deflections.
+    FACE_WIDE = 1.93
+    FACE_TALL = 1.13
     #: How far below the top of the face the arc's centre sits. The
     #: difference between this and FACE_TALL is the room under the hub.
     FACE_DROP = 1.16
@@ -1269,20 +1353,53 @@ class Meters(Scene):
     #: are the real article; the rest are the closest of what a Mac and a
     #: Linux build machine actually carry, ranked by measuring the width
     #: of a "0" against its height and how much of its box the ink fills.
+    #: The face, which ships with the app - see ``dial_face``. The rest
+    #: are only what Qt falls back to if that file ever goes missing, and
+    #: none of them is right: nothing installed on a Mac or on a build
+    #: runner has square digits.
     FAMILIES = ("Eurostile", "Microgramma", "Square721 BT", "Bank Gothic",
                 "Verdana", "DejaVu Sans", "Futura", "Gill Sans",
                 "Avenir Next", "Liberation Sans", "Helvetica Neue")
+
+    @staticmethod
+    def _lettering(font):
+        """Put the dial's own face on a font, if it loaded."""
+        family = dial_face()
+        font.setFamilies(([family] if family else [])
+                         + list(Meters.FAMILIES))
+        # Michroma has one weight and it is the right one. Asking for bold
+        # makes Qt synthesise a heavier version by smearing it sideways,
+        # which is what turned the numbers into blobs at small sizes.
+        font.setBold(not family)
+        return font
     #: 1.09 rather than the 1.07 measured to the reference's own label
     #: centres, because this face's numerals are a shade taller than its
     #: and at 1.07 their bottoms sat on the arc instead of above it.
-    DB_AT_R = 1.09
-    DB_TYPE = 0.125
+    #: Further out than it was, and smaller. Both because the face
+    #: changed: Michroma is a wide, square design, so the same point size
+    #: sets numbers half again as wide as Verdana's and they ran into the
+    #: arc, into the ticks, and into each other at the crowded left end.
+    #: Solved rather than nudged, against two things at once: the
+    #: reference's face is 1.85 radii wide, and the numbers have to clear
+    #: what is under them.
+    #:
+    #: Michroma is a wide design, so the size that looks right for a
+    #: humanist sans is half again too big here - at 0.098 radii of type
+    #: the face came out 2.09 across against the reference's 1.85, because
+    #: the outermost thing on a face is the "-24" and it had grown.
+    #:
+    #: The first solve cleared the *arc*, at 0.968 radii, and put the row
+    #: at 1.06. That is under the ticks, which reach out to 1.052, so
+    #: every number came to rest on a tick tip. What has to be cleared is
+    #: whichever of the two reaches further.
+    DB_AT_R = 1.12
+    DB_TYPE = 0.072
     #: Nearly as large as the dB row, which is what the reference has:
     #: they read as two scales on one face rather than as a scale and a
     #: footnote. At 0.082 they were a smudge under the arc.
-    PERCENT_TYPE = 0.105
-    UNIT_TYPE = 0.125
-    LABEL_TYPE = 0.130
+    PERCENT_TYPE = 0.062
+    UNIT_TYPE = 0.088
+    LABEL_TYPE = 0.096
 
     #: Where 0 dB - which is also 100 per cent - sits along the travel.
     #: A VU movement deflects in proportion to voltage, so per cent is
@@ -1297,6 +1414,12 @@ class Meters(Scene):
     #: dB marks along the arc, and where each one sits across the sweep.
     DB_MARKS = tuple((db, (10.0 ** (db / 20.0)) / (10.0 ** (3.0 / 20.0)))
                      for db in (-24, -12, -3, 0, 1, 2, 3))
+    #: Where the per-cent row sits, inside the arc. Further in than the
+    #: 0.86 it was, for the same reason the dB row moved out: with a wide
+    #: face at 0.86 radii the numbers are nearly touching the scale they
+    #: are inside of.
+    PERCENT_AT = 0.82
+
     #: Below this face radius the per-cent row is dropped as unreadable.
     #: It used to be 150, which no cell on a 1080p screen ever reached
     #: with ten meters on it, so the row that is half of what a VU face
@@ -1340,10 +1463,22 @@ class Meters(Scene):
         if not count:
             return
         columns, rows = self._grid(rect, count)
-        cell_w = rect.width() / columns
-        cell_h = rect.height() / rows
+        # Cells the size of a face, not the size of the frame divided up.
+        #
+        # A rack of ten on a wide screen is four across and three down,
+        # and a face is 1.74 times as wide as it is tall where a third of
+        # a 16:9 frame is 1.78 - so dividing the frame evenly left about a
+        # hundred pixels of air under every row, all of which piled up at
+        # the bottom and read as the rack having slipped upwards. The
+        # block is built at its own size and centred instead.
+        radius = self._radius(rect, columns, rows)
+        cell_w = min(rect.width() / columns, radius * self.FACE_WIDE * 1.06)
+        cell_h = min(rect.height() / rows, radius * self.FACE_TALL * 1.06)
+        left = rect.left() + (rect.width() - cell_w * columns) / 2.0
+        top = rect.top() + (rect.height() - cell_h * rows) / 2.0
         #: How many are on each row, so the last one can be centred.
         on_row = [min(columns, count - r * columns) for r in range(rows)]
+        boxes = []
         flash = self.flash(state)
         # How many real pixels one unit of this rect is worth, so a face
         # is rendered at the resolution it will be shown at and no more.
@@ -1359,12 +1494,49 @@ class Meters(Scene):
             # meters hanging off the left of a five-wide grid reads as
             # two that failed to draw.
             spare = (columns - on_row[row]) * cell_w / 2.0
-            box = QRectF(rect.left() + spare + column * cell_w,
-                         rect.top() + row * cell_h,
+            box = QRectF(left + spare + column * cell_w,
+                         top + row * cell_h,
                          cell_w, cell_h)
             label = (state.dial_labels[index]
                      if index < len(state.dial_labels) else "")
-            self._meter(painter, box, levels[index], label, state, flash, dpr)
+            boxes.append((box, levels[index], label))
+
+        # The backlights first, all of them, before any face is drawn.
+        #
+        # Each one used to be filled inside its own cell, and a meter's
+        # backlight reaches half a radius past the face - so it stopped
+        # dead at the edge of the cell with a straight line down it, and
+        # the next meter's face was then drawn over the top of whatever
+        # had spilled. That is the strobe "clipping behind other meters".
+        # Light does not belong to a cell.
+        if flash > 0.02:
+            for box, _value, _label in boxes:
+                self._backlight(painter, rect, box, state, flash)
+        for box, value, label in boxes:
+            self._meter(painter, box, value, label, state, flash, dpr)
+
+    def _backlight(self, painter, rect, box, state, flash) -> None:
+        """One meter's lamp coming up, over whatever is around it."""
+        geometry = self._geometry(QRectF(0, 0, box.width(), box.height()))
+        pivot = geometry["pivot"] + box.topLeft()
+        reach = geometry["radius"] * 1.5
+        glow = QRadialGradient(pivot, reach)
+        tint = QColor(state.dial_colour)
+        tint.setAlphaF(0.55 * flash)
+        glow.setColorAt(0.0, tint)
+        glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+        spill = QRectF(pivot.x() - reach, pivot.y() - reach,
+                       reach * 2, reach * 2).intersected(rect)
+        painter.fillRect(spill, glow)
+
+    @staticmethod
+    def _radius(rect, columns: int, rows: int) -> float:
+        """The biggest face that fits a cell of this grid."""
+        cell_w = rect.width() / max(1, columns)
+        cell_h = rect.height() / max(1, rows)
+        pad = min(cell_w, cell_h) * 0.05
+        return max(1.0, min((cell_w - 2 * pad) / Meters.FACE_WIDE,
+                            (cell_h - 2 * pad) / Meters.FACE_TALL))
 
     @staticmethod
     def _grid(rect, count: int):
@@ -1385,13 +1557,19 @@ class Meters(Scene):
         best = (1, count, 0.0)
         for columns in range(1, count + 1):
             rows = (count + columns - 1) // columns
+            left = count - (rows - 1) * columns
+            # Never one on its own at the bottom. Ten meters three across
+            # is four rows of 3, 3, 3 and 1, and that single meter under
+            # the rack reads as a mistake rather than as a layout - which
+            # is what "I want a grid layout, not just one on the bottom
+            # row" was about. Two or more is a short row; one is a stray.
+            if rows > 1 and left == 1:
+                continue
             cell_w = rect.width() / columns
             cell_h = rect.height() / rows
             if cell_w <= 48 or cell_h <= 34:
                 continue
-            pad = min(cell_w, cell_h) * 0.05
-            radius = min((cell_w - 2 * pad) / Meters.FACE_WIDE,
-                         (cell_h - 2 * pad) / Meters.FACE_TALL)
+            radius = Meters._radius(rect, columns, rows)
             # A small nudge towards filling the grid, so that when two
             # arrangements give nearly the same size the tidy one wins.
             radius *= 1.0 - 0.02 * (columns * rows - count)
@@ -1415,15 +1593,6 @@ class Meters(Scene):
         geometry = self._geometry(QRectF(0, 0, box.width(), box.height()))
         painter.save()
         painter.translate(box.topLeft())
-        if flash > 0.02:
-            # The strobe is the meter's own backlight coming up, not a flash
-            # over the top of it.
-            glow = QRadialGradient(geometry["pivot"], geometry["radius"] * 1.5)
-            tint = QColor(state.dial_colour)
-            tint.setAlphaF(0.55 * flash)
-            glow.setColorAt(0.0, tint)
-            glow.setColorAt(1.0, QColor(0, 0, 0, 0))
-            painter.fillRect(QRectF(0, 0, box.width(), box.height()), glow)
         self._needle(painter, geometry, value, state)
         painter.restore()
 
@@ -1532,15 +1701,13 @@ class Meters(Scene):
                     size, size)
             painter.setBrush(Qt.BrushStyle.NoBrush)
 
-        font = painter.font()
-        font.setFamilies(list(self.FAMILIES))
+        font = self._lettering(painter.font())
         # Measured against the radius, and the same proportion at every
         # size. These were all a half larger than the reference, which is
         # what made a face look like a diagram of a meter rather than a
         # meter: the numbers were competing with the scale instead of
         # labelling it.
         font.setPointSizeF(max(6.0, radius * self.DB_TYPE))
-        font.setBold(True)
         painter.setFont(font)
         painter.setPen(QPen(colour))
         for value, fraction in marks:
@@ -1565,8 +1732,8 @@ class Meters(Scene):
             inside.setAlphaF(0.62)
             painter.setPen(QPen(inside))
             for value, fraction in self.PERCENT_MARKS:
-                self._label(painter, centre, radius * 0.86, fraction,
-                            str(value), tight=True)
+                self._label(painter, centre, radius * self.PERCENT_AT,
+                            fraction, str(value), tight=True)
         painter.setPen(QPen(colour))
         if roomy:
             font.setPointSizeF(max(5.0, radius * self.UNIT_TYPE))

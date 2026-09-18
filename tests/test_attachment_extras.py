@@ -4480,3 +4480,266 @@ class TestTheListOfPlayingKeys:
         woke = self._counting(window)
         self._press(window, _Qt.Key.Key_J)
         assert woke == [1], "J moved the playhead without showing where"
+
+
+class TestTheDialsAreLetteredInTheirOwnFace:
+    """"The font does not match at all either. Ensure fonts are loading
+    correctly."
+
+    They were not. The face was asked for by name with a fallback list -
+    Eurostile, Microgramma, Square721, Bank Gothic, then Verdana - and
+    none of the first four ships with macOS or with a build runner.
+    Measured over the 181 families installed here, nothing installed has
+    square digits at all. So Qt silently took the first name it knew,
+    which was Verdana: round where the reference is square, and a
+    different face again on Linux.
+
+    A fallback list was never going to fix that, because the fallback does
+    not exist anywhere. The face ships with the app now.
+    """
+
+    def test_the_face_is_beside_the_code(self):
+        from pathlib import Path
+
+        import visualizers
+
+        here = Path(visualizers.__file__).resolve().parent
+        font = here / "assets" / "fonts" / visualizers.FONT_FILE
+        assert font.exists(), f"{font} is not there"
+        licence = here / "assets" / "fonts" / "Michroma-OFL.txt"
+        assert licence.exists(), (
+            "a font is redistributed with its licence or not at all")
+        assert "SIL Open Font License" in licence.read_text()
+
+    def test_it_loads(self, qtbot):
+        import visualizers
+
+        assert visualizers.dial_face() == visualizers.FONT_FAMILY, (
+            f"the dials are lettered in {visualizers.dial_face()}")
+
+    def test_the_dials_ask_for_it(self, qtbot):
+        """Loading it and not using it would be the same bug again."""
+        from PySide6.QtGui import QFont
+
+        import visualizers
+
+        font = visualizers.Meters._lettering(QFont())
+        assert font.families()[0] == visualizers.FONT_FAMILY
+        assert not font.bold(), (
+            "Michroma has one weight; asking for bold makes Qt smear it "
+            "sideways, which is what turned the numbers into blobs")
+
+    def test_a_missing_face_is_not_fatal(self, qtbot):
+        """It is decoration. Losing it costs the look, not the app."""
+        from PySide6.QtGui import QFont
+
+        import visualizers
+
+        was = visualizers._LOADED
+        visualizers._LOADED = ""
+        try:
+            assert visualizers.dial_face() is None
+            font = visualizers.Meters._lettering(QFont())
+            assert font.families()
+            assert font.bold(), (
+                "without the face the fallbacks need their bold weight")
+        finally:
+            visualizers._LOADED = was
+
+
+class TestTheRackOfDials:
+    """The layout complaints: a meter alone on the bottom row, the bottom
+    row running off the screen, and the strobe stopping at a cell edge.
+    """
+
+    @staticmethod
+    def _drawn(width=1920, height=1080, flash=0.0, count=10):
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        scene = visualizers.by_name("VU meters")
+        state = SpectrumState()
+        state.dials = [0.2 + 0.5 * (i % 3) / 3 for i in range(count)]
+        state.dial_labels = [f"{i}Hz" for i in range(count)]
+        state.strobe = flash > 0
+        state.hit = flash
+        image = QImage(width, height,
+                       QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0))
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        scene.paint(painter, QRectF(0, 0, width, height), state)
+        painter.end()
+        return image
+
+    @staticmethod
+    def _ink_rows(image, floor=40):
+        """Which rows of the frame have anything drawn on them."""
+        rows = []
+        for y in range(image.height()):
+            for x in range(0, image.width(), 4):
+                if sum(image.pixelColor(x, y).getRgb()[:3]) > floor:
+                    rows.append(y)
+                    break
+        return rows
+
+    def test_nothing_runs_off_the_bottom(self, qtbot):
+        """It did, and by six per cent of a cell: the reserved height was
+        1.02 radii where the drawing needs 1.17, because the needle hinges
+        below the arc and swings past the frequency label. Every row
+        overflowed by fourteen pixels and the last row overflowed into
+        nothing."""
+        image = self._drawn()
+        rows = self._ink_rows(image)
+        assert rows, "nothing was drawn at all"
+        assert max(rows) < image.height() - 4, (
+            f"there is ink on row {max(rows)} of {image.height()}")
+        assert min(rows) > 2, f"there is ink on row {min(rows)}"
+
+    def test_the_face_fits_what_is_reserved_for_it(self, qtbot):
+        """The constants and the drawing have to agree, or the one that
+        is wrong is only found by looking at a screenshot."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        scene = visualizers.by_name("VU meters")
+        side = 900
+        worst_wide = worst_tall = 0.0
+        for level in (0.02, 0.5, 1.0):
+            state = SpectrumState()
+            state.dials = [level]
+            image = QImage(side, side,
+                           QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(QColor(0, 0, 0))
+            painter = QPainter(image)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            scene._meter(painter, QRectF(0, 0, side, side), level, "10kHz",
+                         state, 0.0, 1.0)
+            painter.end()
+            lit = [(x, y) for y in range(0, side, 2)
+                   for x in range(0, side, 2)
+                   if sum(image.pixelColor(x, y).getRgb()[:3]) > 40]
+            assert lit
+            radius = scene._radius(QRectF(0, 0, side, side), 1, 1)
+            worst_wide = max(worst_wide,
+                             (max(x for x, _y in lit)
+                              - min(x for x, _y in lit)) / radius)
+            worst_tall = max(worst_tall,
+                             (max(y for _x, y in lit)
+                              - min(y for _x, y in lit)) / radius)
+        assert worst_wide <= visualizers.Meters.FACE_WIDE, (
+            f"a face draws {worst_wide:.2f} radii wide and "
+            f"{visualizers.Meters.FACE_WIDE} is reserved")
+        assert worst_tall <= visualizers.Meters.FACE_TALL, (
+            f"a face draws {worst_tall:.2f} radii tall and "
+            f"{visualizers.Meters.FACE_TALL} is reserved")
+
+    def test_the_numbers_do_not_touch_the_scale(self, qtbot):
+        """"Numbers overlap with the arc."
+
+        Measured off the font rather than off a screenshot: a label is
+        drawn centred on DB_AT_R, so its inner edge is half its own height
+        in from there, and what it has to clear is whichever of the arc
+        and the ticks reaches further out. The ticks do - 1.052 radii
+        against the arc's 0.978 - and the first attempt at this cleared
+        the arc only, which put every number on a tick tip.
+        """
+        from PySide6.QtGui import QFont, QFontMetricsF
+
+        import visualizers
+
+        meters = visualizers.Meters
+        radius = 400.0
+        font = meters._lettering(QFont())
+        font.setPointSizeF(radius * meters.DB_TYPE)
+        metrics = QFontMetricsF(font)
+        tall = metrics.tightBoundingRect("-24").height() / radius
+        reaches = max(meters.TICK_OUT,
+                      meters.ARC_AT + meters.ARC_STROKE_HOT / 2)
+        air = meters.DB_AT_R - tall / 2 - reaches
+        assert air > 0.012, (
+            f"the numbers come within {air:.3f} radii of the scale, and "
+            f"the scale reaches {reaches:.3f}")
+
+        # And the per-cent row, which is inside it.
+        font.setPointSizeF(radius * meters.PERCENT_TYPE)
+        inner = QFontMetricsF(font).tightBoundingRect("100").height() / radius
+        below = (meters.ARC_AT - meters.ARC_STROKE_HOT / 2
+                 - (meters.PERCENT_AT + inner / 2))
+        assert below > 0.012, (
+            f"the per-cent numbers come within {below:.3f} radii of the "
+            f"arc from underneath")
+
+    def test_no_meter_is_left_alone_on_the_bottom_row(self, qtbot):
+        """Ten three across is 3, 3, 3 and 1, and that single meter under
+        the rack reads as a mistake rather than as a layout."""
+        from PySide6.QtCore import QRectF
+
+        import visualizers
+
+        for width, height in ((1920, 1080), (1280, 720), (1000, 800),
+                              (760, 240), (2560, 1440)):
+            for count in (6, 8, 9, 10, 12):
+                columns, rows = visualizers.Meters._grid(
+                    QRectF(0, 0, width, height), count)
+                left = count - (rows - 1) * columns
+                assert rows == 1 or left != 1, (
+                    f"{count} meters on {width}x{height} came out "
+                    f"{columns} across and {rows} down, leaving one alone")
+
+    def test_the_backlight_is_not_cut_off_at_a_cell_edge(self, qtbot):
+        """Each lamp used to be filled inside its own cell, and a lamp
+        reaches half a radius past the face - so it stopped dead with a
+        straight line down it and the next meter's face was drawn over
+        what had spilled."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        scene = visualizers.by_name("VU meters")
+        state = SpectrumState()
+        side = 900
+        cell = QRectF(340, 380, 220, 130)
+        image = QImage(side, side,
+                       QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0))
+        painter = QPainter(image)
+        try:
+            scene._backlight(painter, QRectF(0, 0, side, side), cell,
+                             state, 0.9)
+        finally:
+            painter.end()
+
+        def lit(x, y):
+            return sum(image.pixelColor(int(x), int(y)).getRgb()[:3])
+
+        middle = lit(cell.center().x(), cell.center().y())
+        assert middle > 30, "the lamp did not light its own meter"
+        # A lamp reaches about half a radius past the face. Clipped to the
+        # cell it stops dead at the edge, and the next meter's face is
+        # then drawn over whatever spilled - which is the strobe
+        # "clipping behind other meters". Light does not belong to a cell.
+        spread = [(x, y) for y in range(0, side, 3)
+                  for x in range(0, side, 3) if lit(x, y) > 4]
+        assert spread, "the lamp lit nothing"
+        assert min(x for x, _y in spread) < cell.left() - 12, (
+            "the light stops at the left edge of the meter's own cell")
+        assert max(x for x, _y in spread) > cell.right() + 12, (
+            "the light stops at the right edge of the meter's own cell")
+        assert min(y for _x, y in spread) < cell.top() - 12, (
+            "the light stops at the top of the meter's own cell")
+        # And it has to fade rather than stop: no step between neighbours.
+        across = [lit(x, cell.center().y())
+                  for x in range(0, side, 2)]
+        jumps = [abs(b - a) for a, b in zip(across, across[1:])]
+        assert max(jumps) < 14, (
+            f"the light jumps by {max(jumps)} between neighbouring pixels, "
+            f"which is an edge rather than a glow")

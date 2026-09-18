@@ -213,6 +213,7 @@ def self_test(offline: bool = False) -> int:
     check("settings directory", lambda: config.app_support_dir())
     check("log directory", lambda: config.log_dir())
     check("app icon", lambda: _bundled_path("assets/icon.png") or "not bundled")
+    check("dial lettering", _dial_face)
 
     import certs
     check("certificate bundle", certs.describe)
@@ -542,6 +543,30 @@ def main(argv: Optional[list] = None) -> int:
     finally:
         window.shutdown()
         log.info("Exited cleanly.")
+
+
+def _dial_face() -> str:
+    """Which face the meter dials will be lettered in.
+
+    Worth a line of its own in the self test. The dials are drawn from a
+    photograph of a real meter, and the face used to be asked for by name
+    with a fallback list that exists on no machine anybody runs this on -
+    so Qt quietly substituted whatever it had and the dials came out in a
+    different typeface on every platform, with nothing to say so.
+    """
+    import visualizers
+
+    family = visualizers.dial_face()
+    if family:
+        return f"{family}, shipped with the app"
+    # Qt will not register a font before there is an application, and this
+    # check runs before there is one. What can be checked here is the part
+    # that actually goes wrong in a build: the file not being in the
+    # bundle at all.
+    where = _bundled_path(f"assets/fonts/{visualizers.FONT_FILE}")
+    if where:
+        return f"{where.name} bundled ({where.stat().st_size:,} bytes)"
+    return f"{visualizers.FONT_FILE} is NOT bundled; Qt will substitute"
 
 
 def _bundled_path(relative: str) -> Optional[Path]:
