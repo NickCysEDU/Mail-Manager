@@ -297,6 +297,8 @@ class Spectrum(QWidget):
         self._settle = 0.0
         self._last_watched = 0.0
         self._since_hit = 99
+        #: Whether the manual key is being held down.
+        self._holding = False
         #: The beats found before playback started, one map per source.
         self._beats: dict = {}
         #: The kit on its own, for scenes that want to know which is which.
@@ -436,8 +438,50 @@ class Spectrum(QWidget):
     #: a shape, so "Kick" fires on kicks and not on the bass note under
     #: them.
 
+    #: "Manual" is last and is not a part of the sound at all: it means
+    #: nothing fires by itself and the only light is the one the hotkey
+    #: gives. The hotkey works in every other mode too - it adds a flash
+    #: on top of whatever the track is doing, which is how anybody
+    #: actually plays a strobe - but there has to be a setting where the
+    #: automatic side is out of the way entirely.
     STROBE_SOURCES = ("Bass", "Mids", "Treble", "Synths",
-                      "Kick", "Snare", "Hats", "Synth")
+                      "Kick", "Snare", "Hats", "Synth", "Manual")
+
+    #: The one source that listens to nobody.
+    BY_HAND = "Manual"
+
+    #: How hard a flash the hotkey gives, and how long a held key keeps
+    #: the light up before it starts to sag. Full brightness: a strobe you
+    #: press yourself is the one thing on screen that should not be shy.
+    HAND_HIT = 1.0
+
+    def flash(self, strength: float = 1.0) -> None:
+        """Fire the strobe now, whatever it is listening to.
+
+        Taps land on the frame after they are pressed rather than on the
+        next beat, because the point of the key is that the timing is the
+        player's.
+        """
+        self._state.hit = max(self._state.hit,
+                              max(0.0, min(1.0, float(strength))))
+        self._since_hit = 0
+        self.update()
+
+    def hold_flash(self, on: bool) -> None:
+        """Keep the light up for as long as the key is down."""
+        self._holding = bool(on)
+        if on:
+            self.flash(self.HAND_HIT)
+
+    def cycle_strobe_source(self, step: int = 1) -> str:
+        """Move to the next thing the strobe listens to, and say which."""
+        try:
+            at = self.STROBE_SOURCES.index(self._strobe_source)
+        except ValueError:
+            at = 0
+        name = self.STROBE_SOURCES[(at + int(step)) % len(self.STROBE_SOURCES)]
+        self.set_strobe_source(name)
+        return name
 
     def set_beats(self, maps) -> None:
         """The beat maps the analysis found, one per thing to listen to."""
@@ -894,7 +938,12 @@ class Spectrum(QWidget):
                    "Synths": state.synth}.get(self._strobe_source, bass)
         self._since_hit += 1
         self._decay_kit(state)
-        if not self._fire_from_the_map(state):
+        if self._holding:
+            # Held, so it does not decay: the key is the light switch.
+            state.hit = self.HAND_HIT
+        elif self._strobe_source == self.BY_HAND:
+            pass      # nothing fires by itself; the hotkey is the whole act
+        elif not self._fire_from_the_map(state):
             self._fire_from_the_frame(state, watched)
         self._last_watched = watched
         self._last_bass = bass
@@ -1500,7 +1549,7 @@ class FullScreenSpectrum(QWidget):
         self.setCursor(Qt.CursorShape.BlankCursor)
 
     def keyPressEvent(self, event) -> None:      # noqa: N802 - Qt's name
-        """Escape leaves; J, K and L work the transport.
+        """Escape leaves; J, K and L work the transport; the rest play it.
 
         One method, deliberately. There were two, and the later one won,
         so the transport keys were dead the whole time - pressing them
@@ -1520,7 +1569,44 @@ class FullScreenSpectrum(QWidget):
             self.close()
             event.accept()
             return
+        if self._play_it(event, held=True):
+            return
         super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        """Letting the strobe key go puts the light out.
+
+        Auto-repeat is ignored on both sides: holding a key down sends
+        press, release, press, release at the keyboard's repeat rate, and
+        a held strobe that switches itself off thirty times a second is a
+        strobe rather than a held light.
+        """
+        if self._play_it(event, held=False):
+            return
+        super().keyReleaseEvent(event)
+
+    def _play_it(self, event, held: bool) -> bool:
+        """Hand one of the playing keys to whoever owns the controls."""
+        if event.isAutoRepeat():
+            event.accept()
+            return True
+        owner = self._owner
+        reader = getattr(owner, "vj_action", None)
+        handler = getattr(owner, "vj", None)
+        if reader is None or handler is None:
+            return False
+        found = reader(event.key())
+        if found is None:
+            return False
+        action, value = found
+        if action == "flash":
+            action = "flash" if held else "unflash"
+        elif not held:
+            return False      # everything else acts on the way down only
+        if handler(action, value):
+            event.accept()
+            return True
+        return False
 
     def mouseMoveEvent(self, event) -> None:      # noqa: N802 - Qt's name
         self._show_controls()

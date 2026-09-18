@@ -909,6 +909,73 @@ class AudioPane(QWidget):
         self.position.setValue(target)
         self._seek(target)
 
+    #: The keys that play the visualiser, and what each one does.
+    #:
+    #: Numbers for scenes because there are eight of them and they are in
+    #: a fixed order, so the number is the same key every time whatever
+    #: the combo box happens to be showing. The rest sit under the left
+    #: hand while the right hand is on the numbers: S switches the strobe
+    #: on and off, A and D walk through what it is listening to, M goes
+    #: straight to listening to nobody, and F is the strobe itself - tap
+    #: it for a flash, hold it for a held light.
+    #:
+    #: J, K, L, space and escape are the transport and are handled where
+    #: they always were; these are the ones that are new.
+    VJ_KEYS = {
+        Qt.Key.Key_S: ("strobe", 0),
+        Qt.Key.Key_A: ("reaction", -1),
+        Qt.Key.Key_D: ("reaction", 1),
+        Qt.Key.Key_M: ("by-hand", 0),
+        Qt.Key.Key_F: ("flash", 1),
+    }
+
+    @staticmethod
+    def vj_action(key):
+        """What a key press means, or None if it means nothing here."""
+        found = AudioPane.VJ_KEYS.get(key)
+        if found is not None:
+            return found
+        if Qt.Key.Key_1 <= key <= Qt.Key.Key_9:
+            return ("scene", key - Qt.Key.Key_1)
+        return None
+
+    def vj(self, action: str, value: int = 0) -> bool:
+        """One of the playing keys, wherever it was pressed.
+
+        Everything goes through this pane's own controls rather than
+        straight at the spectrum, so that what the boxes show is what is
+        happening - the same reason the full screen controls are wired to
+        the ones in the window rather than to the widget.
+        """
+        if action == "scene":
+            import visualizers
+
+            if not 0 <= value < len(visualizers.SCENES):
+                return False
+            self.scene_box.setCurrentText(visualizers.SCENES[value].name)
+            return True
+        if action == "strobe":
+            self.strobe_box.setChecked(not self.strobe_box.isChecked())
+            return True
+        if action in ("reaction", "by-hand"):
+            from attachment_widgets import Spectrum as _Spec
+
+            name = (_Spec.BY_HAND if action == "by-hand"
+                    else self.spectrum.cycle_strobe_source(value))
+            self.strobe_source.setCurrentText(name)
+            return True
+        if action in ("flash", "unflash"):
+            wants = action == "flash"
+            # Pressing the strobe key with the strobe switched off did
+            # nothing at all, because the master switch is what scenes
+            # ask before they light up. Reaching for the light is asking
+            # for the light, so the box is ticked rather than ignored.
+            if wants and not self.strobe_box.isChecked():
+                self.strobe_box.setChecked(True)
+            self.spectrum.hold_flash(wants)
+            return True
+        return False
+
     def _sync_visual_controls(self) -> None:
         """Available whenever there is a sound file, analysed or not."""
         self.visual_holder.setVisible(self._path is not None)
@@ -963,14 +1030,38 @@ class AudioPane(QWidget):
 
         import visualizers
         scene = _combo([s.name for s in visualizers.SCENES],
-                       "Which visualiser to draw.")
+                       "Which visualiser to draw.  Keys 1 to "
+                       f"{len(visualizers.SCENES)}.")
         scene.setCurrentText(self.scene_box.currentText())
         scene.currentTextChanged.connect(self.scene_box.setCurrentText)
         scene.currentTextChanged.connect(self._scene_chosen)
 
         strobe = QCheckBox("Strobe")
+        strobe.setToolTip("Flash the scene on the beat.  Key S.\n\n"
+                          "F flashes it by hand - tap for a flash, hold "
+                          "for a held light.")
         strobe.setChecked(self.strobe_box.isChecked())
         strobe.toggled.connect(self.strobe_box.setChecked)
+
+        from attachment_widgets import Spectrum as _Spec
+        reaction = _combo(list(_Spec.STROBE_SOURCES),
+                          "What the strobe listens to.  Keys A and D, "
+                          "and M for nothing at all.")
+        reaction.setCurrentText(self.strobe_source.currentText())
+        reaction.currentTextChanged.connect(self.strobe_source.setCurrentText)
+
+        # Back the other way as well. The keys drive this pane's own
+        # controls, so without these the picture changed and the box in
+        # front of it went on saying what it used to be.
+        self._full_links += [
+            (self.scene_box.currentTextChanged,
+             self.scene_box.currentTextChanged.connect(scene.setCurrentText)),
+            (self.strobe_box.toggled,
+             self.strobe_box.toggled.connect(strobe.setChecked)),
+            (self.strobe_source.currentTextChanged,
+             self.strobe_source.currentTextChanged.connect(
+                 reaction.setCurrentText)),
+        ]
 
         colours = QPushButton("Colours…")
         colours.clicked.connect(self._choose_colours)
@@ -983,7 +1074,7 @@ class AudioPane(QWidget):
         full.add_control(clock)
         full.add_control(QLabel("Vol"))
         full.add_control(volume)
-        for widget in (scene, strobe, colours):
+        for widget in (scene, strobe, reaction, colours):
             full.add_control(widget)
         full.add_control(leave)
 

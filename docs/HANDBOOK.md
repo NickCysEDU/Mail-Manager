@@ -710,10 +710,29 @@ Press **⌘/** in the app for this list.
 | **⌘D** | Clear all ticks |
 | **⌘L** | Show or hide the activity log |
 | **⌘M** | Model settings |
-
-The `Job Search/Application Received` folder is now just `Job Search/Received`.
-shorter in a column, and unambiguous next to `Not Interested`.
 | **⌘,** | Settings |
+
+### Playing the visualiser
+
+The attachment viewer's visualiser has its own keys, and they work in the
+full-screen view, where there is nothing to type into. Numbers pick a
+scene; the letters sit under the left hand while the right hand is on the
+numbers.
+
+| Key | Action |
+|---|---|
+| **1 – 8** | Pick a scene, in the order the menu lists them |
+| **S** | Strobe on or off |
+| **A** / **D** | Step through what the strobe listens to |
+| **M** | Set it to listen to nobody - the hotkey is the only light |
+| **F** | Flash by hand: tap for a flash, hold for a held light |
+| **J** / **K** / **L** | Back ten seconds / play or pause / forward ten |
+| **Space** | Play or pause |
+| **Esc** | Leave full screen |
+
+**F** works whatever the strobe is set to listen to, so you can punch in
+flashes over what the track is already doing, and it switches the strobe
+on if it was off.
 
 ---
 
@@ -745,7 +764,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,267 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,281 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1106,7 +1125,7 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 3,267 tests, about three minutes
+./dev test        # 3,281 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```
