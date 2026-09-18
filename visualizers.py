@@ -118,6 +118,15 @@ HAIR_STEP = 0.9
 
 #: Past this many passes a real wide pen is cheaper, and correct.
 #:
+#: Fourteen is measured, and it is a floor as well as a ceiling. Swept
+#: over three scenes at 1080p, the Rave costs 31 ms a frame here, 40 at
+#: twenty passes, and about 100 at four, six, eight or ten - because at
+#: those a line that *should* stack gets a real pen instead. The
+#: Waterfall wants at least six for the same reason. A clamp on the
+#: Rave's own widths, to keep its trusses stacking, was tried and made
+#: that scene slower still: it moved lines out of the pen and into
+#: thirteen-pass stacks, which is the worst of both.
+#:
 #: Nothing in these scenes draws a line that thick, so this is a
 #: backstop. Raising it to 26 was tried, so that the Rave's widened
 #: trusses would stack rather than fall back to a pen: it halved that

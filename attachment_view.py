@@ -681,8 +681,27 @@ class AudioPane(QWidget):
             self.spectrum.set_working(None)
             self.spectrum.set_beats(beats)
             self.spectrum.set_traces(shapes, vectors)
+            # Set again, because the position the pane is at has to be
+            # read against the finished list rather than the one that
+            # arrived early. It is the same list on an uninterrupted run.
             self.spectrum.set_frames(frames, attachment_audio.RATE)
             self._decoder = None
+
+        def bands(result) -> None:
+            """The picture, as soon as there is one to show.
+
+            Seven of the eight scenes draw from the bands alone, and the
+            two passes that follow take another two thirds as long again -
+            so waiting for all of it before showing anything is most of
+            the wait anybody sees. The scene starts here and the traces
+            arrive underneath it a moment later.
+            """
+            if not alive():
+                return
+            frames, calibration = result
+            self.spectrum.set_calibration(calibration)
+            self.spectrum.set_working(None)
+            self.spectrum.set_frames(frames, attachment_audio.RATE)
 
         def failed(_detail: str) -> None:
             if alive():
@@ -705,7 +724,7 @@ class AudioPane(QWidget):
                 self.spectrum.set_elements(elements)
 
         self._decoder = attachment_audio.decode(path, done, failed, progress,
-                                                kit)
+                                                kit, bands)
 
     # -- transport --------------------------------------------------------
     @Slot()
