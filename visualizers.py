@@ -880,6 +880,21 @@ class Bars(Scene):
 
 
 
+def _dots_between(*tables, apart: float = 0.035) -> tuple:
+    """One point midway between each neighbouring pair of numbered marks.
+
+    A class body cannot be read from inside a comprehension defined in
+    it, so this is a function rather than two lines where it is used.
+    """
+    marks = sorted({fraction for table in tables for _v, fraction in table})
+    out: list = []
+    for first, second in zip(marks, marks[1:]):
+        middle = (first + second) / 2.0
+        if not out or middle - out[-1] > apart:
+            out.append(middle)
+    return tuple(out)
+
+
 class Meters(Scene):
     """Ten analogue VU meters, laid out like a rack of them.
 
@@ -952,7 +967,46 @@ class Meters(Scene):
     #: How far out the dB numbers sit. The reference puts them at 1.07
     #: radii - close in, almost touching the arc - and 1.20 is what made
     #: the face taller than the reference's by the difference.
-    DB_AT_R = 1.07
+    #: The arc's own stroke, measured where nothing crosses it: 0.020
+    #: radii, which on the reference's 270 pixel radius is 5.3 px. It was
+    #: drawn at 0.030, and the part above 0 dB at 0.052 - one and a half
+    #: to two and a half times too heavy, which is most of why the face
+    #: read as a diagram rather than as an instrument.
+    ARC_STROKE = 0.020
+    #: The run above 0 dB is heavier, but only a little.
+    ARC_STROKE_HOT = 0.027
+    #: Where the arc's stroke sits. Not at the radius itself: measured,
+    #: it runs 0.95 to 0.98, so its centre line is a little inside.
+    ARC_AT = 0.968
+    #: Ticks reach outward past the arc, not inward from it. Measured at
+    #: -3, 0, +1, +2 and +3 the ink continues to about 1.05 radii and
+    #: there is none inside; they were being drawn from 0.84 to 1.00,
+    #: which is the wrong side of the line they mark.
+    TICK_IN = 0.945
+    TICK_OUT = 1.052
+    #: The small marks between them are dots, and they are outside the
+    #: arc too - measured widths of 0.005 to 0.008 of the sweep, against
+    #: 0.037 to 0.047 for a tick.
+    DOT_AT = 1.012
+    DOT_SIZE = 0.011
+    #: A squarish face, like the reference's: its "0" is a rounded
+    #: rectangle rather than a circle. That is the Eurostile family,
+    #: which is not on a Mac, so this is the closest of the ones that
+    #: are - measured on the width of a "0" against its height and how
+    #: much of its box the ink fills.
+    #: In order of preference, because none of these is on every
+    #: machine and a face that silently falls back to the system default
+    #: is the thing this is trying to avoid. Eurostile and Microgramma
+    #: are the real article; the rest are the closest of what a Mac and a
+    #: Linux build machine actually carry, ranked by measuring the width
+    #: of a "0" against its height and how much of its box the ink fills.
+    FAMILIES = ("Eurostile", "Microgramma", "Square721 BT", "Bank Gothic",
+                "Verdana", "DejaVu Sans", "Futura", "Gill Sans",
+                "Avenir Next", "Liberation Sans", "Helvetica Neue")
+    #: 1.09 rather than the 1.07 measured to the reference's own label
+    #: centres, because this face's numerals are a shade taller than its
+    #: and at 1.07 their bottoms sat on the arc instead of above it.
+    DB_AT_R = 1.09
     DB_TYPE = 0.125
     #: Nearly as large as the dB row, which is what the reference has:
     #: they read as two scales on one face rather than as a scale and a
@@ -988,10 +1042,23 @@ class Meters(Scene):
     #: is nearly a decibel and a half out.
     PERCENT_MARKS = tuple((pc, pc / 100.0 / (10.0 ** (3.0 / 20.0)))
                           for pc in (0, 20, 40, 60, 80, 100))
-    #: Unnumbered ticks, one per dB. They crowd towards the quiet end
-    #: because the scale does, which is what a real face looks like.
-    MINOR = tuple((10.0 ** (db / 20.0)) / (10.0 ** (3.0 / 20.0))
-                  for db in range(-20, 4))
+    #: Built from both tables: one dot between each neighbouring pair of
+    #: numbered marks, wherever they fall, thinned so two that nearly
+    #: coincide do not print on top of each other.
+    DOTS = _dots_between(DB_MARKS, PERCENT_MARKS)
+    #: Where the dots go: midway between each pair of marks that carries
+    #: a number, on both scales. A handful, evenly spread - the reference
+    #: has eight or nine of them. What was here was one per decibel from
+    #: -20 up, which is twenty-four marks crowded into the left half and
+    #: is what made the row read as a smear rather than as points.
+    @staticmethod
+    def _between(marks):
+        at = sorted(set(marks))
+        return [(a + b) / 2.0 for a, b in zip(at, at[1:])]
+
+    #: Kept so anything that still names it finds an empty tuple rather
+    #: than an attribute error. The face draws DOTS above.
+    MINOR: tuple = ()
 
     def __init__(self) -> None:
         self._faces: dict = {}
@@ -1158,11 +1225,14 @@ class Meters(Scene):
         # it is the one marking on the instrument that means anything at a
         # glance.
         zero = self._db_at(0.0)
-        painter.setPen(QPen(colour, max(1.4, radius * 0.030),
+        span = QRectF(centre.x() - radius * self.ARC_AT,
+                      centre.y() - radius * self.ARC_AT,
+                      radius * self.ARC_AT * 2, radius * self.ARC_AT * 2)
+        painter.setPen(QPen(colour, max(1.0, radius * self.ARC_STROKE),
                             Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
         painter.drawArc(span, int(self.START * 16),
                         int(self.SWEEP * zero * 16))
-        painter.setPen(QPen(colour, max(2.2, radius * 0.052),
+        painter.setPen(QPen(colour, max(1.3, radius * self.ARC_STROKE_HOT),
                             Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
         painter.drawArc(span, int((self.START + self.SWEEP * zero) * 16),
                         int(self.SWEEP * (1.0 - zero) * 16))
@@ -1176,26 +1246,25 @@ class Meters(Scene):
 
         for _value, fraction in marks:
             self._tick(painter, centre, radius, fraction, colour,
-                       0.84, 1.0, max(1.3, radius * 0.026))
+                       self.TICK_IN, self.TICK_OUT,
+                       max(1.0, radius * self.ARC_STROKE))
         if roomy:
             # Dots, not lines. Every meter of this kind puts a row of
             # small points inside the arc between the numbered marks, and
             # short strokes hanging off the scale read as a comb instead.
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(dim)
-            size = max(0.9, radius * 0.020)
-            numbered = {round(f, 4) for _v, f in marks}
-            for fraction in self.MINOR:
-                if round(fraction, 4) in numbered:
-                    continue
+            size = max(0.7, radius * self.DOT_SIZE)
+            for fraction in self.DOTS:
                 angle = self._angle(fraction)
                 painter.drawEllipse(
-                    QPointF(centre.x() + math.cos(angle) * radius * 0.90,
-                            centre.y() - math.sin(angle) * radius * 0.90),
+                    QPointF(centre.x() + math.cos(angle) * radius * self.DOT_AT,
+                            centre.y() - math.sin(angle) * radius * self.DOT_AT),
                     size, size)
             painter.setBrush(Qt.BrushStyle.NoBrush)
 
         font = painter.font()
+        font.setFamilies(list(self.FAMILIES))
         # Measured against the radius, and the same proportion at every
         # size. These were all a half larger than the reference, which is
         # what made a face look like a diagram of a meter rather than a
@@ -1221,8 +1290,10 @@ class Meters(Scene):
             # were wider than the gaps and ran into each other.
             font.setPointSizeF(max(4.0, radius * self.PERCENT_TYPE))
             painter.setFont(font)
+            # Dimmer than the dB row, as the reference has them: two
+            # scales on one face, and only one of them is the scale.
             inside = QColor(colour)
-            inside.setAlphaF(0.78)
+            inside.setAlphaF(0.62)
             painter.setPen(QPen(inside))
             for value, fraction in self.PERCENT_MARKS:
                 self._label(painter, centre, radius * 0.86, fraction,
