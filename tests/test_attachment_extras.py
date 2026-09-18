@@ -4248,11 +4248,31 @@ class TestTheRaveIsARoom:
 
         return visualizers.Rave()
 
+    @staticmethod
+    def _pinned(scene):
+        """Put the room back where it started.
+
+        This scene keeps a world, and it moves it on by the *clock* every
+        time it paints. So two renders taken to compare one thing differ
+        by however long the first took as well - which is not a control,
+        it is a second variable. Measured: removing the walls entirely
+        still "changed" 825 pixels down the left of the room, all of them
+        the corridor having travelled.
+        """
+        scene._z = 4.0
+        scene._spin = 1.0
+        scene._last = None          # the first frame steps a fixed 16 ms
+        scene._thump = scene._fizz = scene._wash = 0.0
+        scene._wash_hue = 0.0
+        scene._rings = []
+        scene._beams = []
+        return scene
+
     def _drawn(self, scene=None):
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
-        scene = scene or self._rave()
+        scene = self._pinned(scene or self._rave())
         image = QImage(self.W, self.H,
                        QImage.Format.Format_ARGB32_Premultiplied)
         image.fill(QColor(0, 0, 0))
@@ -4281,7 +4301,10 @@ class TestTheRaveIsARoom:
         # any threshold written down here would be a statement about this
         # machine's antialiasing.
         whole = scene._surfaces
-        scene._surfaces = lambda lift, span: whole(lift, span)[:2]
+        # Floor and ceiling only, which is what this was: two planes with
+        # the dark showing between them.
+        scene._surfaces = lambda lift, span: tuple(
+            row for row in whole(lift, span) if row[1] < 0.1)
         try:
             bare = self._drawn(scene)
         finally:
@@ -4301,30 +4324,44 @@ class TestTheRaveIsARoom:
                         count += 1
             return count
 
-        middle = changed(0.42, 0.58)
         for name, left, right in (("left", 0.02, 0.22),
                                   ("right", 0.78, 0.98)):
             side = changed(left, right)
-            assert side > 120, (
+            assert side > 400, (
                 f"taking the walls away changed {side} pixels down the "
                 f"{name} of the room, which is not a wall")
-            assert side > middle * 3, (
-                f"taking the walls away changed {side} pixels at the "
-                f"{name} and {middle} in the middle, so whatever moved was "
-                f"not at the sides")
+        # No control region to compare against: a wall runs from beside
+        # you to the vanishing point, so it is *in* the middle of the
+        # frame as well as at the edges. The first version of this took
+        # the middle as a control and failed once the two walls became one
+        # surface, having been right about the walls the whole time.
 
     def test_the_grid_fades_into_the_distance(self):
         """Drawn at one weight, a grid stops wherever the loop stops. The
         cross lines are drawn in depth bands so the near ones are heavy
-        and the far ones dissolve."""
-        image = self._drawn()
-        # Down the middle of the floor: just below the horizon is the far
-        # end, the bottom of the frame is under your feet.
-        near = self._ink(image, 0.42, 0.58, 0.80, 0.98)
-        far = self._ink(image, 0.42, 0.58, 0.52, 0.58)
-        assert near > far * 1.5, (
-            f"the near floor has {near} of light and the far floor {far}, "
-            f"which is a grid rather than a distance")
+        and the far ones dissolve.
+
+        Against the same scene with the banding turned off, not against
+        the near floor. Comparing the two ends of the corridor sounds like
+        the same question and is not: the lines bunch up towards the
+        vanishing point and the haze is brightest there, so the far end is
+        the *brighter* of the two whether it fades or not, and a test
+        written that way passed with the fade taken out.
+        """
+        import visualizers
+
+        with_fade = self._drawn()
+        was = visualizers.Rave.BANDS
+        visualizers.Rave.BANDS = 1      # one band is no fade
+        try:
+            flat = self._drawn()
+        finally:
+            visualizers.Rave.BANDS = was
+        faded = self._ink(with_fade, 0.42, 0.58, 0.50, 0.60)
+        plain = self._ink(flat, 0.42, 0.58, 0.50, 0.60)
+        assert faded < plain * 0.95, (
+            f"the far end has {faded} of light with the banding and "
+            f"{plain} without, so the banding is not doing anything")
 
     def test_the_far_end_is_lit_rather_than_a_hole(self):
         """A closed corridor fading to nothing has a hole in it: the lines
@@ -4360,10 +4397,20 @@ class TestTheRaveIsARoom:
             without = self._drawn(scene)
         finally:
             scene._trusses = whole
-        lit = self._ink(with_them, 0.0, 1.0, 0.3, 0.7)
-        bare = self._ink(without, 0.0, 1.0, 0.3, 0.7)
-        assert lit > bare * 1.05, (
-            f"{lit} of light with the trusses and {bare} without, which is "
+        # The pixels they change, not the light they add. A truss is a
+        # thin frame on a corridor that is now brightly lit from end to
+        # end, so it moves the total by one per cent while being plainly
+        # visible - which is a statement about the corridor, not about the
+        # truss.
+        changed = 0
+        for y in range(int(self.H * 0.3), int(self.H * 0.7), 2):
+            for x in range(0, self.W, 2):
+                one = with_them.pixelColor(x, y).getRgb()[:3]
+                two = without.pixelColor(x, y).getRgb()[:3]
+                if sum(abs(a - b) for a, b in zip(one, two)) > 24:
+                    changed += 1
+        assert changed > 300, (
+            f"taking the trusses away changed {changed} pixels, which is "
             f"not a truss")
 
     def test_the_walls_are_not_drawn_as_densely_as_the_floor(self):
@@ -4371,11 +4418,14 @@ class TestTheRaveIsARoom:
         floor's line count on a side wall puts them a twentieth of a unit
         apart and it reads as hatching."""
         surfaces = self._rave()._surfaces(0.55, 4.5)
-        floor_lines = surfaces[0][2]
-        wall_lines = surfaces[2][2]
+        floor_lines = next(n for place, shift, n in surfaces if shift == 0.0)
+        # The two walls are one surface with two faces, so its line count
+        # covers both of them.
+        wall_lines = next(n for place, shift, n in surfaces
+                          if shift > 0.1) / 2.0
         assert wall_lines < floor_lines / 2, (
-            f"{wall_lines} lines across a wall against {floor_lines} across "
-            f"the floor, for a tenth of the distance")
+            f"{wall_lines:.0f} lines across a wall against {floor_lines} "
+            f"across the floor, for a tenth of the distance")
 
 
 class TestTheListOfPlayingKeys:
@@ -4743,3 +4793,172 @@ class TestTheRackOfDials:
         assert max(jumps) < 14, (
             f"the light jumps by {max(jumps)} between neighbouring pixels, "
             f"which is an edge rather than a glow")
+
+
+class TestTheRaveIsWiredToTheKit:
+    """"Make rave less jumpy and smoother while keeping high energy.
+    Bass increases the speed at which we go through the tunnel. The
+    background colour morphs and changes at the snare. Hats make the
+    middle geometry wireframe go crazy. It doesn't even look like a
+    continuous walk forward when no music is playing."
+    """
+
+    @staticmethod
+    def _scene():
+        import visualizers
+
+        scene = visualizers.Rave()
+        scene._last = None
+        return scene
+
+    @staticmethod
+    def _state(**kit):
+        from attachment_widgets import SpectrumState
+
+        state = SpectrumState()
+        state.levels = [0.3] * 48
+        state.bass = kit.pop("bass", 0.0)
+        state.mid = state.synth = state.high = 0.2
+        state.kit = {"Kick": 0.0, "Snare": 0.0, "Hats": 0.0, "Synth": 0.0}
+        state.kit.update(kit)
+        return state
+
+    @staticmethod
+    def _walk(scene, state, frames=30, step=1 / 60.0):
+        """Where the room gets to, on a clock that does not wander."""
+        import visualizers
+
+        real = visualizers.time.monotonic
+        now = [1000.0]
+        visualizers.time.monotonic = lambda: now[0]
+        was = []
+        try:
+            for _ in range(frames):
+                now[0] += step
+                scene._advance(state)
+                was.append(scene._z)
+        finally:
+            visualizers.time.monotonic = real
+        return was
+
+    def test_the_bass_is_what_drives_the_speed(self):
+        """It was one term of three and the smallest of them."""
+        scene, quiet = self._scene(), self._state(bass=0.0)
+        still = self._walk(scene, quiet)
+        scene = self._scene()
+        loud = self._walk(scene, self._state(bass=1.0))
+        went_still = still[-1] - still[0]
+        went_loud = loud[-1] - loud[0]
+        assert went_loud > went_still * 3.0, (
+            f"a full bass moved the room {went_loud / max(1e-9, went_still):.1f} "
+            f"times as far as silence")
+
+    def test_it_walks_forward_at_a_steady_pace_with_nothing_playing(self):
+        """"It doesn't even look like a continuous walk forward when no
+        music is playing." Every step the same, on a steady clock."""
+        scene = self._scene()
+        was = self._walk(scene, self._state(), frames=40)
+        steps = [b - a for a, b in zip(was, was[1:])]
+        assert min(steps) > 0, "the room stopped"
+        assert max(steps) - min(steps) < max(steps) * 0.02, (
+            f"steps run from {min(steps):.4f} to {max(steps):.4f}")
+
+    def test_the_trusses_keep_their_own_time(self):
+        """They rode the grid's offset, which wraps every *row*: a truss
+        crept back one row's worth and then jumped forward five, sixty
+        times a minute. It is the only thing in the room with a length to
+        it, so when it stutters the walk stutters."""
+        import inspect
+
+        import visualizers
+
+        source = inspect.getsource(visualizers.Rave._trusses)
+        assert "self._z % self.TRUSS" in source, (
+            "the trusses are back on the grid's offset, which wraps five "
+            "times as often as they recur")
+
+    def test_a_snare_moves_the_colour_on_and_leaves_it_there(self):
+        """"The background colour morphs and changes at the snare." Not a
+        flash that returns: each one puts the colour somewhere new."""
+        scene = self._scene()
+        state = self._state()
+        scene._advance(state)
+        before = scene._wash_hue
+        scene._advance(self._state(Snare=0.9))
+        after = scene._wash_hue
+        assert after != before, "a snare did not move the colour"
+        for _ in range(40):
+            scene._advance(self._state())
+        assert scene._wash_hue == after, (
+            "the colour drifted back, so it is a flash rather than a change")
+
+    def test_the_hats_shake_the_thing_in_the_middle(self):
+        """And only that: the walls keep time."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        def core(fizz):
+            scene = self._scene()
+            scene._fizz = fizz
+            scene._spin = 1.0
+            image = QImage(400, 300,
+                           QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(QColor(0, 0, 0))
+            painter = QPainter(image)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            from PySide6.QtCore import QPointF
+
+            scene._core(painter, QPointF(200, 150), 300.0, 0.3,
+                        0.2, 0.0, 0.0, 0.0, 1.0)
+            painter.end()
+            lit = [(x, y) for y in range(300) for x in range(0, 400, 2)
+                   if sum(image.pixelColor(x, y).getRgb()[:3]) > 60]
+            return lit
+
+        import math
+        import statistics
+
+        def ragged(lit):
+            """How uneven the shape is: the spread of how far it reaches
+            in sixteen directions, over how far it reaches on average.
+
+            Not how *wide* it gets. The hats swell the wireframe as well
+            as shaking it, so a width measurement cannot tell one from the
+            other - it passed with the shake taken out and only the swell
+            left.
+            """
+            reach = []
+            for step in range(16):
+                angle = step * math.tau / 16.0
+                far = 0.0
+                for x, y in lit:
+                    dx, dy = x - 200, y - 150
+                    if abs(math.atan2(dy, dx) - angle) < 0.2:
+                        far = max(far, math.hypot(dx, dy))
+                if far:
+                    reach.append(far)
+            if len(reach) < 6:
+                return 0.0
+            return statistics.pstdev(reach) / statistics.mean(reach)
+
+        still, shaken = core(0.0), core(1.0)
+        assert still and shaken
+        assert ragged(shaken) > ragged(still) * 1.25, (
+            f"the wireframe is {ragged(still):.2f} uneven at rest and "
+            f"{ragged(shaken):.2f} under the hats, which is not going crazy")
+
+    def test_the_room_is_pushed_by_the_kick_rather_than_kicked(self):
+        """The kick moved the horizon, the focal length, the walls and
+        every line width in the single frame it landed on, and back over
+        the six after it. What a kick does to a room is push it."""
+        scene = self._scene()
+        state = self._state(Kick=1.0)
+        reached = []
+        for _ in range(12):
+            scene._advance(state)
+            reached.append(scene._thump)
+        frames = next((n for n, v in enumerate(reached, 1) if v > 0.75), 99)
+        assert frames >= 3, (
+            f"the room was {reached[0]:.2f} pushed on the first frame and "
+            f"past three quarters by frame {frames}")
+        assert reached[-1] > 0.9, "it never gets there"

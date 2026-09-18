@@ -116,8 +116,13 @@ HAIRLINE = 1.0
 #: Below one there are no gaps to see between them.
 HAIR_STEP = 0.9
 
-#: Past this many passes a real wide pen is cheaper, and correct. Nothing
-#: in these scenes draws a line that thick, so this is a backstop.
+#: Past this many passes a real wide pen is cheaper, and correct.
+#:
+#: Nothing in these scenes draws a line that thick, so this is a
+#: backstop. Raising it to 26 was tried, so that the Rave's widened
+#: trusses would stack rather than fall back to a pen: it halved that
+#: scene's worst frame and still left it at three times the median, so
+#: the width is kept where stacking is cheap instead.
 HAIR_MOST = 14
 
 #: Solved alphas, kept because the answer depends only on how wide the
@@ -2207,6 +2212,16 @@ class Rave(Scene):
     #: How fast the world comes towards you at rest, in z per second.
     DRIFT = 2.6
 
+    #: How fast each part of the kit reaches the room, and how slowly it
+    #: lets go. A drum is a step, and a room that steps is a room that
+    #: glitches: the kick used to move the horizon, the focal length, the
+    #: walls and every line width in the single frame it landed on, and
+    #: back over the six after it. What a kick does to a room is push it,
+    #: and a push takes time to arrive and longer to fade.
+    THUMP_RISE, THUMP_FALL = 0.34, 0.075
+    WASH_RISE, WASH_FALL = 0.30, 0.030
+    FIZZ_RISE, FIZZ_FALL = 0.55, 0.16
+
     def __init__(self) -> None:
         self._z = 0.0
         self._last = None
@@ -2215,6 +2230,12 @@ class Rave(Scene):
         self._spin = 0.0
         self._haze_key = None
         self._haze_image = None
+        #: The kit, smoothed: the kick pushing the room, the snare washing
+        #: its colour, the hats shaking the thing in the middle.
+        self._thump = 0.0
+        self._wash = 0.0
+        self._wash_hue = 0.0
+        self._fizz = 0.0
 
     # -- the clock --------------------------------------------------------
     def _advance(self, state) -> float:
@@ -2228,20 +2249,43 @@ class Rave(Scene):
         now = time.monotonic()
         step = 0.016 if self._last is None else min(0.1, max(0.0, now - self._last))
         self._last = now
-        kick = state.kit.get("Kick", 0.0)
-        bass = state.bass
-        self._z += step * self.DRIFT * (1.0 + bass * 1.8 + kick * 2.2)
-        self._spin += step * (0.25 + state.kit.get("Synth", 0.0) * 1.1)
+
+        def ease(was, to, rise, fall):
+            return was + (to - was) * (rise if to > was else fall)
+
+        kit = state.kit
+        self._thump = ease(self._thump, kit.get("Kick", 0.0),
+                           self.THUMP_RISE, self.THUMP_FALL)
+        self._fizz = ease(self._fizz, kit.get("Hats", 0.0),
+                          self.FIZZ_RISE, self.FIZZ_FALL)
+        snare = kit.get("Snare", 0.0)
+        if snare > self._wash + 0.12:
+            # A snare does not brighten the room, it repaints it: each one
+            # moves the colour on by a step of its own, and the colour
+            # then stays where it was put until the next.
+            self._wash_hue = (self._wash_hue + 0.13 + snare * 0.09) % 1.0
+        self._wash = ease(self._wash, snare, self.WASH_RISE, self.WASH_FALL)
+
+        # Speed is the bass. It was one term of three and the smallest of
+        # them; it is the one that should be felt, because how fast a room
+        # comes at you is how hard the track is pushing.
+        bass = max(state.bass, kit.get("Bass", 0.0))
+        self._z += step * self.DRIFT * (1.0 + bass * 3.4 + self._thump * 0.9)
+        self._spin += step * (0.25 + kit.get("Synth", 0.0) * 1.1
+                              + self._fizz * 2.2)
         return step
 
     def paint(self, painter, rect, state) -> None:
         step = self._advance(state)
-        kick = state.kit.get("Kick", 0.0)
+        # The eased kick everywhere the room moves. The raw one still
+        # fires the things that are *meant* to be sudden - the rings and
+        # the beams - because a snare hit is an event and the room is not.
+        kick = self._thump
         snare = state.kit.get("Snare", 0.0)
         hats = state.kit.get("Hats", 0.0)
         synth = state.kit.get("Synth", 0.0)
         bass = max(state.kit.get("Bass", 0.0), state.bass)
-        flash = self.flash(state)
+        flash = self.bloom(state)
 
         painter.fillRect(rect, QColor(3, 2, 8))
         centre = rect.center()
@@ -2251,13 +2295,14 @@ class Rave(Scene):
         focal = span * (0.62 - kick * 0.10)
         horizon = QPointF(centre.x(),
                           centre.y() - rect.height() * (0.02 + kick * 0.05))
-        hue = (self._spin * 0.11 + synth * 0.22) % 1.0
+        hue = (self._spin * 0.11 + synth * 0.22 + self._wash_hue) % 1.0
 
         self._haze(painter, rect, horizon, bass, synth, flash)
         self._grid(painter, rect, horizon, focal, hue, bass, kick, flash)
         self._rings_now(painter, rect, horizon, focal, snare, step, hue, flash)
         self._beams_now(painter, rect, horizon, focal, hats, step, hue)
-        self._core(painter, horizon, span, hue, bass, kick, synth, flash)
+        self._core(painter, horizon, span, hue, bass, kick, synth, flash,
+                   self._weight(rect))
 
     # -- the parts --------------------------------------------------------
     #: How big the haze is actually drawn before being stretched over the
@@ -2347,12 +2392,20 @@ class Rave(Scene):
         are the same grid turned, and writing them out separately is how
         four surfaces drift apart.
         """
+        # The two walls are one surface with two faces. They share a hue,
+        # so drawing them in one path halves what they cost, and a stroke
+        # is what this scene spends its frame on. The cross-lines are
+        # drawn in halves (see _grid) so that nothing joins them across
+        # the room.
+        def walls(across):
+            return ((-span if across < 0 else span),
+                    (abs(across) * 2.0 - 1.0) * lift)
+
         return (
             # across -1..1        ->  (x, y)        hue    lines
             (lambda t: (t * span, lift), 0.00, self.ACROSS),      # floor
             (lambda t: (t * span, -lift), 0.08, self.ACROSS),     # ceiling
-            (lambda t: (-span, t * lift), 0.16, self.UPRIGHTS),   # left
-            (lambda t: (span, t * lift), 0.16, self.UPRIGHTS),    # right
+            (walls, 0.16, self.UPRIGHTS * 2),                     # both sides
         )
 
     def _grid(self, painter, rect, horizon, focal, hue, bass, kick, flash):
@@ -2369,7 +2422,9 @@ class Rave(Scene):
         happens to stop.
         """
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        width = 1.0 + bass * 1.2
+        weight = self._weight(rect)
+        glow = self._glow(rect)
+        width = (1.0 + bass * 1.2) * weight
         # How far the surfaces are from the eye - the corridor opening up
         # on a bass note is most of what makes the room feel big.
         lift = 0.55 + bass * 0.22
@@ -2388,43 +2443,78 @@ class Rave(Scene):
                 x, y = place(across)
                 away.moveTo(self._project(horizon, focal, x, y, self.NEAR))
                 away.lineTo(self._project(horizon, focal, x, y, self.FAR))
-            self._ink(painter, base, width * (1.0 + kick * 1.4),
-                      min(1.0, 0.20 + bass * 0.30 + kick * 0.26
-                          + flash * 0.26))
-            painter.drawPath(away)
+            stroke(painter, away,
+                   self._shade(base, min(1.0, (0.20 + bass * 0.30
+                                          + kick * 0.26
+                                          + flash * 0.26) * glow)),
+                   width * (1.0 + kick * 1.4))
 
             # And the ones across it, marching towards you, in bands.
             for band in range(self.BANDS):
                 path = QPainterPath()
                 for row in range(band, self.DEPTH, self.BANDS):
                     z = self.NEAR + (row + offset) * reach / self.DEPTH
-                    left = self._project(horizon, focal, *place(-1.0), z)
-                    right = self._project(horizon, focal, *place(1.0), z)
-                    path.moveTo(left)
-                    path.lineTo(right)
+                    # In two halves, so a surface that is really two
+                    # faces - the pair of walls - does not draw a line
+                    # straight across the room joining them.
+                    for lo, hi in ((-1.0, -0.002), (0.002, 1.0)):
+                        path.moveTo(
+                            self._project(horizon, focal, *place(lo), z))
+                        path.lineTo(
+                            self._project(horizon, focal, *place(hi), z))
                 # Bands further back are dimmer and thinner. Squared, so
                 # the fall is steep near the eye and gentle in the
                 # distance, which is how air actually works.
                 near = 1.0 - band / self.BANDS
-                self._ink(painter, base,
-                          width * (0.45 + near * 0.75) * (1.0 + kick * 1.4),
-                          min(1.0, (0.10 + bass * 0.26 + kick * 0.24
-                                    + flash * 0.24) * (0.14 + near * near)))
-                painter.drawPath(path)
+                stroke(painter, path,
+                       self._shade(base,
+                                   min(1.0, (0.10 + bass * 0.26 + kick * 0.24
+                                             + flash * 0.24) * glow
+                                       * (0.14 + near * near))),
+                       width * (0.45 + near * 0.75) * (1.0 + kick * 1.4))
 
         self._trusses(painter, horizon, focal, hue, lift, span, bass, kick,
-                      flash, offset, reach)
+                      flash, reach, weight, glow)
+
+    #: The frame this scene's line weights were chosen against. A line
+    #: thicker than a real pixel is drawn by ``stroke`` as a stack of
+    #: hairlines, so making them grow with the frame costs nothing.
+    DRAWN_FOR = 700.0
+
+    #: How much of the contrast a big frame gets back as *light* rather
+    #: than as width. Brightness is free and width is not: stacking a four
+    #: pixel line costs nineteen passes, and drawing it with a real pen
+    #: costs a hundred milliseconds a frame at 1080p. So the lines grow a
+    #: little and brighten a lot.
+    LIFT = 0.45
+
+    @classmethod
+    def _glow(cls, rect) -> float:
+        """How much brighter to draw, for a frame this size."""
+        return 1.0 + (cls._weight(rect) - 1.0) * cls.LIFT
+
+    @classmethod
+    def _weight(cls, rect) -> float:
+        """How thick to draw, for a frame this size.
+
+        The lines used to be cosmetic - a fixed number of real pixels
+        however big the frame was - so a full screen got the same
+        hairlines spread over four times the area and washed out. Measured
+        across sizes, the contrast fell by a third from 640x360 to 1080p
+        and the brightest tenth of the picture went from 107 to 82 of 765.
+        That is "the rave scene doesn't have as much contrast in full
+        screen mode, it actually looks better in windowed".
+        """
+        return max(0.75, min(1.30, rect.height() / cls.DRAWN_FOR))
 
     @staticmethod
-    def _ink(painter, base, width: float, alpha: float) -> None:
+    def _shade(base, alpha: float):
         colour = QColor(base)
         colour.setAlphaF(max(0.0, min(1.0, alpha)))
-        pen = QPen(colour, max(0.4, width))
-        pen.setCosmetic(True)
-        painter.setPen(pen)
+        return colour
 
     def _trusses(self, painter, horizon, focal, hue, lift, span, bass, kick,
-                 flash, offset, reach) -> None:
+                 flash, reach, weight, glow) -> None:
         """A frame round the corridor every few metres, coming at you.
 
         The thing the room was missing: a grid tells you where the floor
@@ -2434,8 +2524,20 @@ class Rave(Scene):
         rather than a field of lines that all move together.
         """
         corners = ((-span, lift), (span, lift), (span, -lift), (-span, -lift))
-        for row in range(0, self.DEPTH, self.TRUSS):
-            z = self.NEAR + (row + offset) * reach / self.DEPTH
+        # On their own clock, not the grid's.
+        #
+        # They used to ride the grid's offset, which wraps every *row*:
+        # so a truss crept back one row's worth and then jumped forward
+        # five to where the next one had been, sixty times a minute. That
+        # is what stopped it reading as a continuous walk forward - the
+        # only things in the room with a length to them stuttered, and
+        # they did it whether anything was playing or not.
+        offset = self._z % self.TRUSS
+        for step in range(0, self.DEPTH, self.TRUSS):
+            row = step + offset
+            if row >= self.DEPTH:
+                continue
+            z = self.NEAR + row * reach / self.DEPTH
             near = max(0.0, 1.0 - (z - self.NEAR) / reach)
             path = QPainterPath()
             first = None
@@ -2447,13 +2549,14 @@ class Rave(Scene):
                 else:
                     path.lineTo(point)
             path.lineTo(first)
-            base = QColor.fromHsvF((hue + 0.04) % 1.0, 0.6 - flash * 0.4, 1.0,
-                                   1.0)
-            self._ink(painter, base,
-                      (0.9 + near * 2.2) * (1.0 + kick * 1.1),
-                      min(1.0, (0.16 + bass * 0.22 + kick * 0.34
-                                + flash * 0.3) * (0.30 + near * near * 1.4)))
-            painter.drawPath(path)
+            base = QColor.fromHsvF((hue + 0.04) % 1.0,
+                                   max(0.0, 0.6 - flash * 0.4), 1.0, 1.0)
+            stroke(painter, path,
+                   self._shade(base,
+                               min(1.0, (0.16 + bass * 0.22 + kick * 0.34
+                                         + flash * 0.3) * glow
+                                   * (0.30 + near * near * 1.4))),
+                   (0.9 + near * 2.2) * (1.0 + kick * 1.1) * weight)
 
     def _rings_now(self, painter, rect, horizon, focal, snare, step, hue,
                    flash):
@@ -2472,7 +2575,8 @@ class Rave(Scene):
             radius = focal * (1.9 * force + 0.6) / z
             colour = QColor.fromHsvF((hue + 0.5) % 1.0, 0.55, 1.0,
                                      (1.0 - fade) * 0.85 * force)
-            pen = QPen(colour, 1.0 + (1.0 - fade) * 4.0 + flash * 2.0)
+            pen = QPen(colour, (1.0 + (1.0 - fade) * 4.0 + flash * 2.0)
+                       * self._weight(rect))
             pen.setCosmetic(True)
             painter.setPen(pen)
             painter.drawEllipse(horizon, radius, radius * 0.62)
@@ -2493,7 +2597,7 @@ class Rave(Scene):
             angle, force, life = beam
             colour = QColor.fromHsvF((hue + 0.18) % 1.0, 0.35, 1.0,
                                      life * 0.7 * force)
-            pen = QPen(colour, 1.0 + life * 2.4)
+            pen = QPen(colour, (1.0 + life * 2.4) * self._weight(rect))
             pen.setCosmetic(True)
             painter.setPen(pen)
             far = self._project(horizon, focal,
@@ -2502,13 +2606,23 @@ class Rave(Scene):
             painter.drawLine(horizon, far)
         self._beams = alive[-14:]
 
-    def _core(self, painter, horizon, span, hue, bass, kick, synth, flash):
-        """The thing in the middle: a wireframe that turns and swells.
+    def _core(self, painter, horizon, span, hue, bass, kick, synth, flash,
+              weight=1.0):
+        """The thing in the middle: a wireframe that turns, swells and shakes.
 
         Drawn last and small. It is the only object in the room with a
         shape of its own, and the room is the subject.
+
+        The hats are wired to it: they spin it faster (in ``_advance``)
+        and they throw its corners about. Nothing else in the room reacts
+        to them that way, so a hi-hat pattern reads as this one object
+        going wild while the walls keep time - which is what was asked
+        for, and is also the only place in the scene where something is
+        *supposed* to be jittery.
         """
-        size = span * (0.045 + bass * 0.05 + kick * 0.05 + flash * 0.02)
+        fizz = self._fizz
+        size = span * (0.045 + bass * 0.05 + kick * 0.05 + flash * 0.02
+                       + fizz * 0.035)
         if size < 2.0:
             return
         turn = self._spin * 1.7
@@ -2516,13 +2630,15 @@ class Rave(Scene):
         for corner in range(6):
             angle = turn + corner * math.tau / 6.0
             lean = math.sin(turn * 0.7 + corner) * 0.35
-            points.append(QPointF(horizon.x() + math.cos(angle) * size,
-                                  horizon.y() + math.sin(angle) * size * (0.5 + lean)))
+            # Per corner, and on its own phase, so the shape breaks up
+            # rather than translating.
+            shake = 1.0 + fizz * 0.55 * math.sin(turn * 6.1 + corner * 2.3)
+            points.append(QPointF(
+                horizon.x() + math.cos(angle) * size * shake,
+                horizon.y() + math.sin(angle) * size * (0.5 + lean) * shake))
         colour = QColor.fromHsvF((hue + 0.32 + synth * 0.1) % 1.0,
-                                 0.25, 1.0, min(1.0, 0.5 + kick * 0.5))
-        pen = QPen(colour, 1.4 + kick * 2.4 + flash * 1.6)
-        pen.setCosmetic(True)
-        painter.setPen(pen)
+                                 max(0.0, 0.25 - fizz * 0.2), 1.0,
+                                 min(1.0, 0.5 + kick * 0.5 + fizz * 0.3))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         path = QPainterPath()
         # Every corner to every other: a wireframe rather than an outline,
@@ -2531,7 +2647,8 @@ class Rave(Scene):
             for b in range(a + 1, len(points)):
                 path.moveTo(points[a])
                 path.lineTo(points[b])
-        painter.drawPath(path)
+        stroke(painter, path, colour,
+               (1.4 + kick * 2.4 + flash * 1.6 + fizz * 1.2) * weight)
 
 
 SCENES = (Vaporwave(), Tunnel(), Oscilloscope(), Bars(), Meters(),
