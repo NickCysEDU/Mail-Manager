@@ -497,12 +497,14 @@ class _AnalysisThread(_QThread_base):
     failed = _Signal(str)
     progress = _Signal(float)
 
-    def __init__(self, samples, rate: int, channels: int) -> None:
+    def __init__(self, samples, rate: int, channels: int,
+                 wants_elements: bool = True) -> None:
         super().__init__()
         self._samples = samples
         self._rate = rate
         self._channels = channels
         self._stop = False
+        self._wants_elements = wants_elements
 
     def stop(self) -> None:
         self._stop = True
@@ -535,7 +537,12 @@ class _AnalysisThread(_QThread_base):
             return
         self.done.emit((frames, shapes, vectors, calibration, beats))
 
-        # Now the slow part, with the picture already on screen.
+        # Now the slow part, with the picture already on screen - and
+        # only if somebody is waiting for it. Doing it regardless meant a
+        # thread went on running for seconds after the only caller that
+        # wanted the result had been told it was finished.
+        if self._stop or not self._wants_elements:
+            return
         try:
             import beatmap as _beatmap
 
@@ -594,11 +601,13 @@ class _Analysis(QObject_base):
     def start_analysis(self, samples, rate: int, channels: int) -> None:
         if self._stop:
             return
-        thread = _AnalysisThread(samples, rate, channels)
+        thread = _AnalysisThread(samples, rate, channels,
+                                 self._on_elements is not None)
         thread.done.connect(self._finished)
         thread.failed.connect(self._failed)
         if self._on_elements is not None:
             thread.elements.connect(self._kit)
+        thread.finished.connect(self._thread_done)
         if self._on_progress is not None:
             thread.progress.connect(self._report)
         self._thread = thread
@@ -614,9 +623,16 @@ class _Analysis(QObject_base):
             self._on_progress(fraction)
 
     def _finished(self, frames) -> None:
-        _LIVE.discard(self)
+        # Deliberately still in _LIVE. The frames are ready but the thread
+        # is not: it goes on to pick the drums out afterwards, and letting
+        # this object be collected while its thread is running is how Qt
+        # takes the process down. It leaves when the thread does, below.
         if not self._stop:
             self._on_done(frames)
+
+    def _thread_done(self) -> None:
+        """The thread's own signal: run() has returned and it is safe."""
+        _LIVE.discard(self)
 
     def _failed(self, detail: str) -> None:
         _LIVE.discard(self)

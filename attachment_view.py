@@ -1643,6 +1643,15 @@ class AttachmentViewer(QDialog):
         super().done(result)
 
     def _sweep(self) -> None:
+        # Stop reading the files before deleting them. Sweeping only ever
+        # unlinked them, which left an analysis running against a path
+        # that no longer existed and, worse, a thread still going after
+        # the window it reports to had gone. The decode used to finish
+        # almost at once so the window was small; it is longer now that
+        # the drums are picked out afterwards, and a thread that outlives
+        # its widget takes the process with it.
+        self.audio.stop()
+        self.audio._cancel_analysis()
         for path in self._written:
             try:
                 path.unlink()
