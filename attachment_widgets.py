@@ -210,6 +210,10 @@ class Spectrum(QWidget):
     #: the controls wrap instead.
     FLOOR = 150
 
+    #: What the strobe has been set to, when a scene changed it. The
+    #: controls follow so that what they show is what is happening.
+    strobe_settings_changed = Signal(str, float, float)
+
     #: Sixty a second, which is what the scenes are budgeted against.
     FRAME_MS = 16
 
@@ -284,6 +288,9 @@ class Spectrum(QWidget):
         self._strobe_sense = 0.5
         #: Which part of the sound the strobe listens to.
         self._strobe_source = "Bass"
+        #: Whether the user has touched any of the strobe controls. Until
+        #: they have, switching scene sets them to whatever suits it.
+        self._strobe_chosen = False
         #: 0 while a track is playing, 1 while the scene is drifting on
         #: its own. Everything in between is the crossfade.
         self._settle = 0.0
@@ -300,6 +307,11 @@ class Spectrum(QWidget):
         #: only looks at what has happened since the last one.
         self._beat_at = 0
         self._beat_seen = -1.0
+        #: How long the watched band has been holding, and when the rapid
+        #: strobe last fired.
+        self._held = 0.0
+        self._held_seen = 0.0
+        self._rapid_at = -99.0
         self._timer = QTimer(self)
         # Sixty a second. Every scene paints in well under a frame at
         # 1080p, so the limit is the display rather than the drawing.
@@ -329,7 +341,29 @@ class Spectrum(QWidget):
     # -- what it shows ----------------------------------------------------
     def set_scene(self, scene) -> None:
         self._scene = scene
+        self._suit_the_scene(scene)
         self.update()
+
+    def _suit_the_scene(self, scene) -> None:
+        """Put the strobe where this scene wants it, until somebody says.
+
+        Only while the controls are untouched. The moment either slider
+        is moved, or a source is chosen, the choice is the user's and
+        switching scene stops overriding it - a setting that springs back
+        every time you change something else is not a setting.
+        """
+        if self._strobe_chosen:
+            return
+        setup = visualizers.strobe_setup(scene)
+        if not setup:
+            return
+        source, rate, sense = setup
+        if source in self.STROBE_SOURCES:
+            self._strobe_source = source
+        self._strobe_rate = max(0.0, min(1.0, float(rate)))
+        self._strobe_sense = max(0.0, min(1.0, float(sense)))
+        self.strobe_settings_changed.emit(
+            self._strobe_source, self._strobe_rate, self._strobe_sense)
 
     def set_strobe(self, on: bool) -> None:
         self._state.strobe = bool(on)
@@ -391,6 +425,7 @@ class Spectrum(QWidget):
         return max(60, wanted)
 
     def set_strobe_rate(self, rate: float) -> None:
+        self._strobe_chosen = True
         """How soon after a flash the next one may fire, 0 rare to 1 often."""
         self._strobe_rate = max(0.0, min(1.0, float(rate)))
 
@@ -435,10 +470,12 @@ class Spectrum(QWidget):
 
     def set_strobe_source(self, name: str) -> None:
         """Which part of the sound sets the strobe off."""
+        self._strobe_chosen = True
         if name in self.STROBE_SOURCES:
             self._strobe_source = name
 
     def set_strobe_sense(self, sense: float) -> None:
+        self._strobe_chosen = True
         """How big a jump in the bass counts as a hit, 0 fussy to 1 eager."""
         self._strobe_sense = max(0.0, min(1.0, float(sense)))
 
@@ -1009,6 +1046,15 @@ class Spectrum(QWidget):
             return True
         floor = 0.06 + (1.0 - self._strobe_sense) * 0.72
         gap = 0.08 + (1.0 - self._strobe_rate) * 1.60
+        # A held note is not a beat, and on a grid it gets one flash and
+        # then nothing until the next bar - which is the opposite of what
+        # a room does under a sustained bass line. When the thing being
+        # watched is holding, and both knobs are up, the grid is divided
+        # and the strobe runs at a multiple of the beat for as long as it
+        # holds. The knobs have to be up together on purpose: this is the
+        # loudest thing the visualiser does and nobody should arrive at
+        # it by nudging one slider.
+        self._machine_gun(state, beats, now, floor)
         while (self._beat_at < len(beats)
                and beats[self._beat_at].at <= now):
             beat = beats[self._beat_at]
@@ -1021,6 +1067,83 @@ class Spectrum(QWidget):
             self._since_hit = 0
         self._beat_seen = now
         return True
+
+    #: Both knobs have to be past this before the grid is subdivided.
+    RAPID_KNOB = 0.62
+    #: And the watched band has to have been this loud for this long.
+    RAPID_LEVEL = 0.45
+    RAPID_HOLD = 0.35
+    #: The fastest it will ever run, in flashes a second.
+    #:
+    #: Ten, and the number matters. Photosensitive epilepsy is provoked
+    #: most reliably somewhere between fifteen and twenty flashes a
+    #: second, and general accessibility guidance draws its line at
+    #: three. A music visualiser's strobe is not general-purpose content
+    #: - it is off until somebody switches it on, and this speed needs
+    #: two separate sliders pushed most of the way up - but ten is close
+    #: enough to that range to be worth capping deliberately rather than
+    #: letting the subdivision run wherever the tempo takes it. The
+    #: control says so too.
+    RAPID_CEILING = 10.0
+
+    def _sustained(self, state) -> float:
+        """How long the watched band has been holding up, in seconds.
+
+        Measured on the smoothed aggregate rather than on the beat list,
+        because the question is about a note that is still sounding and a
+        beat list only knows where things started.
+        """
+        watched = {"Bass": state.bass, "Kick": state.bass,
+                   "Mids": state.mid, "Synths": state.synth,
+                   "Synth": state.synth, "Treble": state.high,
+                   "Snare": state.mid, "Hats": state.high}.get(
+                       self._strobe_source, state.bass)
+        now = self._position / 1000.0
+        step = max(0.0, min(0.25, now - self._held_seen))
+        self._held_seen = now
+        if watched >= self.RAPID_LEVEL:
+            self._held += step
+        else:
+            self._held = 0.0
+        return self._held
+
+    def _machine_gun(self, state, beats, now: float, floor: float) -> None:
+        """Run the strobe at a multiple of the beat while a note holds."""
+        if (self._strobe_rate < self.RAPID_KNOB
+                or self._strobe_sense < self.RAPID_KNOB):
+            self._held = 0.0
+            self._held_seen = now
+            return
+        if self._sustained(state) < self.RAPID_HOLD:
+            return
+        # How far past the point where it switches on both knobs are,
+        # which is what decides the subdivision: just past it doubles the
+        # beat, all the way over is as fast as it will go.
+        over = min(1.0, ((self._strobe_rate - self.RAPID_KNOB)
+                         + (self._strobe_sense - self.RAPID_KNOB))
+                   / (2.0 * (1.0 - self.RAPID_KNOB)))
+        period = self._beat_period(beats)
+        if period <= 0.0:
+            return
+        divisions = 2 ** int(1 + over * 2.99)          # 2, 4 or 8
+        every = max(1.0 / self.RAPID_CEILING, period / divisions)
+        if now - self._rapid_at < every:
+            return
+        self._rapid_at = now
+        state.hit = max(state.hit, 0.72 + over * 0.28)
+        self._since_hit = 0
+
+    def _beat_period(self, beats) -> float:
+        """The gap between beats, from the map or from the gaps in it."""
+        found = self._beats.get(self._strobe_source)
+        bpm = getattr(found, "bpm", 0.0)
+        if bpm:
+            return 60.0 / bpm
+        if len(beats) >= 3:
+            gaps = sorted(beats[i + 1].at - beats[i].at
+                          for i in range(min(24, len(beats) - 1)))
+            return gaps[len(gaps) // 2]
+        return 0.0
 
     def _fire_from_the_frame(self, state, watched: float) -> None:
         """Flash on a jump in one band, for when there is no map yet.

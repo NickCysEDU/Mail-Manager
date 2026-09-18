@@ -474,3 +474,161 @@ class TestPickingTheKitApart:
         low, high = attachment_audio._onset_edges(bins)[0]
         assert low * hz < 60.0, (
             f"the lowest band starts at {low * hz:.0f} Hz, above a kick")
+
+
+class TestTheStrobeRunsOnAHeldNote:
+    """A held note is not a beat. On a grid it gets one flash and then
+    nothing until the next bar, which is the opposite of what a room does
+    under a sustained bass line.
+    """
+
+    @staticmethod
+    def _held(seconds=12, bpm=128, hold=(4.0, 8.0)):
+        """Kicks throughout, and a bass note held through the middle."""
+        import math
+        from array import array
+
+        import attachment_audio
+
+        rate = attachment_audio.DECODE_RATE
+        total = rate * seconds
+        pcm = array("h", [0]) * (total * 2)
+        beat = 60.0 / bpm
+        at = 0.0
+        while at < seconds:
+            start = int(at * rate)
+            for step in range(int(rate * 0.12)):
+                if start + step >= total:
+                    break
+                here = (start + step) * 2
+                value = int(20000 * math.exp(-step / (rate * 0.05))
+                            * math.sin(2 * math.pi * 52 * step / rate))
+                pcm[here] = max(-32768, min(32767, pcm[here] + value))
+                pcm[here + 1] = pcm[here]
+            at += beat
+        for index in range(int(hold[0] * rate), int(hold[1] * rate)):
+            here = index * 2
+            value = int(15000 * math.sin(2 * math.pi * 55 * index / rate))
+            pcm[here] = max(-32768, min(32767, pcm[here] + value))
+            pcm[here + 1] = pcm[here]
+        return pcm
+
+    @staticmethod
+    def _flashes(qapp, knob_rate, knob_sense, seconds=12):
+        import attachment_audio
+        from attachment_widgets import Spectrum
+
+        pcm = TestTheStrobeRunsOnAHeldNote._held(seconds=seconds)
+        frames = attachment_audio.analyse(
+            pcm, attachment_audio.DECODE_RATE, 2)
+        spectrum = Spectrum()
+        spectrum.set_frames(frames, attachment_audio.RATE)
+        spectrum.set_beats(beatmap.build(frames, attachment_audio.RATE))
+        spectrum.set_strobe(True)
+        spectrum.set_strobe_source("Bass")
+        spectrum.set_strobe_rate(knob_rate)
+        spectrum.set_strobe_sense(knob_sense)
+        out = []
+        was = 0.0
+        for step in range(seconds * 60):
+            spectrum.set_position(int(step / 60.0 * 1000))
+            spectrum._tick()
+            now = spectrum._state.hit
+            # The start of a flash, not every frame it is still lit: the
+            # glow decays over two or three and counting samples doubles
+            # every number.
+            if now > 0.65 and now > was:
+                out.append(step / 60.0)
+            was = now
+        during = len([t for t in out if 4.3 < t < 7.9]) / 3.6
+        rest = len([t for t in out if t < 4.0 or t > 8.2]) / 8.0
+        return during, rest
+
+    def test_both_knobs_up_runs_it_through_the_note(self, qapp):
+        during, rest = self._flashes(qapp, 1.0, 1.0)
+        assert during > rest * 3, (
+            f"{during:.1f} a second during the held note against "
+            f"{rest:.1f} elsewhere")
+
+    def test_it_speeds_up_as_the_knobs_go_up(self, qapp):
+        gentle, _ = self._flashes(qapp, 0.7, 0.7)
+        hard, _ = self._flashes(qapp, 1.0, 1.0)
+        assert hard > gentle * 1.5, f"{gentle:.1f} then {hard:.1f}"
+
+    def test_one_knob_alone_does_not_reach_it(self, qapp):
+        """It is the loudest thing the visualiser does. Nobody should
+        arrive at it by nudging one slider."""
+        only_rate, _ = self._flashes(qapp, 1.0, 0.3)
+        only_sense, _ = self._flashes(qapp, 0.3, 1.0)
+        both, _ = self._flashes(qapp, 1.0, 1.0)
+        assert only_rate < both / 3
+        assert only_sense < both / 3
+
+    def test_it_is_capped(self, qapp):
+        """Photosensitive epilepsy is provoked most reliably between
+        fifteen and twenty flashes a second. This stops well short, and
+        the control says so."""
+        from attachment_widgets import Spectrum
+
+        during, _ = self._flashes(qapp, 1.0, 1.0)
+        assert during <= Spectrum.RAPID_CEILING + 1.0, (
+            f"{during:.1f} flashes a second against a cap of "
+            f"{Spectrum.RAPID_CEILING}")
+        assert Spectrum.RAPID_CEILING <= 12.0
+
+    def test_the_middle_of_the_sliders_is_just_the_beat(self, qapp):
+        during, rest = self._flashes(qapp, 0.5, 0.5)
+        assert during < 3.0, (
+            f"{during:.1f} a second with both sliders centred, which is "
+            "not something anybody asked for")
+
+
+class TestEachSceneGetsAStrobeThatSuitsIt:
+    def test_switching_scene_sets_it_up(self, qapp):
+        import visualizers
+        from attachment_widgets import Spectrum
+
+        spectrum = Spectrum()
+        spectrum.set_scene(visualizers.by_name("Rave"))
+        loud = (spectrum._strobe_rate, spectrum._strobe_sense)
+        spectrum.set_scene(visualizers.by_name("VU meters"))
+        quiet = (spectrum._strobe_rate, spectrum._strobe_sense)
+        assert loud != quiet, "every scene got the same strobe"
+        assert loud > quiet, "the rave scene should be the eager one"
+
+    def test_it_stops_once_the_user_has_chosen(self, qapp):
+        """A setting that springs back whenever you change something else
+        is not a setting."""
+        import visualizers
+        from attachment_widgets import Spectrum
+
+        spectrum = Spectrum()
+        spectrum.set_scene(visualizers.by_name("Rave"))
+        spectrum.set_strobe_rate(0.9)
+        spectrum.set_strobe_sense(0.15)
+        spectrum.set_scene(visualizers.by_name("VU meters"))
+        assert spectrum._strobe_rate == pytest.approx(0.9)
+        assert spectrum._strobe_sense == pytest.approx(0.15)
+
+    def test_every_scene_has_one_and_it_is_a_real_source(self, qapp):
+        import visualizers
+        from attachment_widgets import Spectrum
+
+        for scene in visualizers.SCENES:
+            setup = visualizers.strobe_setup(scene)
+            assert setup, f"{scene.name} has no strobe setting"
+            source, rate, sense = setup
+            assert source in Spectrum.STROBE_SOURCES, (
+                f"{scene.name} listens to {source}, which is not a source")
+            assert 0.0 <= rate <= 1.0 and 0.0 <= sense <= 1.0
+
+    def test_no_scene_starts_in_the_rapid_range(self, qapp):
+        """Reaching it has to be something somebody did."""
+        import visualizers
+        from attachment_widgets import Spectrum
+
+        for scene in visualizers.SCENES:
+            _source, rate, sense = visualizers.strobe_setup(scene)
+            assert not (rate >= Spectrum.RAPID_KNOB
+                        and sense >= Spectrum.RAPID_KNOB), (
+                f"{scene.name} starts with the fast strobe already on")

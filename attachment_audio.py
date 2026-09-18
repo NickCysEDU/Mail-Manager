@@ -442,6 +442,16 @@ def analyse(samples: array, sample_rate: int, channels: int = 1,
 #: destroyed. This is the backstop that runs when the application quits.
 _LIVE: "set" = set()
 
+#: Threads that would not stop in time, kept forever.
+#:
+#: Qt calls qFatal when a running QThread is destroyed, and qFatal aborts
+#: the process - it is not an exception anybody can catch. Waiting is the
+#: answer and it can time out, so when it does the thread is cut loose
+#: instead: a reference is kept here so neither Python nor Qt can collect
+#: it, and the process exits normally while it finishes on its own. Every
+#: step it takes is bounded, so it does finish.
+_ABANDONED: "list" = []
+
 
 def stop_all() -> None:
     """Cancel every analysis still running. Safe at any time."""
@@ -548,6 +558,8 @@ class _AnalysisThread(_QThread_base):
 
             fine = onset_frames(self._samples, self._rate, self._channels,
                                 should_stop=lambda: self._stop)
+            if self._stop or not fine:
+                return
             kit = _beatmap.elements(fine, ONSET_RATE)
         except Exception as exc:      # noqa: BLE001 - lighting, not the mail
             log.info("Could not pick the drums out (%s).", exc)
@@ -590,7 +602,16 @@ class _Analysis(QObject_base):
             thread.stop()
             if thread.isRunning():
                 # A running QThread destroyed by Qt is fatal, so wait for it.
-                thread.wait(4000)
+                if not thread.wait(4000):
+                    # It did not stop. Dropping the last reference here
+                    # would let Qt destroy it while it runs, which aborts
+                    # the process - so it is kept instead, and the
+                    # process exits while it finishes on its own.
+                    log.warning(
+                        "An analysis did not stop in time; letting it "
+                        "finish on its own rather than destroying it.")
+                    if thread not in _ABANDONED:
+                        _ABANDONED.append(thread)
         _LIVE.discard(self)
 
     @property
@@ -903,6 +924,13 @@ def regroup(frames: List[array], centres, source=CENTRES) -> List[array]:
     for row in frames:
         made = array("f", [0.0]) * len(centres)
         for index, chosen in enumerate(picks):
-            made[index] = max(row[i] for i in chosen)
+            # Only the bands this row actually has. Every row analyse
+            # produces is the full width, and this used to assume that -
+            # a short one raised an IndexError out of set_frames, which
+            # is not a frame that fails to draw but a window that does
+            # not open. Nothing should be able to take the viewer down by
+            # being half a row.
+            here = [row[i] for i in chosen if i < len(row)]
+            made[index] = max(here) if here else 0.0
         out.append(made)
     return out
