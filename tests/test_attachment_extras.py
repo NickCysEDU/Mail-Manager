@@ -2850,3 +2850,87 @@ class TestNothingRunsOffTheEdge:
                     offenders.append(f"{width}x{height}/{name}")
         dialog.close()
         assert not offenders, f"drawn past the right edge: {offenders}"
+
+
+class TestTheDialsMatchTheReference:
+    """The face is drawn to numbers taken off the reference photograph,
+    not to taste. These check the numbers are still the ones measured.
+
+    Its cell is 562 by 339 and its arc runs from (55,192) to (500,192)
+    over an apex at y=75: a chord of 445 rising 117, which is a radius of
+    270 and a sweep of 111 degrees. Everything drawn fits in 499 by 269
+    of that cell - 1.85 radii by 1.00 - and the centre of the arc sits
+    1.12 radii below the top of it.
+    """
+
+    #: What the reference measures, in radii.
+    REF_WIDE, REF_TALL, REF_SWEEP = 1.85, 1.00, 111.0
+
+    def test_the_sweep_is_the_measured_one(self):
+        import visualizers
+
+        assert abs(abs(visualizers.Meters.SWEEP) - self.REF_SWEEP) <= 3.0
+
+    def test_the_face_is_as_wide_and_as_short_as_the_reference(self):
+        """Being too wide is what made the faces small: the radius is
+        whichever dimension runs out first, so asking for a quarter more
+        width than the face uses throws that quarter away."""
+        import visualizers
+
+        meters = visualizers.Meters
+        assert abs(meters.FACE_WIDE - self.REF_WIDE) < 0.18, (
+            f"{meters.FACE_WIDE} radii wide against {self.REF_WIDE}")
+        # The drawn height is from the top of the dB numbers down to the
+        # frequency, not down to the hinge - nothing is drawn at the hinge.
+        drawn = meters.FACE_DROP - meters.LABEL_AT
+        assert abs(drawn - self.REF_TALL) < 0.15, (
+            f"{drawn:.2f} radii of drawing against {self.REF_TALL}")
+
+    def test_the_shape_it_asks_for_is_the_shape_it_draws(self):
+        """The reserved box and the drawing measure against the same
+        constants, so they cannot disagree - which they did, by a factor
+        of 1.76 in height."""
+        import visualizers
+
+        meters = visualizers.Meters
+        assert meters.FACE_TALL >= meters.FACE_DROP - meters.LABEL_AT - 0.02
+        assert meters.FACE_WIDE / meters.FACE_TALL > 1.5, (
+            "a VU face is much wider than it is tall")
+
+    def test_there_is_no_hub(self):
+        """The reference shows none: the needle runs off the bottom of
+        the face and the lowest thing on it is the frequency. Drawing one
+        put the face's bottom edge a sixth of a radius lower."""
+        import inspect
+
+        import visualizers
+
+        source = inspect.getsource(visualizers.Meters._needle)
+        assert "drawEllipse" not in source, "a hub is being drawn"
+
+    def test_the_needle_is_a_radius_of_its_own_arc(self):
+        """Hinging it below the centre made it half as long again and
+        dragged the whole face taller to fit."""
+        import visualizers
+        from PySide6.QtCore import QRectF
+
+        geometry = visualizers.Meters._geometry(QRectF(0, 0, 400, 240))
+        centre, pivot = geometry["centre"], geometry["pivot"]
+        assert abs(centre.x() - pivot.x()) < 0.01
+        assert abs(centre.y() - pivot.y()) < 0.01
+
+    def test_a_face_keeps_its_proportions_at_every_size(self):
+        import visualizers
+        from PySide6.QtCore import QRectF
+
+        shapes = []
+        for width, height in ((200, 120), (562, 339), (1200, 700)):
+            g = visualizers.Meters._geometry(QRectF(0, 0, width, height))
+            radius = g["radius"]
+            shapes.append(((g["centre"].y()) / radius,
+                           (g["centre"].x()) / radius))
+        # The centre sits in the same place relative to the radius
+        # whatever the cell is, or the face is being stretched.
+        first = shapes[0]
+        for other in shapes[1:]:
+            assert abs(other[0] - first[0]) < 0.05, shapes
