@@ -702,3 +702,58 @@ class TestTwoSpectraFromOneTransform:
         from array import array
 
         assert attachment_audio.analyse(array("h", [0, 0]), 48000, 2) == []
+
+
+class TestNothingOutlivesTheWindow:
+    """A thread that is still running when Qt destroys it aborts the
+    process. The analysis now goes on working after it has handed the
+    frames over - it picks the drums out next - so the window between
+    "the viewer has what it asked for" and "the thread has finished" is
+    seconds rather than nothing, and everything that tears the viewer
+    down has to close it.
+    """
+
+    def test_sweeping_stops_the_analysis_before_deleting_its_file(
+            self, qtbot, tmp_path):
+        """Sweeping only unlinked the files. That left a decode running
+        against a path that no longer existed, and a thread reporting to
+        a window that had gone."""
+        from attachment_view import AttachmentViewer
+        from attachments import Attachment
+
+        data = b"ID3\x04\x00" + b"\x00" * 200
+        item = Attachment(part="1", name="a.mp3", content_type="audio/mpeg",
+                          size=len(data), data=data)
+        viewer = AttachmentViewer([item])
+        qtbot.addWidget(viewer)
+        viewer.list.setCurrentRow(0)
+        stopped = []
+        viewer.audio._cancel_analysis = lambda: stopped.append(True)
+        viewer._sweep()
+        assert stopped, "the files went before the thing reading them did"
+
+    def test_the_finer_pass_is_skipped_when_nobody_wants_it(self, qapp):
+        """It costs about twice what the frames cost. Running it for a
+        caller that never asked meant a thread going for seconds after
+        the only listener had been told the work was done."""
+        import attachment_audio
+
+        thread = attachment_audio._AnalysisThread(
+            None, 48000, 2, wants_elements=False)
+        assert thread._wants_elements is False
+        wanted = attachment_audio._AnalysisThread(None, 48000, 2)
+        assert wanted._wants_elements is True
+
+    def test_the_handle_stays_alive_until_its_thread_has_finished(self, qapp):
+        """It used to be dropped as soon as the frames were handed over,
+        which was safe only while that was the last thing the thread
+        did."""
+        import inspect
+
+        import attachment_audio
+
+        source = inspect.getsource(attachment_audio._Analysis._finished)
+        assert "_LIVE.discard" not in source, (
+            "the handle is released while its thread may still be running")
+        assert "_LIVE.discard" in inspect.getsource(
+            attachment_audio._Analysis._thread_done)
