@@ -304,22 +304,7 @@ class Vaporwave(Scene):
         # The strobe belongs to the sun here: a kick makes it flare and
         # widen rather than washing the whole frame white.
         flash = self.flash(state)
-        radius = horizon * (0.46 + state.bass * 0.26 + flash * 0.85)
-        sun = QRadialGradient(QPointF(width / 2.0, horizon), radius)
-        sun.setColorAt(0.0, QColor.fromHsvF(hue, 0.50 - flash * 0.4, 1.0,
-                                            0.60 + state.bass * 0.3 + flash * 0.35))
-        sun.setColorAt(0.75, QColor.fromHsvF((hue + 0.05) % 1.0, 0.9, 1.0,
-                                             0.18 + flash * 0.25))
-        sun.setColorAt(1.0, QColor(0, 0, 0, 0))
-        painter.fillRect(QRectF(0, 0, width, horizon), sun)
-        # Scanlines across the sun, which is the look this is copying.
-        painter.setPen(QPen(QColor(10, 6, 24, 150), max(1.0, horizon * 0.018)))
-        step = max(4.0, horizon * 0.055)
-        y = horizon - radius * 0.62
-        while y < horizon:
-            painter.drawLine(QPointF(width / 2.0 - radius, y),
-                             QPointF(width / 2.0 + radius, y))
-            y += step
+        self._sun(painter, width, horizon, hue, state.bass, flash)
 
         # No bar graph here on purpose: it stood in front of the city and
         # hid the thing that is already showing the same numbers. The
@@ -330,6 +315,80 @@ class Vaporwave(Scene):
         self._reflection(painter, width, height, horizon, state)
         self._ribbons(painter, width, horizon, state)
         self._stars(painter, width, horizon, state)
+
+    #: The gaps across the sun: how far apart they sit and how far up the
+    #: disc they go, both as a fraction of its radius.
+    BAR_APART = 0.105
+    BAR_TOP = 0.90
+
+    @staticmethod
+    def sun_radius(horizon: float, bass: float, flash: float) -> float:
+        """How big the sun is. Separate so it can be asked for."""
+        return horizon * (0.46 + bass * 0.26 + flash * 0.85)
+
+    def _sun(self, painter, width, horizon, hue: float, bass: float,
+             flash: float) -> None:
+        """The sun: a glow, a face, and the gaps cut across it.
+
+        The bars in front of it looked wrong, and fixing where they were
+        drawn was only half of it. They were drawn from one edge of the
+        sun's *bounding box* to the other, so they carried on out past the
+        glow and across the skyline as dark rectangles - but they also
+        implied a disc that was never there. All the sun had was a soft
+        radial glow with no edge anywhere, so bars across it had nothing
+        to belong to and read as rectangles lying on top of the picture.
+
+        So there is a disc now, with the face every picture of this has:
+        pale and warm at the top, deepening to magenta at the horizon. The
+        gaps are drawn inside a clip of that disc, which is what stops
+        them at its edge - no arithmetic, and they follow the circle
+        exactly. They are spaced evenly and grow towards the horizon, so
+        the sun dissolves into stripes at the bottom and stays whole at
+        the top, rather than being evenly barred like a barcode.
+        """
+        radius = self.sun_radius(horizon, bass, flash)
+        if radius <= 1.0:
+            return
+        centre = QPointF(width / 2.0, horizon)
+        sky = QRectF(0, 0, width, horizon)
+
+        # The air around it, which is what makes it a sunset rather than a
+        # circle on a background.
+        glow = QRadialGradient(centre, radius * 1.55)
+        glow.setColorAt(0.0, QColor.fromHsvF(hue, 0.55, 1.0,
+                                             0.42 + bass * 0.22 + flash * 0.3))
+        glow.setColorAt(0.45, QColor.fromHsvF((hue + 0.04) % 1.0, 0.9, 1.0,
+                                              0.16 + flash * 0.2))
+        glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+        painter.fillRect(sky, glow)
+
+        face = QLinearGradient(0.0, horizon - radius, 0.0, horizon)
+        face.setColorAt(0.0, QColor.fromHsvF((hue + 0.07) % 1.0,
+                                             0.42 - flash * 0.3, 1.0))
+        face.setColorAt(0.52, QColor.fromHsvF((hue + 0.99) % 1.0,
+                                              0.72 - flash * 0.4, 1.0))
+        face.setColorAt(1.0, QColor.fromHsvF((hue + 0.92) % 1.0,
+                                             0.92 - flash * 0.5, 0.97))
+
+        painter.save()
+        disc = QPainterPath()
+        disc.addEllipse(centre, radius, radius)
+        painter.setClipRect(sky)
+        painter.setClipPath(disc, Qt.ClipOperation.IntersectClip)
+        painter.fillRect(sky, face)
+        painter.setPen(Qt.PenStyle.NoPen)
+        apart = max(3.0, radius * self.BAR_APART)
+        up = apart
+        while up < radius * self.BAR_TOP:
+            share = up / (radius * self.BAR_TOP)      # 0 at the horizon
+            thick = apart * 0.86 * (1.0 - share) ** 1.05
+            if thick < 0.5:
+                break
+            painter.fillRect(
+                QRectF(0.0, horizon - up - thick / 2.0, width, thick),
+                QColor(12, 5, 26, 225))
+            up += apart
+        painter.restore()
 
     def _far_skyline(self, painter, width, horizon, state) -> None:
         """A dimmer row behind, offset, so the city has depth."""
