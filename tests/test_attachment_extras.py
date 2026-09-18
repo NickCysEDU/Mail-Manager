@@ -3564,3 +3564,158 @@ class TestTheKeysThatPlayIt:
             assert ticked == [True], "the bar's strobe box did not follow"
         finally:
             window.close()
+
+
+class TestTheSunInTheVaporwaveScene:
+    """"The horizontal bars in front of the sun look off."
+
+    They were. Each was drawn from one edge of the sun's *bounding box*
+    to the other, so they carried on out past the glow and lay across the
+    skyline as dark rectangles. And there was nothing for them to belong
+    to: the sun was a soft radial glow with no edge anywhere, so bars
+    across it could only read as rectangles on top of the picture.
+    """
+
+    W, H = 900, 520
+    HORIZON = 280.0
+    BASS, FLASH = 0.5, 0.0
+    #: A gap is painted at alpha 225 over whatever is behind it, so where
+    #: there is one the pixel is nearly the gap's own near-black. The glow
+    #: only ever adds light, so nothing else in this scene gets near it.
+    DARK = 70
+
+    def _drawn(self, bass=None, flash=None):
+        from PySide6.QtCore import Qt as _Qt
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+
+        scene = visualizers.by_name("Vaporwave city")
+        image = QImage(self.W, self.H,
+                       QImage.Format.Format_ARGB32_Premultiplied)
+        # A flat background brighter than any gap and a colour nothing in
+        # the sun is near, so "dark here" can only mean a gap. Plain green
+        # was too dark: averaged over the channels it came out under the
+        # threshold, and every untouched pixel read as a bar.
+        image.fill(QColor(60, 200, 60))
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        scene._sun(painter, float(self.W), self.HORIZON, 0.08,
+                   self.BASS if bass is None else bass,
+                   self.FLASH if flash is None else flash)
+        painter.end()
+        radius = scene.sun_radius(self.HORIZON,
+                                  self.BASS if bass is None else bass,
+                                  self.FLASH if flash is None else flash)
+        return scene, image, radius
+
+    @staticmethod
+    def _bar_runs(image, x, top, bottom, dark):
+        """Where the dark bars are down one column, as (start, height)."""
+        runs, start = [], None
+        for y in range(int(top), int(bottom)):
+            here = image.pixelColor(x, y)
+            barred = (here.red() + here.green() + here.blue()) / 3.0 < dark
+            if barred and start is None:
+                start = y
+            elif not barred and start is not None:
+                runs.append((start, y - start))
+                start = None
+        if start is not None:
+            runs.append((start, int(bottom) - start))
+        return runs
+
+    def test_no_bar_reaches_past_the_edge_of_the_sun(self):
+        """The whole complaint: each bar ran the full width of the sun's
+        bounding box, so above and below the middle of the disc it carried
+        on out past the glow and lay across the skyline.
+
+        The glow is allowed out there - that is what makes it a sunset
+        rather than a circle on a background - so this asks only where the
+        *dark* is, and the dark is only ever a gap.
+        """
+        import math
+
+        _scene, image, radius = self._drawn()
+        centre = self.W // 2
+        found = 0
+        for up in range(8, int(radius * 0.88), 5):
+            y = int(self.HORIZON - up)
+            half = math.sqrt(max(0.0, radius * radius - up * up))
+            dark = [x for x in range(self.W)
+                    if sum(image.pixelColor(x, y).getRgb()[:3]) / 3.0
+                    < self.DARK]
+            if not dark:
+                continue
+            found += 1
+            # Two pixels of slack at each end for the antialiased edge.
+            assert min(dark) >= centre - half - 2, (
+                f"a gap at y={y} starts at x={min(dark)}, and the sun only "
+                f"reaches x={centre - half:.0f}")
+            assert max(dark) <= centre + half + 2, (
+                f"a gap at y={y} runs to x={max(dark)}, and the sun only "
+                f"reaches x={centre + half:.0f}")
+        assert found >= 4, f"only {found} rows had a gap in them at all"
+
+    def test_the_bars_are_thicker_nearer_the_horizon(self):
+        """Evenly weighted bars read as a barcode. A sunset dissolves."""
+        _scene, image, radius = self._drawn()
+        runs = self._bar_runs(image, self.W // 2,
+                              self.HORIZON - radius + 4, self.HORIZON,
+                              self.DARK)
+        assert len(runs) >= 4, f"only {len(runs)} bars were drawn"
+        highest, lowest = runs[0][1], runs[-1][1]
+        assert lowest > highest * 1.6, (
+            f"the bar nearest the horizon is {lowest}px and the highest is "
+            f"{highest}px, which is not a gradient")
+
+    #: The top of the disc that has to stay unbroken, as a fraction of
+    #: the radius. A number of its own on purpose: reading BAR_TOP here
+    #: and checking above it is a test that moves wherever the code moves,
+    #: and it passed with the bars running the whole way up.
+    CAP = 0.92
+
+    def test_the_top_of_the_sun_is_whole(self):
+        _scene, image, radius = self._drawn()
+        cap = self.HORIZON - radius * self.CAP
+        # From a little below the very top, where the disc's own
+        # antialiased edge against the background is dark for a pixel.
+        runs = self._bar_runs(image, self.W // 2,
+                              self.HORIZON - radius + 4, cap, self.DARK)
+        assert runs == [], f"the cap is cut by {len(runs)} bars"
+
+    def test_the_sun_has_an_edge_rather_than_fading_away(self):
+        """A glow with no edge is what left the bars nothing to belong
+        to. Just inside the top of the disc is bright; just outside is
+        the sky."""
+        _scene, image, radius = self._drawn()
+        centre = self.W // 2
+        inside = image.pixelColor(centre, int(self.HORIZON - radius) + 4)
+        outside = image.pixelColor(centre, int(self.HORIZON - radius) - 4)
+        step = abs(inside.red() - outside.red()) + abs(inside.blue()
+                                                      - outside.blue())
+        assert step > 120, (
+            f"inside {inside.name()} and outside {outside.name()} are barely "
+            f"different, so the disc has no edge")
+
+    def test_a_flash_makes_it_bigger(self):
+        """The strobe belongs to the sun in this scene."""
+        import visualizers
+
+        scene = visualizers.by_name("Vaporwave city")
+        quiet = scene.sun_radius(self.HORIZON, 0.2, 0.0)
+        hit = scene.sun_radius(self.HORIZON, 0.2, 1.0)
+        assert hit > quiet * 1.5
+
+    def test_it_draws_nothing_at_all_when_there_is_no_room(self):
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+
+        scene = visualizers.by_name("Vaporwave city")
+        image = QImage(40, 30, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(60, 200, 60))
+        painter = QPainter(image)
+        scene._sun(painter, 40.0, 0.5, 0.1, 0.0, 0.0)
+        painter.end()
+        assert image.pixelColor(20, 10).green() == 200
