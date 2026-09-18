@@ -24,7 +24,8 @@ import cmath
 import logging
 import math
 from array import array
-from typing import List, Optional
+from operator import mul
+from typing import List, Optional, Tuple
 
 log = logging.getLogger(__name__)
 
@@ -777,15 +778,50 @@ GAMMA = 0.72
 #: as the sweep does, turns a detailed figure into a scribble.
 #:
 #: The length was chosen by rendering Oscilloscope Music's "Function" at
-#: 130, 260, 520 and 1024 and looking at the results. Its figures repeat
-#: about every 65 samples, so 512 is eight passes of the same shape laid
-#: over each other - enough that the figure is solid, few enough that it
-#: has not moved on to the next one. At 1024 the later figures smear into
-#: the earlier ones; at 260 the shape is not finished.
+#: The most points kept for one X-Y trace.
 #:
-#: Kept as int16 rather than floats: the same density in floats is four
-#: times the memory for no more picture.
-VECTOR_POINTS = 512
+#: A cap now rather than a fixed count, and it is the memory knob: at 512
+#: every trace cost the same whatever it held, and a fifteen minute track
+#: comes to about 28 MB either way.
+#:
+#: What changed is what a trace *spans*. It used to be 512 consecutive
+#: samples, about eleven milliseconds, taken once every sixty-seven. On a
+#: record written for a scope that is between a third and a half of one
+#: figure - so every frame drew part of a drawing, a different part each
+#: time, and the phosphor stacked four unrelated fragments on top of each
+#: other. That is "laggy, shaky and all over the place": the figures
+#: really were incomplete, and they really were different every frame.
+#:
+#: See ``_figure_lag``: the span is one figure now.
+VECTOR_POINTS = 1024
+
+#: How often the figure rate is measured, in traces. The rate is a
+#: property of the passage rather than of the track - measured across one
+#: record it went 25 Hz, 200, 132, 123, 25, 104, 10.6, 50.5 - so it is
+#: followed rather than decided once. Fifteen traces is about a second.
+FIGURE_EVERY = 30
+
+#: The band of figure rates looked for, in samples of lag at the decode
+#: rate: about 8 Hz to 200 Hz.
+FIGURE_SLOWEST = 4000
+FIGURE_FASTEST = 240
+
+#: How much of the signal is looked at to find the rate, and how coarsely.
+#: Both are for speed: the search runs on a copy decimated by four, which
+#: costs sixteen times less and finds the same lag to within a sample or
+#: two, and the answer is then refined at full rate.
+FIGURE_LOOK = 8192
+FIGURE_COARSE = 4
+
+#: How near the best a shorter lag has to score before it is preferred.
+#: See ``_figure_lag``: every multiple of a figure's period fits it
+#: equally well, and the shortest one is the figure.
+FIGURE_PREFER = 0.93
+
+#: Below this the passage has no figure in it - a noise sweep, a cymbal,
+#: silence - and a span chosen from the lag would be arbitrary. The old
+#: fixed window is used instead.
+FIGURE_SURE = 0.45
 
 #: Points in one oscilloscope trace. Enough to show a waveform's shape at
 #: any width the scene is drawn at, small enough that a three minute track
@@ -840,14 +876,120 @@ def traces(samples: array, sample_rate: int, channels: int = 1,
     return out
 
 
+def _figure_lag(samples: array, channels: int, at: int,
+                look: int = FIGURE_LOOK) -> Tuple[int, float]:
+    """How long one figure takes, in samples, and how sure that is.
+
+    A record written for a scope draws the same shape over and over, and
+    how long that takes is the one setting a person reaches for first on
+    a real instrument: you turn the time base until the figure stands
+    still. Nothing here was doing that, so the window was whatever eleven
+    milliseconds happened to contain.
+
+    The beam's path is (left, right), so this is an autocorrelation of the
+    two together - how well the path lies on top of itself a lag later.
+
+    Done on a copy decimated by four, which is sixteen times less
+    arithmetic for an answer within a sample or two, and then refined at
+    full rate. Straight, it measured 21 ms a go, which over a long track
+    is most of a minute spent on a visualiser.
+    """
+    total = len(samples) // max(1, channels)
+    if at < 0 or at + look > total or channels < 2:
+        return 0, 0.0
+    step = FIGURE_COARSE
+    xs = samples[at * channels: (at + look) * channels: channels * step]
+    ys = samples[at * channels + 1: (at + look) * channels + 1: channels * step]
+    count = min(len(xs), len(ys))
+    if count < 32:
+        return 0, 0.0
+    energy = sum(map(mul, xs, xs)) + sum(map(mul, ys, ys))
+    if energy <= 0.0:
+        return 0, 0.0
+
+    # sum(map(mul, ...)) rather than a loop over indices, because all of
+    # it then happens in C. Same answer, less than half the time: 24.5 ms
+    # a measurement became 11.5, and over a seven minute record that is
+    # the difference between eleven seconds of the analysis and five.
+    scored = []
+    best_score = 0.0
+    lag = max(1, FIGURE_FASTEST // step)
+    top = min(FIGURE_SLOWEST // step, count - 32)
+    while lag <= top:
+        span = count - lag
+        here = (sum(map(mul, xs, xs[lag:])) + sum(map(mul, ys, ys[lag:])))
+        # Against the energy of the part that overlaps, so a long lag is
+        # not punished for having less of itself left to compare.
+        score = here / max(1.0, energy * span / count)
+        scored.append((lag, score))
+        if score > best_score:
+            best_score = score
+        # Geometric, because the interesting range is twelve hertz to two
+        # hundred and a fixed step would spend all of itself at the slow
+        # end.
+        lag += max(1, lag // 40)
+    if not scored or best_score <= 0.0:
+        return 0, 0.0
+
+    # The *shortest* lag that is as good as the best, not the best.
+    #
+    # A figure that really repeats lies on top of itself at every multiple
+    # of its period, and all of those score the same. Taking the highest
+    # score then picks whichever one a floating point comparison happened
+    # to favour: a figure written with a period of 953 samples came back
+    # as 2859, and one of 241 as 1687. Both are perfectly good answers to
+    # the question asked and completely wrong for the question meant -
+    # they draw three figures and seven, which is the smear this whole
+    # change is about.
+    best_lag = scored[-1][0]
+    for lag, score in scored:
+        if score >= best_score * FIGURE_PREFER:
+            best_lag = lag
+            best_score = score
+            break
+
+    # Back to full rate. The search has to cover half the gap to the
+    # neighbouring coarse lag, not a fixed few samples: the grid is
+    # geometric, so near a lag of 950 its rungs are ninety-five samples
+    # apart and looking four either side finds nothing.
+    coarse = best_lag * step
+    reach = max(step, best_lag // 40 * step // 2 + step)
+    finest, found = best_score, coarse
+    full_x = samples[at * channels: (at + look) * channels: channels]
+    full_y = samples[at * channels + 1: (at + look) * channels + 1: channels]
+    thin_x = full_x[::step]
+    thin_y = full_y[::step]
+    for lag in range(max(1, coarse - reach), coarse + reach + 1):
+        span = look - lag
+        if span < 32:
+            break
+        here = (sum(map(mul, thin_x, full_x[lag::step]))
+                + sum(map(mul, thin_y, full_y[lag::step])))
+        here = here / max(1.0, energy * span / look)
+        if here > finest:
+            finest, found = here, lag
+    return found, finest
+
+
 def vector_traces(samples: array, sample_rate: int, channels: int = 2,
                   should_stop=None) -> List[array]:
     """Left against right, which is how oscilloscope music draws.
 
-    Interleaved as x, y, x, y - so one trace is 2 * TRACE_POINTS long.
-    A record that was written for a scope puts a picture in here; an
-    ordinary stereo mix puts a blob that leans with the stereo image,
+    Interleaved as x, y, x, y - so one trace is twice as long as it has
+    points. A record that was written for a scope puts a picture in here;
+    an ordinary stereo mix puts a blob that leans with the stereo image,
     which is what a vectorscope shows and is worth looking at anyway.
+
+    **One trace is one figure.** The time base is measured from the record
+    - see ``_figure_lag`` - and followed as it changes, which is the thing
+    a person does first with a real scope and the thing this was not doing
+    at all. Before, a trace was 512 samples whatever the record was doing:
+    between a third and a half of one figure, so every frame drew a
+    different fragment of a drawing and the phosphor stacked four of them.
+
+    Where the figure is longer than the points allowed, it is thinned
+    rather than cut short - a whole figure at half the samples is still
+    the figure, and half a figure at every sample is not.
 
     No trigger: the position in the file is the position in the drawing,
     and hunting for a zero crossing would tear the picture apart.
@@ -859,22 +1001,33 @@ def vector_traces(samples: array, sample_rate: int, channels: int = 2,
         return []
 
     hop = max(1, sample_rate // RATE)
-    # A longer window than the sweep uses: a drawing takes more than one
-    # cycle of anything to complete.
-    # Consecutive samples, not every nth. The window is about twenty
-    # milliseconds, which is roughly how long a figure takes to be drawn
-    # once, and every sample in it is a point on the figure.
-    span = min(total, VECTOR_POINTS)
     out: List[array] = []
     at = 0
     checked = 0
-    while at + span <= total:
+    lag, sure = 0, 0.0
+    since = FIGURE_EVERY
+    while at < total:
         checked += 1
         if should_stop is not None and not checked % 40 and should_stop():
             return []
-        row = array("h", [0]) * (span * 2)
-        for point in range(span):
-            index = (at + point) * channels
+        if since >= FIGURE_EVERY:
+            since = 0
+            lag, sure = _figure_lag(samples, channels, at)
+        since += 1
+        if sure >= FIGURE_SURE and lag:
+            span = lag
+        else:
+            span = VECTOR_POINTS // 2
+        span = max(64, min(span, total - at))
+        if span < 64:
+            break
+        step = max(1, -(-span // VECTOR_POINTS))      # ceil
+        points = span // step
+        if points < 8:
+            break
+        row = array("h", [0]) * (points * 2)
+        for point in range(points):
+            index = (at + point * step) * channels
             if index + 1 < len(samples):
                 row[point * 2] = samples[index]
                 row[point * 2 + 1] = samples[index + 1]

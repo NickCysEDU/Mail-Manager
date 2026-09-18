@@ -3921,3 +3921,210 @@ class TestTheStrobeInAmbienceIsSmooth:
         source = inspect.getsource(visualizers.Ambience.paint)
         assert "flash=flash" in source, (
             "the plasma behind the ribbons is still reading the raw hit")
+
+
+class TestTheScopesTimeBase:
+    """"The images are a bit laggy, shaky and all over the place. Look
+    around to find THE best settings, whether in hardware or post
+    processing, for an oscilloscope to view that music."
+
+    The first thing anybody does with a real scope is turn the time base
+    until the figure stands still. Nothing here was doing that. A trace
+    was 512 consecutive samples - about eleven milliseconds - taken once
+    every sixty-seven, and a record written for a scope draws a figure in
+    twenty. So every frame drew between a third and a half of a drawing, a
+    different part each time, and the phosphor stacked four unrelated
+    fragments on top of each other.
+
+    Measured on the record this came from: the figures repeat at 50 Hz
+    over most of it, with passages at 10, 22 and 194. So there is no fixed
+    window that is right - a 1024 sample one is a whole figure at 50 Hz
+    and four of them at 194, which looked worse than what it replaced.
+    """
+
+    @staticmethod
+    def _figure(hertz=50.0, seconds=1.2, ratio=3, rate=None, noise=False):
+        """A Lissajous at a known figure rate, or noise, as stereo PCM."""
+        import math
+        import random
+        from array import array
+
+        import attachment_audio
+
+        rate = rate or attachment_audio.DECODE_RATE
+        rng = random.Random(4)
+        pcm = array("h")
+        for index in range(int(rate * seconds)):
+            if noise:
+                pcm.append(int(rng.uniform(-1, 1) * 16000))
+                pcm.append(int(rng.uniform(-1, 1) * 16000))
+                continue
+            moment = index / rate
+            pcm.append(int(16000 * math.sin(2 * math.pi * hertz * moment)))
+            pcm.append(int(16000 * math.sin(2 * math.pi * hertz * ratio * moment
+                                            + 0.7)))
+        return pcm, rate
+
+    #: Figure lengths to measure, in samples. Awkward numbers on purpose:
+    #: they fall between the rungs of the coarse search, which is where
+    #: the answer has to be refined rather than rounded.
+    LENGTHS = (241, 317, 480, 641, 953, 1201, 1607, 2099)
+
+    @staticmethod
+    def _of_length(period, seconds=0.9, ratio=3):
+        import math
+        from array import array
+
+        import attachment_audio
+
+        rate = attachment_audio.DECODE_RATE
+        hertz = rate / period
+        pcm = array("h")
+        for index in range(int(rate * seconds)):
+            moment = index / rate
+            pcm.append(int(16000 * math.sin(2 * math.pi * hertz * moment)))
+            pcm.append(int(16000 * math.sin(2 * math.pi * hertz * ratio
+                                            * moment + 0.7)))
+        return pcm
+
+    @pytest.mark.parametrize("period", LENGTHS)
+    def test_it_measures_how_long_one_figure_takes(self, period):
+        """To better than two per cent, and it has to be *one* figure.
+
+        A figure that really repeats lies on top of itself at every
+        multiple of its period, and every one of those fits exactly as
+        well. Taking the best-scoring lag therefore picks whichever
+        multiple a floating point comparison happens to favour: a figure
+        of 953 samples came back as 2859 and one of 241 as 1687, which
+        draw three figures and seven. The shortest lag that is as good as
+        the best is taken instead.
+
+        Two per cent is also what makes the refinement worth its cost. The
+        coarse search runs on a copy decimated by four and steps its lag
+        geometrically, so near a lag of a thousand its rungs are
+        twenty-five samples apart; looking only a few either side of the
+        winner leaves the answer 2.2 per cent out, and looking across half
+        the gap to the next rung brings it to 1.15.
+        """
+        import attachment_audio
+
+        pcm = self._of_length(period)
+        lag, sure = attachment_audio._figure_lag(pcm, 2, 0)
+        assert sure > attachment_audio.FIGURE_SURE, (
+            f"a clean figure of {period} samples measured as unsure "
+            f"({sure:.2f})")
+        assert abs(lag - period) / period < 0.02, (
+            f"a figure of {period} samples measured as {lag}"
+            + (f", which is {lag / period:.0f} of them"
+               if lag > period * 1.5 else ""))
+
+    def test_one_trace_holds_one_figure(self):
+        """Not half of one, which is what 512 samples was, and not four,
+        which is what a fixed 1024 would be at 194 Hz."""
+        import attachment_audio
+
+        for hertz in (25.0, 50.0, 120.0):
+            pcm, rate = self._figure(hertz, seconds=2.0)
+            traces = attachment_audio.vector_traces(pcm, rate, 2)
+            assert traces, f"no traces at {hertz} Hz"
+            points = len(traces[len(traces) // 2]) // 2
+            step = max(1, -(-int(rate / hertz) // attachment_audio.VECTOR_POINTS))
+            wanted = int(rate / hertz) // step
+            assert abs(points - wanted) <= max(3, wanted * 0.06), (
+                f"a {hertz} Hz figure is {wanted} points and the trace has "
+                f"{points}")
+
+    def test_the_figure_closes(self):
+        """The test that says it is really one figure: draw it and the
+        beam comes back to where it started. A trace holding half a figure
+        ends half way round; one holding four ends anywhere."""
+        import attachment_audio
+
+        pcm, rate = self._figure(50.0, seconds=2.0)
+        traces = attachment_audio.vector_traces(pcm, rate, 2)
+        trace = traces[len(traces) // 2]
+        count = len(trace) // 2
+        start = (trace[0], trace[1])
+        end = (trace[(count - 1) * 2], trace[(count - 1) * 2 + 1])
+        # Against the size of the figure, so this is "a twentieth of the
+        # way across the picture" rather than a number of counts.
+        width = max(abs(trace[i * 2]) for i in range(count)) or 1
+        height = max(abs(trace[i * 2 + 1]) for i in range(count)) or 1
+        apart = max(abs(start[0] - end[0]) / width,
+                    abs(start[1] - end[1]) / height)
+        assert apart < 0.12, (
+            f"the beam finishes {apart * 100:.0f} per cent of the picture "
+            f"away from where it started")
+
+    def test_a_record_with_no_figure_in_it_is_left_alone(self):
+        """Noise, a cymbal, silence: there is no figure, so a span taken
+        from the lag would be an arbitrary number. The fixed window is
+        used, which is what it always was."""
+        import attachment_audio
+
+        pcm, rate = self._figure(seconds=1.2, noise=True)
+        lag, sure = attachment_audio._figure_lag(pcm, 2, 0)
+        assert sure < attachment_audio.FIGURE_SURE, (
+            f"noise measured as a figure, {sure:.2f} sure")
+        traces = attachment_audio.vector_traces(pcm, rate, 2)
+        points = len(traces[len(traces) // 2]) // 2
+        assert points == attachment_audio.VECTOR_POINTS // 2, (
+            f"{points} points from noise, rather than the fixed "
+            f"{attachment_audio.VECTOR_POINTS // 2}")
+
+    def test_a_slow_figure_is_thinned_and_not_cut_short(self):
+        """A whole figure at half the samples is still the figure; half a
+        figure at every sample is not. This is also what keeps the memory
+        where it was - a trace never holds more points than it used to."""
+        import attachment_audio
+
+        pcm, rate = self._figure(11.0, seconds=2.4)
+        lag, sure = attachment_audio._figure_lag(pcm, 2, 0)
+        traces = attachment_audio.vector_traces(pcm, rate, 2)
+        trace = traces[len(traces) // 2]
+        points = len(trace) // 2
+        assert points <= attachment_audio.VECTOR_POINTS, (
+            f"{points} points in one trace, against a cap of "
+            f"{attachment_audio.VECTOR_POINTS}")
+        assert sure > attachment_audio.FIGURE_SURE and lag > 0
+        # And it still spans the whole figure.
+        step = max(1, -(-lag // attachment_audio.VECTOR_POINTS))
+        assert abs(points * step - lag) < lag * 0.08, (
+            f"{points} points every {step} samples covers {points * step} of "
+            f"a {lag} sample figure")
+
+    def test_it_follows_the_rate_as_it_changes(self):
+        """The rate is a property of the passage rather than of the
+        record: measured across one, it went 25 Hz, 200, 132, 123, 25,
+        104, 10.6, 50.5."""
+        from array import array
+
+        import attachment_audio
+
+        slow, rate = self._figure(25.0, seconds=2.5)
+        fast, _ = self._figure(100.0, seconds=2.5)
+
+        def alone(pcm):
+            rows = attachment_audio.vector_traces(pcm, rate, 2)
+            return len(rows[len(rows) // 2]) // 2
+
+        # Against what each rate gives on its own, rather than against
+        # each other. A slow figure is *thinned* to stay inside the point
+        # cap, so the number of points is not the span: 25 Hz comes back
+        # as 960 points of every second sample and 100 Hz as 480 of every
+        # one, which is four times the span and twice the points.
+        want_slow, want_fast = alone(slow), alone(fast)
+        both = array("h")
+        both.extend(slow)
+        both.extend(fast)
+        traces = attachment_audio.vector_traces(both, rate, 2)
+        per_second = attachment_audio.RATE
+        early = len(traces[per_second * 1]) // 2
+        late = len(traces[int(per_second * 4.2)]) // 2
+        assert abs(early - want_slow) <= 4, (
+            f"{early} points a second in, where the slow figure on its own "
+            f"gives {want_slow}")
+        assert abs(late - want_fast) <= 4, (
+            f"{late} points after it speeds up, where the fast figure on "
+            f"its own gives {want_fast}")
+        assert want_slow != want_fast, "the two rates are indistinguishable"
