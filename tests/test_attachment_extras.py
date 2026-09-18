@@ -3027,3 +3027,231 @@ class TestTheDialsMarkingsMatchTheReference:
         assert bottom > meters.ARC_AT + meters.ARC_STROKE / 2, (
             f"the numbers reach {bottom:.3f} and the arc's top edge is at "
             f"{meters.ARC_AT + meters.ARC_STROKE / 2:.3f}")
+
+
+class TestTheSceneIsDrawnAtTheScreensResolution:
+    """Full screen used to be softer than the window it replaced.
+
+    The whole rule was one number - 600,000 pixels, above which the scene
+    was drawn smaller and stretched - and the number was written on one
+    machine and applied to every screen. Measured against the window's own
+    logical resolution it came out at 0.54 of it at 1920x1080 and 0.64 at
+    a retina full screen, while the same rule in a windowed strip drew at
+    1.81 times logical. That difference is what "fuzzy at full screen"
+    was: not a blur, a genuinely smaller picture stretched up.
+
+    So these are about the floor. Below one buffer pixel per point the
+    picture goes soft, and for scenes like these soft is worse than
+    thirty frames a second.
+    """
+
+    @staticmethod
+    def _settled(governor, cost_at, ratio=2.0, pixels=8_294_400, frames=900,
+                 scene=object()):
+        """Run the governor against a cost model until it stops moving.
+
+        ``cost_at(scale)`` says what a frame costs at that scale. Returns
+        the scale it settled on and how many times it changed its mind.
+        """
+        moves, last = 0, None
+        for _ in range(frames):
+            scale = governor.scale_for(pixels, ratio, scene)
+            if last is not None and scale != last:
+                moves += 1
+            last = scale
+            governor.record(cost_at(scale), ratio)
+        return last, moves
+
+    def test_a_scene_that_can_hold_it_is_never_drawn_softer_than_the_window(self):
+        from attachment_widgets import Sharpness
+
+        # Comfortable at logical (0.5 of a 2x screen's pixels), too slow
+        # above it. The old rule would have put this at 0.27.
+        settled, _ = self._settled(
+            Sharpness(), lambda s: 3.0 * (s / 0.5) ** 3)
+        assert settled >= 0.5, (
+            f"settled at {settled}, which is {settled * 2:.2f} of the "
+            f"window's own resolution")
+
+    def test_a_scene_that_cannot_hold_it_gives_up_resolution(self):
+        """The floor is a preference, not a promise. Something has to give
+        when even a thirtieth of a second will not cover it."""
+        from attachment_widgets import Sharpness
+
+        settled, _ = self._settled(
+            Sharpness(), lambda s: 90.0 * s / 0.5)
+        assert settled < 0.5, f"stayed at {settled} while costing 90 ms"
+
+    def test_below_the_floor_it_buys_frames_before_it_buys_pixels(self):
+        """A scene costing 15 ms at logical keeps the resolution and takes
+        the longer frame, rather than going soft to stay at sixty."""
+        from attachment_widgets import Sharpness
+
+        governor = Sharpness()
+        settled, _ = self._settled(governor, lambda s: 15.0 * s / 0.5)
+        assert settled >= 0.5, f"gave up resolution at {settled} for 15 ms"
+        assert governor.interval_ms(2.0, 16) > 16, (
+            "it kept the resolution but still asked for sixty frames a "
+            "second, which fills the event queue rather than drawing them")
+
+    def test_a_cold_first_frame_is_not_believed(self):
+        """The first frame of a scene is the fonts and the tiles being
+        built, not the scene. The Equaliser's first came in at 64 ms
+        against the 1.4 it settles at, and one reading like that was
+        enough to convince the governor for good."""
+        from attachment_widgets import Sharpness
+
+        governor = Sharpness()
+        scene = object()
+        for frame in range(900):
+            scale = governor.scale_for(8_294_400, 2.0, scene)
+            governor.record(64.0 if frame < 6 else 1.4 * scale / 0.5, 2.0)
+        assert scale >= 0.5, (
+            f"settled at {scale} because of the first six frames")
+
+    def test_it_does_not_walk_between_two_rungs_for_ever(self):
+        """A rung it has measured is not guessed at again.
+
+        This is Waterfall, whose cost no tidy formula predicts: 14 ms at
+        960x540 and 24 at 1267x713, where anything smooth says 18. The
+        rung below looks cheap enough to climb out of and the rung above
+        cannot be held, so a governor that re-guesses each time steps up,
+        finds out, steps down, forgets, and does it again for as long as
+        the scene is on screen.
+        """
+        from attachment_widgets import Sharpness
+
+        cliff = {1.0: 120.0, 0.8: 80.0, 0.67: 60.0, 0.5: 45.0,
+                 0.4: 36.0, 0.33: 30.0, 0.25: 7.0}
+        governor = Sharpness()
+        settled, moves = self._settled(
+            governor, lambda s: cliff.get(round(s, 2), 50.0), frames=2400)
+        assert settled == 0.25, f"settled at {settled}, which costs 30 ms"
+        assert moves <= 6, (
+            f"changed its mind {moves} times in 2400 frames, which is a "
+            f"resolution change every {2400 // max(1, moves)} frames for ever")
+        assert governor._seen.get(0.33, 0.0) > 24.0, (
+            "it never wrote down that the rung above was too slow")
+
+    def test_the_windowed_strip_is_left_alone(self):
+        """Small frames were never the problem and are not measured."""
+        from attachment_widgets import Sharpness
+
+        governor = Sharpness()
+        assert governor.scale_for(400_000, 2.0, object()) == 1.0
+
+
+class TestAWideLineIsDrawnTheQuickWay:
+    """Qt has a fast path for one-pixel lines and nothing above it.
+
+    Measured on a thousand antialiased curve segments at 1080p: 2.21 ms at
+    pen width 1.0, 58.00 ms at 1.01. That cliff is why the scenes were
+    only ever cheap while they were being drawn small - a 2.4 unit pen in
+    a quarter-size buffer is 1.3 real pixels, under the cliff.
+    """
+
+    @staticmethod
+    def _draw(how, width=2.4, size=(420, 260), scale=1.0):
+        import math
+
+        from PySide6.QtCore import QPointF, Qt
+        from PySide6.QtGui import (QColor, QImage, QPainter, QPainterPath,
+                                   QPen)
+
+        path = QPainterPath()
+        path.moveTo(20, 200)
+        for step in range(1, 14):
+            x = 20 + step * 28.0
+            y = 200 - (math.sin(step * 0.8) * 0.5 + 0.5) * 150
+            half = x - 14.0
+            path.cubicTo(QPointF(half, path.currentPosition().y()),
+                         QPointF(half, y), QPointF(x, y))
+        image = QImage(size[0], size[1],
+                       QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0))
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.scale(scale, scale)
+        ink = QColor(210, 130, 255, 200)
+        if how == "wide":
+            painter.setPen(QPen(ink, width, Qt.PenStyle.SolidLine,
+                                Qt.PenCapStyle.RoundCap,
+                                Qt.PenJoinStyle.RoundJoin))
+            painter.drawPath(path)
+        else:
+            import visualizers
+
+            visualizers.stroke(painter, path, ink, width)
+        painter.end()
+        return image
+
+    @staticmethod
+    def _ink(image) -> int:
+        return sum(image.pixelColor(x, y).blue()
+                   for y in range(0, image.height(), 2)
+                   for x in range(0, image.width(), 2))
+
+    @staticmethod
+    def _apart(first, second) -> float:
+        total = count = 0
+        for y in range(0, first.height(), 2):
+            for x in range(0, first.width(), 2):
+                one, two = first.pixelColor(x, y), second.pixelColor(x, y)
+                total += (abs(one.red() - two.red())
+                          + abs(one.green() - two.green())
+                          + abs(one.blue() - two.blue()))
+                count += 3
+        return total / max(1, count)
+
+    #: Widths to check, and the painter scale to check them at. The
+    #: scaled rows are the ones that matter: a pen of width 1.2 in a
+    #: painter scaled by two is 2.4 *real* pixels, and everything here -
+    #: whether to stack at all, how far apart, how faint - is a statement
+    #: about real pixels. Read in painter units instead, the offsets come
+    #: out twice as far apart as they should and the line is drawn half
+    #: again as wide as it was asked for.
+    #:
+    #: 5.0 and 8.0 are past what a ring of hairlines can cover, so they
+    #: are drawn with a real pen. They are here because the first version
+    #: drew them with as much of the ring as fitted, which is a thinner
+    #: line rather than a cheaper one: 47 per cent of the ink at 5.0.
+    SWEEP = [(1.4, 1.0), (2.0, 1.0), (2.4, 1.0), (3.2, 1.0), (5.0, 1.0),
+             (8.0, 1.0), (1.2, 2.0), (1.6, 2.0), (2.4, 2.0), (0.8, 2.0)]
+
+    @pytest.mark.parametrize("width,scale", SWEEP)
+    def test_it_puts_the_same_ink_on_the_screen_as_a_wide_pen(self, width, scale):
+        size = (int(420 * scale), int(260 * scale))
+        mine = self._draw("hairlines", width=width, scale=scale, size=size)
+        real = self._draw("wide", width=width, scale=scale, size=size)
+        share = self._ink(mine) / max(1, self._ink(real))
+        assert 0.90 <= share <= 1.12, (
+            f"{width} units at a painter scale of {scale} is {width * scale} "
+            f"real pixels, and the stacked line laid down "
+            f"{share * 100:.0f} per cent of the ink a real pen does")
+
+    @pytest.mark.parametrize("width,scale", SWEEP)
+    def test_it_lands_in_the_same_place_as_a_wide_pen(self, width, scale):
+        size = (int(420 * scale), int(260 * scale))
+        apart = self._apart(
+            self._draw("hairlines", width=width, scale=scale, size=size),
+            self._draw("wide", width=width, scale=scale, size=size))
+        assert apart < 3.0, (
+            f"mean channel difference {apart:.2f}/255 against a real pen, "
+            f"for {width} units at a painter scale of {scale}")
+
+    def test_a_line_already_thin_enough_is_drawn_straight(self):
+        """No stacking where there is nothing to gain: a pen under a pixel
+        is already on the fast path, and passing it through the stacker
+        would only make it fainter."""
+        import visualizers
+
+        assert visualizers._hair_spots(0.0) == ((0.0, 0.0),)
+
+    def test_a_line_too_thick_to_stack_is_drawn_with_a_real_pen(self):
+        """The backstop, and it has to be all or nothing: a ring cut off
+        where it stopped fitting draws a line as wide as the last ring
+        that fitted."""
+        import visualizers
+
+        assert visualizers._hair_spots(2.0) == ()
+        assert self._ink(self._draw("hairlines", width=40.0)) > 0
