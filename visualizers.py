@@ -2095,10 +2095,14 @@ class Rave(Scene):
         """
         if rect.width() < 2 or rect.height() < 2:
             return None
+        # Brighter and wider than it was. The corridor is closed in now,
+        # and a closed corridor that fades to nothing at the far end has a
+        # hole in it rather than a distance - the grid lines run out and
+        # what is left is a dark rectangle the eye reads as a wall.
         key = (round((0.62 + synth * 0.3) % 1.0, 2),
-               round(min(1.0, 0.22 + bass * 0.5 + flash * 0.4), 2),
-               round(min(1.0, 0.30 + bass * 0.45), 2),
-               round(0.45 + bass * 0.35, 2),
+               round(min(1.0, 0.34 + bass * 0.5 + flash * 0.4), 2),
+               round(min(1.0, 0.46 + bass * 0.42), 2),
+               round(0.58 + bass * 0.35, 2),
                round((horizon.x() - rect.left()) / rect.width(), 2),
                round((horizon.y() - rect.top()) / rect.height(), 2))
         if self._haze_key == key and self._haze_image is not None:
@@ -2129,44 +2133,136 @@ class Rave(Scene):
             z = self.NEAR
         return QPointF(horizon.x() + focal * x / z, horizon.y() + focal * y / z)
 
-    def _grid(self, painter, rect, horizon, focal, hue, bass, kick, flash):
-        """Floor and ceiling, as lines running away and lines across.
+    #: How many depth bands the grid is drawn in. Each is one stroke with
+    #: its own weight, so the corridor dissolves into the haze instead of
+    #: stopping dead at the far end. Four is where it stops being visible
+    #: as banding and starts reading as distance.
+    BANDS = 4
+    #: Every this many rows, a frame around the corridor. They are what
+    #: gives the room a length: a grid alone is a floor and a ceiling, and
+    #: a truss every few metres is a building.
+    TRUSS = 5
 
-        Both surfaces from one loop with the sign flipped, because they
-        are the same grid mirrored and writing it twice is how the two
-        drift apart.
+    #: Lines across a side wall. Far fewer than the floor gets, because
+    #: the corridor is about eight times wider than it is tall: laid out
+    #: with the floor's count they came out a twentieth of a unit apart
+    #: and read as hatching rather than as a grid.
+    UPRIGHTS = 3
+
+    def _surfaces(self, lift, span):
+        """The four walls of the corridor: where a point across each one
+        is, how far its colour is turned, and how many lines it gets.
+
+        Floor, ceiling and both sides from one description, because they
+        are the same grid turned, and writing them out separately is how
+        four surfaces drift apart.
+        """
+        return (
+            # across -1..1        ->  (x, y)        hue    lines
+            (lambda t: (t * span, lift), 0.00, self.ACROSS),      # floor
+            (lambda t: (t * span, -lift), 0.08, self.ACROSS),     # ceiling
+            (lambda t: (-span, t * lift), 0.16, self.UPRIGHTS),   # left
+            (lambda t: (span, t * lift), 0.16, self.UPRIGHTS),    # right
+        )
+
+    def _grid(self, painter, rect, horizon, focal, hue, bass, kick, flash):
+        """The corridor: four surfaces, fading with distance, with trusses.
+
+        It used to be a floor and a ceiling and nothing at the sides, so
+        the room was a pair of planes with the dark showing between them.
+        Closing it in is most of what makes it a room.
+
+        Each surface is drawn in depth bands rather than as one path, so
+        the near lines are bright and heavy and the far ones fade into the
+        haze. That is the whole difference between a wireframe and a
+        space: a grid drawn at one weight ends abruptly wherever the loop
+        happens to stop.
         """
         painter.setBrush(Qt.BrushStyle.NoBrush)
         width = 1.0 + bass * 1.2
         # How far the surfaces are from the eye - the corridor opening up
         # on a bass note is most of what makes the room feel big.
         lift = 0.55 + bass * 0.22
+        span = self.ACROSS * 0.5
         offset = self._z % 1.0
-        for side in (1.0, -1.0):
-            colour = QColor.fromHsvF(
-                (hue + (0.0 if side > 0 else 0.08)) % 1.0,
-                0.85 - flash * 0.4, 1.0,
-                min(1.0, 0.22 + bass * 0.35 + kick * 0.3 + flash * 0.3))
-            pen = QPen(colour, width * (1.0 + kick * 1.4))
-            pen.setCosmetic(True)
-            painter.setPen(pen)
-            # The lines that run away from you.
+        reach = self.FAR - self.NEAR
+        for place, shift, lines in self._surfaces(lift, span):
+            base = QColor.fromHsvF(
+                (hue + shift) % 1.0, 0.85 - flash * 0.4, 1.0, 1.0)
+            # The lines that run away from you, drawn whole: they carry
+            # the perspective, and cutting them into bands would show the
+            # joins.
+            away = QPainterPath()
+            for column in range(-lines, lines + 1):
+                across = column / lines
+                x, y = place(across)
+                away.moveTo(self._project(horizon, focal, x, y, self.NEAR))
+                away.lineTo(self._project(horizon, focal, x, y, self.FAR))
+            self._ink(painter, base, width * (1.0 + kick * 1.4),
+                      min(1.0, 0.20 + bass * 0.30 + kick * 0.26
+                          + flash * 0.26))
+            painter.drawPath(away)
+
+            # And the ones across it, marching towards you, in bands.
+            for band in range(self.BANDS):
+                path = QPainterPath()
+                for row in range(band, self.DEPTH, self.BANDS):
+                    z = self.NEAR + (row + offset) * reach / self.DEPTH
+                    left = self._project(horizon, focal, *place(-1.0), z)
+                    right = self._project(horizon, focal, *place(1.0), z)
+                    path.moveTo(left)
+                    path.lineTo(right)
+                # Bands further back are dimmer and thinner. Squared, so
+                # the fall is steep near the eye and gentle in the
+                # distance, which is how air actually works.
+                near = 1.0 - band / self.BANDS
+                self._ink(painter, base,
+                          width * (0.45 + near * 0.75) * (1.0 + kick * 1.4),
+                          min(1.0, (0.10 + bass * 0.26 + kick * 0.24
+                                    + flash * 0.24) * (0.14 + near * near)))
+                painter.drawPath(path)
+
+        self._trusses(painter, horizon, focal, hue, lift, span, bass, kick,
+                      flash, offset, reach)
+
+    @staticmethod
+    def _ink(painter, base, width: float, alpha: float) -> None:
+        colour = QColor(base)
+        colour.setAlphaF(max(0.0, min(1.0, alpha)))
+        pen = QPen(colour, max(0.4, width))
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+
+    def _trusses(self, painter, horizon, focal, hue, lift, span, bass, kick,
+                 flash, offset, reach) -> None:
+        """A frame round the corridor every few metres, coming at you.
+
+        The thing the room was missing: a grid tells you where the floor
+        is and a truss tells you how far down the room you are looking.
+        They brighten on the kick with everything else, and the nearest
+        one is much the brightest, so the eye has something travelling
+        rather than a field of lines that all move together.
+        """
+        corners = ((-span, lift), (span, lift), (span, -lift), (-span, -lift))
+        for row in range(0, self.DEPTH, self.TRUSS):
+            z = self.NEAR + (row + offset) * reach / self.DEPTH
+            near = max(0.0, 1.0 - (z - self.NEAR) / reach)
             path = QPainterPath()
-            for column in range(-self.ACROSS, self.ACROSS + 1):
-                x = column * 0.5
-                path.moveTo(self._project(horizon, focal, x, side * lift,
-                                          self.NEAR))
-                path.lineTo(self._project(horizon, focal, x, side * lift,
-                                          self.FAR))
-            # And the ones across it, marching towards you.
-            for row in range(self.DEPTH):
-                z = self.NEAR + (row + offset) * (self.FAR - self.NEAR) / self.DEPTH
-                left = self._project(horizon, focal, -self.ACROSS * 0.5,
-                                     side * lift, z)
-                right = self._project(horizon, focal, self.ACROSS * 0.5,
-                                      side * lift, z)
-                path.moveTo(left)
-                path.lineTo(right)
+            first = None
+            for x, y in corners:
+                point = self._project(horizon, focal, x, y, z)
+                if first is None:
+                    path.moveTo(point)
+                    first = point
+                else:
+                    path.lineTo(point)
+            path.lineTo(first)
+            base = QColor.fromHsvF((hue + 0.04) % 1.0, 0.6 - flash * 0.4, 1.0,
+                                   1.0)
+            self._ink(painter, base,
+                      (0.9 + near * 2.2) * (1.0 + kick * 1.1),
+                      min(1.0, (0.16 + bass * 0.22 + kick * 0.34
+                                + flash * 0.3) * (0.30 + near * near * 1.4)))
             painter.drawPath(path)
 
     def _rings_now(self, painter, rect, horizon, focal, snare, step, hue,

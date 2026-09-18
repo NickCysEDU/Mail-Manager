@@ -4128,3 +4128,169 @@ class TestTheScopesTimeBase:
             f"{late} points after it speeds up, where the fast figure on "
             f"its own gives {want_fast}")
         assert want_slow != want_fast, "the two rates are indistinguishable"
+
+
+class TestTheRaveIsARoom:
+    """"Refine the rave scene to be smoother, more complex and fancier."
+
+    It was a floor and a ceiling with the dark showing between them: two
+    planes and nothing at the sides, every line the same weight, and the
+    corridor stopping dead at a rectangle the eye reads as a wall.
+    """
+
+    W, H = 640, 360
+
+    @staticmethod
+    def _state(bass=0.5, kick=0.3):
+        from attachment_widgets import SpectrumState
+
+        state = SpectrumState()
+        state.levels = [0.3 + 0.3 * ((i * 5) % 7) / 7 for i in range(48)]
+        state.bass, state.mid = bass, 0.4
+        state.synth, state.high = 0.35, 0.3
+        state.kit = {"Kick": kick, "Snare": 0.2, "Hats": 0.2, "Synth": 0.3}
+        return state
+
+    @staticmethod
+    def _rave():
+        """A new one, not the scene the picker hands round.
+
+        It keeps a world in it - how far down the corridor you are, which
+        rings and beams are still alive - and every other test that paints
+        it moves that world on. Sharing it made these measurements depend
+        on what had run before them, which with a shuffled suite means
+        they depend on nothing at all: the same assertion passed alone and
+        failed in the full run, 1.44 against a bar of 1.5.
+        """
+        import visualizers
+
+        return visualizers.Rave()
+
+    def _drawn(self, scene=None):
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        scene = scene or self._rave()
+        image = QImage(self.W, self.H,
+                       QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0))
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        scene.paint(painter, QRectF(0, 0, self.W, self.H), self._state())
+        painter.end()
+        return image
+
+    def _ink(self, image, left, right, top, bottom) -> int:
+        """How much light is in a part of the frame, as a fraction."""
+        total = 0
+        for y in range(int(self.H * top), int(self.H * bottom), 2):
+            for x in range(int(self.W * left), int(self.W * right), 2):
+                total += sum(image.pixelColor(x, y).getRgb()[:3])
+        return total
+
+    def test_the_room_has_sides(self):
+        """The change that matters most: it is a room now rather than two
+        planes with the dark showing between them."""
+        scene = self._rave()
+        walls = self._drawn(scene)
+
+        # The same scene with the two side surfaces taken away, which is
+        # what it used to be. A control rather than a remembered number:
+        # any threshold written down here would be a statement about this
+        # machine's antialiasing.
+        whole = scene._surfaces
+        scene._surfaces = lambda lift, span: whole(lift, span)[:2]
+        try:
+            bare = self._drawn(scene)
+        finally:
+            scene._surfaces = whole
+
+        # Where the two differ, rather than how much light is in each.
+        # The haze is most of the light in this frame, so a wall drawn
+        # over it moves the total by a sixth and hides in the noise;
+        # counting the pixels it changed does not.
+        def changed(left, right):
+            count = 0
+            for y in range(int(self.H * 0.36), int(self.H * 0.64), 2):
+                for x in range(int(self.W * left), int(self.W * right), 2):
+                    one = walls.pixelColor(x, y).getRgb()[:3]
+                    two = bare.pixelColor(x, y).getRgb()[:3]
+                    if sum(abs(a - b) for a, b in zip(one, two)) > 24:
+                        count += 1
+            return count
+
+        middle = changed(0.42, 0.58)
+        for name, left, right in (("left", 0.02, 0.22),
+                                  ("right", 0.78, 0.98)):
+            side = changed(left, right)
+            assert side > 120, (
+                f"taking the walls away changed {side} pixels down the "
+                f"{name} of the room, which is not a wall")
+            assert side > middle * 3, (
+                f"taking the walls away changed {side} pixels at the "
+                f"{name} and {middle} in the middle, so whatever moved was "
+                f"not at the sides")
+
+    def test_the_grid_fades_into_the_distance(self):
+        """Drawn at one weight, a grid stops wherever the loop stops. The
+        cross lines are drawn in depth bands so the near ones are heavy
+        and the far ones dissolve."""
+        image = self._drawn()
+        # Down the middle of the floor: just below the horizon is the far
+        # end, the bottom of the frame is under your feet.
+        near = self._ink(image, 0.42, 0.58, 0.80, 0.98)
+        far = self._ink(image, 0.42, 0.58, 0.52, 0.58)
+        assert near > far * 1.5, (
+            f"the near floor has {near} of light and the far floor {far}, "
+            f"which is a grid rather than a distance")
+
+    def test_the_far_end_is_lit_rather_than_a_hole(self):
+        """A closed corridor fading to nothing has a hole in it: the lines
+        run out and what is left is a dark rectangle the eye reads as a
+        wall.
+
+        How dark the darkest part of it gets, not how much light is there
+        in total. The lines all converge on the vanishing point, so that
+        corner of the frame has more of them in it than anywhere else and
+        comes out brighter either way - it was brighter than its
+        surroundings with the haze turned nearly off, while plainly having
+        a hole in it. What the haze changes is the gaps *between* the
+        lines: they bottom out at 162 of 765 with it and at 13 without.
+        """
+        image = self._drawn()
+        darkest = sorted(
+            sum(image.pixelColor(x, y).getRgb()[:3])
+            for y in range(int(self.H * 0.44), int(self.H * 0.51))
+            for x in range(int(self.W * 0.42), int(self.W * 0.58)))
+        tenth = darkest[len(darkest) // 10]
+        assert tenth > 70, (
+            f"a tenth of the far end is darker than {tenth} of 765, so the "
+            f"corridor ends in a hole rather than in air")
+
+    def test_there_are_frames_down_the_corridor(self):
+        """A grid says where the floor is; a truss says how far down the
+        room you are looking."""
+        scene = self._rave()
+        with_them = self._drawn(scene)
+        whole = scene._trusses
+        scene._trusses = lambda *args, **kwargs: None
+        try:
+            without = self._drawn(scene)
+        finally:
+            scene._trusses = whole
+        lit = self._ink(with_them, 0.0, 1.0, 0.3, 0.7)
+        bare = self._ink(without, 0.0, 1.0, 0.3, 0.7)
+        assert lit > bare * 1.05, (
+            f"{lit} of light with the trusses and {bare} without, which is "
+            f"not a truss")
+
+    def test_the_walls_are_not_drawn_as_densely_as_the_floor(self):
+        """The corridor is about eight times wider than it is tall, so the
+        floor's line count on a side wall puts them a twentieth of a unit
+        apart and it reads as hatching."""
+        surfaces = self._rave()._surfaces(0.55, 4.5)
+        floor_lines = surfaces[0][2]
+        wall_lines = surfaces[2][2]
+        assert wall_lines < floor_lines / 2, (
+            f"{wall_lines} lines across a wall against {floor_lines} across "
+            f"the floor, for a tenth of the distance")
