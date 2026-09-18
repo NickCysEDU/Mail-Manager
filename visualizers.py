@@ -21,6 +21,160 @@ from PySide6.QtGui import (QColor, QImage, QLinearGradient, QPainter,
                            QPen, QRadialGradient)
 
 
+#: The width, in real screen pixels, above which Qt stops being quick.
+#:
+#: Qt's raster engine has a dedicated path for one-pixel lines and nothing
+#: comparable above it. Measured on the Waterfall's ridges at 1080p - about
+#: a thousand antialiased curve segments - one frame took:
+#:
+#:      pen width 0.9   1.62 ms        pen width 1.01  58.00 ms
+#:      pen width 1.0   2.21 ms        pen width 2.0   66.35 ms
+#:
+#: A thirty-six fold cliff at exactly one pixel. This is the whole reason
+#: the scenes used to be cheap: the old fixed resolution budget kept the
+#: buffer at about a quarter of the screen's pixels, which put a 2.4 unit
+#: pen at 1.3 *real* pixels, under the cliff. Drawing at the resolution the
+#: screen actually has pushes every one of them over it. The scenes were
+#: fast because they were fuzzy.
+HAIRLINE = 1.0
+
+#: Rings of offset hairlines are spaced this far apart, in real pixels.
+#: Below one there are no gaps to see between them.
+HAIR_STEP = 0.9
+
+#: Past this many passes a real wide pen is cheaper, and correct. Nothing
+#: in these scenes draws a line that thick, so this is a backstop.
+HAIR_MOST = 14
+
+#: Solved alphas, kept because the answer depends only on how wide the
+#: line is and how solid it is meant to be.
+_HAIR_ALPHA: dict = {}
+
+
+def stroke(painter, path, colour, width: float,
+           cap=Qt.PenCapStyle.RoundCap, join=Qt.PenJoinStyle.RoundJoin) -> None:
+    """Draw ``path`` in ``colour`` at ``width``, the quick way where there is one.
+
+    A wide line is drawn as a handful of one-pixel lines nudged around a
+    circle - which is what a wide line *is*: the curve swept by a disc.
+    Above, HAIRLINE explains why that is worth doing.
+
+    The hairlines are cosmetic pens, so they stay one real pixel however
+    the painter is scaled, and the offsets are converted back out of real
+    pixels into whatever units the painter is working in.
+
+    Overlapping strokes accumulate alpha, so each pass is drawn fainter.
+    How much fainter is solved for rather than guessed at - see
+    ``_hair_alpha``, and the note there on why a constant cannot do it.
+
+    A Waterfall frame at 1080p went from 41.4 ms to 7.7 ms this way, and
+    the picture differs from the real thing by half of one channel step
+    out of 255.
+    """
+    scale = abs(painter.combinedTransform().m11()) or 1.0
+    thick = width * scale
+    if thick <= HAIRLINE + 0.01:
+        painter.setPen(QPen(colour, width, Qt.PenStyle.SolidLine, cap, join))
+        painter.drawPath(path)
+        return
+    spots = _hair_spots((thick - HAIRLINE) / 2.0)
+    if not spots or len(spots) > HAIR_MOST:
+        painter.setPen(QPen(colour, width, Qt.PenStyle.SolidLine, cap, join))
+        painter.drawPath(path)
+        return
+    faint = QColor(colour)
+    faint.setAlphaF(_hair_alpha(spots, (thick - HAIRLINE) / 2.0,
+                                colour.alphaF()))
+    # Width zero is what makes it one real pixel whatever the painter is
+    # scaled to; setCosmetic says so out loud.
+    pen = QPen(faint, 0.0, Qt.PenStyle.SolidLine, cap, join)
+    pen.setCosmetic(True)
+    painter.setPen(pen)
+    for dx, dy in spots:
+        painter.translate(dx / scale, dy / scale)
+        painter.drawPath(path)
+        painter.translate(-dx / scale, -dy / scale)
+
+
+def _hair_spots(reach: float) -> tuple:
+    """Where to put the hairlines to fill a disc of radius ``reach``.
+
+    The centre, then rings out to the edge no more than HAIR_STEP apart,
+    each with enough points that neighbours on it are no further apart
+    than that either - otherwise the ring scallops and the line looks
+    beaded rather than thick.
+
+    All of it or none of it. Stopping partway through leaves a line drawn
+    to the radius of the last ring that fitted, which is a *thinner* line
+    rather than a cheaper one: truncated at a five pixel width it put down
+    47 per cent of the ink. An empty answer means "too thick for this -
+    use a real pen", which is what ``stroke`` does with it.
+    """
+    spots = [(0.0, 0.0)]
+    if reach <= 0.05:
+        return tuple(spots)
+    rings = max(1, int(math.ceil(reach / HAIR_STEP)))
+    for step in range(1, rings + 1):
+        radius = reach * step / rings
+        count = max(4, int(math.ceil(2.0 * math.pi * radius / HAIR_STEP)))
+        if len(spots) + count > HAIR_MOST:
+            return ()
+        for index in range(count):
+            angle = 2.0 * math.pi * index / count
+            spots.append((math.cos(angle) * radius, math.sin(angle) * radius))
+    return tuple(spots)
+
+
+def _hair_alpha(spots: tuple, reach: float, target: float) -> float:
+    """How solid each pass must be for the stack to read as one wide line.
+
+    There is no constant that does this. The passes overlap each other
+    most when they are nearly on top of one another and least when they
+    are spread out, so the same correction that is right for a 1.2 pixel
+    line lays down 56 per cent of the ink at 3.2 pixels. Measured against
+    a real pen, the share of the passes that has to carry the colour runs
+    from about 0.85 at 1.2 pixels to 0.25 at 3.2.
+
+    So it is solved instead. Take a straight line under the stack; at
+    every offset ``d`` across it, count the passes whose own offset puts
+    them within half a pixel of ``d`` - that is how many times that column
+    gets painted, and ``1 - (1 - a)**k`` is how solid it ends up. Sum
+    that across the line, average over the directions the line might run
+    in, and find the ``a`` that totals what a pen of this width would.
+
+    Bisection, over a histogram of those counts rather than the counts
+    themselves, so it is a few dozen multiplications. Cached: the answer
+    depends on nothing that changes within a frame.
+    """
+    key = (round(reach, 2), round(target, 3))
+    found = _HAIR_ALPHA.get(key)
+    if found is not None:
+        return found
+    step, angles = 0.1, 8
+    edge = int((reach + 0.5) / step) + 1
+    tally: dict = {}
+    for turn in range(angles):
+        angle = math.pi * turn / angles
+        across = [x * -math.sin(angle) + y * math.cos(angle) for x, y in spots]
+        for index in range(-edge, edge + 1):
+            here = index * step
+            covers = sum(1 for c in across if abs(c - here) <= 0.5)
+            if covers:
+                tally[covers] = tally.get(covers, 0) + 1
+    wanted = target * (2.0 * reach + 1.0) * angles / step
+    low, high = 0.0, 1.0
+    for _ in range(24):
+        middle = (low + high) / 2.0
+        got = sum(n * (1.0 - (1.0 - middle) ** k) for k, n in tally.items())
+        if got < wanted:
+            low = middle
+        else:
+            high = middle
+    answer = min(1.0, (low + high) / 2.0)
+    _HAIR_ALPHA[key] = answer
+    return answer
+
+
 class Scene:
     """One way of drawing the music."""
 
@@ -1615,10 +1769,7 @@ class Waterfall(Scene):
             # frames that hit cost twice what the quiet ones did, and they
             # are exactly the frames nobody wants to see stutter. It
             # brightens instead, above, which costs nothing.
-            painter.setPen(QPen(colour, 1.0 + share * 1.4 + flash * 0.4,
-                                Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
-                                Qt.PenJoinStyle.RoundJoin))
-            painter.drawPath(path)
+            stroke(painter, path, colour, 1.0 + share * 1.4 + flash * 0.4)
 
         self._axis(painter, rect, state, origin_x, origin_y, plot_w, rise)
 

@@ -217,19 +217,19 @@ class Spectrum(QWidget):
     #: Sixty a second, which is what the scenes are budgeted against.
     FRAME_MS = 16
 
-    #: Frames up to this many pixels are drawn at their real size. Above
-    #: it the scene is drawn into a smaller buffer and stretched, because
-    #: antialiased strokes are charged by area and a full screen of them
-    #: does not fit in a sixtieth of a second.
+    #: Frames up to this many pixels are drawn at their real size without
+    #: anything being measured first, because at that size every scene
+    #: holds a frame. Above it ``Sharpness`` times the scene and decides,
+    #: which is the part that used to be a guess: this number alone was
+    #: the whole rule, and at full screen it put the buffer *below* the
+    #: window's own logical resolution - 1032x580 behind 1920x1080 - while
+    #: the same rule in a windowed strip drew at nearly twice logical.
+    #: That is what "fuzzy at full screen" was.
     #:
-    #: It is a floor, not the rule: a scene that says it can afford more
-    #: gets more (``Scene.sharp_pixels``). The dials are the case that
-    #: made this necessary - their faces are drawn once into a pixmap and
-    #: blitted after that, so they cost almost nothing per frame, and
-    #: putting them through a budget set for scenes that stroke thousands
-    #: of curves meant a screenful of instrument panels rendered at half
-    #: size and stretched, with every number softened for no saving at
-    #: all.
+    #: A scene that says it can afford more gets more
+    #: (``Scene.sharp_pixels``). The dials are the case that made that
+    #: necessary - their faces are drawn once into a pixmap and blitted
+    #: after that, so they cost almost nothing per frame.
     SHARP_PIXELS = 600_000
 
     #: Which bands feed which aggregate, as fractions of the band count.
@@ -275,6 +275,7 @@ class Spectrum(QWidget):
         self._working = None
         self._post = True
         self._effects = PostProcess()
+        self._sharpness = Sharpness()
         self._buffer = None
         #: None for the fixed strip, else width-to-height.
         self._aspect = None
@@ -808,7 +809,28 @@ class Spectrum(QWidget):
         high = max(low + 1, int(span[1] * count))
         return sum(row[low:high]) / max(1, high - low)
 
+    def _pace(self) -> None:
+        """Ask the timer for frames at a rate the scene can actually meet.
+
+        A timer set to sixteen milliseconds that is handed a thirty
+        millisecond frame does not draw faster; it fills the event queue,
+        and the pane stops answering the mouse. This is the same lesson as
+        the analysis throttle - the scene was never the thing being
+        starved.
+        """
+        if self._working is not None:
+            return      # the analysis has its own, slower, interval
+        # The scene's own time plus the polish pass's, because what
+        # decides whether a frame fits is the whole frame. Both are
+        # measured; neither is a guess about this machine.
+        wanted = self._sharpness.interval_ms(
+            self.devicePixelRatioF(), self.FRAME_MS,
+            extra=self._effects.cost_ms())
+        if self._timer.interval() != wanted:
+            self._timer.setInterval(wanted)
+
     def _tick(self) -> None:
+        self._pace()
         if self._source is not None and not self._idling:
             try:
                 self._position = max(0, int(self._source()))
@@ -1234,24 +1256,24 @@ class Spectrum(QWidget):
         """
         import visualizers
 
+        import time as _time
+
         recipe = visualizers.post_for(self._scene) if self._post else {}
         ratio = self.devicePixelRatioF()
         pixels = rect.width() * ratio * rect.height() * ratio
         # Antialiasing is what these scenes cost, and it is charged per
         # pixel of every stroke: Ambience measured 10.3 ms a frame at 1080p
         # with it on and 1.6 ms with it off. Rather than give it up and
-        # draw jagged curves, big frames are drawn smaller and stretched,
-        # which costs the same as turning it off and still looks smooth.
-        # Floored at a fifth rather than a half: on a retina screen the
-        # physical frame is four times the logical one, and a half-scale
-        # floor left the buffer at nearly three times the target however
-        # low the target was set.
-        budget = max(self.SHARP_PIXELS,
-                     int(getattr(self._scene, "sharp_pixels", 0) or 0))
-        shrink = 1.0 if pixels <= budget else max(
-            0.20, (budget / pixels) ** 0.5)
+        # draw jagged curves, a frame that will not fit is drawn smaller
+        # and stretched, which costs the same as turning it off and still
+        # looks smooth. How much smaller is measured rather than fixed -
+        # see Sharpness, and the note on SHARP_PIXELS.
+        shrink = self._sharpness.scale_for(pixels, ratio, self._scene)
         if (not recipe and shrink >= 0.999) or rect.width() < 8.0 or rect.height() < 8.0:
+            started = _time.perf_counter()
             self._scene.paint(painter, rect, self._state)
+            self._sharpness.record(
+                (_time.perf_counter() - started) * 1000.0, ratio)
             return
         wanted = QSize(max(1, int(rect.width() * ratio * shrink)),
                        max(1, int(rect.height() * ratio * shrink)))
@@ -1262,9 +1284,11 @@ class Spectrum(QWidget):
         inner = QPainter(self._buffer)
         inner.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         side = self._buffer.size() / self._buffer.devicePixelRatio()
+        started = _time.perf_counter()
         self._scene.paint(inner, QRectF(0, 0, side.width(), side.height()),
                           self._state)
         inner.end()
+        self._sharpness.record((_time.perf_counter() - started) * 1000.0, ratio)
         if recipe:
             self._effects.apply(painter, rect, self._buffer, recipe)
         else:
@@ -1724,6 +1748,208 @@ class FlowRow(QLayout):
         return y - rect.y()
 
 
+class Sharpness:
+    """How much of the screen's own resolution a scene is drawn at.
+
+    Antialiased strokes are charged by area, so a scene that paints in a
+    millisecond in a strip costs thirty at full screen. Something has to
+    give, and what used to give was resolution: everything above a fixed
+    600,000 pixels was drawn into a smaller buffer and stretched.
+
+    A fixed number cannot be right, because it is a statement about a
+    machine and it was written on one machine. Measured here instead,
+    which is how the post-processing pass already decides what it can
+    afford.
+
+    The rule it follows comes from what the fixed number got wrong. At
+    full screen it put the buffer *below* the screen's logical
+    resolution - 961x624 behind a 1512x982 window on this display, 1032x580
+    behind 1920x1080 - while the same code in a windowed strip drew at
+    1.8 times logical and looked sharp. So:
+
+        Draw at the largest scale that fits the frame. The frame is a
+        sixtieth of a second while the picture is sharper than the window
+        it sits in, and a thirtieth once it is not - because below one
+        buffer pixel per point the picture goes soft, and for scenes like
+        these soft is worse than thirty a second.
+
+    ``LOGICAL`` is that line: on a 2x display it is 0.5 of the screen's
+    pixels, and a scale of 0.5 means one buffer pixel per point. The
+    rungs are coarse and the decisions have a settling period, so the
+    buffer is not reallocated every frame and a scene that sits between
+    two rungs does not flicker between them.
+    """
+
+    #: Fractions of the screen's real pixels. 1.0 is every one of them.
+    #: 0.5 is one buffer pixel per point on a 2x display, which is why a
+    #: display's own ratio always has a rung of its own (see ``_rungs``).
+    SCALES = (1.0, 0.80, 0.67, 0.50, 0.40, 0.33, 0.25)
+
+    #: The least it will ever draw at, however slow the machine. Past
+    #: this the picture stops being a picture.
+    FLOOR = 0.22
+
+    #: What the scene itself may take at sixty a second, and at thirty.
+    #: The rest of the sixteen milliseconds belongs to the polish pass
+    #: (6.5 of it) and to Qt getting the result onto the screen.
+    SMOOTH_MS = 8.5
+    SOFT_MS = 24.0
+
+    #: Frames thrown away before anything is believed, after a scene or a
+    #: size changes. The first frame of a scene is not a frame of that
+    #: scene: it is the fonts being opened, the gradients and tiles being
+    #: built, and the branches being taken for the first time. Measured
+    #: cold, the Equaliser's first frame came in at 64 ms against the 1.4
+    #: it settles at - and one reading like that, written down, was enough
+    #: to convince the governor for good that full resolution was
+    #: impossible.
+    WARMUP = 24
+
+    def __init__(self) -> None:
+        self._scale = 0.0          # 0 means "not chosen yet"
+        self._cost = 0.0
+        self._settle = 0
+        self._warm = self.WARMUP
+        self._key = None
+        #: What each rung actually measured, once it has been tried. A
+        #: guess is only used for a rung nothing is known about.
+        self._seen: dict = {}
+
+    # -- what to draw at ---------------------------------------------------
+    def _rungs(self, ratio: float) -> tuple:
+        """The scales, with the display's logical resolution among them.
+
+        On a 2x display 0.5 is already there. On a 1.5x or 1.25x display
+        it is not, and landing exactly on it matters more than the rung
+        it displaces, because that is the line the budget changes at.
+        """
+        logical = 1.0 / max(1.0, ratio)
+        rungs = set(self.SCALES)
+        rungs.add(round(logical, 4))
+        return tuple(sorted((r for r in rungs if r >= self.FLOOR),
+                            reverse=True))
+
+    def scale_for(self, pixels: float, ratio: float, scene) -> float:
+        """The fraction of ``pixels`` to draw, for this scene and screen.
+
+        A new scene or a resized window starts again at the sharpest
+        rung it is likely to hold, rather than inheriting a decision made
+        about something else.
+        """
+        rungs = self._rungs(ratio)
+        key = (id(scene), int(pixels / 100_000.0))
+        if key != self._key:
+            self._key = key
+            self._cost = 0.0
+            self._settle = 0
+            self._warm = self.WARMUP
+            self._seen = {}
+            self._scale = self._first(pixels, rungs, ratio, scene)
+        return self._scale
+
+    def _first(self, pixels: float, rungs: tuple, ratio: float, scene) -> float:
+        """Where to begin, before anything has been measured.
+
+        Small frames start sharp, because they will hold it. Big ones
+        start at the screen's logical resolution and climb from there if
+        the machine turns out to have the room - which is the same place
+        the old fixed budget would have landed a small window, and far
+        above where it landed a large one.
+        """
+        floor = int(getattr(scene, "sharp_pixels", 0) or 0)
+        if pixels <= max(600_000, floor):
+            return rungs[0]
+        logical = round(1.0 / max(1.0, ratio), 4)
+        return next((r for r in rungs if r <= logical), rungs[-1])
+
+    # -- what it cost ------------------------------------------------------
+    def record(self, taken_ms: float, ratio: float) -> None:
+        """Time one scene paint, and move a rung when the average asks."""
+        if self._warm > 0:
+            self._warm -= 1
+            return
+        self._cost = (taken_ms if self._cost <= 0.0
+                      else self._cost * 0.8 + taken_ms * 0.2)
+        if self._settle > 0:
+            self._settle -= 1
+            return
+        self._seen[self._scale] = self._cost
+        rungs = self._rungs(ratio)
+        if self._scale not in rungs:
+            return
+        at = rungs.index(self._scale)
+        here = self._budget_for(self._scale, ratio)
+        if self._cost > here and at < len(rungs) - 1:
+            self._step(rungs[at + 1])
+        elif self._cost < here * 0.45 and at > 0:
+            # Against the rung above's own budget, not this one's. The
+            # budget changes at logical resolution, so a scene sitting
+            # just under it is always comfortably inside the *soft*
+            # budget and always over the smooth one it would land in -
+            # which had it stepping up and back down for ever, 45 frames
+            # apart, for as long as the scene was on screen.
+            up = rungs[at - 1]
+            if self._predict(up) < self._budget_for(up, ratio):
+                self._step(up)
+
+    def _predict(self, scale: float) -> float:
+        """What a frame would cost at ``scale``.
+
+        Measured if this rung has ever been drawn at, because a guess
+        that has been contradicted is not worth keeping. Waterfall is why:
+        it costs 14 ms at 960x540 and 24 ms at 1267x713, where any tidy
+        model says 18 - so the governor stepped up, found out, stepped
+        down, forgot, and did it again every 45 frames.
+
+        The guess, for a rung never tried, is linear in the *side* rather
+        than in the area. Stroking is charged by the length of the stroke,
+        and a line across the screen is as long as the screen is wide.
+        Measured over a 28-fold range of area, Vaporwave's cost grew
+        five-fold and Ambience's 5.3-fold; the square would have said 28.
+        """
+        known = self._seen.get(scale)
+        if known is not None:
+            return known
+        if self._scale <= 0.0:
+            return self._cost
+        return self._cost * scale / self._scale
+
+    def _step(self, to: float) -> None:
+        # Seeded with what the new rung is expected to cost rather than
+        # with zero: zeroing it makes the next frame look free, which
+        # sends it straight back where it came from.
+        self._cost = self._predict(to)
+        self._scale = to
+        self._settle = 45
+
+    def _budget_for(self, scale: float, ratio: float) -> float:
+        """Sixty a second while the picture is sharp, thirty once it is not."""
+        logical = 1.0 / max(1.0, ratio)
+        return self.SMOOTH_MS if scale > logical + 1e-6 else self.SOFT_MS
+
+    def budget_ms(self, ratio: float) -> float:
+        """What the scene is allowed at the scale it is drawing at."""
+        return self._budget_for(self._scale, ratio)
+
+    def interval_ms(self, ratio: float, frame_ms: int,
+                    extra: float = 0.0) -> int:
+        """How often to repaint, given what a frame is costing.
+
+        Painting for longer than the timer's period does not slow the
+        scene down - it fills the event queue, and the pane stops
+        answering the mouse. So when a frame is known to cost more than
+        that, the timer is told the truth. This is the same lesson as the
+        analysis throttle: the scene was never the thing being starved.
+
+        ``extra`` is whatever else the frame pays for, which is the
+        polish pass.
+        """
+        whole = self._cost + max(0.0, extra)
+        if whole <= frame_ms * 0.85:
+            return frame_ms
+        return max(frame_ms, min(33, int(whole * 1.1) + 1))
+
+
 class PostProcess:
     """Cheap screen-space polish applied after a scene has drawn itself.
 
@@ -1758,6 +1984,10 @@ class PostProcess:
         #: Frames to leave alone after a change, so a decision is given a
         #: chance to show its effect before the next one is made.
         self._settle = 0
+
+    def cost_ms(self) -> float:
+        """What the pass has been taking, for whoever is pacing frames."""
+        return max(0.0, self._cost)
 
     def _permitted(self, recipe: dict) -> dict:
         """The recipe minus whatever there is no time for.
