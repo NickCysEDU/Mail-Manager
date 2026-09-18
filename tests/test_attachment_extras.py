@@ -3719,3 +3719,177 @@ class TestTheSunInTheVaporwaveScene:
         scene._sun(painter, 40.0, 0.5, 0.1, 0.0, 0.0)
         painter.end()
         assert image.pixelColor(20, 10).green() == 200
+
+
+class TestTheStrobeInAmbienceIsSmooth:
+    """"Ensure smooth strobe effects for ambience."
+
+    The hit every scene is handed is a step: full height in one frame,
+    then a linear decay over six. That is right for a scene made of bars.
+    Ambience is made of long curves, and it put the step straight into
+    their geometry - the ribbons jumped half their height outwards and
+    snapped back inside a tenth of a second, which reads as the scene
+    glitching rather than as a beat.
+    """
+
+    W, H = 360, 200
+
+    @staticmethod
+    def _scene():
+        import visualizers
+
+        scene = visualizers.by_name("Ambience")
+        scene._bloom = 0.0
+        return scene
+
+    @staticmethod
+    def _state(hit=0.0):
+        import attachment_audio
+        from attachment_widgets import SpectrumState
+
+        state = SpectrumState()
+        state.strobe = True
+        state.hit = hit
+        state.levels = [0.35 + 0.25 * ((i * 7) % 5) / 5 for i in range(48)]
+        state.bass = state.mid = state.synth = state.high = 0.4
+        state.history = [list(state.levels) for _ in range(96)]
+        state.labels = [str(c) for c in attachment_audio.CENTRES]
+        return state
+
+    def _frame(self, scene, state):
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        image = QImage(self.W, self.H,
+                       QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0))
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        scene.paint(painter, QRectF(0, 0, self.W, self.H), state)
+        painter.end()
+        return image
+
+    def _apart(self, first, second) -> float:
+        total = count = 0
+        for y in range(0, self.H, 3):
+            for x in range(0, self.W, 3):
+                one, two = first.pixelColor(x, y), second.pixelColor(x, y)
+                total += (abs(one.red() - two.red())
+                          + abs(one.green() - two.green())
+                          + abs(one.blue() - two.blue()))
+                count += 3
+        return total / max(1, count)
+
+    def _run(self, frames=26):
+        """Every frame across a beat, kept, so tests can compare any two."""
+        scene, state = self._scene(), self._state()
+        for _ in range(40):      # settle the field and the drift
+            state.phase += 0.0045
+            self._frame(scene, state)
+        shots = []
+        for index in range(frames):
+            state.phase += 0.0045
+            if index == self.BEAT:
+                state.hit = 1.0
+            else:
+                # What the pane does to it between frames.
+                state.hit = max(0.0, state.hit - 0.16)
+            shots.append(self._frame(scene, state))
+        return shots
+
+    #: Where the beat lands in the run, so the frames before it are a
+    #: sample of what an ordinary frame costs the picture.
+    BEAT = 5
+
+    def test_the_light_comes_up_over_several_frames_and_not_in_one(self):
+        """Not "the beat is small" - a beat is meant to be seen, and in a
+        scene this still a quiet frame moves the picture by 0.7 of one
+        channel step, so anything visible is thirty times a quiet frame
+        and always will be.
+
+        What makes it smooth is that it arrives over several frames
+        instead of all at once. The raw hit is at full height on the frame
+        it lands.
+        """
+        scene, state = self._scene(), self._state(hit=1.0)
+        reached = [scene._ease(state) for _ in range(12)]
+        frames = next((n for n, v in enumerate(reached, 1) if v > 0.75), 99)
+        assert frames >= 4, (
+            f"it was {reached[0]:.2f} on the first frame and past three "
+            f"quarters by frame {frames}")
+        assert reached[-1] > 0.9, (
+            f"it never gets there: {reached[-1]:.2f} after twelve frames")
+
+    def test_it_settles_instead_of_springing_back(self):
+        """What looked wrong was not the beat, it was the frames after it.
+
+        Not how *far* the picture moves - a light that fades over a third
+        of a second has to keep moving, and the field behind it is
+        drifting the whole time anyway. What tells a settle from a spring
+        is whether it goes somewhere or goes out and comes back. So:
+        add up how far the picture travels frame by frame, and compare it
+        with how far it actually ended up from where it started. A settle
+        is a short path to a distant place; a spring is a long path back
+        to nearly the same one.
+
+        Measured on the code this replaces: a path of 92.8 for a net of
+        35.0, a ratio of 2.6. Now 35.5 for 25.3, which is 1.4.
+        """
+        shots = self._run()
+        low, high = self.BEAT + 2, self.BEAT + 16
+        path = sum(self._apart(shots[n], shots[n + 1])
+                   for n in range(low, high))
+        net = self._apart(shots[low], shots[high])
+        assert path < net * 2.0, (
+            f"the picture travelled {path:.0f}/255 to end up {net:.0f} from "
+            f"where it started, which is going out and coming back")
+
+    def test_the_light_outlasts_the_beat(self):
+        """The hit is gone in seven frames. A strobe that is over before
+        anybody has seen it is not a strobe, so the scene keeps its own
+        envelope and lets it fall away slowly."""
+        scene, state = self._scene(), self._state(hit=1.0)
+        scene._ease(state)
+        state.hit = 0.0
+        held = [scene._ease(state) for _ in range(30)]
+        assert held[8] > 0.12, (
+            f"eight frames after the beat the light is down to {held[8]:.2f}")
+        assert held[-1] < held[0], "it never comes down"
+
+    def test_it_lights_the_ribbons_rather_than_moving_them(self):
+        """A scene of long curves shows a beat by brightening, not by
+        changing shape - the same thing the waterfall had to learn."""
+        scene = self._scene()
+        dark = self._frame(scene, self._state())
+        scene._bloom = 1.0
+        lit = self._frame(scene, self._state())
+
+        def reach(image):
+            for y in range(image.height()):
+                for x in range(0, image.width(), 2):
+                    if sum(image.pixelColor(x, y).getRgb()[:3]) > 260:
+                        return y
+            return image.height()
+
+        def ink(image):
+            return sum(sum(image.pixelColor(x, y).getRgb()[:3])
+                       for y in range(0, image.height(), 3)
+                       for x in range(0, image.width(), 3))
+
+        moved = abs(reach(dark) - reach(lit)) / (self.H / 2.0)
+        brighter = ink(lit) / max(1, ink(dark))
+        assert brighter > 1.15, (
+            f"a full strobe only made it {brighter:.2f} times as bright")
+        assert moved < 0.22, (
+            f"a full strobe moved the top of the ribbons {moved * 100:.0f} "
+            f"per cent of the way up the frame")
+
+    def test_the_field_behind_is_on_the_same_strobe(self):
+        """A field that snaps while the ribbons bloom is two strobes."""
+        import inspect
+
+        import visualizers
+
+        source = inspect.getsource(visualizers.Ambience.paint)
+        assert "flash=flash" in source, (
+            "the plasma behind the ribbons is still reading the raw hit")
