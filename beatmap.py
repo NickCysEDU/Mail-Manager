@@ -49,7 +49,8 @@ import math
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
-__all__ = ["Beat", "BeatMap", "SOURCES", "build", "flux", "onsets", "tempo_of"]
+__all__ = ["Beat", "BeatMap", "SOURCES", "build", "fits", "flux",
+           "onsets", "tempo_of"]
 
 #: What the strobe can be told to listen to, and the slice of the band
 #: range each one means, as fractions of the band count. The same splits
@@ -91,34 +92,76 @@ ELEMENTS: Dict[str, Tuple[float, float, float]] = {
 LOW, MID, HIGH = (0.00, 0.25), (0.25, 0.64), (0.64, 1.00)
 
 #: What each instrument's rise looks like, as shares of bottom, middle
-#: and top. Measured off a kit played to a known pattern rather than
-#: chosen: with the bands read linearly the three are far apart, and
-#: these are the gaps between them.
+#: and top: the bounds each share has to sit inside.
 #:
-#:      kick   bottom 0.89-1.00  middle 0.00-0.09  top 0.00-0.02
-#:      snare  bottom 0.39-0.53  middle 0.36-0.50  top 0.11
-#:      hats   bottom 0.16-0.31  middle 0.36-0.49  top 0.33-0.44
+#: The snare's was measured off one kit playing one pattern, and it wrote
+#: that down as a narrow window: bottom 0.04-0.74, middle at least 0.26,
+#: **top 0.04 to 0.20**. That last bound is a description of one snare
+#: rather than of snares.
 #:
-#: The top share is what separates all three, and the bottom share is
-#: what stops a snare being read as a kick: a snare has a two hundred
-#: hertz body, so half its energy really is down there, and the thing
-#: that makes it a snare is the sizzle over the top.
+#: Held against four written to known times - see tests/drumkit.py - it
+#: found two of them and called a third a cymbal:
+#:
+#:      acoustic snare   bottom 0.47  middle 0.37  top 0.16   found
+#:      electronic              0.42          0.53      0.05  found
+#:      clap                    0.46          0.33      0.21  called a hat
+#:      rimshot                 0.18          0.72      0.10  found
+#:
+#: A clap is all crack and no body, and 0.21 of its rise is in the top -
+#: over a ceiling of 0.20 by one hundredth. So it went to the hats, and
+#: so did every bright snare, and on a real track the same ceiling was
+#: one of the two things holding the snare map down to thirteen hits a
+#: minute against ninety-one kicks. That is what "the snare isn't too
+#: accurate" was.
+#:
+#: The ceiling is 0.25 now, and there is a real gap to put it in. Over
+#: the four written snares and a bar of hats played on their own:
+#:
+#:      the brightest snare, a clap      top 0.21
+#:      the dimmest hat                  top 0.29
+#:      a hat, typically                 top 0.34
+#:
+#: So 0.25, in the middle of the gap. It cannot go much higher: the
+#: ceiling is the only thing keeping hats out of the snare map, and at
+#: 0.45 a bar of hats alone produced forty-seven snares.
+#:
+#: The floor of 0.04 stays, and it is worth saying why, because taking it
+#: away looks tempting and is wrong. It asks a snare to have *some* air
+#: over it, which is what a pitched note in the same part of the spectrum
+#: does not. Removing it doubled the real track's snares, from 71 a
+#: minute to 151, and every one of the extras was a synth.
 #:
 #: Hats are the exception and are left almost unconstrained. When a hat
 #: lands on a kick the frame's rise is thirty times more kick than hat,
 #: so no share of it can recover the hat - and asking for one lost half
 #: of them, which reads as lighting that stops during the loud parts.
-#: The band-limited detector on its own finds 99 per cent of them for
-#: six false ones in ninety-five, which is the right trade for something
-#: driving a flicker.
-PROFILE = {
-    #        bottom >=  bottom <=  middle >=  top >=  top <=
-    "Kick":  (0.70, 1.01, 0.00, 0.00, 0.09),
-    "Snare": (0.04, 0.74, 0.26, 0.04, 0.20),
-    "Hats":  (0.00, 0.99, 0.00, 0.10, 1.01),
-    "Bass":  (0.55, 1.01, 0.00, 0.00, 0.14),
-    "Synth": (0.00, 0.62, 0.30, 0.02, 1.01),
+PROFILE: Dict[str, dict] = {
+    "Kick":  {"bottom": (0.70, 1.01), "top": (0.00, 0.09)},
+    "Snare": {"bottom": (0.04, 0.74), "middle": (0.26, 1.01),
+              "top": (0.04, 0.25)},
+    "Hats":  {"top": (0.10, 1.01)},
+    "Bass":  {"bottom": (0.55, 1.01), "top": (0.00, 0.14)},
+    "Synth": {"bottom": (0.00, 0.62), "middle": (0.30, 1.01),
+              "top": (0.02, 1.01)},
 }
+
+
+def fits(profile: Optional[dict], bottom: float, middle: float,
+         top: float) -> bool:
+    """Whether a rise divided like this belongs to that instrument.
+
+    A table of named bounds rather than a five-tuple, because the tuple
+    said ``(0.04, 0.74, 0.26, 0.04, 0.20)`` and nobody reading that could
+    tell which number was the one doing the damage.
+    """
+    if not profile:
+        return True
+    for key, value in (("bottom", bottom), ("middle", middle), ("top", top)):
+        low, high = profile.get(key, (0.0, 1.01))
+        if not low <= value <= high:
+            return False
+    return True
+
 
 #: Elements are found with a fussier setting than the strobe's own. At
 #: sixty frames a second every ripple is a local peak, and lighting that
@@ -149,6 +192,23 @@ BASE_K = 1.4
 #: Nothing may fire twice inside this, whatever the settings say. Two
 #: flashes 50ms apart are one flash with a stutter in it.
 FLOOR_GAP = 0.09
+
+#: And nothing counts at all below this share of the loudest thing in the
+#: track.
+#:
+#: The threshold everything else uses is the local median plus a multiple
+#: of the local spread, which is what makes one sensitivity setting mean
+#: the same thing in a sparse passage and a dense one. In silence it means
+#: nothing: the median is zero, the spread is zero, and any wobble in the
+#: last decimal place clears the bar. Measured on a written drum pattern,
+#: forty-three of the sixty-six snares found were in the gaps between the
+#: hits, on rises of 0.003 where a snare is 0.3 - a hundredth of one.
+#:
+#: Two per cent, so a quiet hit still counts and a hundredth of one does
+#: not. It was never noticed before because the old snare profile happened
+#: to reject them for a different reason, having asked for a sizzle they
+#: did not have either.
+QUIET_FLOOR = 0.02
 
 #: How tightly the onsets have to bunch before the grid is trusted over
 #: the onsets themselves.
@@ -289,6 +349,8 @@ def onsets(envelope: Sequence[float], rate: float,
         here = envelope[index]
         if here <= envelope[index - 1] or here < envelope[index + 1]:
             continue        # not a peak
+        if here < loudest * QUIET_FLOOR:
+            continue        # silence, not a hit
         middle, spread = _local(envelope, index, reach)
         if here < middle + k * spread:
             continue
@@ -446,8 +508,25 @@ def _grid(beats: Sequence[Beat], bpm: float, span: float,
     return out
 
 
-def shares(frames: Sequence, at: int) -> Tuple[float, float, float]:
-    """How a frame's rise divided between bottom, middle and top.
+#: How many frames either side of an onset make up its attack.
+#:
+#: One frame was not enough, and the reason is worth keeping. A kick's
+#: fundamental arrives first and its harmonics a frame or two behind it,
+#: so in the later frame the bottom has already peaked - it is not rising
+#: any more - and the only thing still going up is the middle. Read one
+#: frame at a time, that moment divides as 0.00 bottom, 0.98 middle, 0.02
+#: top, which is a perfect description of a rimshot. Every kick in a
+#: written pattern produced one, and the snare map came back with twice
+#: as many hits as there were snares.
+#:
+#: An instrument's signature is its attack, which is fifty milliseconds,
+#: not the sixteen of a single frame. Reading the rise across the whole
+#: attack puts the kick's bottom back where it belongs.
+ATTACK = 2
+
+
+def shares(frames: Sequence, at: int, span: int = ATTACK) -> Tuple[float, float, float]:
+    """How the rise across a hit divided between bottom, middle and top.
 
     The three add to one when anything rose at all, so each is the share
     of this moment that belongs to that part of the spectrum - which is
@@ -456,15 +535,18 @@ def shares(frames: Sequence, at: int) -> Tuple[float, float, float]:
     if at <= 0 or at >= len(frames):
         return 0.0, 0.0, 0.0
     bands = len(frames[0])
-    here, before = frames[at], frames[at - 1]
+    first = max(1, at - span)
+    last = min(len(frames) - 1, at + span)
     totals = [0.0, 0.0, 0.0]
-    for index in range(bands):
-        rise = here[index] - before[index]
-        if rise <= 0.0:
-            continue
-        share = index / max(1, bands - 1)
-        which = 0 if share < LOW[1] else (1 if share < MID[1] else 2)
-        totals[which] += rise
+    for step in range(max(1, first), last + 1):
+        here, before = frames[step], frames[step - 1]
+        for index in range(bands):
+            rise = here[index] - before[index]
+            if rise <= 0.0:
+                continue
+            share = index / max(1, bands - 1)
+            which = 0 if share < LOW[1] else (1 if share < MID[1] else 2)
+            totals[which] += rise
     everything = sum(totals)
     if everything <= 0.0:
         return 0.0, 0.0, 0.0
@@ -507,12 +589,8 @@ def elements(frames: Sequence, rate: float,
             if index not in profiles:
                 profiles[index] = shares(frames, index)
             bottom, middle, top = profiles[index]
-            if wants is not None:
-                low_at_least, low_at_most, mid_at_least, top_at_least, top_at_most = wants
-                if not (low_at_least <= bottom <= low_at_most
-                        and middle >= mid_at_least
-                        and top_at_least <= top <= top_at_most):
-                    continue
+            if not fits(wants, bottom, middle, top):
+                continue
             kept.append(beat)
         found[name] = BeatMap(beats=tuple(kept))
     return found
