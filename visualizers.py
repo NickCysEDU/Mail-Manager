@@ -71,6 +71,16 @@ def stroke(painter, path, colour, width: float,
     the picture differs from the real thing by half of one channel step
     out of 255.
     """
+    # Only where the passes stack the way the correction assumes they do.
+    # Under additive compositing they do not: each pass adds its light
+    # instead of covering what is under it, so a stack drawn at the
+    # reduced alpha comes out hollow - a dark core with bright edges,
+    # which is what it did to Ambience's ribbons.
+    if (painter.compositionMode()
+            != QPainter.CompositionMode.CompositionMode_SourceOver):
+        painter.setPen(QPen(colour, width, Qt.PenStyle.SolidLine, cap, join))
+        painter.drawPath(path)
+        return
     scale = abs(painter.combinedTransform().m11()) or 1.0
     thick = width * scale
     if thick <= HAIRLINE + 0.01:
@@ -235,7 +245,14 @@ class Plasma:
         self._drift_b = 0.0
         self._drift_c = 0.0
 
-    def paint(self, painter, rect, state, strength: float = 1.0) -> None:
+    def paint(self, painter, rect, state, strength: float = 1.0,
+              flash: float = None) -> None:
+        """The field. ``flash`` overrides the strobe this reads.
+
+        Ambience passes its own smoothed one: the field is half of what
+        that scene shows, and a field that snaps while the ribbons bloom
+        is not one strobe, it is two.
+        """
         if rect.width() < 4 or rect.height() < 4:
             return
         if self._image is None:
@@ -258,7 +275,8 @@ class Plasma:
         self._drift_a += 0.016 * pace
         self._drift_b -= 0.011 * pace + state.high * 0.02
         self._drift_c += 0.007 * pace
-        swell = 0.55 + state.bass * 0.8 + self.flash_of(state) * 0.9
+        hit = self.flash_of(state) if flash is None else max(0.0, flash)
+        swell = 0.55 + state.bass * 0.8 + hit * 0.9
         hue_shift = state.hue
         image = self._image
         for row in range(self.ROWS):
@@ -1620,21 +1638,51 @@ class Ambience(Scene):
     RIBBONS = 5
     STEPS = 44
 
+    #: How the strobe reaches this scene.
+    #:
+    #: The hit every scene is handed is a step: it arrives at full height
+    #: in one frame and decays linearly over six. That is right for a
+    #: scene made of bars, and wrong for this one, which is made of long
+    #: curves - a step in the shape of a long curve is a lurch, and the
+    #: ribbons used to jump half their height outwards and snap back
+    #: inside a tenth of a second.
+    #:
+    #: So the hit is put through an envelope of its own here: quick up,
+    #: slow down, about a third of a second of tail. And what it reaches
+    #: is mostly the light rather than the geometry - the ribbons brighten
+    #: and bloom where they cross, and barely move.
+    BLOOM_RISE = 0.30
+    BLOOM_FALL = 0.055
+    #: How much of the bloom the shape gets. The rest is light.
+    BLOOM_SHAPE = 0.16
+
     def __init__(self) -> None:
         self._plasma = Plasma()
+        self._bloom = 0.0
+
+    def _ease(self, state) -> float:
+        """The strobe, smoothed, and advanced one frame."""
+        hit = self.flash(state)
+        speed = self.BLOOM_RISE if hit > self._bloom else self.BLOOM_FALL
+        self._bloom += (hit - self._bloom) * speed
+        if self._bloom < 0.002:
+            self._bloom = 0.0
+        return self._bloom
 
     def paint(self, painter, rect, state) -> None:
         width, height = rect.width(), rect.height()
         middle = height * 0.5
         painter.fillRect(rect, QColor(3, 2, 8))
+        flash = self._ease(state)
         # The morphing field, behind everything and dim enough that the
-        # ribbons still read as the bright thing.
-        self._plasma.paint(painter, rect, state, strength=0.55)
+        # ribbons still read as the bright thing. It lifts with the strobe
+        # too, so the whole frame breathes rather than only the ribbons.
+        self._plasma.paint(painter, rect, state,
+                           strength=0.55 + flash * 0.28, flash=flash)
         levels = state.levels
         if not levels:
             return
 
-        flash = self.flash(state)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.save()
         painter.setCompositionMode(
@@ -1644,25 +1692,27 @@ class Ambience(Scene):
             # Each ribbon listens to its own quarter of the spectrum.
             low = int(share * (len(levels) - 1) * 0.75)
             band = sum(levels[low:low + 4]) / max(1, len(levels[low:low + 4]))
-            reach = middle * (0.18 + band * 0.74 + flash * 0.55)
+            reach = middle * (0.18 + band * 0.74
+                              + flash * self.BLOOM_SHAPE)
             turn = state.phase * (0.7 + ribbon * 0.23)
             shade = (state.hue + share * 0.42 + 0.1) % 1.0
-            colour = QColor.fromHsvF(shade, 0.72 - flash * 0.35, 1.0,
-                                     0.30 + band * 0.45 + flash * 0.2)
+            colour = QColor.fromHsvF(shade, 0.72 - flash * 0.42, 1.0,
+                                     min(1.0, 0.30 + band * 0.45
+                                         + flash * 0.34))
             # Capped. Additive compositing charges per pixel of stroke,
             # and an uncapped width put a sixteen pixel ribbon across a
             # 1080p frame ten times over - seventeen milliseconds before
             # any polish, which is the whole frame gone.
-            painter.setPen(QPen(colour,
-                                max(1.6, min(9.0, height * 0.010 * (0.6 + band))),
-                                Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
-                                Qt.PenJoinStyle.RoundJoin))
-            self._ribbon(painter, width, middle, reach, turn, ribbon, +1)
-            self._ribbon(painter, width, middle, reach, turn, ribbon, -1)
+            thick = max(1.6, min(9.0, height * 0.010
+                                  * (0.6 + band + flash * 0.5)))
+            for side in (+1, -1):
+                path = self._ribbon_path(width, middle, reach, turn,
+                                         ribbon, side)
+                stroke(painter, path, colour, thick)
         painter.restore()
         self._core(painter, width, middle, state, flash)
 
-    def _ribbon(self, painter, width, middle, reach, turn, index, side) -> None:
+    def _ribbon_path(self, width, middle, reach, turn, index, side):
         """One curve, mirrored by ``side``.
 
         Two sines of different periods rather than one, because a single
@@ -1684,7 +1734,7 @@ class Ambience(Scene):
                 path.moveTo(x, y)
             else:
                 path.lineTo(x, y)
-        painter.drawPath(path)
+        return path
 
     def _core(self, painter, width, middle, state, flash) -> None:
         """A soft line along the middle, brightest where the bass is."""
@@ -1692,7 +1742,8 @@ class Ambience(Scene):
         shade = (state.hue + 0.5) % 1.0
         edge = QColor.fromHsvF(shade, 0.6, 1.0, 0.0)
         centre = QColor.fromHsvF(shade, 0.25, 1.0,
-                                 0.25 + state.bass * 0.5 + flash * 0.25)
+                                 min(1.0, 0.25 + state.bass * 0.5
+                                     + flash * 0.45))
         glow.setColorAt(0.0, edge)
         glow.setColorAt(0.5, centre)
         glow.setColorAt(1.0, edge)
