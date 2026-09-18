@@ -1584,6 +1584,37 @@ class TestTheVisualiserCanBeSwitchedOff:
         viewer._sweep()
 
 
+def _settle(spectrum, painter, most: int = 500, quiet: int = 70) -> float:
+    """Draw until the pane has decided what resolution it can hold.
+
+    Every timing test below used to draw three or four frames and then
+    start the clock. That was right while the resolution was a fixed
+    number, and it is not now: the pane measures the scene and steps down
+    a rung when a frame will not fit, so the first frames are not the
+    frames anybody sees. A build runner failed exactly this way - the
+    scope measured 29.8 ms against a 27.9 ms budget, at a resolution it
+    would have left within two hundred frames.
+
+    What these tests are for is whether the visualiser holds its frame
+    rate, which is a question about where it ends up. So: draw until the
+    scale has not moved for ``quiet`` frames, then let the caller time it.
+    On a machine that never has to step down this costs the warm-up and
+    no more.
+    """
+    governor = spectrum._sharpness
+    still, last = 0, None
+    for step in range(most):
+        spectrum.set_position(900 + step * 16)
+        spectrum._tick()
+        spectrum._paint(painter)
+        now = governor._scale
+        still = still + 1 if now == last else 0
+        last = now
+        if still >= quiet and governor._warm <= 0 and governor._settle <= 0:
+            break
+    return last
+
+
 #: What the reference workload below costs on the machine the sixteen
 #: millisecond budget was set on. Measured, not guessed.
 REFERENCE_MS = 12.2
@@ -1742,9 +1773,7 @@ class TestItHoldsSixtyFramesASecond:
             canvas.setDevicePixelRatio(spectrum.devicePixelRatioF())
             painter = QPainter(canvas)
             try:
-                for _ in range(3):
-                    spectrum._tick()
-                    spectrum._paint(painter)
+                _settle(spectrum, painter)
                 started = time.monotonic()
                 rounds = 12
                 for step in range(rounds):
@@ -1824,9 +1853,7 @@ class TestItHoldsSixtyFramesASecond:
         canvas.setDevicePixelRatio(spectrum.devicePixelRatioF())
         painter = QPainter(canvas)
         try:
-            for _ in range(3):
-                spectrum._tick()
-                spectrum._paint(painter)
+            _settle(spectrum, painter)
             started = time.monotonic()
             rounds = 16
             for step in range(rounds):
@@ -1874,9 +1901,7 @@ class TestItHoldsSixtyFramesASecond:
         canvas.setDevicePixelRatio(spectrum.devicePixelRatioF())
         painter = QPainter(canvas)
         try:
-            for _ in range(4):
-                spectrum._tick()
-                spectrum._paint(painter)
+            _settle(spectrum, painter)
             spent = []
             rounds = 24
             started = time.monotonic()
@@ -3142,6 +3167,45 @@ class TestTheSceneIsDrawnAtTheScreensResolution:
         assert governor._seen.get(0.33, 0.0) > 24.0, (
             "it never wrote down that the rung above was too slow")
 
+    def test_a_scene_too_slow_for_the_screen_really_is_stepped_down(self, qtbot):
+        """The real pane, not the cost model, with a scene that is really
+        slow - and slow in the way a scene is, which is in proportion to
+        how many pixels it is asked for.
+
+        This is also what the timing tests below rely on. They used to
+        draw three frames and start the clock, which was right while the
+        resolution was a fixed number; now the first frames are drawn at a
+        resolution the pane is about to leave, and a build runner failed
+        on exactly that.
+        """
+        import time
+
+        from PySide6.QtGui import QPainter, QPixmap
+
+        class Slow:
+            name, blurb, sharp_pixels = "Slow", "too slow", 0
+
+            def paint(self, painter, rect, state):
+                # Charged by area, the way an antialiased scene is: thirty
+                # milliseconds at the screen's own resolution, which is
+                # over the frame however long a frame is allowed to be.
+                scale = abs(painter.combinedTransform().m11()) or 1.0
+                time.sleep(0.030 * scale * scale)
+
+        spectrum = TestItHoldsSixtyFramesASecond._spectrum(qtbot, 1280, 720)
+        spectrum.set_scene(Slow())
+        canvas = QPixmap(1280, 720)
+        canvas.setDevicePixelRatio(spectrum.devicePixelRatioF())
+        painter = QPainter(canvas)
+        try:
+            started = spectrum._sharpness.scale_for(
+                1280 * 720, spectrum.devicePixelRatioF(), spectrum._scene)
+            settled = _settle(spectrum, painter, most=400, quiet=40)
+        finally:
+            painter.end()
+        assert settled < started, (
+            f"it stayed at {settled} drawing a scene that cannot hold it")
+
     def test_the_windowed_strip_is_left_alone(self):
         """Small frames were never the problem and are not measured."""
         from attachment_widgets import Sharpness
@@ -3264,3 +3328,239 @@ class TestAWideLineIsDrawnTheQuickWay:
 
         assert visualizers._hair_spots(2.0) == ()
         assert self._ink(self._draw("hairlines", width=40.0)) > 0
+
+
+class TestTheKeysThatPlayIt:
+    """Numbers for scenes, S for the strobe, A and D for what it hears,
+    M for nothing at all, and F for the strobe by hand.
+
+    Everything here goes through the pane's own controls rather than
+    straight at the widget, because a key that changes the picture and
+    leaves the box in front of it saying something else is worse than no
+    key. The transport keys were dead in full screen for a while and a
+    test that only checked nothing raised passed the whole time, so none
+    of these check that nothing raised.
+    """
+
+    @staticmethod
+    def _pane():
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        pane.enable_box.setChecked(True)
+        return pane
+
+    @staticmethod
+    def _feed(spectrum):
+        """Something to draw, so the frame loop actually runs.
+
+        Without it ``_tick`` returns before it reaches the strobe at all -
+        there is no row to interpolate - and a test of what the strobe
+        does measures nothing.
+        """
+        from array import array
+
+        import attachment_audio
+
+        bands = attachment_audio.BANDS
+        spectrum.set_frames(
+            [array("f", [0.95 if step % 4 == 0 else 0.1
+                         for _ in range(bands)]) for step in range(120)],
+            attachment_audio.RATE)
+        return spectrum
+
+    @staticmethod
+    def _press(window, key, release=False):
+        from PySide6.QtCore import QEvent
+        from PySide6.QtGui import QKeyEvent
+        from PySide6.QtCore import Qt as _Qt
+
+        kind = (QEvent.Type.KeyRelease if release
+                else QEvent.Type.KeyPress)
+        window.keyReleaseEvent(QKeyEvent(kind, key, _Qt.KeyboardModifier.NoModifier)) \
+            if release else \
+            window.keyPressEvent(QKeyEvent(kind, key, _Qt.KeyboardModifier.NoModifier))
+
+    def _full(self, qtbot):
+        from attachment_widgets import FullScreenSpectrum
+
+        pane = self._pane()
+        qtbot.addWidget(pane)
+        window = FullScreenSpectrum(pane.spectrum, pane)
+        qtbot.addWidget(window)
+        return pane, window
+
+    def test_a_number_picks_the_scene_with_that_number(self, qtbot):
+        import visualizers
+        from PySide6.QtCore import Qt as _Qt
+
+        pane, window = self._full(qtbot)
+        for index in (2, 0, 4):
+            self._press(window, _Qt.Key.Key_1 + index)
+            assert pane.spectrum._scene is visualizers.SCENES[index]
+            assert pane.scene_box.currentText() == visualizers.SCENES[index].name
+
+    def test_a_number_past_the_last_scene_does_nothing(self, qtbot):
+        """There are nine number keys and eight scenes, so one of them
+        lands past the end of the list."""
+        import visualizers
+        from PySide6.QtCore import Qt as _Qt
+
+        pane, window = self._full(qtbot)
+        was = pane.scene_box.currentText()
+        beyond = len(visualizers.SCENES)
+        assert pane.vj("scene", beyond) is False, (
+            f"scene {beyond} was accepted with "
+            f"{beyond} scenes to choose from")
+        assert pane.scene_box.currentText() == was
+        if beyond <= 8:      # still within the keys that are mapped
+            self._press(window, _Qt.Key.Key_1 + beyond)
+            assert pane.scene_box.currentText() == was
+
+    def test_s_switches_the_strobe_on_and_off(self, qtbot):
+        from PySide6.QtCore import Qt as _Qt
+
+        pane, window = self._full(qtbot)
+        pane.strobe_box.setChecked(False)
+        self._press(window, _Qt.Key.Key_S)
+        assert pane.strobe_box.isChecked()
+        assert pane.spectrum._state.strobe
+        self._press(window, _Qt.Key.Key_S)
+        assert not pane.strobe_box.isChecked()
+        assert not pane.spectrum._state.strobe
+
+    def test_a_and_d_walk_through_what_the_strobe_listens_to(self, qtbot):
+        from PySide6.QtCore import Qt as _Qt
+        from attachment_widgets import Spectrum
+
+        pane, window = self._full(qtbot)
+        pane.strobe_source.setCurrentText(Spectrum.STROBE_SOURCES[0])
+        self._press(window, _Qt.Key.Key_D)
+        assert pane.spectrum._strobe_source == Spectrum.STROBE_SOURCES[1]
+        assert pane.strobe_source.currentText() == Spectrum.STROBE_SOURCES[1]
+        self._press(window, _Qt.Key.Key_A)
+        assert pane.spectrum._strobe_source == Spectrum.STROBE_SOURCES[0]
+
+    def test_walking_past_the_end_comes_round_again(self, qtbot):
+        from PySide6.QtCore import Qt as _Qt
+        from attachment_widgets import Spectrum
+
+        pane, window = self._full(qtbot)
+        pane.strobe_source.setCurrentText(Spectrum.STROBE_SOURCES[-1])
+        self._press(window, _Qt.Key.Key_D)
+        assert pane.spectrum._strobe_source == Spectrum.STROBE_SOURCES[0]
+
+    def test_m_goes_straight_to_listening_to_nobody(self, qtbot):
+        from PySide6.QtCore import Qt as _Qt
+        from attachment_widgets import Spectrum
+
+        pane, window = self._full(qtbot)
+        self._press(window, _Qt.Key.Key_M)
+        assert pane.spectrum._strobe_source == Spectrum.BY_HAND
+        assert pane.strobe_source.currentText() == Spectrum.BY_HAND
+
+    def test_on_manual_nothing_fires_by_itself(self, qtbot):
+        """The point of the setting: the track stops driving the light."""
+        from array import array
+
+        import attachment_audio
+        from attachment_widgets import Spectrum
+
+        pane = self._pane()
+        qtbot.addWidget(pane)
+        spectrum = pane.spectrum
+        bands = attachment_audio.BANDS
+        spectrum.set_frames(
+            [array("f", [0.95 if step % 4 == 0 else 0.1
+                         for _ in range(bands)]) for step in range(120)],
+            attachment_audio.RATE)
+        spectrum.set_strobe(True)
+        spectrum.set_strobe_source(Spectrum.BY_HAND)
+        spectrum.set_strobe_rate(1.0)
+        spectrum.set_strobe_sense(1.0)
+        lit = 0.0
+        for step in range(90):
+            spectrum.set_position(step * 30)
+            spectrum._tick()
+            lit = max(lit, spectrum._state.hit)
+        assert lit == 0.0, f"the light came up to {lit:.2f} on its own"
+
+    def test_f_flashes_by_hand_and_letting_go_puts_it_out(self, qtbot):
+        from PySide6.QtCore import Qt as _Qt
+        from attachment_widgets import Spectrum
+
+        pane, window = self._full(qtbot)
+        self._feed(pane.spectrum)
+        pane.spectrum.set_strobe_source(Spectrum.BY_HAND)
+        self._press(window, _Qt.Key.Key_F)
+        assert pane.spectrum._state.hit > 0.9
+        # Held: it does not decay while the key is down.
+        for _ in range(20):
+            pane.spectrum._tick()
+        assert pane.spectrum._state.hit > 0.9, "the held light sagged"
+        self._press(window, _Qt.Key.Key_F, release=True)
+        for _ in range(20):
+            pane.spectrum._tick()
+        assert pane.spectrum._state.hit == 0.0, "the light stayed on"
+
+    def test_reaching_for_the_strobe_switches_it_on(self, qtbot):
+        """Pressing the strobe key with the strobe off used to do nothing
+        at all, because the tick box is what the scenes ask before they
+        light up."""
+        from PySide6.QtCore import Qt as _Qt
+
+        pane, window = self._full(qtbot)
+        pane.strobe_box.setChecked(False)
+        self._press(window, _Qt.Key.Key_F)
+        assert pane.strobe_box.isChecked()
+        assert pane.spectrum._state.strobe
+
+    def test_holding_a_key_down_is_not_a_stream_of_presses(self, qtbot):
+        """The keyboard repeats a held key at its own rate. A held strobe
+        that switches itself off thirty times a second is a strobe."""
+        from PySide6.QtCore import QEvent, Qt as _Qt
+        from PySide6.QtGui import QKeyEvent
+
+        pane, window = self._full(qtbot)
+        self._press(window, _Qt.Key.Key_F)
+        window.keyReleaseEvent(QKeyEvent(
+            QEvent.Type.KeyRelease, _Qt.Key.Key_F,
+            _Qt.KeyboardModifier.NoModifier, autorep=True))
+        pane.spectrum._tick()
+        assert pane.spectrum._holding, "auto-repeat let go of the key"
+
+    def test_the_transport_keys_still_work(self, qtbot):
+        """J, K and L were dead in full screen once already."""
+        from PySide6.QtCore import Qt as _Qt
+
+        pane, window = self._full(qtbot)
+        pane.position.setRange(0, 300_000)
+        pane.position.setValue(120_000)
+        self._press(window, _Qt.Key.Key_J)
+        assert pane.position.value() < 120_000
+
+    def test_the_bar_says_what_the_keys_did(self, qtbot):
+        """A key that changes the picture and leaves the box in front of
+        it saying something else is worse than no key."""
+        from PySide6.QtCore import Qt as _Qt
+        from PySide6.QtWidgets import QCheckBox, QComboBox
+
+        import visualizers
+
+        pane = self._pane()
+        qtbot.addWidget(pane)
+        pane._go_full_screen()
+        window = pane._full
+        try:
+            self._press(window, _Qt.Key.Key_3)
+            self._press(window, _Qt.Key.Key_S)
+            self._press(window, _Qt.Key.Key_M)
+            shown = [b.currentText() for b in window.findChildren(QComboBox)]
+            ticked = [b.isChecked() for b in window.findChildren(QCheckBox)
+                      if b.text() == "Strobe"]
+            assert visualizers.SCENES[2].name in shown, (
+                f"the bar still says {shown}")
+            assert "Manual" in shown, f"the bar still says {shown}"
+            assert ticked == [True], "the bar's strobe box did not follow"
+        finally:
+            window.close()
