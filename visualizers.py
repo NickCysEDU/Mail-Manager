@@ -130,6 +130,45 @@ HAIR_MOST = 14
 _HAIR_ALPHA: dict = {}
 
 
+def smooth_path(points):
+    """A curve through these points, rather than a line between them.
+
+    Forty-four straight segments across a 1080p frame is one every
+    forty-four pixels, and at a ribbon's peak - where the direction
+    changes fastest - that reads as a corner. "Smooth out the lines in
+    ambience, they look sectioned and straight in places" is exactly
+    that: not the wrong shape, a shape drawn as a polygon.
+
+    Each sample becomes the control point of a quadratic, and the
+    midpoints between samples become the points the curve passes
+    through. The curve leaves every segment tangent to the one before
+    it, so there are no corners anywhere - at the same sample count,
+    which is the whole reason for doing it this way rather than by
+    adding points until nobody can see the joins.
+    """
+    path = QPainterPath()
+    if not points:
+        return path
+    if len(points) < 3:
+        path.moveTo(points[0])
+        for point in points[1:]:
+            path.lineTo(point)
+        return path
+    path.moveTo(points[0])
+    for index in range(1, len(points) - 1):
+        here, following = points[index], points[index + 1]
+        path.quadTo(here, QPointF((here.x() + following.x()) * 0.5,
+                                  (here.y() + following.y()) * 0.5))
+    # Straight to the last point, not a curve through the one before
+    # it: the loop above finishes at the midpoint of the final pair,
+    # so a quadratic controlled by the *earlier* of them turns back on
+    # itself. It put a hook on the end of every ribbon - 179 degrees
+    # of turn in one step, at the one place a ribbon is supposed to
+    # taper away.
+    path.lineTo(points[-1])
+    return path
+
+
 def stroke(painter, path, colour, width: float,
            cap=Qt.PenCapStyle.RoundCap, join=Qt.PenJoinStyle.RoundJoin) -> None:
     """Draw ``path`` in ``colour`` at ``width``, the quick way where there is one.
@@ -599,12 +638,37 @@ class Vaporwave(Scene):
             (state.hue + 0.6) % 1.0, 0.30 - self.flash(state) * 0.25, 1.0,
             0.42 + self.flash(state) * 0.45))
 
+    #: How many lines of the floor go by in a bar. Four, so one arrives
+    #: on every beat: the floor is the only thing in this scene that
+    #: travels, so it is the only thing that can carry the tempo.
+    FLOOR_LINES = 15
+    PER_BAR = 4.0
+
+    def _scroll(self, state) -> float:
+        """Where the floor has got to, on the beat where there is one.
+
+        state.scroll is a free-running counter the pane advances by a
+        little each frame and a little more when the bass is up - fine for
+        a scene nobody is counting along with, and wrong for this one,
+        whose horizontal lines march towards you in plain sight. On a
+        record with a tempo they march *past* the beat, which reads as the
+        scene ignoring the music it is drawn from.
+        """
+        tempo = getattr(state, "tempo", 0.0)
+        if tempo <= 0.0:
+            return state.scroll
+        # One line a beat, which is the phase the pane hands over. Read
+        # from the playhead each frame rather than accumulated, so a seek
+        # lands where it should instead of somewhere it remembered.
+        return getattr(state, "beat_at", 0.0)
+
     def _floor(self, painter, width, height, horizon, state) -> None:
         depth = height - horizon
         colour = QColor.fromHsvF(state.hue, 0.72, 1.0, 0.28 + state.bass * 0.5)
         painter.setPen(QPen(colour, 1.0))
-        for step in range(1, 15):
-            t = ((step + state.scroll) / 15.0) ** 2.4
+        scroll = self._scroll(state)
+        for step in range(1, self.FLOOR_LINES):
+            t = ((step + scroll) / self.FLOOR_LINES) ** 2.4
             y = horizon + t * depth
             painter.drawLine(QPointF(0, y), QPointF(width, y))
         middle = width / 2.0
@@ -975,7 +1039,10 @@ class Oscilloscope(Scene):
         # In the tube's own pixels, so the beam ends up the same thickness
         # against the graticule however much the pane is shrinking the
         # frame it draws into.
-        core = ((1.3 if drawing else 1.9) + flash * 1.2) * dpr
+        # A shade thicker than it was. A real trace is a glowing filament
+        # rather than a pen line, and at 1.3 pixels the figures read as a
+        # diagram of one.
+        core = ((1.8 if drawing else 2.2) + flash * 1.2) * dpr
         colour = QColor.fromHsvF(0.34 - flash * 0.08,
                                  max(0.0, 0.42 - flash * 0.3), 1.0, 0.92)
         pen = QPen(colour, core, Qt.PenStyle.SolidLine,
@@ -1005,19 +1072,24 @@ class Oscilloscope(Scene):
         says. A disc cut for a scope draws a picture here; an ordinary mix
         draws the blob a vectorscope shows, leaning with the stereo image.
         """
-        path = QPainterPath()
         count = len(trace) // 2
         # Stored as int16 so a long track's worth fits in memory.
         scale = 1.0 / 32768.0
+        points = []
         for index in range(count):
-            x = trace[index * 2] * scale
-            # Screen y grows downwards and a scope's does not.
-            y = -trace[index * 2 + 1] * scale
-            if index:
-                path.lineTo(x, y)
-            else:
-                path.moveTo(x, y)
-        return path
+            points.append(QPointF(
+                trace[index * 2] * scale,
+                # Screen y grows downwards and a scope's does not.
+                -trace[index * 2 + 1] * scale))
+        # A curve through the samples, not a line between them.
+        #
+        # A beam is a physical thing with a mass of electrons in it and a
+        # deflection coil that cannot change direction instantly, so it
+        # rounds every corner it is asked to draw. Joining the samples
+        # with straight lines draws the corners the signal asks for and
+        # not the ones a scope makes, which is why the figures came out
+        # "straight and taking sharp turns".
+        return smooth_path(points)
 
     def _sweep_path(self, trace):
         """One sweep, swept around a circle rather than across.
@@ -1807,11 +1879,13 @@ class Meters(Scene):
         # a radius lower than the reference's, which is what kept the
         # proportions wrong however the rest was adjusted.
         tail = pivot + reach * (radius * 0.15)
-        halo = QColor(state.dial_colour)
-        halo.setAlphaF(0.26)
-        painter.setPen(QPen(halo, max(3.0, radius * 0.075),
-                            Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        painter.drawLine(tail, tip)
+        # No halo behind it. There was one - a wide, faint stroke under
+        # the needle to suggest a lit pointer - and it read as a smear
+        # rather than as light, because a glow around a hard edge is a
+        # thing a camera does and this is not a photograph of a meter, it
+        # is a meter. The reference has none either: the needle there is
+        # a clean tapered blade.
+        #
         # Tapered, in three strokes from the hinge out. A needle is
         # broad where it is anchored and fine where it has to be read
         # against a scale, and a line of one width is the one thing that
@@ -1907,6 +1981,12 @@ class Ambience(Scene):
         painter.restore()
         self._core(painter, width, middle, state, flash)
 
+    #: Kept as a name on the scene because that is where it was found,
+    #: and because a test names it. The curve itself is shared with the
+    #: oscilloscope now - both draw a path through samples, and both were
+    #: drawing it as a polygon.
+    _smooth = staticmethod(smooth_path)
+
     def _ribbon_path(self, width, middle, reach, turn, index, side):
         """One curve, mirrored by ``side``.
 
@@ -1925,46 +2005,8 @@ class Ambience(Scene):
             # cut off by the edge of the frame.
             pinch = math.sin(across * math.pi) ** 0.7
             points.append(QPointF(x, middle + side * wave * reach * pinch))
-        return self._smooth(points)
+        return smooth_path(points)
 
-    @staticmethod
-    def _smooth(points):
-        """A curve through these points, rather than a line between them.
-
-        Forty-four straight segments across a 1080p frame is one every
-        forty-four pixels, and at a ribbon's peak - where the direction
-        changes fastest - that reads as a corner. "Smooth out the lines in
-        ambience, they look sectioned and straight in places" is exactly
-        that: not the wrong shape, a shape drawn as a polygon.
-
-        Each sample becomes the control point of a quadratic, and the
-        midpoints between samples become the points the curve passes
-        through. The curve leaves every segment tangent to the one before
-        it, so there are no corners anywhere - at the same sample count,
-        which is the whole reason for doing it this way rather than by
-        adding points until nobody can see the joins.
-        """
-        path = QPainterPath()
-        if not points:
-            return path
-        if len(points) < 3:
-            path.moveTo(points[0])
-            for point in points[1:]:
-                path.lineTo(point)
-            return path
-        path.moveTo(points[0])
-        for index in range(1, len(points) - 1):
-            here, following = points[index], points[index + 1]
-            path.quadTo(here, QPointF((here.x() + following.x()) * 0.5,
-                                      (here.y() + following.y()) * 0.5))
-        # Straight to the last point, not a curve through the one before
-        # it: the loop above finishes at the midpoint of the final pair,
-        # so a quadratic controlled by the *earlier* of them turns back on
-        # itself. It put a hook on the end of every ribbon - 179 degrees
-        # of turn in one step, at the one place a ribbon is supposed to
-        # taper away.
-        path.lineTo(points[-1])
-        return path
 
     def _core(self, painter, width, middle, state, flash) -> None:
         """A soft line along the middle, brightest where the bass is."""
@@ -2253,7 +2295,13 @@ class Rave(Scene):
     #: walls and every line width in the single frame it landed on, and
     #: back over the six after it. What a kick does to a room is push it,
     #: and a push takes time to arrive and longer to fade.
+    #: How much a full bass front-loads the travel within a beat. At 0
+    #: the room moves evenly; at 1.6 it covers three quarters of the beat's
+    #: distance in the first third of it.
+    SURGE = 1.6
+
     THUMP_RISE, THUMP_FALL = 0.34, 0.075
+    CRACK_RISE, CRACK_FALL = 0.85, 0.22
     WASH_RISE, WASH_FALL = 0.30, 0.030
     FIZZ_RISE, FIZZ_FALL = 0.55, 0.16
 
@@ -2268,11 +2316,33 @@ class Rave(Scene):
         #: The kit, smoothed: the kick pushing the room, the snare washing
         #: its colour, the hats shaking the thing in the middle.
         self._thump = 0.0
+        self._crack = 0.0
+        self._beat_was = None
+        self._beat_count = 0.0
         self._wash = 0.0
         self._wash_hue = 0.0
         self._fizz = 0.0
 
     # -- the clock --------------------------------------------------------
+    def _beats_done(self, state) -> float:
+        """How many beats have gone by, counting fractions.
+
+        Kept as a running total rather than read from the playhead each
+        frame, because the phase the pane hands over wraps at every beat
+        and a wrap is a jump. This adds up the wraps.
+        """
+        at = getattr(state, "beat_at", 0.0)
+        if self._beat_was is None:
+            self._beat_was = at
+        step = at - self._beat_was
+        if step < -0.5:
+            step += 1.0          # it wrapped past the beat
+        elif step < 0.0:
+            step = 0.0           # a seek backwards: hold still for a frame
+        self._beat_was = at
+        self._beat_count += step
+        return self._beat_count
+
     def _advance(self, state) -> float:
         """Move the world on by however long the last frame took.
 
@@ -2291,6 +2361,11 @@ class Rave(Scene):
         kit = state.kit
         self._thump = ease(self._thump, kit.get("Kick", 0.0),
                            self.THUMP_RISE, self.THUMP_FALL)
+        # And a second, much faster envelope off the same kick, for the
+        # one thing that is meant to snap: a shake is a shake or it is a
+        # wobble.
+        self._crack = ease(self._crack, kit.get("Kick", 0.0),
+                           self.CRACK_RISE, self.CRACK_FALL)
         self._fizz = ease(self._fizz, kit.get("Hats", 0.0),
                           self.FIZZ_RISE, self.FIZZ_FALL)
         snare = kit.get("Snare", 0.0)
@@ -2305,7 +2380,27 @@ class Rave(Scene):
         # them; it is the one that should be felt, because how fast a room
         # comes at you is how hard the track is pushing.
         bass = max(state.bass, kit.get("Bass", 0.0))
-        self._z += step * self.DRIFT * (1.0 + bass * 3.4 + self._thump * 0.9)
+        tempo = getattr(state, "tempo", 0.0)
+        if tempo > 0.0:
+            # On the grid: one truss passes you every beat, exactly.
+            #
+            # A room that travels at whatever the bass happens to be is a
+            # room that never arrives anywhere - the only things in it
+            # with a length are the trusses, and if they drift past the
+            # beat then nothing in the scene is on the music. So the
+            # *distance* per beat is fixed and the bass changes how it is
+            # spent: at rest the room moves evenly through the beat, and
+            # under a heavy bass most of the beat's travel happens in the
+            # first part of it, which is a lunge on the beat and a coast
+            # before the next one. Same tempo, much more push.
+            beats = self._beats_done(state)
+            surge = 1.0 / (1.0 + bass * self.SURGE)
+            whole = math.floor(beats)
+            through = beats - whole
+            self._z = (whole + through ** surge) * self.TRUSS
+        else:
+            self._z += step * self.DRIFT * (1.0 + bass * 3.4
+                                            + self._thump * 0.9)
         self._spin += step * (0.25 + kit.get("Synth", 0.0) * 1.1
                               + self._fizz * 2.2)
         return step
@@ -2648,14 +2743,19 @@ class Rave(Scene):
         Drawn last and small. It is the only object in the room with a
         shape of its own, and the room is the subject.
 
-        The hats are wired to it: they spin it faster (in ``_advance``)
-        and they throw its corners about. Nothing else in the room reacts
-        to them that way, so a hi-hat pattern reads as this one object
-        going wild while the walls keep time - which is what was asked
-        for, and is also the only place in the scene where something is
-        *supposed* to be jittery.
+        The *kick* is what throws its corners about, and the bass is what
+        drives the room past you. They were both doing a bit of both,
+        which is why neither read as itself: a kick and a loud bassline
+        arrive together most of the time, so two effects sharing them look
+        like one effect. One object shaking and one room moving is a
+        difference you can see.
+
+        The hats still spin it (in ``_advance``), which is a different
+        thing again - a spin is continuous and a shake is not.
         """
-        fizz = self._fizz
+        # The raw hit, not the eased one. The room is pushed slowly on
+        # purpose; the thing in the middle is supposed to be hit.
+        fizz = max(self._crack, self._fizz * 0.25)
         size = span * (0.045 + bass * 0.05 + kick * 0.05 + flash * 0.02
                        + fizz * 0.035)
         if size < 2.0:

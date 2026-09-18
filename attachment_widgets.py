@@ -144,7 +144,8 @@ class SpectrumState:
                  "hue", "phase", "scroll", "strobe", "sparks", "labels",
                  "dials", "dial_labels", "dial_colour", "background",
                  "trace", "vector", "calibration", "history",
-                 "trace_history", "vector_history", "kit")
+                 "trace_history", "vector_history", "kit", "tempo",
+                 "beat_at")
 
     def __init__(self) -> None:
         self.levels: List[float] = []
@@ -174,6 +175,15 @@ class SpectrumState:
         #: than the beat list, so it never has to know where the playhead
         #: is or how long a frame took.
         self.kit: dict = {}
+        #: The track's tempo in beats a minute, or 0 where none was
+        #: found, and how far through the current beat the playhead is,
+        #: from 0 at the beat to just under 1 at the next.
+        #:
+        #: Scenes that want to *anticipate* need this rather than the kit:
+        #: the kit says a kick has just landed, which is too late to lean
+        #: into. A grid says where the next one will be.
+        self.tempo = 0.0
+        self.beat_at = 0.0
 
 
 class Spectrum(QWidget):
@@ -948,6 +958,7 @@ class Spectrum(QWidget):
         self._last_watched = watched
         self._last_bass = bass
 
+        self._clock(state)
         state.scroll = (state.scroll + 0.012 + state.bass * 0.05) % 1.0
         state.phase += 0.0045
         state.hue = (state.phase * 0.5) % 1.0
@@ -1054,6 +1065,32 @@ class Spectrum(QWidget):
     #: them the same reads as one thing flashing rather than as a kit.
     KIT_HOLD = {"Kick": 0.16, "Snare": 0.20, "Hats": 0.07,
                 "Bass": 0.30, "Synth": 0.34}
+
+    def _clock(self, state) -> None:
+        """Where the playhead is on the beat, for scenes that want it.
+
+        Taken from whichever map has a tempo, preferring the kick: what a
+        scene wants to sit on is the pulse, and on most records the kick
+        is the pulse. Falls back to the source the strobe is watching, and
+        then to nothing, which scenes read as "free running".
+        """
+        found = None
+        for name in ("Kick", "Bass", self._strobe_source, "Mids"):
+            candidate = self._beats.get(name)
+            if candidate is not None and getattr(candidate, "bpm", 0.0) > 0:
+                found = candidate
+                break
+        if found is None or not found.beats:
+            state.tempo = 0.0
+            return
+        state.tempo = found.bpm
+        period = 60.0 / max(1e-6, found.bpm)
+        now = self._position / 1000.0
+        # Against the first beat rather than against zero: a grid that
+        # starts where the track starts is a grid that is wrong by
+        # whatever the intro was.
+        since = now - found.beats[0].at
+        state.beat_at = (since / period) % 1.0 if since >= 0 else 0.0
 
     def _decay_kit(self, state) -> None:
         """Light whichever parts of the kit are due, and fade the rest.

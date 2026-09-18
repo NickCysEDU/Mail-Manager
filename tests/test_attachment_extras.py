@@ -2684,6 +2684,80 @@ class TestOscilloscopeMusic:
         assert steps == {1}, (
             f"samples are being skipped: {sorted(steps)[:5]}")
 
+    def test_the_beam_curves_rather_than_taking_corners(self, qapp):
+        """"Smooth out the oscilloscope lines, they are straight and take
+        sharp turns."
+
+        A beam is a physical thing with a mass of electrons in it and a
+        deflection coil that cannot change direction instantly, so it
+        rounds every corner it is asked to draw. Joining the samples with
+        straight lines draws the corners the *signal* asks for and not the
+        ones a scope makes.
+        """
+        import math
+
+        from PySide6.QtGui import QPainterPath
+
+        import visualizers
+
+        scope = visualizers.by_name("Oscilloscope")
+        # A square, walked round with eight samples a side: a corner
+        # every eighth sample, which is the shape of a real figure.
+        #
+        # Not a zig-zag reversing at every sample. Nothing can round that
+        # and nothing should: a signal that changes direction faster than
+        # it is sampled is noise, not a figure, and the smoothing only
+        # claims to draw the corners a beam makes rather than the ones the
+        # samples ask for.
+        full = 20000
+        corners = ((-full, -full), (full, -full), (full, full), (-full, full))
+        trace = []
+        for index in range(4):
+            x0, y0 = corners[index]
+            x1, y1 = corners[(index + 1) % 4]
+            for step in range(8):
+                share = step / 8.0
+                trace.append(int(x0 + (x1 - x0) * share))
+                trace.append(int(y0 + (y1 - y0) * share))
+        path = scope._path(trace, True)
+
+        def sharpest(shape, samples=400):
+            at = [shape.pointAtPercent(n / samples)
+                  for n in range(samples + 1)]
+            worst = 0.0
+            for first, second, third in zip(at, at[1:], at[2:]):
+                one = (second.x() - first.x(), second.y() - first.y())
+                two = (third.x() - second.x(), third.y() - second.y())
+                if math.hypot(*one) < 1e-4 or math.hypot(*two) < 1e-4:
+                    continue
+                turn = abs(math.atan2(two[1], two[0])
+                           - math.atan2(one[1], one[0]))
+                worst = max(worst, math.degrees(min(turn, math.tau - turn)))
+            return worst
+
+        straight = QPainterPath()
+        scale = 1.0 / 32768.0
+        for index in range(len(trace) // 2):
+            x, y = trace[index * 2] * scale, -trace[index * 2 + 1] * scale
+            straight.lineTo(x, y) if index else straight.moveTo(x, y)
+
+        curved, cornered = sharpest(path), sharpest(straight)
+        assert curved < cornered * 0.75, (
+            f"the beam still turns {curved:.0f} degrees in one step "
+            f"against {cornered:.0f} for a plain polyline")
+
+    def test_the_beam_is_drawn_thick_enough_to_glow(self, qapp):
+        """A real trace is a glowing filament rather than a pen line."""
+        import inspect
+
+        import visualizers
+
+        source = inspect.getsource(visualizers.Oscilloscope._strike)
+        line = next(part for part in source.splitlines()
+                    if "core = " in part)
+        assert "1.8" in line or "2." in line, (
+            f"the beam is struck at {line.strip()}, which is a pen line")
+
     def test_the_scope_plots_the_picture_not_a_sweep(self, qapp):
         """The X-Y path has to follow the samples, not a clock."""
         import visualizers
@@ -2694,18 +2768,36 @@ class TestOscilloscopeMusic:
         assert scope.mode == "X-Y"
 
         state = SpectrumState()
-        # A square, as four corners, in the int16 the analysis produces.
+        # A square, walked round with several samples a side, in the int16
+        # the analysis produces. Several a side rather than four corners
+        # because the beam is drawn as a curve through the samples now,
+        # the way a real one is bent by its own coils - and a curve
+        # through four points is mostly corner.
         full = 32767
-        state.vector = [-full, -full, full, -full, full, full, -full, full]
+        corners = ((-full, -full), (full, -full), (full, full), (-full, full))
+        state.vector = []
+        for index in range(4):
+            x0, y0 = corners[index]
+            x1, y1 = corners[(index + 1) % 4]
+            for step in range(8):
+                share = step / 8.0
+                state.vector.append(int(x0 + (x1 - x0) * share))
+                state.vector.append(int(y0 + (y1 - y0) * share))
         # Built in a unit box - the window size and the strobe are a
         # transform applied when it is drawn, not part of the shape.
         path = scope._path(state.vector, True)
-        assert path.elementCount() == 4
-        xs = {round(path.elementAt(i).x, 3) for i in range(4)}
-        ys = {round(path.elementAt(i).y, 3) for i in range(4)}
-        assert len(xs) == 2 and len(ys) == 2, (
-            "the four corners did not land on two x values and two y values, "
-            "so this is not plotting one channel against the other")
+        box = path.boundingRect()
+        assert box.width() > 1.7 and box.height() > 1.7, (
+            f"the plot is {box.width():.2f} by {box.height():.2f} of a unit "
+            f"box, so it is not reaching the corners of the square")
+        # Left against right: at the left edge of the figure the beam
+        # spans the whole height, which a sweep against a clock never
+        # does - there, x is the clock and can only go one way.
+        at = [path.pointAtPercent(n / 200.0) for n in range(201)]
+        left = [point.y() for point in at if point.x() < -0.7]
+        assert left and max(left) - min(left) > 1.2, (
+            "the left of the figure is a point rather than a side, so this "
+            "is not plotting one channel against the other")
         scope.set_mode("Sweep")
 
     def test_the_shape_does_not_depend_on_the_window(self):
@@ -4262,7 +4354,7 @@ class TestTheRaveIsARoom:
         scene._z = 4.0
         scene._spin = 1.0
         scene._last = None          # the first frame steps a fixed 16 ms
-        scene._thump = scene._fizz = scene._wash = 0.0
+        scene._thump = scene._fizz = scene._wash = scene._crack = 0.0
         scene._wash_hue = 0.0
         scene._rings = []
         scene._beams = []
@@ -4892,14 +4984,17 @@ class TestTheRaveIsWiredToTheKit:
         assert scene._wash_hue == after, (
             "the colour drifted back, so it is a flash rather than a change")
 
-    def test_the_hats_shake_the_thing_in_the_middle(self):
-        """And only that: the walls keep time."""
+    def test_the_kick_shakes_the_thing_in_the_middle(self):
+        """And the bass moves the room. They were both doing a bit of
+        both, which is why neither read as itself: a kick and a loud
+        bassline arrive together most of the time, so two effects sharing
+        them look like one effect."""
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
-        def core(fizz):
+        def core(hit):
             scene = self._scene()
-            scene._fizz = fizz
+            scene._crack = hit
             scene._spin = 1.0
             image = QImage(400, 300,
                            QImage.Format.Format_ARGB32_Premultiplied)
@@ -4945,7 +5040,33 @@ class TestTheRaveIsWiredToTheKit:
         assert still and shaken
         assert ragged(shaken) > ragged(still) * 1.25, (
             f"the wireframe is {ragged(still):.2f} uneven at rest and "
-            f"{ragged(shaken):.2f} under the hats, which is not going crazy")
+            f"{ragged(shaken):.2f} on a kick, which is not a shake")
+
+    def test_the_kick_and_the_bass_do_different_things(self):
+        """The one that matters: a kick shakes the shape in the middle and
+        the bass drives the room past you, and you can tell which is
+        which."""
+        scene = self._scene()
+        self._walk(scene, self._state(Kick=1.0), frames=20)
+        kicked = scene._z
+        scene = self._scene()
+        self._walk(scene, self._state(bass=1.0), frames=20)
+        bassed = scene._z
+        assert bassed > kicked * 1.5, (
+            f"a full bass moved the room to {bassed:.2f} and a full kick "
+            f"to {kicked:.2f}, which is not a difference")
+
+        scene = self._scene()
+        for _ in range(6):
+            scene._advance(self._state(Kick=1.0))
+        on_kick = scene._crack
+        scene = self._scene()
+        for _ in range(6):
+            scene._advance(self._state(bass=1.0))
+        on_bass = scene._crack
+        assert on_kick > 0.7 and on_bass < 0.05, (
+            f"the shake is {on_kick:.2f} on a kick and {on_bass:.2f} on "
+            f"bass, which is not a difference either")
 
     def test_the_room_is_pushed_by_the_kick_rather_than_kicked(self):
         """The kick moved the horizon, the focal length, the walls and
@@ -5068,3 +5189,136 @@ class TestTheRibbonsAreCurvesNotPolygons:
             path = visualizers.Ambience._smooth(
                 [QPointF(n * 10.0, n * 5.0) for n in range(count)])
             assert path.elementCount() == count
+
+
+class TestTheScenesSitOnTheBeat:
+    """"Make rave and vaporwave sync to tempo as well."
+
+    Both had something travelling towards you - the rave's trusses, the
+    vaporwave's floor lines - and both moved them on a free-running clock
+    that the bass sped up a little. On a record with a tempo that is the
+    one thing you can see is wrong: the marks march *past* the beat, which
+    reads as the scene ignoring the music it is drawn from.
+    """
+
+    @staticmethod
+    def _state(tempo=120.0, beat_at=0.0, bass=0.0):
+        from attachment_widgets import SpectrumState
+
+        state = SpectrumState()
+        state.levels = [0.3] * 48
+        state.bass = bass
+        state.tempo = tempo
+        state.beat_at = beat_at
+        state.kit = {"Kick": 0.0, "Snare": 0.0, "Hats": 0.0, "Synth": 0.0}
+        return state
+
+    def test_the_pane_works_out_where_the_beat_is(self, qtbot):
+        """From whichever map has a tempo, preferring the kick."""
+        from array import array
+
+        import attachment_audio
+        import beatmap
+        from attachment_widgets import Spectrum
+
+        spectrum = Spectrum()
+        qtbot.addWidget(spectrum)
+        bands = attachment_audio.BANDS
+        spectrum.set_frames(
+            [array("f", [0.4] * bands) for _ in range(120)],
+            attachment_audio.RATE)
+        # The first beat is *not* at zero, and that is the point: a track
+        # has an intro, so a grid counted from the start of the file is
+        # wrong by however long it was.
+        beats = tuple(beatmap.Beat(at=0.3 + n * 0.5, strength=0.9)
+                      for n in range(20))
+        spectrum.set_beats({"Kick": beatmap.BeatMap(beats=beats, bpm=120.0,
+                                                    locked=True)})
+        for position, wanted in ((300, 0.0), (550, 0.5), (800, 0.0),
+                                 (925, 0.25)):
+            spectrum.set_position(position)
+            spectrum._tick()
+            assert abs(spectrum._state.tempo - 120.0) < 1e-6
+            assert abs(spectrum._state.beat_at - wanted) < 0.02, (
+                f"at {position} ms the pane says {spectrum._state.beat_at:.2f} "
+                f"through the beat and it is {wanted}")
+
+    def test_no_tempo_is_not_a_tempo_of_zero_beats(self, qtbot):
+        """A track with no steady pulse has to keep running."""
+        from array import array
+
+        import attachment_audio
+        from attachment_widgets import Spectrum
+
+        spectrum = Spectrum()
+        qtbot.addWidget(spectrum)
+        spectrum.set_frames(
+            [array("f", [0.4] * attachment_audio.BANDS) for _ in range(60)],
+            attachment_audio.RATE)
+        spectrum._tick()
+        assert spectrum._state.tempo == 0.0
+
+    def test_a_truss_arrives_on_every_beat(self):
+        """The rave's corridor is locked to the grid: the distance
+        travelled in a beat is exactly one truss, whatever the bass is
+        doing."""
+        import visualizers
+
+        for bass in (0.0, 0.5, 1.0):
+            scene = visualizers.Rave()
+            scene._last = None
+            went = []
+            for beat in range(5):
+                for part in range(8):
+                    scene._advance(self._state(beat_at=part / 8.0, bass=bass))
+                went.append(scene._z)
+            steps = [b - a for a, b in zip(went, went[1:])]
+            for step in steps:
+                assert abs(step - visualizers.Rave.TRUSS) < 0.05, (
+                    f"a beat moved the room {step:.2f} rows at bass {bass} "
+                    f"and a truss is {visualizers.Rave.TRUSS}")
+
+    def test_the_bass_changes_how_the_beat_is_spent(self):
+        """Locked distance, but not locked motion: under a heavy bass most
+        of the beat's travel happens at the start of it, which is a lunge
+        on the beat and a coast before the next."""
+        import visualizers
+
+        def through(bass, part):
+            scene = visualizers.Rave()
+            scene._last = None
+            scene._advance(self._state(beat_at=0.0, bass=bass))
+            start = scene._z
+            scene._advance(self._state(beat_at=part, bass=bass))
+            return (scene._z - start) / visualizers.Rave.TRUSS
+
+        even = through(0.0, 1 / 3.0)
+        lunged = through(1.0, 1 / 3.0)
+        assert abs(even - 1 / 3.0) < 0.03, (
+            f"with no bass a third of the beat should be a third of the "
+            f"way, and it is {even:.2f}")
+        assert lunged > even * 1.6, (
+            f"a full bass covered {lunged:.2f} of the beat in its first "
+            f"third against {even:.2f} with none")
+
+    def test_the_vaporwave_floor_marches_on_the_beat(self):
+        """One line arrives every beat."""
+        import visualizers
+
+        scene = visualizers.by_name("Vaporwave city")
+        for part in (0.0, 0.25, 0.5, 0.75):
+            assert abs(scene._scroll(self._state(beat_at=part)) - part) < 1e-6
+
+    def test_without_a_tempo_both_free_run_as_they_did(self):
+        import visualizers
+
+        scene = visualizers.by_name("Vaporwave city")
+        state = self._state(tempo=0.0)
+        state.scroll = 0.42
+        assert scene._scroll(state) == 0.42
+
+        rave = visualizers.Rave()
+        rave._last = None
+        before = rave._z
+        rave._advance(self._state(tempo=0.0))
+        assert rave._z > before, "the room stopped when the tempo did"

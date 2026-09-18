@@ -141,7 +141,11 @@ LOW, MID, HIGH = (0.00, 0.25), (0.25, 0.64), (0.64, 1.00)
 #: which is "kick detection is off, only gets one every once in a while".
 #:
 #: What is asked now is that the bottom *leads* - that it is the largest
-#: of the three - with nothing up top. That is what a kick is, and it
+#: of the three - with little up top. The cap is 0.20, which is where it
+#: stops being free: at 0.26 a written track's kick precision falls from
+#: 88 per cent to 49, and at 0.20 it does not move at all while the real
+#: track goes from 65 kicks a minute to 75. A fifth of the rise up top is
+#: a hat landing on the kick; a quarter of it is a cymbal. That is what a kick is, and it
 #: needs no floor of its own: with the top capped at 0.09, leading
 #: already means the bottom has at least 0.455 of the rise, which is why
 #: every floor from 0.45 down made no difference to anything. It takes
@@ -157,7 +161,7 @@ LOW, MID, HIGH = (0.00, 0.25), (0.25, 0.64), (0.64, 1.00)
 #: so no share of it can recover the hat - and asking for one lost half
 #: of them, which reads as lighting that stops during the loud parts.
 PROFILE: Dict[str, dict] = {
-    "Kick":  {"top": (0.00, 0.09), "leads": "bottom"},
+    "Kick":  {"top": (0.00, 0.20), "leads": "bottom"},
     "Snare": {"bottom": (0.04, 0.74), "middle": (0.26, 1.01),
               "top": (0.04, 0.25)},
     "Hats":  {"top": (0.10, 1.01)},
@@ -197,6 +201,18 @@ def fits(profile: Optional[dict], bottom: float, middle: float,
 #: sixty frames a second every ripple is a local peak, and lighting that
 #: fires on all of them is not reacting to the drums, it is reacting to
 #: the noise floor.
+#:
+#: Turning it up is the obvious way to find more kicks and it is the wrong
+#: one. Measured over eight written tracks, against a real one:
+#:
+#:      0.22   kick 95.5% recall at 88.0 precision   74.8 kicks/min
+#:      0.35        95.5             68.9            85.0
+#:      0.45        95.5             58.1            86.7
+#:      0.60        93.2             48.8            91.2
+#:
+#: The real track's rate goes up because the false positives do. What
+#: actually found more kicks was the profile - see PROFILE - which found
+#: them without inventing any.
 ELEMENT_SENSE = 0.22
 
 #: Pulses worth looking for, in beats per minute. The top of the range

@@ -178,7 +178,13 @@ def _band_edges(sample_rate: int) -> List[tuple]:
 #: transform can report starts at 93 Hz, which is above where a kick
 #: lives, so the one instrument the bottom of the range exists for was
 #: invisible to it.
-ONSET_WINDOW = 1024
+#: How much the drum pass thins the signal before it looks at it. The
+#: window below is in samples *after* this, so the two together decide the
+#: bin width - which is what actually has to be fine enough to put a kick
+#: in a band of its own. 512 over 24 kHz resolves what 1024 over 48 did,
+#: for half the arithmetic.
+ONSET_DECIMATE = 2
+ONSET_WINDOW = 512
 ONSET_RATE = 60
 #: The coarse bands this pass reports, as fractions of the spectrum. Only
 #: enough to tell the bottom from the middle from the top, because that is
@@ -232,6 +238,37 @@ def _onset_window_at(samples: array, at: int, channels: int,
     return out
 
 
+def _onset_mono(samples: array, channels: int) -> array:
+    """The track as one channel at half the rate, for the drum pass.
+
+    Everything the onset pass asks of the signal is "did something start
+    here, and roughly where in the spectrum" - see ``onset_frames``. That
+    question does not need 24 kHz of bandwidth or two channels, and
+    carrying both was most of what the pass cost: the transform is the
+    expensive part and it grows with the window, so halving the rate
+    halves the window for the same span of time and the same musical
+    resolution.
+
+    Summed to mono first, then averaged in pairs, which is a crude
+    low-pass and the right one here: it is the anti-aliasing filter, and
+    what it rolls off is the top of the hats, which the top band still
+    reaches without.
+    """
+    channels = max(1, channels)
+    total = len(samples) // channels
+    out = array("f", bytes(4 * (total // 2)))
+    if channels == 1:
+        for index in range(total // 2):
+            out[index] = (samples[index * 2] + samples[index * 2 + 1]) * 0.5
+        return out
+    for index in range(total // 2):
+        base = index * 2 * channels
+        out[index] = (samples[base] + samples[base + 1]
+                      + samples[base + channels]
+                      + samples[base + channels + 1]) * 0.25
+    return out
+
+
 def _onset_edges(bins: int) -> List[tuple]:
     """Log-spaced bin ranges, from the first bin to the last.
 
@@ -268,6 +305,14 @@ def onset_frames(samples: array, sample_rate: int, channels: int = 1,
     total = len(samples) // channels
     if total <= ONSET_WINDOW or total / sample_rate > MAX_SECONDS:
         return []
+    # One channel at half the rate, made once. The pass then reads a
+    # plain array instead of de-interleaving a stereo frame every time,
+    # which was a fifth of what it cost on its own.
+    mono = _onset_mono(samples, channels)
+    total = len(mono)
+    sample_rate = sample_rate // ONSET_DECIMATE
+    if total <= ONSET_WINDOW:
+        return []
     hop = max(1, sample_rate // ONSET_RATE)
     bins = ONSET_WINDOW // 2
     edges = _onset_edges(bins)
@@ -284,10 +329,12 @@ def onset_frames(samples: array, sample_rate: int, channels: int = 1,
             if should_stop is not None and should_stop():
                 return []
         # Two frames per transform, the same trick the display pass uses.
-        here = _onset_window_at(samples, at, channels, scale)
+        here = [mono[at + i] * scale * _ONSET_HANN[i]
+                for i in range(ONSET_WINDOW)]
         second_at = at + hop
         if second_at + ONSET_WINDOW <= total:
-            there = _onset_window_at(samples, second_at, channels, scale)
+            there = [mono[second_at + i] * scale * _ONSET_HANN[i]
+                     for i in range(ONSET_WINDOW)]
             spectra = _two_real_ffts(there=there, first=here,
                                      transform=_onset_fft)
         else:

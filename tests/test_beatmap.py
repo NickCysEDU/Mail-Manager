@@ -465,13 +465,23 @@ class TestPickingTheKitApart:
         assert quietest < 0.02
 
     def test_the_finer_pass_can_see_the_bottom_of_the_range(self):
-        """At a 512-point window the lowest band a transform can report
-        starts at 93 Hz, which is above where a kick lives."""
+        """A bin has to be narrow enough to put a kick in a band of its
+        own: at 512 points over 48 kHz the lowest one a transform can
+        report starts at 94 Hz, which is above where a kick lives.
+
+        What matters is the bin *width*, which is the rate over the
+        window - not the window on its own. The pass halves both now, so
+        512 points over 24 kHz resolves exactly what 1024 over 48 did, at
+        half the arithmetic. Reading DECODE_RATE here rather than the rate
+        the pass actually runs at is what made this look like a
+        regression.
+        """
         import attachment_audio
 
         bins = attachment_audio.ONSET_WINDOW // 2
-        hz = attachment_audio.DECODE_RATE / attachment_audio.ONSET_WINDOW
-        low, high = attachment_audio._onset_edges(bins)[0]
+        rate = attachment_audio.DECODE_RATE / attachment_audio.ONSET_DECIMATE
+        hz = rate / attachment_audio.ONSET_WINDOW
+        low, _high = attachment_audio._onset_edges(bins)[0]
         assert low * hz < 60.0, (
             f"the lowest band starts at {low * hz:.0f} Hz, above a kick")
 
