@@ -2934,3 +2934,96 @@ class TestTheDialsMatchTheReference:
         first = shapes[0]
         for other in shapes[1:]:
             assert abs(other[0] - first[0]) < 0.05, shapes
+
+
+class TestTheDialsMarkingsMatchTheReference:
+    """Not the size of the face - the marks on it.
+
+    Every number here was measured off the reference rather than chosen.
+    It is a compressed still from a video, so there is a floor on how
+    exactly anything can be read off it; these are the things that could
+    be read clearly, and each one was wrong before it was measured.
+    """
+
+    def test_the_arc_is_as_thin_as_the_reference_s(self):
+        """0.020 radii, which on its 270 pixel radius is 5.3 px. It was
+        drawn at 0.030, and the run above 0 dB at 0.052 - one and a half
+        to two and a half times too heavy."""
+        import visualizers
+
+        meters = visualizers.Meters
+        assert abs(meters.ARC_STROKE - 0.020) < 0.004
+        assert meters.ARC_STROKE_HOT < meters.ARC_STROKE * 1.6, (
+            "the red zone is heavier than the rest, but only a little")
+
+    def test_the_ticks_reach_outward_past_the_arc(self):
+        """Measured at -3, 0, +1, +2 and +3 the ink continues to about
+        1.05 radii and there is none inside. They were drawn from 0.84 to
+        1.00 - the wrong side of the line they mark."""
+        import visualizers
+
+        meters = visualizers.Meters
+        assert meters.TICK_OUT > 1.0, "the ticks do not reach past the arc"
+        assert meters.TICK_IN > 0.90, "they reach too far inward"
+        assert meters.TICK_OUT - meters.TICK_IN < 0.15
+
+    def test_the_dots_are_few_and_outside(self):
+        """One per decibel from -20 up is twenty-four marks crowded into
+        the left half, which reads as a smear. The reference has eight or
+        nine, evenly spread, and they sit outside the arc."""
+        import visualizers
+
+        meters = visualizers.Meters
+        assert 6 <= len(meters.DOTS) <= 14, f"{len(meters.DOTS)} dots"
+        assert meters.DOT_AT > 1.0, "the dots are inside the arc"
+        gaps = [b - a for a, b in zip(meters.DOTS, meters.DOTS[1:])]
+        assert min(gaps) > 0.03, "two dots are nearly on top of each other"
+
+    def test_a_dot_never_lands_on_a_numbered_mark(self):
+        import visualizers
+
+        meters = visualizers.Meters
+        numbered = [f for _v, f in meters.DB_MARKS]
+        numbered += [f for _v, f in meters.PERCENT_MARKS]
+        for dot in meters.DOTS:
+            nearest = min(abs(dot - at) for at in numbered)
+            assert nearest > 0.015, f"a dot sits on a mark at {dot:.3f}"
+
+    def test_the_numbers_ask_for_a_squarish_face(self, qapp):
+        """The reference's "0" is a rounded rectangle rather than a
+        circle - the Eurostile family. None of these is on every machine,
+        so it is a list in order of preference rather than one name, and
+        at least one of them has to be here or the face silently falls
+        back to whatever the system default is."""
+        import visualizers
+        from PySide6.QtGui import QFontDatabase
+
+        wanted = visualizers.Meters.FAMILIES
+        assert len(wanted) >= 4, "one name is not a fallback"
+        assert wanted[0] == "Eurostile", "the real article comes first"
+        here = set(QFontDatabase.families())
+        assert any(name in here for name in wanted), (
+            f"none of {wanted} is on this machine")
+
+    def test_the_per_cent_row_is_the_quieter_of_the_two(self):
+        """Two scales on one face, and only one of them is the scale."""
+        import inspect
+
+        import visualizers
+
+        source = inspect.getsource(visualizers.Meters._draw_face)
+        assert "setAlphaF(0.62)" in source or "inside.setAlphaF" in source
+
+    def test_the_dB_numbers_clear_the_arc(self):
+        """At 1.07 radii their bottoms sat on the arc rather than above
+        it, because this face's numerals are a shade taller than the
+        reference's."""
+        import visualizers
+
+        meters = visualizers.Meters
+        # Half the numeral's height below its centre has to clear the
+        # arc's outer edge.
+        bottom = meters.DB_AT_R - meters.DB_TYPE * 0.75
+        assert bottom > meters.ARC_AT + meters.ARC_STROKE / 2, (
+            f"the numbers reach {bottom:.3f} and the arc's top edge is at "
+            f"{meters.ARC_AT + meters.ARC_STROKE / 2:.3f}")
