@@ -62,3 +62,143 @@ inbox-*.json
 # prove finished - four passes each found something the previous one missed.
 # They stay on the machine that made them; the hand-written sets ship.
 tests/fixtures/private/
+
+# Audio, video and images dropped in the working folder to test against.
+# Somebody's music is somebody's copyright, and a reference photograph is
+# not this project's to publish - and a ten megabyte MP3 reached the
+# public repository this way once already. Ignored wherever it lands
+# rather than only at the top, because the test material sits in tests/.
+*.mp3
+*.m4a
+*.aac
+*.wav
+*.aif
+*.aiff
+*.flac
+*.ogg
+*.oga
+*.opus
+*.wma
+*.mp4
+*.mov
+*.m4v
+*.avi
+*.mkv
+# Reference pictures and screenshots taken while working.
+*.jpg
+*.jpeg
+*.heic
+*.heif
+*.gif
+*.bmp
+*.tif
+*.webp
+
+# Documents. Somebody working on this drops a CV, an offer letter, a
+# bank statement or a set of interview notes in the folder to test
+# against, and none of those are things a public repository should ever
+# be one "git add -A" away from publishing.
+*.pdf
+*.doc
+*.docx
+*.rtf
+*.rtfd
+*.odt
+*.pages
+*.key
+*.numbers
+*.xls
+*.xlsx
+*.ods
+*.ppt
+*.pptx
+*.csv
+*.tsv
+
+# Mail, calendars and contacts, in every shape a mail client exports.
+*.eml
+*.emlx
+*.mbox
+*.mbx
+*.msg
+*.pst
+*.ost
+*.olm
+*.ics
+*.ifb
+*.vcf
+*.vcard
+
+# Archives, which hide whatever is inside them from every check here.
+*.zip
+*.tar
+*.tgz
+*.gz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.sit
+*.dmg
+*.pkg
+
+# Databases and caches somebody might copy in to look at.
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.realm
+
+# Credentials and keys beyond the ones already listed above.
+*.p8
+*.pfx
+*.jks
+*.keystore
+*.ppk
+*.asc
+*.gpg
+*.kdbx
+*.keychain
+*.keychain-db
+id_rsa*
+id_dsa*
+id_ecdsa*
+id_ed25519*
+.netrc
+.npmrc
+.pypirc
+.aws/
+.ssh/
+credentials.json
+client_secret*.json
+service-account*.json
+token.json
+
+# Crash reports and diagnostics, which carry paths, process names and
+# sometimes the contents of memory.
+*.ips
+*.crash
+*.diag
+*.spin
+*.hang
+
+# Editor and system leftovers.
+*.bak
+*.old
+*.orig
+*.rej
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# The icons and the documentation's own pictures are committed
+# deliberately, so they are excepted from the rules above. Kept last,
+# because in gitignore the final matching rule is the one that counts.
+!assets/**
+!docs/assets/**
+!docs/*.png
+!data/*.gz
+!requirements*.txt
+!THIRD-PARTY-LICENSES.md

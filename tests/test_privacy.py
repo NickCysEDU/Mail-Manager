@@ -786,3 +786,95 @@ class TestNoEvaluationDataIsTracked:
         assert set(private_fixtures.PRIVATE) == {
             "labelled.json", "acknowledgements.json", "adversarial.json",
             "holdout.json", "meetings.json"}
+
+
+class TestNobodyElsesMediaIsPublished:
+    """Music and pictures dropped in the working folder to test against.
+
+    A ten megabyte MP3 of somebody's album reached the public repository
+    this way - committed by accident along with a fix it was used to
+    check. Nothing in the privacy guards noticed, because they were all
+    looking for credentials and personal data and this is neither: it is
+    a copyright that is not this project's to give away.
+    """
+
+    #: Things somebody would reasonably drop in the folder while working.
+    #: Not only music: the folder this was written in had interview notes,
+    #: a CV and four stems from a session sitting next to it, and any one
+    #: of them is worse to publish than the album was.
+    DROPPED = [
+        # Sound and pictures
+        "Some Album - Track 01.mp3", "recording.wav", "loop.aif",
+        "take.aiff", "master.flac", "voice.m4a", "stem.ogg", "cut.opus",
+        "reference.jpg", "photo.jpeg", "grab.heic", "sketch.gif",
+        "scan.tif", "shot.webp", "clip.mp4", "screen.mov", "take.m4v",
+        # Documents
+        "CV.pdf", "offer letter.docx", "notes.rtf", "budget.xlsx",
+        "contacts.csv", "deck.pptx", "plan.pages", "figures.numbers",
+        "minutes.odt",
+        # Mail, calendars and contacts
+        "saved.eml", "archive.mbox", "message.emlx", "outlook.msg",
+        "backup.pst", "invite.ics", "people.vcf",
+        # Archives, which hide what is inside them
+        "inbox.zip", "dump.tar", "old.tgz", "things.7z", "stuff.rar",
+        # Databases
+        "mail.sqlite", "cache.db",
+        # Keys and credentials beyond the ones already covered
+        "apple.p8", "bundle.pfx", "store.jks", "id_rsa", "id_ed25519",
+        ".netrc", "credentials.json", "client_secret_123.json",
+        "service-account-prod.json",
+        # Crash reports, which carry paths and sometimes memory
+        "Python-2026-01-01-000000.ips", "app.crash",
+        # Leftovers
+        "config.bak", "notes.orig", ".DS_Store",
+        # And wherever they land
+        "tests/MP3_Section Whatever.mp3",
+        "tests/fixtures/sample.mp3",
+        "docs/secret plans.pdf",
+        "tools/inbox.mbox",
+    ]
+
+    @pytest.mark.parametrize("name", DROPPED)
+    def test_it_is_ignored_wherever_it_lands(self, name):
+        path = ROOT / name
+        existed = path.exists()
+        if not existed:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+        try:
+            assert git_check_ignore(name), f"{name} would be committed"
+        finally:
+            if not existed:
+                path.unlink()
+
+    def test_nothing_of_that_kind_is_tracked_right_now(self):
+        tracked = git_lines("ls-files")
+        bad = [f for f in tracked
+               if re.search(r"\.(mp3|m4a|aac|wav|aif|aiff|flac|ogg|oga|"
+                            r"opus|wma|mp4|mov|m4v|avi|mkv|jpg|jpeg|heic|"
+                            r"heif|gif|bmp|tif|webp|pdf|docx?|rtf|odt|"
+                            r"pages|numbers|xlsx?|ods|pptx?|csv|tsv|eml|"
+                            r"emlx|mbox|mbx|msg|pst|ost|olm|ics|vcf|zip|"
+                            r"tar|tgz|7z|rar|sqlite3?|db|p8|pfx|jks|"
+                            r"keystore|ppk|kdbx|keychain|ips|crash|bak|"
+                            r"orig)$", f, re.IGNORECASE)]
+        assert bad == [], f"in the repository: {bad}"
+
+    def test_the_icons_and_documentation_pictures_still_ship(self):
+        """The rule is broad, so the things that are meant to be there
+        have to be excepted - and checked, or the next person to add an
+        icon finds it silently missing from the build."""
+        tracked = set(git_lines("ls-files"))
+        for wanted in ("assets/icon.png", "assets/dmg-background.png",
+                       "docs/screenshot.png", "docs/assets/favicon-32.png"):
+            assert wanted in tracked, f"{wanted} stopped being committed"
+
+    def test_nothing_enormous_is_tracked(self):
+        """Whatever it is, a big binary in a source repository is
+        something nobody meant to put there."""
+        big = []
+        for name in git_lines("ls-files"):
+            path = ROOT / name
+            if path.is_file() and path.stat().st_size > 4 * 1024 * 1024:
+                big.append((name, path.stat().st_size // 1024 // 1024))
+        assert not big, f"files over 4 MB: {big}"
