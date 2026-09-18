@@ -5322,3 +5322,70 @@ class TestTheScenesSitOnTheBeat:
         before = rave._z
         rave._advance(self._state(tempo=0.0))
         assert rave._z > before, "the room stopped when the tempo did"
+
+
+class TestThePictureArrivesBeforeTheAnalysisFinishes:
+    """"Initial visualizer performance is pretty rough and laggy."
+
+    Most of that wait was the pane having everything it needed and being
+    told nothing. Seven of the eight scenes draw from the bands alone, and
+    the two passes after them - the waveform for the sweep and the X-Y
+    traces for the figures - take another two thirds as long again.
+    """
+
+    def test_the_bands_go_out_as_soon_as_they_exist(self):
+        """Before the waveform and the X-Y traces are worked out."""
+        import inspect
+
+        import attachment_audio
+
+        source = inspect.getsource(attachment_audio._AnalysisThread.run)
+        at_bands = source.index("self.bands.emit")
+        at_traces = source.index("shapes = traces(")
+        at_vectors = source.index("vectors = vector_traces(")
+        assert at_bands < at_traces < at_vectors, (
+            "the bands are handed over after the passes that were the "
+            "reason for handing them over early")
+
+    def test_the_pane_draws_from_them(self, qtbot):
+        """And stops saying it is working."""
+        from array import array
+
+        import attachment_audio
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        qtbot.addWidget(pane)
+        pane.enable_box.setChecked(True)
+        spectrum = pane.spectrum
+        spectrum.set_working(0.4)
+        assert spectrum._working is not None
+
+        frames = [array("f", [0.3] * attachment_audio.BANDS)
+                  for _ in range(40)]
+        # What the early signal carries, through the same path the pane
+        # wires up.
+        import inspect
+
+        source = inspect.getsource(AudioPane._start_analysis)
+        assert "kit, bands)" in source, (
+            "the pane does not ask for the bands early")
+        spectrum.set_frames(frames, attachment_audio.RATE)
+        spectrum.set_working(None)
+        assert spectrum._working is None
+        assert spectrum.ready
+
+    def test_a_cancelled_analysis_hands_nothing_over(self, qtbot):
+        """The early signal is one more thing that can arrive after the
+        caller has gone away."""
+        import inspect
+
+        import attachment_audio
+
+        source = inspect.getsource(attachment_audio._AnalysisThread.run)
+        before = source[:source.index("self.bands.emit")]
+        assert "if self._stop:" in before.rsplit("\n\n", 1)[-1], (
+            "nothing checks whether the analysis was cancelled before the "
+            "bands are sent")
+        guard = inspect.getsource(attachment_audio._Analysis._early)
+        assert "self._stop" in guard

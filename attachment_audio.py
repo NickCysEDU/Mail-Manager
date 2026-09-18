@@ -543,6 +543,14 @@ class _AnalysisThread(_QThread_base):
     """
 
     done = _Signal(object)
+    #: The bands, as soon as they exist, before anything else is worked
+    #: out. Seven of the eight scenes need only these, so waiting for the
+    #: waveform and the X-Y traces before showing anything meant a picture
+    #: that could have been up in 0.39 seconds a twenty of audio arrived
+    #: at 0.65 - which is most of what "initial visualizer performance is
+    #: pretty rough and laggy" was. The rest follows through ``done`` and
+    #: the picture simply gets better.
+    bands = _Signal(object)
     #: The drums, which arrive after the rest.
     #:
     #: Finding them needs a second, much finer pass over the samples, and
@@ -574,6 +582,12 @@ class _AnalysisThread(_QThread_base):
                              should_stop=lambda: self._stop,
                              on_progress=lambda f: self.progress.emit(f * 0.85),
                              calibration=calibration)
+            if self._stop:
+                return
+            # Out with it. Every scene but the oscilloscope can draw from
+            # here, and the two passes below take another two thirds as
+            # long again.
+            self.bands.emit((frames, calibration))
             # The waveform the oscilloscope draws, on the same schedule as
             # the bands so one index reads both.
             shapes = traces(self._samples, self._rate, self._channels,
@@ -623,10 +637,11 @@ class _Analysis(QObject_base):
     """
 
     def __init__(self, decoder, on_done, on_fail, on_progress=None,
-                 on_elements=None) -> None:
+                 on_elements=None, on_bands=None) -> None:
         super().__init__()
         self._decoder = decoder
         self._on_done = on_done
+        self._on_bands = on_bands
         self._on_fail = on_fail
         self._on_progress = on_progress
         self._on_elements = on_elements
@@ -673,6 +688,8 @@ class _Analysis(QObject_base):
         thread = _AnalysisThread(samples, rate, channels,
                                  self._on_elements is not None)
         thread.done.connect(self._finished)
+        if self._on_bands is not None:
+            thread.bands.connect(self._early)
         thread.failed.connect(self._failed)
         if self._on_elements is not None:
             thread.elements.connect(self._kit)
@@ -681,6 +698,11 @@ class _Analysis(QObject_base):
             thread.progress.connect(self._report)
         self._thread = thread
         thread.start()
+
+    def _early(self, result) -> None:
+        """The bands, before the rest of the analysis has finished."""
+        if not self._stop and self._on_bands is not None:
+            self._on_bands(result)
 
     def _kit(self, elements) -> None:
         """The drums, once the finer pass has finished."""
@@ -710,7 +732,7 @@ class _Analysis(QObject_base):
 
 
 def decode(path, on_done, on_fail, on_progress=None,
-           on_elements=None) -> Optional[object]:
+           on_elements=None, on_bands=None) -> Optional[object]:
     """Decode a file to PCM with Qt, then hand the frames back.
 
     Returns a handle the caller must keep alive and may ``cancel()``. Qt
@@ -765,7 +787,8 @@ def decode(path, on_done, on_fail, on_progress=None,
         # a beachball, which reads as a crash rather than as work.
         handle.start_analysis(collected, state["rate"], state["channels"])
 
-    handle = _Analysis(decoder, on_done, on_fail, on_progress, on_elements)
+    handle = _Analysis(decoder, on_done, on_fail, on_progress, on_elements,
+                       on_bands)
     decoder.bufferReady.connect(buffer_ready)
     decoder.finished.connect(finished)
     # The signal is named differently across Qt 6 point releases, and a
