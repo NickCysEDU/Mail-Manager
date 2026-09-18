@@ -632,3 +632,136 @@ class TestEachSceneGetsAStrobeThatSuitsIt:
             assert not (rate >= Spectrum.RAPID_KNOB
                         and sense >= Spectrum.RAPID_KNOB), (
                 f"{scene.name} starts with the fast strobe already on")
+
+
+class TestEveryKindOfSnare:
+    """"Improve instrument detection for strobe too. Snare isn't too
+    accurate."
+
+    It was not. On a real track it found thirteen snares a minute against
+    ninety-one kicks, which is not a drummer anybody has ever heard.
+
+    The reason is in tests/drumkit.py, which writes drum tracks with every
+    hit at a known time so this can be measured rather than guessed at.
+    "Snare" is not one sound, and the profile that decided what one was
+    had been measured off a single kit playing a single pattern.
+    """
+
+    KINDS = ("bright", "tight", "clap", "rim")
+
+    @staticmethod
+    def _kit(kind, melody=False):
+        import attachment_audio
+        import drumkit
+
+        pcm, truth = drumkit.track(kind, melody=melody)
+        frames = attachment_audio.onset_frames(pcm, drumkit.RATE, 2)
+        found = beatmap.elements(frames, attachment_audio.ONSET_RATE)
+        return frames, truth, found
+
+    @pytest.mark.parametrize("kind", KINDS)
+    def test_every_kind_of_snare_is_found(self, kind):
+        """A clap and a rimshot both scored nothing at all before this."""
+        import drumkit
+
+        _frames, truth, found = self._kit(kind)
+        hits = [b.at for b in found["Snare"].beats]
+        _n, recall, precision = drumkit.score(hits, truth["Snare"])
+        assert recall >= 0.95, (
+            f"found {recall * 100:.0f} per cent of the {kind} snares")
+        assert precision >= 0.90, (
+            f"{precision * 100:.0f} per cent of what it called a {kind} "
+            f"snare was one")
+
+    @pytest.mark.parametrize("kind", KINDS)
+    def test_the_kick_is_not_lost_in_the_bargain(self, kind):
+        import drumkit
+
+        _frames, truth, found = self._kit(kind)
+        hits = [b.at for b in found["Kick"].beats]
+        _n, recall, precision = drumkit.score(hits, truth["Kick"])
+        assert recall >= 0.90 and precision >= 0.90, (
+            f"kick recall {recall * 100:.0f}%, precision "
+            f"{precision * 100:.0f}% on the {kind} track")
+
+    def test_the_ceiling_on_the_sizzle_sits_between_a_clap_and_a_hat(self):
+        """The one number that was wrong, and the gap it has to sit in.
+
+        A clap puts 0.21 of its rise in the top and the dimmest hat puts
+        0.29, so anything from about 0.22 to 0.28 tells them apart. It was
+        0.20 - one hundredth under the brightest snare - so every clap
+        went to the hats.
+
+        Both halves are checks on a number rather than on behaviour, and
+        that is a deliberate choice in each case. The ceiling's behaviour
+        is already guarded, by test_hats_alone_are_never_called_kicks,
+        which fails outright at 0.45. The floor's is not guardable here:
+        the evidence for it is a real track that cannot be checked into a
+        public repository, where taking it away doubled the snares from 71
+        a minute to 151 and every extra one was a synth. On written tracks
+        it makes no difference either way, so the number is the only thing
+        left to hold on to.
+        """
+        low, high = beatmap.PROFILE["Snare"]["top"]
+        assert 0.22 <= high <= 0.28, (
+            f"the ceiling is {high}, and the gap between a clap at 0.21 "
+            f"and a hat at 0.29 is where it belongs")
+        assert low > 0.0, (
+            "the floor asks a snare to have some air over it, which is "
+            "what a pitched note in the same place does not")
+
+    def test_nothing_fires_in_the_silence_between_the_hits(self):
+        """The threshold everything else uses is the local median plus a
+        multiple of the local spread, and in silence that is zero plus
+        zero. Measured before the floor was added: forty-three of the
+        sixty-six snares found were in the gaps, on rises a hundredth the
+        size of a real one."""
+        import attachment_audio
+        import drumkit
+
+        frames, truth, found = self._kit("bright")
+        rate = attachment_audio.ONSET_RATE
+        real = sorted(truth["Kick"] + truth["Snare"] + truth["Hats"])
+        loudest = 0.0
+        for row in frames:
+            loudest = max(loudest, max(row))
+        stray = []
+        for name in ("Kick", "Snare"):
+            for hit in found[name].beats:
+                if min(abs(hit.at - w) for w in real) > 0.09:
+                    stray.append((name, hit.at))
+        assert not stray, (
+            f"{len(stray)} hits landed where nothing was played: "
+            + ", ".join(f"{n} at {t:.2f}s" for n, t in stray[:6]))
+
+    def test_an_instruments_signature_is_its_attack_not_one_frame(self):
+        """A kick's fundamental arrives before its harmonics, so one frame
+        into it the bottom has stopped rising and only the middle is
+        moving - which reads as a perfect rimshot. Every kick produced
+        one, and the snare map came back with twice as many hits as there
+        were snares."""
+        assert beatmap.ATTACK >= 1, (
+            "reading a single frame calls the second half of every kick a "
+            "snare")
+
+    def test_the_written_tracks_do_not_click(self):
+        """The test of the test, and it earned its place.
+
+        A sample that stops while it is still moving is a step, and a step
+        is a broadband click that a detector is right to call a hit. Mine
+        stopped at about 1.5 per cent of full height, which put one 150 ms
+        after every kick; the false positives looked exactly like rimshots
+        and very nearly became a change to the detector.
+        """
+        import drumkit
+
+        for name, sample in (("kick", drumkit.kick()),
+                             ("hat", drumkit.hat()),
+                             ("note", drumkit.note(330.0))):
+            assert abs(sample[-1]) < 1e-9, (
+                f"the {name} stops at {sample[-1]:.4f}, which is a click, "
+                f"which is an onset")
+        for kind in self.KINDS:
+            sample = drumkit.snare(kind)
+            assert abs(sample[-1]) < 1e-9, (
+                f"the {kind} snare stops at {sample[-1]:.4f}")
