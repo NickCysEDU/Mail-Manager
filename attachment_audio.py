@@ -100,6 +100,42 @@ def _fft(values: List[complex]) -> List[complex]:
     return values
 
 
+def _two_real_ffts(first: List[float], second: List[float]) -> tuple:
+    """Two real spectra out of one complex transform.
+
+    The signal being analysed is real, and a real transform throws half of
+    a complex one away: the negative frequencies are just the positive
+    ones conjugated. So two frames can ride in one transform - one in the
+    real part, one in the imaginary - and be separated afterwards, because
+    a real input's spectrum is conjugate-symmetric and an imaginary one's
+    is conjugate-antisymmetric.
+
+        A[k] = (Z[k] + conj(Z[N-k])) / 2
+        B[k] = (Z[k] - conj(Z[N-k])) / 2j
+
+    The transform is what analysing a track costs - measured, three
+    quarters of it - and this halves how many are needed. It is exact
+    arithmetic, not an approximation: the bands that come out are the same
+    bands to the last bit that floating point allows.
+
+    Only the first half of each spectrum is returned, which is all the
+    bands ever read.
+    """
+    n = len(first)
+    packed = [complex(first[i], second[i]) for i in range(n)]
+    spectrum = _fft(packed)
+    half = n // 2
+    a: List[complex] = [0j] * half
+    b: List[complex] = [0j] * half
+    for k in range(half):
+        here = spectrum[k]
+        # Z[0]'s partner is Z[0] itself, which the modulo handles.
+        there = spectrum[(n - k) % n].conjugate()
+        a[k] = (here + there) * 0.5
+        b[k] = (here - there) * -0.5j
+    return a, b
+
+
 def _band_edges(sample_rate: int) -> List[tuple]:
     """(low bin, high bin) per third-octave band.
 
@@ -116,6 +152,19 @@ def _band_edges(sample_rate: int) -> List[tuple]:
         high = min(bins - 1, max(low + 1, int((centre * ratio) / hz_per_bin) + 1))
         edges.append((min(low, bins - 2), high))
     return edges
+
+
+def _window_at(samples: array, at: int, channels: int,
+               scale: float) -> List[float]:
+    """One Hann-windowed frame of mono, as plain floats."""
+    if channels == 1:
+        return [samples[at + i] * scale * _HANN[i] for i in range(WINDOW)]
+    out = []
+    for i in range(WINDOW):
+        base = (at + i) * channels
+        mono = (samples[base] + samples[base + 1]) * 0.5
+        out.append(mono * scale * _HANN[i])
+    return out
 
 
 def analyse(samples: array, sample_rate: int, channels: int = 1,
@@ -160,34 +209,38 @@ def analyse(samples: array, sample_rate: int, channels: int = 1,
                 return []
             if on_progress is not None:
                 on_progress(min(0.99, at / total))
-        block: List[complex] = []
-        if channels == 1:
-            for i in range(WINDOW):
-                block.append(complex(samples[at + i] * scale * _HANN[i], 0.0))
+        # Two frames at a time, because two real transforms fit in one
+        # complex one. The second is whatever comes a hop later; at the
+        # very end there may not be one, and then it is transformed on
+        # its own the plain way.
+        here = _window_at(samples, at, channels, scale)
+        second_at = at + hop
+        if second_at + WINDOW <= total:
+            there = _window_at(samples, second_at, channels, scale)
+            spectra = _two_real_ffts(here, there)
         else:
-            for i in range(WINDOW):
-                base = (at + i) * channels
-                mono = (samples[base] + samples[base + 1]) * 0.5
-                block.append(complex(mono * scale * _HANN[i], 0.0))
-        spectrum = _fft(block)
-        row = array("f", [0.0]) * BANDS
-        for band, (lo, hi) in enumerate(edges):
-            # Power summed across the band, which is what an equaliser reads,
-            # rather than the single loudest bin in it.
-            power = 0.0
-            for bin_index in range(lo, hi):
-                value = spectrum[bin_index]
-                power += value.real * value.real + value.imag * value.imag
-            rms = math.sqrt(power / max(1, hi - lo))
-            # Decibels, floored at -70, because loudness is logarithmic and a
-            # linear bar spends its whole height on the loudest thing.
-            db = 20.0 * math.log10(rms + 1e-9)
-            # A 55 dB window rather than 70. Seventy put ordinary music in
-            # the top third of the range and nothing appeared to move; this
-            # spends the whole height on the part anybody can hear.
-            row[band] = max(0.0, (db + RANGE_DB) / RANGE_DB)
-        frames.append(row)
-        at += hop
+            spectra = (_fft([complex(v, 0.0) for v in here])[:WINDOW // 2],)
+        for spectrum in spectra:
+            row = array("f", [0.0]) * BANDS
+            for band, (lo, hi) in enumerate(edges):
+                # Power summed across the band, which is what an equaliser
+                # reads, rather than the single loudest bin in it.
+                power = 0.0
+                for bin_index in range(lo, hi):
+                    value = spectrum[bin_index]
+                    power += value.real * value.real + value.imag * value.imag
+                rms = math.sqrt(power / max(1, hi - lo))
+                # Decibels, floored at -70, because loudness is logarithmic
+                # and a linear bar spends its whole height on the loudest
+                # thing.
+                db = 20.0 * math.log10(rms + 1e-9)
+                # A 55 dB window rather than 70. Seventy put ordinary music
+                # in the top third of the range and nothing appeared to
+                # move; this spends the whole height on the part anybody
+                # can hear.
+                row[band] = max(0.0, (db + RANGE_DB) / RANGE_DB)
+            frames.append(row)
+        at += hop * len(spectra)
 
     # Normalise to the track rather than to an absolute scale. A quiet
     # recording and a loud one should both fill the strip; without this a

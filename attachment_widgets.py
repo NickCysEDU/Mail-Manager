@@ -205,6 +205,9 @@ class Spectrum(QWidget):
     #: the controls wrap instead.
     FLOOR = 150
 
+    #: Sixty a second, which is what the scenes are budgeted against.
+    FRAME_MS = 16
+
     #: Frames up to this many pixels are drawn at their real size. Above
     #: it the scene is drawn into a smaller buffer and stretched, because
     #: antialiased strokes are charged by area and a full screen of them
@@ -290,7 +293,7 @@ class Spectrum(QWidget):
         self._timer = QTimer(self)
         # Sixty a second. Every scene paints in well under a frame at
         # 1080p, so the limit is the display rather than the drawing.
-        self._timer.setInterval(16)
+        self._timer.setInterval(self.FRAME_MS)
         self._timer.timeout.connect(self._tick)
 
         self._reveal = 0.0
@@ -570,38 +573,48 @@ class Spectrum(QWidget):
         self._flow.setEndValue(float(target))
         self._flow.start()
 
+    #: How often the clock ticks while a track is being analysed. The
+    #: analysis is pure Python on a thread of its own, and so is every
+    #: scene, so the two take turns holding the interpreter lock: a pane
+    #: repainting sixty times a second is not politely waiting, it is
+    #: taking the processor away from the thing being waited for.
+    #: Measured, painting a scene alongside made the analysis 1.6 times
+    #: slower. Twelve a second is plenty for a progress bar.
+    WORKING_MS = 80
+
     def set_working(self, fraction) -> None:
         """Show that analysis is running, and roughly how far along.
 
         Analysis takes a few seconds on a long track. Without this the
         strip is blank for all of it, which reads as nothing happening -
         or, when it ran on the UI thread, as the app having died.
+
+        This had a block of the constructor pasted into the middle of it,
+        and it has been that way since the analysis moved off the UI
+        thread. It ran on every progress callback, which meant that while
+        a track was being read the pane threw away its render buffer and
+        built a new post-processor several times a second, and reset the
+        aspect ratio, the strobe settings and the source the strobe was
+        listening to back to their defaults. It also never set
+        ``_working``, so the "listening to the track" bar this method
+        exists to show had not appeared once.
+
+        The line that assigned the progress fraction had been left
+        attached to ``_since_hit``, the strobe's frame counter, which is
+        where the tail of that block ended up.
         """
-        self._working = None
-        self._post = True
-        self._effects = PostProcess()
-        self._buffer = None
-        #: None for the fixed strip, else width-to-height.
-        self._aspect = None
-        #: The most the strip may take, set by whoever owns the layout.
-        #: Without it a tall shape simply demanded its height, the layout
-        #: could not fit the transport underneath, and the controls ended
-        #: up drawn on top of the scene.
-        self._budget = None
-        #: Middle of the slider until somebody moves it.
-        self._strobe_rate = 0.5
-        self._strobe_sense = 0.5
-        #: Which part of the sound the strobe listens to.
-        self._strobe_source = "Bass"
-        #: 0 while a track is playing, 1 while the scene is drifting on
-        #: its own. Everything in between is the crossfade.
-        self._settle = 0.0
-        self._last_watched = 0.0
-        self._since_hit = 99 if fraction is None else max(0.0, min(1.0, float(fraction)))
+        self._working = (None if fraction is None
+                         else max(0.0, min(1.0, float(fraction))))
         if self._working is not None:
             self.reveal()
+            # Slowed right down while the analysis has the processor, and
+            # put back when it finishes.
+            if self._timer.interval() != self.WORKING_MS:
+                self._timer.setInterval(self.WORKING_MS)
             if not self._timer.isActive():
                 self._timer.start()
+        elif self._timer.interval() != self.FRAME_MS:
+            self._timer.setInterval(self.FRAME_MS)
         self.update()
 
     def set_reserve(self, pixels: int) -> None:

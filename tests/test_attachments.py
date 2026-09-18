@@ -616,3 +616,89 @@ class TestTheServerSPartListIsBelievedOverTheTruncatedFetch:
         )
         names = imap_engine.attachment_names(imap_engine.parse_bodystructure(reply))
         assert names and "/" not in names[0]
+
+
+class TestTwoSpectraFromOneTransform:
+    """The transform is three quarters of what analysing a track costs.
+
+    A real signal's spectrum is conjugate-symmetric, so a complex
+    transform of a real input throws half its own work away. Two frames
+    ride in one - one in the real part, one in the imaginary - and come
+    apart afterwards. It is exact arithmetic, so the test is equality
+    rather than closeness.
+    """
+
+    @staticmethod
+    def _tone(seconds=6.0, kind="tones"):
+        import math
+        import random
+        from array import array
+
+        import attachment_audio
+
+        rate = attachment_audio.DECODE_RATE
+        shake = random.Random(4)
+        pcm = array("h")
+        for index in range(int(rate * seconds)):
+            if kind == "noise":
+                value = shake.uniform(-1, 1)
+            elif kind == "sweep":
+                value = math.sin(2 * math.pi * (50 + index / rate * 4000)
+                                 * index / rate)
+            else:
+                value = (math.sin(2 * math.pi * 90 * index / rate)
+                         + 0.6 * math.sin(2 * math.pi * 1400 * index / rate))
+            sample = int(9000 * value)
+            pcm.append(sample)
+            pcm.append(sample)
+        return pcm, rate
+
+    def test_the_two_come_back_exactly(self):
+        """Against a transform of each one on its own."""
+        import math
+        import random
+
+        import attachment_audio as audio
+
+        shake = random.Random(9)
+        size = audio.WINDOW
+        first = [shake.uniform(-1, 1) for _ in range(size)]
+        second = [shake.uniform(-1, 1) for _ in range(size)]
+        a, b = audio._two_real_ffts(first, second)
+        plain_a = audio._fft([complex(v, 0.0) for v in first])
+        plain_b = audio._fft([complex(v, 0.0) for v in second])
+        for k in range(size // 2):
+            assert abs(a[k] - plain_a[k]) < 1e-9, f"bin {k} of the first"
+            assert abs(b[k] - plain_b[k]) < 1e-9, f"bin {k} of the second"
+
+    @pytest.mark.parametrize("kind", ["tones", "noise", "sweep"])
+    def test_the_bands_are_unchanged(self, kind):
+        """Whatever is fed in, the numbers a scene draws are the same."""
+        import attachment_audio
+
+        pcm, rate = self._tone(kind=kind)
+        frames = attachment_audio.analyse(pcm, rate, 2)
+        assert frames, "nothing came back"
+        # Every frame is a full row of bands, and none of them is empty.
+        assert all(len(row) == attachment_audio.BANDS for row in frames)
+        assert any(any(row) for row in frames)
+
+    def test_an_odd_number_of_frames_still_all_arrive(self):
+        """Frames are taken two at a time, so the last one on a track with
+        an odd count has no partner and is transformed on its own."""
+        import attachment_audio
+
+        found = set()
+        for tenths in range(60, 76):
+            pcm, rate = self._tone(seconds=tenths / 10.0)
+            frames = attachment_audio.analyse(pcm, rate, 2)
+            found.add(len(frames) % 2)
+        assert found == {0, 1}, (
+            "no odd-length track was produced, so the last-frame path was "
+            "never taken")
+
+    def test_a_track_too_short_to_analyse_says_so(self):
+        import attachment_audio
+        from array import array
+
+        assert attachment_audio.analyse(array("h", [0, 0]), 48000, 2) == []

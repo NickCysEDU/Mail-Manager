@@ -384,6 +384,9 @@ them. **Attachments** opens them.
 | **Text** | Wrap on or off, five font sizes |
 | **Anything else** | Described, and saved if you want it |
 
+Audio covers MP3, M4A/AAC, WAV, AIFF, FLAC, Ogg and Opus. The format is
+decided by the file's own bytes, never its name.
+
 **Info** shows what the file says about itself: type, size, SHA-256, image
 dimensions, audio tags, PDF producer - and whether a photograph carries GPS
 coordinates, which is worth knowing before you forward it.
@@ -582,7 +585,7 @@ notice, and contribution terms.
 
 ```bash
 ./dev demo      # the app with sample mail, no setup
-./dev test      # 3,003 tests, about three minutes on four workers
+./dev test      # 3,021 tests, about three minutes on four workers
 ./dev eval      # sorter accuracy (needs a labelled set of your own)
 ./dev fake      # the whole pipeline in the terminal, offline
 ```
