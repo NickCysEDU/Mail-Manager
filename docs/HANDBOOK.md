@@ -728,7 +728,12 @@ numbers.
 | **F** | Flash by hand: tap for a flash, hold for a held light |
 | **J** / **K** / **L** | Back ten seconds / play or pause / forward ten |
 | **Space** | Play or pause |
-| **Esc** | Leave full screen |
+| **?** | Show or hide this list, over the picture |
+| **Esc** | Close the list, or leave full screen |
+
+The playing keys deliberately do not bring the control bar back: they
+exist so the scene can be played without the furniture. **?** is there
+because keys nobody can find are not keys.
 
 **F** works whatever the strobe is set to listen to, so you can punch in
 flashes over what the track is already doing, and it switches the strobe
@@ -764,7 +769,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,323 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,332 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1125,7 +1130,7 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 3,323 tests, about three minutes
+./dev test        # 3,332 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

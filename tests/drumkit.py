@@ -134,9 +134,35 @@ def note(hertz: float, length: float = 0.42) -> List[float]:
     return taper(out)
 
 
+def sub(hertz: float, length: float) -> List[float]:
+    """A held bass note, which is what a kick has to be found under.
+
+    House is the case that showed this up: a kick on every beat with a
+    bassline running underneath it, in the same part of the spectrum. The
+    band the kick is found in is never quiet, so the kick's *rise* in it
+    is a fraction of what it is over silence.
+    """
+    out = []
+    count = int(length * RATE)
+    for index in range(count):
+        moment = index / RATE
+        # Barely decaying: the point is that it is still sounding when the
+        # next kick lands.
+        out.append((math.sin(2 * math.pi * hertz * moment)
+                    + 0.35 * math.sin(2 * math.pi * hertz * 2 * moment))
+                   * (0.75 + 0.25 * math.sin(2 * math.pi * 1.5 * moment)))
+    return taper(out, 0.06)
+
+
 def track(kind: str = "bright", bpm: float = 120.0, seconds: float = 22.0,
-          melody: bool = False) -> Tuple[array, Dict[str, List[float]]]:
-    """The pattern, as stereo PCM, and where every hit really is."""
+          melody: bool = False, house: bool = False
+          ) -> Tuple[array, Dict[str, List[float]]]:
+    """The pattern, as stereo PCM, and where every hit really is.
+
+    ``house`` is four to the floor with a bassline under it: a kick on
+    every beat, offbeat hats, and a held sub that never gets out of the
+    way. It is the pattern the kick detector was reported as missing.
+    """
     frames = int(seconds * RATE)
     buffer = [0.0] * frames
     beat = 60.0 / bpm
@@ -151,16 +177,20 @@ def track(kind: str = "bright", bpm: float = 120.0, seconds: float = 22.0,
 
     one_kick, one_hat, one_snare = kick(), hat(), snare(kind)
     notes = [note(330.0), note(440.0), note(247.0)]
+    bassline = [sub(hz, beat * BEATS) for hz in (55.0, 65.4, 49.0, 58.3)]
     for bar in range(int(seconds / (beat * BEATS))):
         top = bar * beat * BEATS
-        for step in range(BEATS * 2):
+        if house:
+            put(top, bassline[bar % len(bassline)], 0.55)
+        hats_on = ((1, 3, 5, 7) if house else range(BEATS * 2))
+        for step in hats_on:
             put(top + step * beat * 0.5, one_hat, 0.45)
             truth["Hats"].append(top + step * beat * 0.5)
-        for step in (0, 2):
+        for step in (range(BEATS) if house else (0, 2)):
             put(top + step * beat, one_kick, 0.95)
             truth["Kick"].append(top + step * beat)
-        for step in (1, 3):
-            put(top + step * beat, one_snare, 0.85)
+        for step in ((1, 3) if not house else (1, 3)):
+            put(top + step * beat, one_snare, 0.85 if not house else 0.55)
             truth["Snare"].append(top + step * beat)
         if melody:
             # On the off-beats, never on a snare.
@@ -170,7 +200,15 @@ def track(kind: str = "bright", bpm: float = 120.0, seconds: float = 22.0,
     peak = max(1e-9, max(abs(v) for v in buffer))
     pcm = array("h")
     for value in buffer:
-        one = int(max(-1.0, min(1.0, value / peak * 0.88)) * 32000)
+        level = value / peak
+        if house:
+            # What a master limiter does, which is most of what makes a
+            # dance record hard to read: the loud parts are pulled down
+            # towards the quiet ones until the whole thing sits near the
+            # ceiling, and the rise at a transient - which is the only
+            # thing any of this detects - is a fraction of what it was.
+            level = math.tanh(level * 3.4) / math.tanh(3.4)
+        one = int(max(-1.0, min(1.0, level * 0.88)) * 32000)
         pcm.append(one)
         pcm.append(one)
     for name in truth:

@@ -684,6 +684,45 @@ class TestEveryKindOfSnare:
             f"kick recall {recall * 100:.0f}%, precision "
             f"{precision * 100:.0f}% on the {kind} track")
 
+    @pytest.mark.parametrize("house", [False, True])
+    def test_the_kick_is_found_under_a_bassline(self, house):
+        """Four to the floor with a sub running under it and a limiter on
+        the whole thing - the pattern this was reported as missing."""
+        import attachment_audio
+        import drumkit
+
+        pcm, truth = drumkit.track("tight", house=house)
+        frames = attachment_audio.onset_frames(pcm, drumkit.RATE, 2)
+        found = beatmap.elements(frames, attachment_audio.ONSET_RATE)
+        hits = [b.at for b in found["Kick"].beats]
+        _n, recall, precision = drumkit.score(hits, truth["Kick"])
+        assert recall >= 0.90, (
+            f"found {recall * 100:.0f} per cent of the kicks")
+        assert precision >= 0.80, (
+            f"{precision * 100:.0f} per cent of what it called a kick was")
+
+    def test_a_kick_is_what_the_bottom_leads_not_what_it_owns(self):
+        """The bound that was wrong, and why it cannot be a bound.
+
+        It asked for 0.70 of a frame's whole rise to be in the bottom
+        third. In a mix something else is nearly always happening on the
+        beat, so a kick owns well under two thirds of the moment while
+        being unmistakably there: on a real track that threw away 227 of
+        309 candidates and left 44 kicks a minute where the pulse says
+        about 140.
+
+        A number cannot express this, because the number that lets a
+        kick through under a hat lets a bass note through on its own.
+        What is asked is that the bottom *leads*.
+        """
+        assert beatmap.PROFILE["Kick"].get("leads") == "bottom"
+        # A kick with a hat over it: two thirds bottom, and still a kick.
+        assert beatmap.fits(beatmap.PROFILE["Kick"], 0.62, 0.30, 0.08)
+        # A kick under a stab: the middle takes more than the bottom.
+        assert not beatmap.fits(beatmap.PROFILE["Kick"], 0.40, 0.55, 0.05)
+        # A cymbal is not a kick however little middle it has.
+        assert not beatmap.fits(beatmap.PROFILE["Kick"], 0.55, 0.05, 0.40)
+
     def test_the_ceiling_on_the_sizzle_sits_between_a_clap_and_a_hat(self):
         """The one number that was wrong, and the gap it has to sit in.
 

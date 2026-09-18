@@ -26,8 +26,8 @@ import visualizers
 
 from PySide6.QtCore import (QEasingCurve, QPoint, QPointF, QRect, QRectF, QSize, Qt,
                             QTimer, QVariantAnimation, Signal)
-from PySide6.QtGui import (QColor, QImage, QLinearGradient, QPainter, QPainterPath,
-                           QPixmap,
+from PySide6.QtGui import (QColor, QFont, QFontMetricsF, QImage, QLinearGradient,
+                           QPainter, QPainterPath, QPixmap,
                            QPen, QRadialGradient)
 from PySide6.QtWidgets import (QGraphicsOpacityEffect, QHBoxLayout, QLabel,
                                QLayout, QSizePolicy,
@@ -1366,6 +1366,110 @@ class Spectrum(QWidget):
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
 
+class _KeysCard(QWidget):
+    """The list of playing keys, hidden until somebody asks for it.
+
+    Hidden because the keys are for playing with, and a panel explaining
+    them is the opposite of that - but unfindable keys are not keys, so
+    there has to be somewhere to look. ``?`` opens it and closes it, and
+    it is the only thing in full screen that does not fade on its own.
+
+    Painted rather than built out of labels: it is one panel of text over
+    a picture, and a layout of a dozen QLabels to say twelve short lines
+    is a lot of widgets for something that is usually not on screen.
+    """
+
+    #: The keys, in the order they are worth learning.
+    KEYS = (
+        ("1 – 8", "the scenes, in the order the menu lists them"),
+        ("S", "strobe on or off"),
+        ("A / D", "step through what the strobe listens to"),
+        ("M", "listen to nobody: nothing fires but F"),
+        ("F", "flash by hand: tap for a flash, hold for a held light"),
+        (None, None),
+        ("J / K / L", "back ten seconds, play or pause, forward ten"),
+        ("space", "play or pause"),
+        ("?", "this list"),
+        ("esc", "leave full screen"),
+    )
+
+    PAD = 26
+    LINE = 26
+    GAP = 34
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setVisible(False)
+
+    def wanted(self) -> QSize:
+        """How big the card has to be to hold what is in it."""
+        metrics = QFontMetricsF(self._face())
+        widest = 0.0
+        for key, what in self.KEYS:
+            if key is None:
+                continue
+            widest = max(widest, metrics.horizontalAdvance(what))
+        keys = max(metrics.horizontalAdvance(k or "")
+                   for k, _w in self.KEYS)
+        tall = self.PAD * 2 + self.LINE * len(self.KEYS) + self.LINE
+        return QSize(int(self.PAD * 2 + keys + self.GAP + widest),
+                     int(tall))
+
+    def _face(self):
+        from widgets import system_font
+
+        font = system_font()
+        font.setPointSizeF(13.0)
+        return font
+
+    def paintEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            panel = QRectF(self.rect())
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(10, 10, 16, 232))
+            painter.drawRoundedRect(panel, 14.0, 14.0)
+            painter.setPen(QPen(QColor(255, 255, 255, 40), 1.0))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(panel.adjusted(0.5, 0.5, -0.5, -0.5),
+                                    14.0, 14.0)
+
+            font = self._face()
+            painter.setFont(font)
+            metrics = QFontMetricsF(font)
+            keys = max(metrics.horizontalAdvance(k or "")
+                       for k, _w in self.KEYS)
+            heading = QFont(font)
+            heading.setBold(True)
+            painter.setFont(heading)
+            painter.setPen(QColor(236, 236, 244))
+            y = self.PAD
+            painter.drawText(QRectF(self.PAD, y, self.width(), self.LINE),
+                             Qt.AlignmentFlag.AlignLeft
+                             | Qt.AlignmentFlag.AlignVCenter, "Playing keys")
+            y += self.LINE
+            painter.setFont(font)
+            for key, what in self.KEYS:
+                if key is None:
+                    y += self.LINE * 0.5
+                    continue
+                painter.setPen(QColor(150, 210, 255))
+                painter.drawText(QRectF(self.PAD, y, keys, self.LINE),
+                                 Qt.AlignmentFlag.AlignRight
+                                 | Qt.AlignmentFlag.AlignVCenter, key)
+                painter.setPen(QColor(206, 206, 218))
+                painter.drawText(
+                    QRectF(self.PAD + keys + self.GAP, y,
+                           self.width(), self.LINE),
+                    Qt.AlignmentFlag.AlignLeft
+                    | Qt.AlignmentFlag.AlignVCenter, what)
+                y += self.LINE
+        finally:
+            painter.end()
+
+
 class _ControlBar(QWidget):
     """The floating strip of controls, drawn rather than stylesheeted.
 
@@ -1507,6 +1611,10 @@ class FullScreenSpectrum(QWidget):
         self._idle.timeout.connect(self._hide_controls)
         self._idle.start()
 
+        #: The list of playing keys. Hidden, and it stays hidden until
+        #: somebody presses the one key that is about the keys.
+        self.keys = _KeysCard(self)
+
     # -- what goes in the bar ---------------------------------------------
     #: The bar's rows are sized from each control's hint, and a slider's
     #: hint describes its groove rather than its handle - so the tops of
@@ -1555,23 +1663,53 @@ class FullScreenSpectrum(QWidget):
         so the transport keys were dead the whole time - pressing them
         did nothing but wake the control bar.
         """
-        self._show_controls()
+        if event.key() in (Qt.Key.Key_Question, Qt.Key.Key_Slash):
+            self.show_keys(not self.keys.isVisibleTo(self))
+            event.accept()
+            return
         keys = {Qt.Key.Key_J: "back", Qt.Key.Key_K: "toggle",
                 Qt.Key.Key_L: "forward", Qt.Key.Key_Space: "toggle"}
         action = keys.get(event.key())
         if action is not None:
+            # The transport moves the playhead, and the bar is where the
+            # playhead is shown, so these bring it back.
+            self._show_controls()
             handler = getattr(self._owner, "transport", None)
             if handler is not None:
                 handler(action)
                 event.accept()
                 return
         if event.key() == Qt.Key.Key_Escape:
-            self.close()
+            if self.keys.isVisibleTo(self):
+                self.show_keys(False)
+            else:
+                self.close()
             event.accept()
             return
+        # And the playing keys deliberately do not.
+        #
+        # They used to, because waking the bar was the first thing this
+        # method did. Changing scene with a number then slid a strip of
+        # controls up over the picture every time, which is the opposite
+        # of what the keys are for: they exist so that the scene can be
+        # played without the furniture.
         if self._play_it(event, held=True):
             return
+        self._show_controls()
         super().keyPressEvent(event)
+
+    def show_keys(self, on: bool) -> None:
+        """Show or hide the list of playing keys."""
+        self.keys.setVisible(bool(on))
+        if on:
+            self._place_keys()
+            self.keys.raise_()
+
+    def _place_keys(self) -> None:
+        size = self.keys.wanted()
+        self.keys.setGeometry(int((self.width() - size.width()) / 2),
+                              int((self.height() - size.height()) / 2),
+                              size.width(), size.height())
 
     def keyReleaseEvent(self, event) -> None:      # noqa: N802 - Qt's name
         """Letting the strobe key go puts the light out.
@@ -1615,6 +1753,8 @@ class FullScreenSpectrum(QWidget):
     def resizeEvent(self, event) -> None:      # noqa: N802 - Qt's name
         super().resizeEvent(event)
         self._place_bar()
+        if self.keys.isVisibleTo(self):
+            self._place_keys()
 
     def showEvent(self, event) -> None:      # noqa: N802 - Qt's name
         super().showEvent(event)
