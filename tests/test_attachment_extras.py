@@ -1915,7 +1915,21 @@ class TestItHoldsSixtyFramesASecond:
         finally:
             painter.end()
             scope.set_decay(was)
-        budget = 16.67 * _machine_factor()
+        # Against the budget the pane is actually working to, not against
+        # a sixtieth of a second.
+        #
+        # Those stopped being the same thing. The pane measures the scene
+        # and picks a resolution, and at or below the window's own it is
+        # allowed a thirtieth rather than a sixtieth - because below one
+        # buffer pixel per point the picture goes soft, and for scenes
+        # like these soft is worse than thirty frames a second. A test
+        # demanding sixteen milliseconds of a pane deliberately spending
+        # twenty-four is testing something nobody asked for, and a build
+        # runner failed exactly there: 19.8 ms against 17.2.
+        from attachment_widgets import PostProcess, Sharpness
+
+        budget = ((Sharpness.SOFT_MS + PostProcess.BUDGET_MS)
+                  * _machine_factor())
         assert each < budget, (
             f"the scope takes {each:.1f} ms a frame at a decay of {decay}, "
             f"against {budget:.1f} ms for this machine")
@@ -3858,8 +3872,22 @@ class TestTheStrobeInAmbienceIsSmooth:
 
     def test_it_lights_the_ribbons_rather_than_moving_them(self):
         """A scene of long curves shows a beat by brightening, not by
-        changing shape - the same thing the waterfall had to learn."""
+        changing shape - the same thing the waterfall had to learn.
+
+        With the field behind them turned off, because it brightens with
+        the strobe too and this is a question about the ribbons. Left on,
+        the topmost bright pixel is sometimes a patch of *background* that
+        has just crossed the threshold, which reads as the ribbons having
+        moved half way up the frame. That passed here and failed on a
+        build runner, which is the whole of what is wrong with measuring
+        one thing by looking at another.
+        """
+        class Nothing:
+            def paint(self, *args, **kwargs):
+                pass
+
         scene = self._scene()
+        scene._plasma = Nothing()
         dark = self._frame(scene, self._state())
         scene._bloom = 1.0
         lit = self._frame(scene, self._state())
