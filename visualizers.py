@@ -1913,7 +1913,7 @@ class Ambience(Scene):
         Two sines of different periods rather than one, because a single
         sine reads as a rope and two read as something being blown about.
         """
-        path = QPainterPath()
+        points = []
         for step in range(self.STEPS + 1):
             across = step / self.STEPS
             x = across * width
@@ -1924,11 +1924,46 @@ class Ambience(Scene):
             # Pinched at both ends, so the ribbons meet rather than being
             # cut off by the edge of the frame.
             pinch = math.sin(across * math.pi) ** 0.7
-            y = middle + side * wave * reach * pinch
-            if step == 0:
-                path.moveTo(x, y)
-            else:
-                path.lineTo(x, y)
+            points.append(QPointF(x, middle + side * wave * reach * pinch))
+        return self._smooth(points)
+
+    @staticmethod
+    def _smooth(points):
+        """A curve through these points, rather than a line between them.
+
+        Forty-four straight segments across a 1080p frame is one every
+        forty-four pixels, and at a ribbon's peak - where the direction
+        changes fastest - that reads as a corner. "Smooth out the lines in
+        ambience, they look sectioned and straight in places" is exactly
+        that: not the wrong shape, a shape drawn as a polygon.
+
+        Each sample becomes the control point of a quadratic, and the
+        midpoints between samples become the points the curve passes
+        through. The curve leaves every segment tangent to the one before
+        it, so there are no corners anywhere - at the same sample count,
+        which is the whole reason for doing it this way rather than by
+        adding points until nobody can see the joins.
+        """
+        path = QPainterPath()
+        if not points:
+            return path
+        if len(points) < 3:
+            path.moveTo(points[0])
+            for point in points[1:]:
+                path.lineTo(point)
+            return path
+        path.moveTo(points[0])
+        for index in range(1, len(points) - 1):
+            here, following = points[index], points[index + 1]
+            path.quadTo(here, QPointF((here.x() + following.x()) * 0.5,
+                                      (here.y() + following.y()) * 0.5))
+        # Straight to the last point, not a curve through the one before
+        # it: the loop above finishes at the midpoint of the final pair,
+        # so a quadratic controlled by the *earlier* of them turns back on
+        # itself. It put a hook on the end of every ribbon - 179 degrees
+        # of turn in one step, at the one place a ribbon is supposed to
+        # taper away.
+        path.lineTo(points[-1])
         return path
 
     def _core(self, painter, width, middle, state, flash) -> None:

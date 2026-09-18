@@ -4962,3 +4962,109 @@ class TestTheRaveIsWiredToTheKit:
             f"the room was {reached[0]:.2f} pushed on the first frame and "
             f"past three quarters by frame {frames}")
         assert reached[-1] > 0.9, "it never gets there"
+
+
+class TestTheRibbonsAreCurvesNotPolygons:
+    """"Smooth out the lines in ambience, they look sectioned and
+    straight in places."
+
+    Forty-four straight segments across a 1080p frame is one every
+    forty-four pixels, and at a ribbon's peak - where the direction
+    changes fastest - that reads as a corner.
+    """
+
+    @staticmethod
+    def _points():
+        import math
+
+        from PySide6.QtCore import QPointF
+
+        out = []
+        for step in range(45):
+            across = step / 44.0
+            wave = (math.sin(across * math.tau * 1.4) * 0.66
+                    + math.sin(across * math.tau * 2.7) * 0.34)
+            out.append(QPointF(across * 1920.0,
+                               540.0 + wave * 300.0
+                               * math.sin(across * math.pi) ** 0.7))
+        return out
+
+    @staticmethod
+    def _sharpest(path, samples=600):
+        """The biggest change of direction anywhere along the path.
+
+        In degrees between consecutive chords. A polyline turns all of its
+        corner in one step; a curve spreads the same turn over many.
+        """
+        import math
+
+        from PySide6.QtCore import QPointF
+
+        at = [path.pointAtPercent(n / samples) for n in range(samples + 1)]
+        worst = 0.0
+        for first, second, third in zip(at, at[1:], at[2:]):
+            one = QPointF(second.x() - first.x(), second.y() - first.y())
+            two = QPointF(third.x() - second.x(), third.y() - second.y())
+            # A real chord, not a rounding difference: two samples a
+            # thousandth of a pixel apart have a direction made of noise,
+            # and one of them read as a 180 degree turn.
+            if (math.hypot(one.x(), one.y()) < 0.5
+                    or math.hypot(two.x(), two.y()) < 0.5):
+                continue
+            turn = abs(math.atan2(two.y(), two.x())
+                       - math.atan2(one.y(), one.x()))
+            worst = max(worst, math.degrees(min(turn, math.tau - turn)))
+        return worst
+
+    def test_a_ribbon_has_no_corners_in_it(self):
+        from PySide6.QtGui import QPainterPath
+
+        import visualizers
+
+        points = self._points()
+        smooth = visualizers.Ambience._smooth(points)
+
+        # The same points joined by straight lines, which is what this
+        # was. A control rather than a remembered number: how sharp a
+        # corner is depends on the shape, and the shape is the point.
+        polygon = QPainterPath()
+        polygon.moveTo(points[0])
+        for point in points[1:]:
+            polygon.lineTo(point)
+
+        curved, cornered = self._sharpest(smooth), self._sharpest(polygon)
+        assert curved < cornered * 0.5, (
+            f"the smoothed ribbon still turns {curved:.1f} degrees in one "
+            f"step against {cornered:.1f} for the straight one")
+        assert curved < 12.0, (
+            f"the smoothed ribbon turns {curved:.1f} degrees in one step")
+
+    def test_it_passes_through_the_music_rather_than_near_it(self):
+        """A smoothing that wanders is a different shape, not the same
+        shape drawn properly. The curve has to stay on the ribbon."""
+        import math
+
+        import visualizers
+
+        points = self._points()
+        smooth = visualizers.Ambience._smooth(points)
+        worst = 0.0
+        for point in points:
+            near = min(
+                math.hypot(smooth.pointAtPercent(n / 400).x() - point.x(),
+                           smooth.pointAtPercent(n / 400).y() - point.y())
+                for n in range(401))
+            worst = max(worst, near)
+        assert worst < 14.0, (
+            f"the curve strays {worst:.1f} pixels from the ribbon it is "
+            f"meant to be drawing")
+
+    def test_a_ribbon_too_short_to_curve_is_still_drawn(self):
+        from PySide6.QtCore import QPointF
+
+        import visualizers
+
+        for count in (0, 1, 2):
+            path = visualizers.Ambience._smooth(
+                [QPointF(n * 10.0, n * 5.0) for n in range(count)])
+            assert path.elementCount() == count
