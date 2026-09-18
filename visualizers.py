@@ -1630,8 +1630,237 @@ class Waterfall(Scene):
 
 
 #: Every theme, in the order the picker offers them.
+class Rave(Scene):
+    """A room lit by the kit, seen from inside it.
+
+    Every other scene here draws the spectrum. This one draws the *hits*:
+    the analysis picks the kick, the snare, the hats and the synth apart
+    before a note plays, and each one is wired to something different, so
+    what the room does is what the drummer did rather than a general
+    reaction to loudness.
+
+        kick    the floor and ceiling lunge towards you, and the horizon
+                pushes back - the whole room moves rather than a shape in it
+        snare   a ring leaves the middle and crosses the room
+        hats    beams flick out along the grid, one per hit
+        bass    how far the corridor opens up, and how hot the haze is
+        synth   the colour of everything, swung round the wheel
+
+    Perspective is one divide per point - x/z and y/z, with the grid laid
+    out in world coordinates and projected each frame. Not a camera in the
+    full sense: there is no rotation to speak of, because a lighting rig
+    does not tumble and a scene that does is unwatchable at this speed.
+
+    Drawn back to front so nearer things cover further ones, and every
+    line is one stroke of a path rather than a segment at a time, since a
+    grid is the one thing here with enough segments for that to matter.
+    """
+
+    name = "Rave"
+    blurb = "a room lit by the kit: kick, snare, hats and synth, in 3D"
+
+    #: How far down the corridor the grid runs, and how finely.
+    DEPTH = 26
+    ACROSS = 9
+    #: Nearest and furthest z. Nothing is drawn nearer than NEAR, because
+    #: a point at z=0 projects to infinity.
+    NEAR = 0.55
+    FAR = 15.0
+    #: How fast the world comes towards you at rest, in z per second.
+    DRIFT = 2.6
+
+    def __init__(self) -> None:
+        self._z = 0.0
+        self._last = None
+        self._rings: list = []
+        self._beams: list = []
+        self._spin = 0.0
+
+    # -- the clock --------------------------------------------------------
+    def _advance(self, state) -> float:
+        """Move the world on by however long the last frame took.
+
+        By the clock rather than by the frame, so the room travels at the
+        same speed whatever the pane is managing - a corridor that speeds
+        up when the window is small is the sort of thing that makes a
+        scene feel cheap.
+        """
+        now = time.monotonic()
+        step = 0.016 if self._last is None else min(0.1, max(0.0, now - self._last))
+        self._last = now
+        kick = state.kit.get("Kick", 0.0)
+        bass = state.bass
+        self._z += step * self.DRIFT * (1.0 + bass * 1.8 + kick * 2.2)
+        self._spin += step * (0.25 + state.kit.get("Synth", 0.0) * 1.1)
+        return step
+
+    def paint(self, painter, rect, state) -> None:
+        step = self._advance(state)
+        kick = state.kit.get("Kick", 0.0)
+        snare = state.kit.get("Snare", 0.0)
+        hats = state.kit.get("Hats", 0.0)
+        synth = state.kit.get("Synth", 0.0)
+        bass = max(state.kit.get("Bass", 0.0), state.bass)
+        flash = self.flash(state)
+
+        painter.fillRect(rect, QColor(3, 2, 8))
+        centre = rect.center()
+        # The kick pushes the horizon away and pulls the walls in, which
+        # reads as the room breathing rather than as a shape being scaled.
+        span = min(rect.width(), rect.height())
+        focal = span * (0.62 - kick * 0.10)
+        horizon = QPointF(centre.x(),
+                          centre.y() - rect.height() * (0.02 + kick * 0.05))
+        hue = (self._spin * 0.11 + synth * 0.22) % 1.0
+
+        self._haze(painter, rect, horizon, bass, synth, flash)
+        self._grid(painter, rect, horizon, focal, hue, bass, kick, flash)
+        self._rings_now(painter, rect, horizon, focal, snare, step, hue, flash)
+        self._beams_now(painter, rect, horizon, focal, hats, step, hue)
+        self._core(painter, horizon, span, hue, bass, kick, synth, flash)
+
+    # -- the parts --------------------------------------------------------
+    def _haze(self, painter, rect, horizon, bass, synth, flash) -> None:
+        """The air in the room, lit from the far end."""
+        reach = min(rect.width(), rect.height()) * (0.45 + bass * 0.35)
+        glow = QRadialGradient(horizon, max(1.0, reach))
+        hot = QColor.fromHsvF((0.62 + synth * 0.3) % 1.0, 0.75,
+                              min(1.0, 0.22 + bass * 0.5 + flash * 0.4),
+                              min(1.0, 0.30 + bass * 0.45))
+        glow.setColorAt(0.0, hot)
+        glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(glow)
+        painter.drawRect(rect)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+    def _project(self, horizon, focal, x: float, y: float, z: float):
+        """One point of the world, on the glass."""
+        if z < self.NEAR:
+            z = self.NEAR
+        return QPointF(horizon.x() + focal * x / z, horizon.y() + focal * y / z)
+
+    def _grid(self, painter, rect, horizon, focal, hue, bass, kick, flash):
+        """Floor and ceiling, as lines running away and lines across.
+
+        Both surfaces from one loop with the sign flipped, because they
+        are the same grid mirrored and writing it twice is how the two
+        drift apart.
+        """
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        width = 1.0 + bass * 1.2
+        # How far the surfaces are from the eye - the corridor opening up
+        # on a bass note is most of what makes the room feel big.
+        lift = 0.55 + bass * 0.22
+        offset = self._z % 1.0
+        for side in (1.0, -1.0):
+            colour = QColor.fromHsvF(
+                (hue + (0.0 if side > 0 else 0.08)) % 1.0,
+                0.85 - flash * 0.4, 1.0,
+                min(1.0, 0.22 + bass * 0.35 + kick * 0.3 + flash * 0.3))
+            pen = QPen(colour, width * (1.0 + kick * 1.4))
+            pen.setCosmetic(True)
+            painter.setPen(pen)
+            # The lines that run away from you.
+            path = QPainterPath()
+            for column in range(-self.ACROSS, self.ACROSS + 1):
+                x = column * 0.5
+                path.moveTo(self._project(horizon, focal, x, side * lift,
+                                          self.NEAR))
+                path.lineTo(self._project(horizon, focal, x, side * lift,
+                                          self.FAR))
+            # And the ones across it, marching towards you.
+            for row in range(self.DEPTH):
+                z = self.NEAR + (row + offset) * (self.FAR - self.NEAR) / self.DEPTH
+                left = self._project(horizon, focal, -self.ACROSS * 0.5,
+                                     side * lift, z)
+                right = self._project(horizon, focal, self.ACROSS * 0.5,
+                                      side * lift, z)
+                path.moveTo(left)
+                path.lineTo(right)
+            painter.drawPath(path)
+
+    def _rings_now(self, painter, rect, horizon, focal, snare, step, hue,
+                   flash):
+        """A ring per snare, leaving the far end and passing you."""
+        if snare > 0.75 and (not self._rings or self._rings[-1][0] > 1.2):
+            self._rings.append([self.FAR * 0.9, snare])
+        alive = []
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for ring in self._rings:
+            ring[0] -= step * 9.0
+            if ring[0] <= self.NEAR:
+                continue
+            alive.append(ring)
+            z, force = ring
+            fade = max(0.0, min(1.0, (z - self.NEAR) / (self.FAR - self.NEAR)))
+            radius = focal * (1.9 * force + 0.6) / z
+            colour = QColor.fromHsvF((hue + 0.5) % 1.0, 0.55, 1.0,
+                                     (1.0 - fade) * 0.85 * force)
+            pen = QPen(colour, 1.0 + (1.0 - fade) * 4.0 + flash * 2.0)
+            pen.setCosmetic(True)
+            painter.setPen(pen)
+            painter.drawEllipse(horizon, radius, radius * 0.62)
+        # Never more than a bar's worth on screen at once.
+        self._rings = alive[-8:]
+
+    def _beams_now(self, painter, rect, horizon, focal, hats, step, hue):
+        """A beam per hat, flicked out along the floor and gone."""
+        if hats > 0.5 and (not self._beams or self._beams[-1][2] < 0.72):
+            angle = (self._spin * 2.3 + len(self._beams) * 1.7) % math.tau
+            self._beams.append([angle, hats, 1.0])
+        alive = []
+        for beam in self._beams:
+            beam[2] -= step * 5.5
+            if beam[2] <= 0.0:
+                continue
+            alive.append(beam)
+            angle, force, life = beam
+            colour = QColor.fromHsvF((hue + 0.18) % 1.0, 0.35, 1.0,
+                                     life * 0.7 * force)
+            pen = QPen(colour, 1.0 + life * 2.4)
+            pen.setCosmetic(True)
+            painter.setPen(pen)
+            far = self._project(horizon, focal,
+                                math.cos(angle) * 4.5,
+                                math.sin(angle) * 1.6, self.FAR * 0.55)
+            painter.drawLine(horizon, far)
+        self._beams = alive[-14:]
+
+    def _core(self, painter, horizon, span, hue, bass, kick, synth, flash):
+        """The thing in the middle: a wireframe that turns and swells.
+
+        Drawn last and small. It is the only object in the room with a
+        shape of its own, and the room is the subject.
+        """
+        size = span * (0.045 + bass * 0.05 + kick * 0.05 + flash * 0.02)
+        if size < 2.0:
+            return
+        turn = self._spin * 1.7
+        points = []
+        for corner in range(6):
+            angle = turn + corner * math.tau / 6.0
+            lean = math.sin(turn * 0.7 + corner) * 0.35
+            points.append(QPointF(horizon.x() + math.cos(angle) * size,
+                                  horizon.y() + math.sin(angle) * size * (0.5 + lean)))
+        colour = QColor.fromHsvF((hue + 0.32 + synth * 0.1) % 1.0,
+                                 0.25, 1.0, min(1.0, 0.5 + kick * 0.5))
+        pen = QPen(colour, 1.4 + kick * 2.4 + flash * 1.6)
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        path = QPainterPath()
+        # Every corner to every other: a wireframe rather than an outline,
+        # which is what makes it read as a solid seen through.
+        for a in range(len(points)):
+            for b in range(a + 1, len(points)):
+                path.moveTo(points[a])
+                path.lineTo(points[b])
+        painter.drawPath(path)
+
+
 SCENES = (Vaporwave(), Tunnel(), Oscilloscope(), Bars(), Meters(),
-          Ambience(), Waterfall())
+          Ambience(), Waterfall(), Rave())
 
 
 def by_name(name: str) -> Scene:
@@ -1653,6 +1882,11 @@ def by_name(name: str) -> Scene:
 #: grain     film noise, which hides banding in the gradients
 #: aberration how far the red and blue channels separate, in pixels
 POST = {
+    # A room full of haze and beams: heavy bloom, a strong vignette, and
+    # the colour fringing a wide lens gives. No scanlines - this is not a
+    # screen, it is a place.
+    "Rave": {"bloom": 0.92, "vignette": 0.52, "aberration": 1.6,
+             "grain": 0.04},
     # A CRT showing a sunset: bloom for the neon, scanlines and a little
     # lens error for the tube, grain to hide banding in the sky gradient.
     "Vaporwave city": {"bloom": 0.60, "scanlines": 0.16, "vignette": 0.42,

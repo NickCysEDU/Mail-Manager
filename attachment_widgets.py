@@ -144,7 +144,7 @@ class SpectrumState:
                  "hue", "phase", "scroll", "strobe", "sparks", "labels",
                  "dials", "dial_labels", "dial_colour", "background",
                  "trace", "vector", "calibration", "history",
-                 "trace_history", "vector_history")
+                 "trace_history", "vector_history", "kit")
 
     def __init__(self) -> None:
         self.levels: List[float] = []
@@ -169,6 +169,11 @@ class SpectrumState:
         #: The reference these are copied from is red on near black.
         self.dial_colour = QColor(226, 62, 48)
         self.background = QColor(6, 4, 6)
+        #: How recently each part of the kit was hit, 1 at the moment of
+        #: the hit and falling away after it. A scene reads these rather
+        #: than the beat list, so it never has to know where the playhead
+        #: is or how long a frame took.
+        self.kit: dict = {}
 
 
 class Spectrum(QWidget):
@@ -286,6 +291,11 @@ class Spectrum(QWidget):
         self._since_hit = 99
         #: The beats found before playback started, one map per source.
         self._beats: dict = {}
+        #: The kit on its own, for scenes that want to know which is which.
+        self._elements: dict = {}
+        #: How far through each element's list the playhead has got.
+        self._kit_at: dict = {}
+        self._kit_seen = -1.0
         #: How far through the map the playhead has got, so each frame
         #: only looks at what has happened since the last one.
         self._beat_at = 0
@@ -384,14 +394,40 @@ class Spectrum(QWidget):
         """How soon after a flash the next one may fire, 0 rare to 1 often."""
         self._strobe_rate = max(0.0, min(1.0, float(rate)))
 
-    #: What the strobe can be told to listen to.
-    STROBE_SOURCES = ("Bass", "Mids", "Treble", "Synths")
+    #: What the strobe can be told to listen to. The four ranges, then
+    #: the parts of the kit - which are not the same thing said twice: a
+    #: range is a place in the spectrum and an instrument is a place and
+    #: a shape, so "Kick" fires on kicks and not on the bass note under
+    #: them.
+
+    STROBE_SOURCES = ("Bass", "Mids", "Treble", "Synths",
+                      "Kick", "Snare", "Hats", "Synth")
 
     def set_beats(self, maps) -> None:
         """The beat maps the analysis found, one per thing to listen to."""
         self._beats = dict(maps or {})
         self._beat_at = 0
         self._beat_seen = -1.0
+
+    def set_elements(self, maps) -> None:
+        """The kit: where the kicks, snares and hats are.
+
+        Added to the same table the beat maps live in, so the strobe can
+        be pointed at "Kick" exactly as it is pointed at "Bass" - and so
+        a scene can ask for them by name without knowing where they came
+        from. They arrive a few seconds after the rest, so anything
+        reading them has to cope with their not being there yet.
+        """
+        self._elements = dict(maps or {})
+        self._beats.update(self._elements)
+        self._beat_at = 0
+        self._beat_seen = -1.0
+        self._kit_at = {}
+        self._kit_seen = -1.0
+
+    def elements(self) -> dict:
+        """The kit, or an empty table while the finer pass is still running."""
+        return dict(self._elements)
 
     def beat_map(self):
         """The map for whatever the strobe is listening to now."""
@@ -798,6 +834,7 @@ class Spectrum(QWidget):
         watched = {"Bass": bass, "Mids": state.mid, "Treble": high,
                    "Synths": state.synth}.get(self._strobe_source, bass)
         self._since_hit += 1
+        self._decay_kit(state)
         if not self._fire_from_the_map(state):
             self._fire_from_the_frame(state, watched)
         self._last_watched = watched
@@ -903,6 +940,44 @@ class Spectrum(QWidget):
                 here, speed = 1.15, min(0.0, speed)
             self._dial_level[index] = here
             self._dial_speed[index] = speed
+
+    #: How long a hit stays lit, in seconds, per part of the kit. A hat
+    #: is over almost at once and a bass note holds; lighting that treats
+    #: them the same reads as one thing flashing rather than as a kit.
+    KIT_HOLD = {"Kick": 0.16, "Snare": 0.20, "Hats": 0.07,
+                "Bass": 0.30, "Synth": 0.34}
+
+    def _decay_kit(self, state) -> None:
+        """Light whichever parts of the kit are due, and fade the rest.
+
+        A scene asks "how recently was the kick hit" rather than "where is
+        the playhead against a list of times", because the second question
+        has an answer that depends on the frame rate and the first does
+        not. A hit lights its own entry to one and it falls from there.
+        """
+        import beatmap
+
+        now = self._position / 1000.0
+        step = max(0.0, min(0.25, now - self._kit_seen)) if self._kit_seen >= 0 else 0.0
+        seeking = self._kit_seen < 0 or now < self._kit_seen or step >= 0.25
+        for name in beatmap.ELEMENTS:
+            found = self._elements.get(name)
+            beats = getattr(found, "beats", ())
+            hold = self.KIT_HOLD.get(name, 0.2)
+            was = state.kit.get(name, 0.0)
+            state.kit[name] = max(0.0, was - (step / hold if hold else 1.0))
+            if not beats:
+                continue
+            cursor = self._kit_at.get(name, 0)
+            if seeking:
+                nxt = beatmap.next_after(beats, now)
+                self._kit_at[name] = beats.index(nxt) if nxt is not None else len(beats)
+                continue
+            while cursor < len(beats) and beats[cursor].at <= now:
+                state.kit[name] = max(0.35, beats[cursor].strength)
+                cursor += 1
+            self._kit_at[name] = cursor
+        self._kit_seen = now
 
     def _fire_from_the_map(self, state) -> bool:
         """Flash because a beat is due. Returns whether the map was used.

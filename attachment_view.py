@@ -691,7 +691,13 @@ class AudioPane(QWidget):
         self._cancel_analysis()
         self.busy.start()
         self.spectrum.set_working(0.0)
-        self._decoder = attachment_audio.decode(path, done, failed, progress)
+        def kit(elements) -> None:
+            """The drums, which arrive a few seconds after the picture."""
+            if alive():
+                self.spectrum.set_elements(elements)
+
+        self._decoder = attachment_audio.decode(path, done, failed, progress,
+                                                kit)
 
     # -- transport --------------------------------------------------------
     @Slot()

@@ -745,7 +745,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,021 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,029 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1068,7 +1068,7 @@ in the [README](../README.md).
 | `briefing.py` | A scan read back as a briefing: what needs you, what arrived, where it is going |
 | `reply_log.py` | Who has already been written to, so a rule does not write to them twice |
 | `briefing_dialog.py` | That briefing on screen, with the flagged messages clickable |
-| `beatmap.py` | Where the beats are, found once before playback so the strobe can sit on them |
+| `beatmap.py` | Where the beats are, and which of them are kicks, snares and hats |
 | `cleanup.py` | What to clear out, as terms a server answers in one command, and the piles worth offering |
 | `cleanup_dialog.py` | The window for it: count from the server first, delete only what was counted |
 | `conversations.py` | Threading: which messages are the same conversation |
@@ -1105,7 +1105,7 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 3,021 tests, about three minutes
+./dev test        # 3,029 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```
