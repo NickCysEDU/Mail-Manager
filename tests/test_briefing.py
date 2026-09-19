@@ -283,6 +283,11 @@ class TestTheBriefingLinesShareTheirEdges:
 
         from briefing_dialog import _Card
 
+        # Saved and put back, rather than restored by applying what this
+        # guesses the session was using. Every one of these changes the
+        # application's font, and a test that guesses wrong leaves the ones
+        # after it measuring a different one.
+        was = (qapp.font(), qapp.palette(), qapp.styleSheet())
         theme.apply(qapp, "light", "normal", spacing=request.param)
         card = _Card("Needs a reply", "the ones with a deadline")
         card.add("3", "A short line")
@@ -299,7 +304,9 @@ class TestTheBriefingLinesShareTheirEdges:
         yield card
         card.close()
         card.deleteLater()
-        theme.apply(qapp, "light", "normal")
+        qapp.setFont(was[0])
+        qapp.setPalette(was[1])
+        qapp.setStyleSheet(was[2])
 
     @staticmethod
     def _boxes(card, column):
