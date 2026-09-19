@@ -2527,16 +2527,36 @@ class Rave(Scene):
         lamp = self._lamp(rect)
         key = (round(lamp, 2),
                round(hue, 2),
-               round(min(1.0, 0.34 + bass * 0.5 + flash * 0.4), 2),
-               round(min(1.0, 0.46 + bass * 0.42), 2),
+               # Brightness, over a narrower range than it had.
+               #
+               # It used to run from 0.34 to 1.24 and clamp: quiet
+               # passages were nearly black, where a colour cannot show,
+               # and loud ones sat against the ceiling, where every colour
+               # goes to white. Both ends read as grey, which is how the
+               # same room could be "mostly grey and not that coloured"
+               # and "blinding at some points" at once. The floor is
+               # higher and the ceiling lower, and what moves with the
+               # music now is mostly the *depth* of the colour.
+               round(min(1.0, 0.38 + bass * 0.26 + flash * 0.18), 2),
+               round(min(1.0, 0.52 + bass * 0.26), 2),
                round(0.58 + bass * 0.35, 2),
                round((horizon.x() - rect.left()) / rect.width(), 2),
                round((horizon.y() - rect.top()) / rect.height(), 2),
-               round(min(1.0, 0.30 + bass * 0.34 + flash * 0.25), 2))
+               round(min(1.0, 0.30 + bass * 0.34 + flash * 0.25), 2),
+               # How deep the colour runs. The bass is what makes the room
+               # vivid: quiet passages are muted and a bass hit floods
+               # them, which is the one thing a smooth wash of light can
+               # do that reads as loud without simply being brighter.
+               round(min(1.30, 0.80 + bass * 0.50), 2))
         if self._haze_key == key and self._haze_image is not None:
             return self._haze_image
-        lamp, shade, value, alpha, spread, across, down, second = key
+        (lamp, shade, value, alpha, spread, across, down, second,
+         deep) = key
         spread *= lamp
+
+        def rich(base: float) -> float:
+            """A saturation, taken as deep as the bass asks."""
+            return max(0.0, min(1.0, base * deep))
         size = QSize(self.HAZE, max(2, int(self.HAZE * rect.height()
                                            / max(1.0, rect.width()))))
         image = QImage(size, QImage.Format.Format_ARGB32_Premultiplied)
@@ -2551,11 +2571,12 @@ class Rave(Scene):
 
             # The room's own light: dim at the ceiling, warmer at the floor.
             wash = QLinearGradient(0.0, 0.0, 0.0, tall)
-            wash.setColorAt(0.0, QColor.fromHsvF(other, 0.92,
+            wash.setColorAt(0.0, QColor.fromHsvF(other, rich(0.92),
                                                  value * 0.52, alpha * 0.80))
-            wash.setColorAt(down, QColor.fromHsvF(shade, 0.78,
+            wash.setColorAt(down, QColor.fromHsvF(shade, rich(0.80),
                                                   value * 0.34, alpha * 0.34))
-            wash.setColorAt(1.0, QColor.fromHsvF((shade + 0.12) % 1.0, 0.86,
+            wash.setColorAt(1.0, QColor.fromHsvF((shade + 0.12) % 1.0,
+                                                 rich(0.88),
                                                  value * 0.86, alpha * 0.86))
             into.setBrush(wash)
             into.drawRect(box)
@@ -2564,10 +2585,11 @@ class Rave(Scene):
             away = QRadialGradient(
                 QPointF(middle.x() - wide * 0.22, middle.y() + tall * 0.10),
                 max(1.0, min(wide, tall) * spread * self.HAZE_REACH))
-            away.setColorAt(0.0, QColor.fromHsvF(other, 0.72,
-                                                 min(1.0, value * 1.2),
+            away.setColorAt(0.0, QColor.fromHsvF(other, rich(0.74),
+                                                 min(1.0, value * 1.15),
                                                  second))
-            away.setColorAt(0.55, QColor.fromHsvF((other + 0.08) % 1.0, 0.95,
+            away.setColorAt(0.55, QColor.fromHsvF((other + 0.08) % 1.0,
+                                                  rich(0.95),
                                                   value * 0.7, second * 0.45))
             away.setColorAt(1.0, QColor(0, 0, 0, 0))
             into.setBrush(away)
@@ -2576,11 +2598,16 @@ class Rave(Scene):
             # And the light at the end of it.
             glow = QRadialGradient(middle,
                                    max(1.0, min(wide, tall) * spread * 2.0))
-            glow.setColorAt(0.0, QColor.fromHsvF(shade, 0.28,
-                                                 min(1.0, value * 1.35),
-                                                 min(1.0, alpha * 1.15)))
-            glow.setColorAt(0.18, QColor.fromHsvF(shade, 0.72, value, alpha))
-            glow.setColorAt(0.55, QColor.fromHsvF((shade + 0.10) % 1.0, 0.92,
+            # The very centre is the lamp itself, so it is the one place
+            # allowed to be nearly white - and even there the bass pulls
+            # colour back into it.
+            glow.setColorAt(0.0, QColor.fromHsvF(shade, rich(0.34),
+                                                 min(1.0, value * 1.25),
+                                                 min(1.0, alpha * 1.05)))
+            glow.setColorAt(0.18, QColor.fromHsvF(shade, rich(0.78),
+                                                  value, alpha))
+            glow.setColorAt(0.55, QColor.fromHsvF((shade + 0.10) % 1.0,
+                                                  rich(0.94),
                                                   value * 0.7, alpha * 0.45))
             glow.setColorAt(1.0, QColor(0, 0, 0, 0))
             into.setBrush(glow)

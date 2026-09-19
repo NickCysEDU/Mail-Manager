@@ -5788,3 +5788,86 @@ class TestTheRingSweepsPastYou:
         assert radii[-1] * 2 > self.W * 1.4, (
             f"the ring was taken away at {radii[-1] * 2:.0f} across on a "
             f"{self.W} frame, which is while it is still on screen")
+
+
+class TestTheAirIsColouredByTheBass:
+    """"Make rave background more vibrant in full screen and make it a
+    little less bright. It can get blinding at some points. In full screen
+    the background is mostly grey and not that coloured. Maybe make it get
+    more saturated when bass hits?"
+
+    Both halves of that were the same fault. The air's brightness ran from
+    nearly black to over the ceiling and clamped: quiet passages were too
+    dark for a colour to show, and loud ones were pinned at the top where
+    every colour goes to white. Both ends read as grey.
+    """
+
+    @staticmethod
+    def _air(width, height, bass=0.5, flash=0.0):
+        """What the room looks like, as saturation and brightness."""
+        import statistics
+
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        scene = visualizers.Rave()
+        scene._last = None
+        state = SpectrumState()
+        state.levels = [0.3 + 0.3 * ((i * 5) % 7) / 7 for i in range(48)]
+        state.bass = bass
+        state.mid = state.synth = state.high = 0.4
+        state.strobe = flash > 0
+        state.hit = flash
+        state.kit = {"Kick": 0.3, "Snare": 0.2, "Hats": 0.2, "Synth": 0.3}
+        image = QImage(width, height,
+                       QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0))
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        try:
+            for _ in range(6):
+                scene.paint(painter, QRectF(0, 0, width, height), state)
+        finally:
+            painter.end()
+        seen = [image.pixelColor(x, y)
+                for y in range(0, height, 5) for x in range(0, width, 5)]
+        values = sorted(colour.valueF() for colour in seen)
+        return (statistics.mean(colour.saturationF() for colour in seen),
+                statistics.mean(values),
+                values[int(len(values) * 0.95)])
+
+    def test_a_bass_hit_floods_it_with_colour(self):
+        """The one thing a smooth wash of light can do that reads as loud
+        without simply being brighter."""
+        for width, height in ((640, 360), (1920, 1080)):
+            quiet = self._air(width, height, bass=0.15)[0]
+            loud = self._air(width, height, bass=0.95)[0]
+            assert loud > quiet * 1.2, (
+                f"at {width}x{height} the air is {quiet:.2f} saturated when "
+                f"it is quiet and {loud:.2f} on a bass hit")
+
+    def test_it_never_gets_blinding(self):
+        """It used to reach a brightness of 1.24 and clamp, which is a
+        white room."""
+        for bass, flash in ((0.95, 0.0), (0.95, 1.0), (1.0, 1.0)):
+            for width, height in ((640, 360), (1920, 1080)):
+                _sat, mean, top = self._air(width, height, bass, flash)
+                assert top < 0.85, (
+                    f"at bass {bass} and flash {flash}, the brightest "
+                    f"twentieth of a {width}x{height} frame is at {top:.2f}")
+                assert mean < 0.62, (
+                    f"the whole frame averages {mean:.2f} bright")
+
+    def test_a_quiet_passage_still_has_colour_in_it(self):
+        """The other end of the same fault: too dark to see a colour is
+        as grey as too bright to have one."""
+        for width, height in ((640, 360), (1920, 1080)):
+            sat, mean, _top = self._air(width, height, bass=0.15)
+            assert mean > 0.12, (
+                f"a quiet {width}x{height} frame averages {mean:.2f} bright, "
+                f"which is too dark for a colour to show")
+            assert sat > 0.35, (
+                f"a quiet {width}x{height} frame is {sat:.2f} saturated")
