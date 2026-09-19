@@ -471,9 +471,26 @@ class AudioPane(QWidget):
 
         self.strobe_source = _combo(
             list(_Spec.STROBE_SOURCES),
-            "Which part of the sound sets the strobe off.")
+            "Which part of the sound sets the strobe off.\n\n"
+            f"{_Spec.BY_HAND} means nothing fires by itself: the F key is "
+            f"the only light. F works on the other settings too, adding a "
+            f"flash to whatever the track is doing.")
         self.strobe_source.currentTextChanged.connect(
             self.spectrum.set_strobe_source)
+        # What to press, said where the choice is made.
+        #
+        # Picking "Manual" turns the automatic strobe off and leaves
+        # nothing on screen to say what turns it on. It was in the full
+        # screen key card, behind ?, which is no use to somebody who has
+        # just chosen it from a menu and is waiting for something to
+        # happen.
+        self.by_hand = QLabel(f"press {AudioPane.BY_HAND_KEY}")
+        self.by_hand.setFont(system_font())
+        self.by_hand.setStyleSheet("color: #8fd0ff;")
+        self.by_hand.setToolTip(
+            "Tap it for a flash, hold it for a held light.")
+        self.by_hand.setVisible(False)
+        self.strobe_source.currentTextChanged.connect(self._show_by_hand)
         self.source_box = _labelled("on", self.strobe_source)
         # When a scene sets the strobe up for itself, the controls have to
         # move with it, or they show one thing while another happens.
@@ -483,8 +500,8 @@ class AudioPane(QWidget):
         strobe_row = QHBoxLayout(self.strobe_group)
         strobe_row.setContentsMargins(0, 0, 0, 0)
         strobe_row.setSpacing(8)
-        for widget in (self.strobe_box, self.source_box, self.sense_box,
-                       self.rate_box):
+        for widget in (self.strobe_box, self.source_box, self.by_hand,
+                       self.sense_box, self.rate_box):
             strobe_row.addWidget(widget)
 
         # A row that wraps. These controls come and go with what is chosen,
@@ -915,6 +932,7 @@ class AudioPane(QWidget):
         self._full_links = []
         self._full = None
         self._full_play = None
+        self._by_hand_echo = []
 
     def transport(self, action: str) -> None:
         """J, K and L, wherever they were pressed."""
@@ -927,6 +945,10 @@ class AudioPane(QWidget):
                             self.position.value() + delta))
         self.position.setValue(target)
         self._seek(target)
+
+    #: The key that flashes the strobe by hand, written where somebody
+    #: choosing "Manual" will see it.
+    BY_HAND_KEY = "F"
 
     #: The keys that play the visualiser, and what each one does.
     #:
@@ -994,6 +1016,18 @@ class AudioPane(QWidget):
             self.spectrum.hold_flash(wants)
             return True
         return False
+
+    def _show_by_hand(self, source: str) -> None:
+        """Say which key flashes it, whenever the strobe waits for one."""
+        from attachment_widgets import Spectrum as _Spec
+
+        wanted = source == _Spec.BY_HAND
+        self.by_hand.setVisible(wanted)
+        for label in getattr(self, "_by_hand_echo", ()):
+            try:
+                label.setVisible(wanted)
+            except RuntimeError:      # the full screen window has gone
+                pass
 
     def _sync_visual_controls(self) -> None:
         """Available whenever there is a sound file, analysed or not."""
@@ -1069,6 +1103,13 @@ class AudioPane(QWidget):
         reaction.setCurrentText(self.strobe_source.currentText())
         reaction.currentTextChanged.connect(self.strobe_source.setCurrentText)
 
+        # And the same hint, on the bar, for the same reason.
+        by_hand = QLabel(f"press {self.BY_HAND_KEY}")
+        by_hand.setFont(system_font())
+        by_hand.setStyleSheet("color: #8fd0ff;")
+        by_hand.setVisible(reaction.currentText() == _Spec.BY_HAND)
+        self._by_hand_echo = [by_hand]
+
         # Back the other way as well. The keys drive this pane's own
         # controls, so without these the picture changed and the box in
         # front of it went on saying what it used to be.
@@ -1093,7 +1134,7 @@ class AudioPane(QWidget):
         full.add_control(clock)
         full.add_control(QLabel("Vol"))
         full.add_control(volume)
-        for widget in (scene, strobe, reaction, colours):
+        for widget in (scene, strobe, reaction, by_hand, colours):
             full.add_control(widget)
         full.add_control(leave)
 
