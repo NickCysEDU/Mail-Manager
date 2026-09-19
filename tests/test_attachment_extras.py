@@ -4465,11 +4465,65 @@ class TestTheRaveIsARoom:
             flat = self._drawn()
         finally:
             visualizers.Rave.BANDS = was
-        faded = self._ink(with_fade, 0.42, 0.58, 0.50, 0.60)
-        plain = self._ink(flat, 0.42, 0.58, 0.50, 0.60)
-        assert faded < plain * 0.95, (
-            f"the far end has {faded} of light with the banding and "
-            f"{plain} without, so the banding is not doing anything")
+        # The pixels it changes, not the light in a region. The far rows
+        # are squeezed into a thin strip at the vanishing point, where the
+        # air is at its brightest - so dimming them moves a region's total
+        # by a sixth of a per cent while being plainly a different
+        # picture. Two versions of this measured regions and could not
+        # tell the two apart at all.
+        changed = 0
+        for y in range(self.H):
+            for x in range(0, self.W, 2):
+                one = with_fade.pixelColor(x, y).getRgb()[:3]
+                two = flat.pixelColor(x, y).getRgb()[:3]
+                if sum(abs(a - b) for a, b in zip(one, two)) > 8:
+                    changed += 1
+        assert changed > 1500, (
+            f"turning the banding off changed {changed} pixels, so it is "
+            f"not doing anything")
+
+    def test_the_dimmer_bands_are_the_further_ones(self):
+        """That the banding does something is not enough: it has to do it
+        with distance.
+
+        It was written ``range(band, DEPTH, BANDS)``, which walks the
+        whole corridor taking every fourth row - so the four "depth bands"
+        were four interleaved sets spread from your feet to the vanishing
+        point, and dimming one dimmed a quarter of the lines *everywhere*.
+        It read as a faint texture rather than as distance, and the test
+        above cannot tell the two apart because both change the same
+        number of pixels.
+        """
+        import visualizers
+
+        scene = self._rave()
+        seen = []
+        real = visualizers.Rave._beam
+
+        def spy(painter, path, colour):
+            box = path.boundingRect()
+            seen.append((colour.alphaF(), box.top(), box.bottom()))
+            real(painter, path, colour)
+
+        visualizers.Rave._beam = staticmethod(spy)
+        try:
+            self._drawn(scene)
+        finally:
+            visualizers.Rave._beam = staticmethod(real)
+
+        # The first surface drawn is the floor: one path of lines running
+        # away from you, then one path per band of lines across it.
+        bands = seen[1:1 + visualizers.Rave.BANDS]
+        assert len(bands) == visualizers.Rave.BANDS, "the floor drew no bands"
+        brightest = max(bands)
+        dimmest = min(bands)
+        # A slice of the corridor has a top and a bottom of its own. Four
+        # interleaved sets each span the whole of it, so their boxes sit
+        # on top of one another and this cannot be true of them.
+        assert brightest[1] > dimmest[2], (
+            f"the brightest band runs from y={brightest[1]:.0f} and the "
+            f"dimmest ends at y={dimmest[2]:.0f}, so they are spread "
+            f"through each other rather than one being nearer")
 
     def test_the_far_end_is_lit_rather_than_a_hole(self):
         """A closed corridor fading to nothing has a hole in it: the lines

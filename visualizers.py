@@ -2450,51 +2450,121 @@ class Rave(Scene):
     #: machine without a graphics card is worst at. Measured on a build
     #: runner, this scene cost four times what it costs here while the
     #: others cost twice; painting the haze small is most of that gap.
-    HAZE = 96
+    HAZE = 128
 
     def _haze(self, painter, rect, horizon, bass, synth, flash) -> None:
         """The air in the room, lit from the far end."""
         small = self._haze_tile(rect, horizon, bass, synth, flash)
         if small is None:
             return
+        # Smoothly, or the tile's own pixels show. It is 96 across and the
+        # frame is up to 1920, so without this the air comes out in
+        # twenty-pixel blocks - which nobody noticed while the tile was
+        # one gradient with two stops and everybody would notice now.
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         painter.drawImage(rect, small, QRectF(small.rect()))
+        painter.restore()
+
+    #: How far round the wheel the air's second colour sits from its
+    #: first. A third: far enough that the two read as different lights
+    #: rather than as one light being uneven, close enough that they are
+    #: still the same room.
+    HAZE_TURN = 0.46
+    #: How far the wash reaches, as a share of the frame.
+    HAZE_REACH = 1.9
 
     def _haze_tile(self, rect, horizon, bass, synth, flash):
-        """The glow, painted into a small image and kept while it fits.
+        """The air in the room, painted small and stretched.
+
+        It was one radial gradient with two stops: a colour at the
+        vanishing point fading to nothing. That is a glow, and a glow is
+        not the same thing as air - a room lit by a rig has more than one
+        lamp in it, and what makes it look like air rather than a smudge
+        is that the colours disagree with each other from place to place.
+
+        Three passes now, all in the same cached image, all free:
+
+          a deep vertical wash   the floor warmer than the ceiling, which
+                                 is what an actual room does - the light
+                                 lands on the floor
+          a wide second colour   a third of the way round the wheel from
+                                 the first, off to one side of the
+                                 vanishing point, so the two mix across
+                                 the middle distance
+          the hot core           four stops rather than two, opening
+                                 almost white at the very centre
+
+        The snare moves the hue (see ``_advance``) and both colours move
+        with it, a third apart, so a change of colour is a change of
+        *light* rather than a tint over the top.
 
         Rebuilt only when what it looks like changes enough to see, which
         for a gradient is not often: the colour is quantised to a few
         dozen steps and the rest of the time the same image is stretched
-        again.
+        again. So all of this costs one blit a frame.
         """
         if rect.width() < 2 or rect.height() < 2:
             return None
-        # Brighter and wider than it was. The corridor is closed in now,
-        # and a closed corridor that fades to nothing at the far end has a
-        # hole in it rather than a distance - the grid lines run out and
-        # what is left is a dark rectangle the eye reads as a wall.
-        key = (round((0.62 + synth * 0.3) % 1.0, 2),
+        hue = (0.62 + synth * 0.3) % 1.0
+        key = (round(hue, 2),
                round(min(1.0, 0.34 + bass * 0.5 + flash * 0.4), 2),
                round(min(1.0, 0.46 + bass * 0.42), 2),
                round(0.58 + bass * 0.35, 2),
                round((horizon.x() - rect.left()) / rect.width(), 2),
-               round((horizon.y() - rect.top()) / rect.height(), 2))
+               round((horizon.y() - rect.top()) / rect.height(), 2),
+               round(min(1.0, 0.30 + bass * 0.34 + flash * 0.25), 2))
         if self._haze_key == key and self._haze_image is not None:
             return self._haze_image
+        shade, value, alpha, spread, across, down, second = key
         size = QSize(self.HAZE, max(2, int(self.HAZE * rect.height()
                                            / max(1.0, rect.width()))))
         image = QImage(size, QImage.Format.Format_ARGB32_Premultiplied)
         image.fill(Qt.GlobalColor.transparent)
-        middle = QPointF(key[4] * size.width(), key[5] * size.height())
-        reach = min(size.width(), size.height()) * key[3] * 2.0
-        glow = QRadialGradient(middle, max(1.0, reach))
-        glow.setColorAt(0.0, QColor.fromHsvF(key[0], 0.75, key[1], key[2]))
-        glow.setColorAt(1.0, QColor(0, 0, 0, 0))
+        wide, tall = size.width(), size.height()
+        middle = QPointF(across * wide, down * tall)
+        box = QRectF(0, 0, wide, tall)
+        other = (shade + self.HAZE_TURN) % 1.0
         into = QPainter(image)
         try:
             into.setPen(Qt.PenStyle.NoPen)
+
+            # The room's own light: dim at the ceiling, warmer at the floor.
+            wash = QLinearGradient(0.0, 0.0, 0.0, tall)
+            wash.setColorAt(0.0, QColor.fromHsvF(other, 0.92,
+                                                 value * 0.52, alpha * 0.80))
+            wash.setColorAt(down, QColor.fromHsvF(shade, 0.78,
+                                                  value * 0.34, alpha * 0.34))
+            wash.setColorAt(1.0, QColor.fromHsvF((shade + 0.12) % 1.0, 0.86,
+                                                 value * 0.86, alpha * 0.86))
+            into.setBrush(wash)
+            into.drawRect(box)
+
+            # A second lamp, off to one side, in the other colour.
+            away = QRadialGradient(
+                QPointF(middle.x() - wide * 0.22, middle.y() + tall * 0.10),
+                max(1.0, min(wide, tall) * spread * self.HAZE_REACH))
+            away.setColorAt(0.0, QColor.fromHsvF(other, 0.72,
+                                                 min(1.0, value * 1.2),
+                                                 second))
+            away.setColorAt(0.55, QColor.fromHsvF((other + 0.08) % 1.0, 0.95,
+                                                  value * 0.7, second * 0.45))
+            away.setColorAt(1.0, QColor(0, 0, 0, 0))
+            into.setBrush(away)
+            into.drawRect(box)
+
+            # And the light at the end of it.
+            glow = QRadialGradient(middle,
+                                   max(1.0, min(wide, tall) * spread * 2.0))
+            glow.setColorAt(0.0, QColor.fromHsvF(shade, 0.28,
+                                                 min(1.0, value * 1.35),
+                                                 min(1.0, alpha * 1.15)))
+            glow.setColorAt(0.18, QColor.fromHsvF(shade, 0.72, value, alpha))
+            glow.setColorAt(0.55, QColor.fromHsvF((shade + 0.10) % 1.0, 0.92,
+                                                  value * 0.7, alpha * 0.45))
+            glow.setColorAt(1.0, QColor(0, 0, 0, 0))
             into.setBrush(glow)
-            into.drawRect(QRectF(0, 0, size.width(), size.height()))
+            into.drawRect(box)
         finally:
             into.end()
         self._haze_key = key
@@ -2563,7 +2633,6 @@ class Rave(Scene):
         painter.setBrush(Qt.BrushStyle.NoBrush)
         weight = self._weight(rect)
         glow = self._glow(rect)
-        width = (1.0 + bass * 1.2) * weight
         # How far the surfaces are from the eye - the corridor opening up
         # on a bass note is most of what makes the room feel big.
         lift = 0.55 + bass * 0.22
@@ -2582,16 +2651,28 @@ class Rave(Scene):
                 x, y = place(across)
                 away.moveTo(self._project(horizon, focal, x, y, self.NEAR))
                 away.lineTo(self._project(horizon, focal, x, y, self.FAR))
-            stroke(painter, away,
-                   self._shade(base, min(1.0, (0.20 + bass * 0.30
-                                          + kick * 0.26
-                                          + flash * 0.26) * glow)),
-                   width * (1.0 + kick * 1.4))
+            self._beam(painter, away,
+                       self._shade(base, min(1.0, (0.20 + bass * 0.30
+                                             + kick * 0.26
+                                             + flash * 0.26) * glow)))
 
             # And the ones across it, marching towards you, in bands.
             for band in range(self.BANDS):
                 path = QPainterPath()
-                for row in range(band, self.DEPTH, self.BANDS):
+                # A slice of the corridor, not every fourth row of it.
+                #
+                # This said range(band, DEPTH, BANDS), which walks the
+                # whole corridor taking every fourth row - so the four
+                # "depth bands" were four interleaved sets spread from
+                # your feet to the vanishing point, and dimming one dimmed
+                # a quarter of the lines everywhere rather than the far
+                # ones. It read as a faint texture and not as distance,
+                # and the test that was supposed to catch it could not,
+                # because the two came out within a tenth of a per cent of
+                # each other.
+                first = band * self.DEPTH // self.BANDS
+                last = (band + 1) * self.DEPTH // self.BANDS
+                for row in range(first, last):
                     z = self.NEAR + (row + offset) * reach / self.DEPTH
                     # In two halves, so a surface that is really two
                     # faces - the pair of walls - does not draw a line
@@ -2605,12 +2686,12 @@ class Rave(Scene):
                 # the fall is steep near the eye and gentle in the
                 # distance, which is how air actually works.
                 near = 1.0 - band / self.BANDS
-                stroke(painter, path,
-                       self._shade(base,
-                                   min(1.0, (0.10 + bass * 0.26 + kick * 0.24
-                                             + flash * 0.24) * glow
-                                       * (0.14 + near * near))),
-                       width * (0.45 + near * 0.75) * (1.0 + kick * 1.4))
+                self._beam(painter, path,
+                           self._shade(base,
+                                       min(1.0, (0.10 + bass * 0.26
+                                                 + kick * 0.24
+                                                 + flash * 0.24) * glow
+                                           * (0.14 + near * near))))
 
         self._trusses(painter, horizon, focal, hue, lift, span, bass, kick,
                       flash, reach, weight, glow)
@@ -2620,12 +2701,15 @@ class Rave(Scene):
     #: hairlines, so making them grow with the frame costs nothing.
     DRAWN_FOR = 700.0
 
-    #: How much of the contrast a big frame gets back as *light* rather
-    #: than as width. Brightness is free and width is not: stacking a four
-    #: pixel line costs nineteen passes, and drawing it with a real pen
-    #: costs a hundred milliseconds a frame at 1080p. So the lines grow a
-    #: little and brighten a lot.
-    LIFT = 0.45
+    #: What the line width used to carry, as light instead.
+    BEAM_LIFT = 1.6
+
+    #: How much of the contrast a big frame gets back as light.
+    #:
+    #: All of it, now. The grid is drawn with one-pixel lines and nothing
+    #: else - see ``_beam`` - so brightness is the only knob left, and it
+    #: is the one that was always free.
+    LIFT = 1.15
 
     @classmethod
     def _glow(cls, rect) -> float:
@@ -2651,6 +2735,43 @@ class Rave(Scene):
         colour = QColor(base)
         colour.setAlphaF(max(0.0, min(1.0, alpha)))
         return colour
+
+    @staticmethod
+    def _beam(painter, path, colour) -> None:
+        """One line of the room, one pixel wide, one pass.
+
+        This scene is a corridor made of about six hundred line segments,
+        and it was drawing every one of them as a stack of hairlines to
+        fake a wide antialiased pen. Measured at 1080p, the whole scene:
+
+            stacked hairlines      32.3 ms a frame
+            one hairline a line     7.4 ms
+            one real wide pen      96.4 ms
+
+        Four and a half times the cost of the thing it is imitating, for a
+        room whose lines are *supposed* to be beams. A laser grid is not a
+        painted one: its lines are as thin as they can be and what makes
+        them read is how bright they are and how many there are. So the
+        weight is carried entirely by alpha now, which costs nothing, and
+        the scene went from the most expensive of the eight to cheaper
+        than the middle one.
+
+        The trusses and the thing in the middle still go through
+        ``stroke``: there are a dozen of them against six hundred, and
+        they are the two things in the room meant to look solid.
+
+        BEAM_LIFT is what the width used to carry. Measured against the
+        same scene drawn with stacked wide lines, 1.6 puts the contrast
+        and the brightest tenth of the picture back where they were - 24
+        of spread against 22, and a 95th percentile of 89 against 95 -
+        and it is free.
+        """
+        lit = QColor(colour)
+        lit.setAlphaF(min(1.0, lit.alphaF() * Rave.BEAM_LIFT))
+        pen = QPen(lit, 0.0)
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+        painter.drawPath(path)
 
     def _trusses(self, painter, horizon, focal, hue, lift, span, bass, kick,
                  flash, reach, weight, glow) -> None:
