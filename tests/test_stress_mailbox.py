@@ -358,6 +358,61 @@ def _fixed_now(criteria):
     return NOW
 
 
+@pytest.fixture(autouse=True)
+def _one_clock(monkeypatch):
+    """Both sides of every date comparison read the same moment.
+
+    The criteria build their IMAP BEFORE date from ``datetime.now()`` and
+    the expectations here are worked out against a fixed NOW. Those agree
+    for as long as the two fall on the same day, which is to say they
+    agree until a run crosses midnight - and then a whole day of messages
+    sits between the two cutoffs. A build runner found it at 00:07: 19
+    deleted that should not have been.
+
+    Freezing the clock the criteria read is the fix. Nothing about the
+    product changes; it is this file that was reading two clocks and
+    calling them one.
+    """
+    import cleanup
+
+    class Frozen(cleanup.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW
+
+    monkeypatch.setattr(cleanup, "datetime", Frozen)
+
+
+class TestTheSuiteReadsOneClock:
+    """The date criteria build their cutoff from the current moment and
+    the expectations here are worked out against a fixed one. Those agree
+    for exactly as long as they fall on the same day.
+    """
+
+    def test_the_criteria_and_the_expectations_share_a_now(self):
+        import cleanup
+
+        assert cleanup.datetime.now() == NOW, (
+            "the criteria are reading the wall clock, so this suite fails "
+            "whenever a run crosses midnight")
+
+    def test_a_day_rolling_over_does_not_move_the_cutoff(self):
+        """What actually went wrong, held still: with the two clocks a day
+        apart, a year-old filter took a whole extra day of messages - 19
+        of them, on a build runner at seven minutes past midnight."""
+        from cleanup import Criteria
+
+        criteria = Criteria(older_than_days=365, only_seen=False)
+        tokens = criteria.search_tokens()
+        assert "BEFORE" in tokens
+        when = tokens[tokens.index("BEFORE") + 1]
+        from cleanup import imap_date
+
+        assert when == imap_date(NOW - timedelta(days=365)), (
+            f"the search says {when}, which is not 365 days before the "
+            f"moment the expectations use")
+
+
 class TestNothingIsDeletedByAccident:
     def test_criteria_that_ask_for_nothing_are_refused(self, big):
         server = SearchingIMAP(list(big))
