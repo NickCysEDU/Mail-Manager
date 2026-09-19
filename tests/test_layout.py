@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import inspect
+
 import pytest
+from PySide6.QtWidgets import QComboBox
+from models import NonJobRouting
 
 pytest.importorskip("PySide6")
 
@@ -407,3 +411,298 @@ class TestSwitchingBeforeTheEngineExists:
         finally:
             window.scan_worker = None
             window.close()
+
+
+class TestTheStatusLineStaysInsideItsLabel:
+    """"The 'analyzed' status bar in the main screen's text goes out of
+    bounds."
+
+    It was cut to fit once, when it was set. The width it was cut to is
+    decided by the layout, and the usage figure to its right grows while a
+    run is going - so a message that fitted when it was set had some of its
+    room taken away afterwards and ran off the end.
+    """
+
+    @pytest.fixture
+    def window(self, qapp, tmp_path, monkeypatch):
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        window = MainWindow(Settings(icloud_email="a@b.com"),
+                            InMemoryCredentialStore())
+        window.model.set_items([make_item(str(i)) for i in range(6)])
+        window.show()
+        yield window
+        window.close()
+
+    def test_the_text_fits_the_label_it_is_in(self, qapp, window):
+        from PySide6.QtGui import QFontMetrics
+
+        window.resize(900, 600)
+        qapp.processEvents()
+        window._set_status("Analyzed 128 of 512 fetched so far…")
+        qapp.processEvents()
+        label = window.status_label
+        width = QFontMetrics(label.font()).horizontalAdvance(label.text())
+        assert width <= label.width(), (
+            f"the status text is {width}px wide in a {label.width()}px label")
+
+    def test_the_progress_bars_own_text_fits_the_bar(self, qapp, window,
+                                                     monkeypatch):
+        """Where it actually ran out of bounds.
+
+        Qt centres the text it draws inside a progress bar and lets it run
+        out past the widget. The bar is never wider than 320 pixels and the
+        message is twice that.
+        """
+        from PySide6.QtGui import QFontMetrics
+
+        window.resize(900, 600)
+        qapp.processEvents()
+        monkeypatch.setattr(window, "running_workers", lambda: True)
+        message = "Analyzed 128 of 512 fetched so far, and a good way to go"
+        window._on_progress(128, 512, message)
+        qapp.processEvents()
+        bar = window.progress
+        shown = (bar.format().replace("%v", str(bar.value()))
+                 .replace("%m", str(bar.maximum())))
+        width = QFontMetrics(bar.font()).horizontalAdvance(shown)
+        assert width <= bar.width(), (
+            f"the bar draws {width}px of text in a {bar.width()}px bar: "
+            f"{shown!r}")
+        assert bar.toolTip() == message, "the whole message was lost"
+
+    def test_the_progress_bar_still_says_where_it_is_up_to(self, qapp, window,
+                                                           monkeypatch):
+        """Cutting it to fit must not cut the counts off."""
+        monkeypatch.setattr(window, "running_workers", lambda: True)
+        window.resize(900, 600)
+        qapp.processEvents()
+        window._on_progress(128, 512, "Analyzed 128 of 512 fetched so far")
+        assert "%v / %m" in window.progress.format(), (
+            f"the bar no longer shows its counts: "
+            f"{window.progress.format()!r}")
+
+
+class TestTheDropdownsShowTheirOptions:
+    """"Options in dropdowns in rules settings are cut off as well. When
+    longer entries are selected they do not fully display in their boxes."
+
+    Qt sizes a combo's menu to the combo, and these are deliberately narrow:
+    three or four of them divide one row. So an option too long for the box
+    was cut short in the menu as well, where there is nothing beside it and
+    no reason to cut it.
+    """
+
+    @staticmethod
+    def _combo(qapp, options):
+        from widgets import RoomyCombo
+
+        combo = RoomyCombo()
+        for option in options:
+            combo.addItem(option)
+        combo.setMinimumWidth(88)
+        combo.resize(88, 26)
+        combo.show()
+        qapp.processEvents()
+        return combo
+
+    OPTIONS = ("is", "is not", "contains", "does not contain",
+               "matches this regular expression", "is one of my mailboxes")
+
+    def test_the_menu_is_as_wide_as_the_longest_option(self, qapp):
+        from PySide6.QtGui import QFontMetrics
+
+        combo = self._combo(qapp, self.OPTIONS)
+        try:
+            combo.showPopup()
+            qapp.processEvents()
+            metrics = QFontMetrics(combo.font())
+            widest = max(metrics.horizontalAdvance(option)
+                         for option in self.OPTIONS)
+            room = combo.view().minimumWidth()
+            assert room >= widest, (
+                f"the longest option needs {widest}px and the menu offers "
+                f"{room}px, so it is cut off")
+        finally:
+            combo.hidePopup()
+            combo.close()
+
+    def test_the_box_asks_for_room_for_what_it_is_showing(self, qapp):
+        from PySide6.QtGui import QFontMetrics
+
+        combo = self._combo(qapp, self.OPTIONS)
+        try:
+            combo.setCurrentIndex(
+                self.OPTIONS.index("matches this regular expression"))
+            qapp.processEvents()
+            needed = QFontMetrics(combo.font()).horizontalAdvance(
+                combo.currentText())
+            assert combo.minimumWidth() >= min(combo.MOST, needed), (
+                f"showing {combo.currentText()!r} needs {needed}px and the "
+                f"box only asks for {combo.minimumWidth()}px")
+        finally:
+            combo.close()
+
+    def test_a_very_long_entry_still_gives_way(self, qapp):
+        """A box that insists on its text would push the dialog off the
+        screen."""
+        combo = self._combo(qapp, ("short", "x" * 400))
+        try:
+            combo.setCurrentIndex(1)
+            qapp.processEvents()
+            assert combo.minimumWidth() <= combo.MOST, (
+                f"the box demands {combo.minimumWidth()}px of the layout")
+        finally:
+            combo.close()
+
+    def test_a_short_option_does_not_shrink_the_box(self, qapp):
+        """The floor the dialog asked for is still the floor."""
+        combo = self._combo(qapp, self.OPTIONS)
+        try:
+            combo.setCurrentIndex(0)      # "is"
+            qapp.processEvents()
+            assert combo.minimumWidth() >= 88, (
+                f"the box shrank to {combo.minimumWidth()}px, under the 88 "
+                f"the row asked for")
+        finally:
+            combo.close()
+
+    def test_the_rules_dialog_uses_them(self, qapp):
+        """Where the report came from."""
+        import settings_dialog
+        from widgets import RoomyCombo
+
+        source = inspect.getsource(settings_dialog)
+        assert "QComboBox()" not in source, (
+            "a plain QComboBox is still being built in the settings dialog")
+        assert issubclass(RoomyCombo, QComboBox)
+
+
+class TestMaximumContrastReachesTheRows:
+    """"Max contrast maintains the same level of contrast for text in
+    unselected rows in the viewer."
+
+    It did. Maximum contrast is monochrome on purpose, and the palette says
+    so, but the table's row colours were written out as fixed values: a grey
+    for a row already filed, another for a folder being left alone, a hue
+    for the category. None of them consult the palette, so every unselected
+    row read exactly as it did at normal contrast.
+    """
+
+    @staticmethod
+    def _item(moved=False, leave=False):
+        from tests.test_gui import make_item
+
+        item = make_item("1")
+        item.moved = moved
+        if leave:
+            item.non_job_routing = NonJobRouting.LEAVE
+        return item
+
+    def _foreground(self, qapp, contrast, column):
+        """What the model says to paint a row's text in."""
+        import theme
+        from triage_table import TriageTableModel
+
+        theme.apply(qapp, "light", contrast)
+        try:
+            model = TriageTableModel()
+            model.set_items([self._item(moved=True)])
+            index = model.index(0, column)
+            return model.data(index, Qt.ItemDataRole.ForegroundRole)
+        finally:
+            theme.apply(qapp, "light", "normal")
+
+    def test_a_filed_rows_text_follows_the_palette(self, qapp):
+        from triage_table import TriageTableModel
+
+        normal = self._foreground(qapp, "normal", TriageTableModel.COL_SUBJECT)
+        most = self._foreground(qapp, "maximum", TriageTableModel.COL_SUBJECT)
+        assert normal is not None, (
+            "a filed row used to be painted grey, and this no longer sees it")
+        assert most is None, (
+            f"at maximum contrast the row is still painted {most.name()}, "
+            f"which is the same grey as at normal contrast")
+
+    def test_the_monochrome_flag_follows_what_was_applied(self, qapp):
+        import theme
+
+        try:
+            theme.apply(qapp, "light", "maximum")
+            assert theme.monochrome() is True
+            assert theme.active_contrast() == "maximum"
+            theme.apply(qapp, "light", "high")
+            assert theme.monochrome() is False
+            theme.apply(qapp, "light", "normal")
+            assert theme.monochrome() is False
+        finally:
+            theme.apply(qapp, "light", "normal")
+
+    def test_the_category_chip_gives_up_its_hue(self, qapp):
+        """The dot still carries the colour; the words do not."""
+        import theme
+        from PySide6.QtGui import QPalette
+
+        theme.apply(qapp, "light", "maximum")
+        try:
+            palette = qapp.palette()
+            ink = palette.color(QPalette.ColorRole.Text)
+            assert theme.monochrome()
+            assert ink.name() == "#000000", (
+                f"maximum contrast in light mode should write in black, not "
+                f"{ink.name()}")
+        finally:
+            theme.apply(qapp, "light", "normal")
+
+
+class TestNothingTouchesTheSplitterBar:
+    """"The attachments button and the field below it are too close to the
+    separating bar to their right. Ensure proper padding across the app."
+
+    Both halves of the preview had zero margins, so everything down the
+    right edge of the left half sat hard against the handle between them.
+    """
+
+    #: Written out rather than read from PreviewPane.GUTTER. Taken from the
+    #: constant, every assertion below slides with it: setting it to zero
+    #: made the whole class pass against the layout it was written to
+    #: reject.
+    LEAST = 6
+
+    @pytest.fixture
+    def pane(self, qapp):
+        from triage_table import PreviewPane
+
+        pane = PreviewPane()
+        pane.resize(1000, 600)
+        pane.show()
+        qapp.processEvents()
+        yield pane
+        pane.close()
+        pane.deleteLater()
+
+    def test_the_attachments_button_clears_the_bar(self, qapp, pane):
+        handle = pane.splitter.handle(1)
+        button = pane.attachments_button
+        right = button.mapTo(pane, button.rect().topRight()).x()
+        bar = handle.mapTo(pane, handle.rect().topLeft()).x()
+        assert bar - right >= self.LEAST, (
+            f"the button's right edge is at {right} and the bar starts at "
+            f"{bar}, a gap of {bar - right}px")
+
+    def test_the_text_box_clears_the_bar(self, qapp, pane):
+        handle = pane.splitter.handle(1)
+        view = pane.body_view
+        right = view.mapTo(pane, view.rect().topRight()).x()
+        bar = handle.mapTo(pane, handle.rect().topLeft()).x()
+        assert bar - right >= self.LEAST, (
+            f"the text box's right edge is at {right} and the bar starts at "
+            f"{bar}, a gap of {bar - right}px")
+
+    def test_the_analysis_side_clears_it_too(self, qapp, pane):
+        handle = pane.splitter.handle(1)
+        view = pane.reasoning_view
+        left = view.mapTo(pane, view.rect().topLeft()).x()
+        bar = handle.mapTo(pane, handle.rect().topRight()).x()
+        assert left - bar >= self.LEAST, (
+            f"the reasoning box starts at {left} and the bar ends at {bar}, "
+            f"a gap of {left - bar}px")

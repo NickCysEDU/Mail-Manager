@@ -1344,11 +1344,14 @@ class IMAPEngine:
                     progress(done, total, f"Filed {done} of {total} message(s)…")
 
         if missing_receipts:
+            # Named, because "this server" is no help to somebody with more
+            # than one account set up.
             report.warnings.append(
-                "This server did not say which UIDs it gave the copies in "
-                + ", ".join(f"\u201c{name}\u201d" for name in sorted(missing_receipts))
-                + ", so those messages cannot be put back automatically. "
-                "Move them yourself if you need to.")
+                f"{self.host} gave no new UIDs for the copies in "
+                + ", ".join(f"\u201c{name}\u201d"
+                            for name in sorted(missing_receipts))
+                + ". Undo cannot put those messages back. Move them "
+                "yourself.")
 
         # 3. EXPUNGE.
         if deleted_uids:

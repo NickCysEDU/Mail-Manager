@@ -82,14 +82,15 @@ from models import (
 from flowlayout import FlowLayout, Spacer
 from widgets import (  # noqa: F401 - re-exported; gui was the home of these
     ACCENT_AMBER, ACCENT_BLUE, ACCENT_GREEN, ACCENT_RED, AdaptiveLineEdit,
-    SelectableMessages, VersionLabel, WrappingList, _abandon, _chip,
+    ElidingLabel, SelectableMessages, VersionLabel, WrappingList, _abandon, _chip,
     _compact_button, _confidence_rgb, _draw_wrapped, _format_duration, _html,
     _is_dark, _mono_font, _one_line, _paint_button, _scrollable, _separator,
     _shade, _stored_date, _swatch, _tint, _wrap, _wrap_lines,
     describe, install_selectable_messages, menu_text,
     remove_selectable_messages,
     say, selectable, system_font,
-    EMPTY_STATE, NOTHING_FOUND, SHOW_ALL, SHOW_JOB_ONLY, SHOW_SELECTED,
+    EMPTY_STATE, NOTHING_FOUND, SHOW_ALL, SHOW_JOB_ONLY,
+    SHOW_OTHER_ONLY, SHOW_SELECTED,
     _ABANDONED, _one_of)
 import helpmode
 import theme
@@ -366,7 +367,7 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
 
-        self.status_label = QLabel("Ready.")
+        self.status_label = ElidingLabel("Ready.")
         self.status_label.setMinimumWidth(120)
         self.status_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.usage_label = QLabel("")
@@ -1212,6 +1213,8 @@ class MainWindow(QMainWindow):
             "Narrow the table to job mail, or to the rows you have ticked.")
         self.show_combo.addItem("Show: everything", SHOW_ALL)
         self.show_combo.addItem("Show: job mail only", SHOW_JOB_ONLY)
+        self.show_combo.addItem("Show: everything but job mail",
+                                SHOW_OTHER_ONLY)
         self.show_combo.addItem("Show: ticked only", SHOW_SELECTED)
         # Wide enough for its longest entry, popup included. Left to size
         # itself it elided them, so "Show: job mail only" arrived as
@@ -1475,7 +1478,7 @@ class MainWindow(QMainWindow):
             said = f"Unticked {changed} of {len(rows)} shown"
         else:
             changed = self.model.restore_suggested_rows(rows)
-            said = f"Put {changed} of {len(rows)} shown back as suggested"
+            said = f"Reset {changed} of {len(rows)} shown to suggestions"
         self._set_status(said)
 
     def _build_ticks_menu(self) -> None:
@@ -1487,7 +1490,8 @@ class MainWindow(QMainWindow):
                  "Ctrl+Shift+A"),
                 ("Untick everything shown", "none", "Ctrl+D"),
                 (None, None, None),
-                ("Put the suggested ticks back", "suggested", "Ctrl+Shift+R")):
+                ("Reset ticks to suggestions", "suggested",
+                 "Ctrl+Shift+R")):
             if label is None:
                 self.ticks_menu.addSeparator()
                 continue
@@ -1503,6 +1507,7 @@ class MainWindow(QMainWindow):
     def _show_filter_changed(self) -> None:
         mode = self.show_combo.currentData()
         self.proxy.set_hide_non_job(mode == SHOW_JOB_ONLY)
+        self.proxy.set_hide_job(mode == SHOW_OTHER_ONLY)
         self.proxy.set_only_selected(mode == SHOW_SELECTED)
         self.settings.hide_non_job = mode == SHOW_JOB_ONLY
 
@@ -1614,7 +1619,7 @@ class MainWindow(QMainWindow):
             ("Tick everything shown", "all"),
             ("Tick only the confident ones shown", "confident"),
             ("Untick everything shown", "none"),
-            ("Put the suggested ticks back", "suggested"),
+            ("Reset ticks to suggestions", "suggested"),
         ):
             action = QAction(label, self)
             action.triggered.connect(lambda _=False, w=what: self._ticks(w))
@@ -2811,7 +2816,8 @@ class MainWindow(QMainWindow):
         """Take the progress bar out of its indeterminate animation at once."""
         self.progress.setRange(0, 1)
         self.progress.setValue(1)
-        self.progress.setFormat(message)
+        self.progress.setFormat(self._fitted_progress(message, False))
+        self.progress.setToolTip(message)
         self.progress.setVisible(False)
 
     def _busy(self) -> bool:
@@ -2844,16 +2850,38 @@ class MainWindow(QMainWindow):
 
 
     @Slot(int, int, str)
+    def _fitted_progress(self, message: str, counts: bool) -> str:
+        """As much of ``message`` as the progress bar can hold.
+
+        Qt does not cut the text it draws inside a progress bar. It centres
+        it and lets it run out past the widget, and these messages are
+        twice as wide as the bar: "Analyzed 128 of 512 fetched so far…"
+        against a bar that is never wider than 320 pixels. That is the
+        status text going out of bounds.
+
+        The counts are expanded when the bar paints itself, so the room
+        they need is measured from the numbers rather than from "%v".
+        """
+        metrics = QFontMetrics(self.progress.font())
+        head = "%v / %m - " if counts else ""
+        spent = metrics.horizontalAdvance(
+            head.replace("%v", str(self.progress.value()))
+                .replace("%m", str(self.progress.maximum())))
+        room = max(24, self.progress.width() - 16 - spent)
+        return head + metrics.elidedText(
+            message, Qt.TextElideMode.ElideRight, room)
+
     def _on_progress(self, done: int, total: int, message: str) -> None:
         if not self.running_workers():
             return                      # a late signal from a stopped worker
         if total > 0:
             self.progress.setRange(0, total)
             self.progress.setValue(min(done, total))
-            self.progress.setFormat(f"%v / %m - {message}")
+            self.progress.setFormat(self._fitted_progress(message, True))
         else:
             self.progress.setRange(0, 0)
-            self.progress.setFormat(message)
+            self.progress.setFormat(self._fitted_progress(message, False))
+        self.progress.setToolTip(message)
         self._set_status(message)
 
     @Slot(dict)
@@ -3199,13 +3227,13 @@ class MainWindow(QMainWindow):
         self.clear_filters_button.setVisible(True)
 
     def _set_status(self, message: str) -> None:
-        """Show as much of `message` as fits; the rest lives in the tooltip."""
+        """Show as much of `message` as fits; the rest lives in the tooltip.
+
+        The label does the cutting, and does it again whenever the layout
+        changes its width - see ``ElidingLabel``.
+        """
         self._status_text = message
-        available = max(80, self.status_label.width() - 8)
-        metrics = QFontMetrics(self.status_label.font())
-        self.status_label.setText(
-            metrics.elidedText(message, Qt.TextElideMode.ElideRight, available)
-        )
+        self.status_label.setText(message)
         self.status_label.setToolTip(message)
 
     def resizeEvent(self, event) -> None:  # noqa: N802

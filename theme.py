@@ -668,10 +668,41 @@ def base_font(app, readable: bool) -> QFont:
     return font
 
 
+#: The contrast the application was last painted with.
+#:
+#: Widgets that paint themselves read the palette, which is enough for
+#: nearly everything. What it is not enough for is a colour chosen for what
+#: it means rather than for how it reads: a grey for a row already filed, a
+#: hue for a category. Those were written out as fixed values, so at
+#: maximum contrast - which is monochrome on purpose - the text in every
+#: unselected row of the table stayed exactly as it was at normal
+#: contrast, which is "max contrast maintains the same level of contrast
+#: for text in unselected rows".
+_ACTIVE_CONTRAST = "normal"
+
+
+def active_contrast() -> str:
+    """Which contrast the application is painted with."""
+    return _ACTIVE_CONTRAST
+
+
+def monochrome() -> bool:
+    """Whether no colour is allowed to carry meaning on its own.
+
+    True at maximum contrast, where every pairing is black on white or
+    white on black and a decorative colour has to give way to the
+    palette's own text colour.
+    """
+    return _ACTIVE_CONTRAST == "maximum"
+
+
 def apply(app, mode: str = "system", contrast: str = "normal",
           readable: bool = False, spacing: str = "comfortable") -> Palette:
     """Paint the whole application. Returns the palette that was used."""
+    global _ACTIVE_CONTRAST
+
     colours = resolve(app, mode, contrast)
+    _ACTIVE_CONTRAST = contrast if contrast in dict(CONTRASTS) else "normal"
     if not isinstance(app.style(), ArrowStyle):
         app.setStyle(ArrowStyle(app.style()))
     app.setPalette(build_palette(colours))

@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QLabel,
                                QTextBrowser, QToolButton, QVBoxLayout, QWidget)
 
 import conversations
+import theme
 from imap_engine import MoveReport
 from models import (CATEGORY_COLORS, OTHER_COLOR, TOPIC_COLORS, Category,
                     Disposition, TriageItem, TriageSummary)
@@ -230,6 +231,11 @@ class TriageTableModel(QAbstractTableModel):
             return None
 
         if role == Qt.ItemDataRole.ForegroundRole:
+            # None means "use the palette's text colour", which is what
+            # maximum contrast is for: it is monochrome by design, and a
+            # grey written out here reads the same at every setting.
+            if theme.monochrome():
+                return None
             if item.moved:
                 return QColor(120, 120, 120)
             if classification.error or item.move_error:
@@ -397,6 +403,7 @@ class TriageFilterProxy(QSortFilterProxyModel):
         self._text = ""
         self._category: Optional[str] = None
         self._hide_non_job = False
+        self._hide_job = False
         self._only_selected = False
         #: Empty means every mailbox. Filtering the view is separate from
         #: choosing what to scan: you can pull six mailboxes in and then read
@@ -413,6 +420,11 @@ class TriageFilterProxy(QSortFilterProxyModel):
 
     def set_hide_non_job(self, hide: bool) -> None:
         self._hide_non_job = bool(hide)
+        self.invalidate()
+
+    def set_hide_job(self, hide: bool) -> None:
+        """The other way round: everything the run did not call job mail."""
+        self._hide_job = bool(hide)
         self.invalidate()
 
     def set_account_filter(self, account_ids) -> None:
@@ -437,6 +449,8 @@ class TriageFilterProxy(QSortFilterProxyModel):
             names.append(f"the {self._category} category")
         if self._hide_non_job:
             names.append("showing job mail only")
+        if self._hide_job:
+            names.append("showing everything but job mail")
         if self._only_selected:
             names.append("showing ticked rows only")
         if self._accounts:
@@ -448,6 +462,7 @@ class TriageFilterProxy(QSortFilterProxyModel):
         self._text = ""
         self._category = None
         self._hide_non_job = False
+        self._hide_job = False
         self._only_selected = False
         self._accounts = set()
         self.invalidate()
@@ -460,6 +475,8 @@ class TriageFilterProxy(QSortFilterProxyModel):
         if item is None:
             return False
         if self._hide_non_job and not item.classification.is_job_related:
+            return False
+        if self._hide_job and item.classification.is_job_related:
             return False
         if self._accounts and item.email.account_id not in self._accounts:
             return False
@@ -613,11 +630,15 @@ class CategoryDelegate(QStyledItemDelegate):
         painter.drawEllipse(dot)
 
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
-        painter.setPen(
-            option.palette.color(QPalette.ColorRole.HighlightedText)
-            if selected
-            else color.lighter(125) if _is_dark(option.palette) else color.darker(105)
-        )
+        if selected:
+            ink = option.palette.color(QPalette.ColorRole.HighlightedText)
+        elif theme.monochrome():
+            ink = option.palette.color(QPalette.ColorRole.Text)
+        elif _is_dark(option.palette):
+            ink = color.lighter(125)
+        else:
+            ink = color.darker(105)
+        painter.setPen(ink)
         text_rect = rect.adjusted(16, 0, 0, 0)
         metrics = painter.fontMetrics()
         painter.drawText(
@@ -633,6 +654,10 @@ class CategoryDelegate(QStyledItemDelegate):
 
 class PreviewPane(QWidget):
     """Side-by-side message text and the backend's reasoning."""
+
+    #: Space either side of the splitter's handle, so that nothing in
+    #: either half touches the bar between them.
+    GUTTER = 10
 
     overrideChanged = Signal(int, object)  # source row, folder or None
     #: "Sort this mail too" - the window turns non-job routing on.
@@ -714,7 +739,11 @@ class PreviewPane(QWidget):
 
         left = QWidget()
         left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 0, 0)
+        # A gutter against the splitter's handle. With no margin the
+        # Attachments button and the text box under it sat hard against the
+        # bar between the two halves: "the attachments button and the field
+        # below it are too close to the separating bar to their right".
+        left_layout.setContentsMargins(0, 0, self.GUTTER, 0)
         mode_row = QHBoxLayout()
         mode_row.addWidget(QLabel("Source:"))
         mode_row.addWidget(self.body_mode, 1)
@@ -724,7 +753,7 @@ class PreviewPane(QWidget):
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setContentsMargins(self.GUTTER, 0, 0, 0)
         self.analysis_label = QLabel("Analysis")
         right_layout.addWidget(self.analysis_label)
         right_layout.addWidget(self.reasoning_view, 1)

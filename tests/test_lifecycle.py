@@ -15,7 +15,9 @@ from PySide6.QtWidgets import QApplication, QDialog, QMessageBox  # noqa: E402
 
 from config import InMemoryCredentialStore, Settings  # noqa: E402
 from conftest import FakeAnthropic, FakeResponse  # noqa: E402
-from gui import SHOW_ALL, SHOW_JOB_ONLY, SHOW_SELECTED, MainWindow, SettingsDialog  # noqa: E402
+from gui import (  # noqa: E402
+    SHOW_ALL, SHOW_JOB_ONLY, SHOW_OTHER_ONLY, SHOW_SELECTED, MainWindow,
+    SettingsDialog)
 from llm_engine import ClassificationCancelled, LLMEngine  # noqa: E402
 from models import EmailMessage  # noqa: E402
 from workers import ScanWorker, _BaseWorker  # noqa: E402
@@ -329,7 +331,8 @@ class TestShowFilter:
 
     def test_one_control_replaces_the_checkbox_row(self, window):
         modes = [window.show_combo.itemData(i) for i in range(window.show_combo.count())]
-        assert modes == [SHOW_ALL, SHOW_JOB_ONLY, SHOW_SELECTED]
+        assert modes == [SHOW_ALL, SHOW_JOB_ONLY, SHOW_OTHER_ONLY,
+                         SHOW_SELECTED]
 
     def test_defaults_to_showing_everything(self, window):
         assert window.show_combo.currentData() == SHOW_ALL
@@ -341,9 +344,18 @@ class TestShowFilter:
         assert window.proxy._hide_non_job is True
         assert window.proxy._only_selected is False
 
-    def test_ticked_only_mode(self, window):
-        window.show_combo.setCurrentIndex(2)
+    def test_everything_but_job_mail_mode(self, window):
+        window.show_combo.setCurrentIndex(
+            window.show_combo.findData(SHOW_OTHER_ONLY))
+        assert window.proxy._hide_job is True
         assert window.proxy._hide_non_job is False
+        assert window.proxy._only_selected is False
+
+    def test_ticked_only_mode(self, window):
+        window.show_combo.setCurrentIndex(
+            window.show_combo.findData(SHOW_SELECTED))
+        assert window.proxy._hide_non_job is False
+        assert window.proxy._hide_job is False
         assert window.proxy._only_selected is True
 
     def test_the_mode_is_remembered_across_launches(self, window, tmp_path):

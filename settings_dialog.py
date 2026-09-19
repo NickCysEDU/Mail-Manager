@@ -39,7 +39,8 @@ from config import (EFFORT_LEVELS, CredentialError, CredentialStore, Settings)
 from imap_engine import clean_secret
 from models import (Category, FolderPlan, NonJobRouting, OtherCategory,
                     TriageItem)
-from widgets import (ACCENT_GREEN, ACCENT_RED, AdaptiveLineEdit, WrappingList,
+from widgets import (ACCENT_GREEN, ACCENT_RED, AdaptiveLineEdit, RoomyCombo,
+                     WrappingList,
                      _abandon, _attr_url, _compact_button, _html,
                      _paint_button, _scrollable, _separator, menu_text,
                      selectable)
@@ -101,7 +102,7 @@ class _RuleRow(QWidget):
                                  QSizePolicy.Policy.Preferred)
             return spacer
         if kind in ("category", "topic", "mailbox", "folder_pick"):
-            combo = QComboBox()
+            combo = RoomyCombo()
             combo.setEditable(kind == "folder_pick")
             combo.setSizePolicy(QSizePolicy.Policy.Ignored,
                                 QSizePolicy.Policy.Fixed)
@@ -177,7 +178,7 @@ class ConditionRow(_RuleRow):
         super().__init__(mailboxes=mailboxes, parent=parent)
         self._quiet = True
 
-        self.field_combo = QComboBox()
+        self.field_combo = RoomyCombo()
         for name, label, _kind in autoreply.FIELDS:
             self.field_combo.addItem(label, name)
         self.field_combo.setCurrentIndex(
@@ -189,7 +190,7 @@ class ConditionRow(_RuleRow):
         self.row.addWidget(self.field_combo, 3)
         self._explain_field()
 
-        self.operator_combo = QComboBox()
+        self.operator_combo = RoomyCombo()
         self.operator_combo.setMinimumWidth(88)
         self.operator_combo.setSizePolicy(QSizePolicy.Policy.Ignored,
                                           QSizePolicy.Policy.Fixed)
@@ -249,7 +250,7 @@ class ActionRow(_RuleRow):
         super().__init__(folders=folders, parent=parent)
         self._quiet = True
 
-        self.kind_combo = QComboBox()
+        self.kind_combo = RoomyCombo()
         for name, label, _needs in autoreply.ACTION_KINDS:
             self.kind_combo.addItem(label, name)
         self.kind_combo.setCurrentIndex(max(0, self.kind_combo.findData(action.kind)))
@@ -329,7 +330,7 @@ class ModelsDialog(QDialog):
 
         add = QHBoxLayout()
         add.addWidget(QLabel("Add"))
-        self.catalogue = QComboBox()
+        self.catalogue = RoomyCombo()
         self.catalogue.setEditable(True)
         self.catalogue.setMinimumWidth(220)
         for choice in providers.provider_class("ollama").models:
@@ -636,7 +637,7 @@ class SettingsDialog(QDialog):
         form = QFormLayout()
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
-        self.preset_combo = QComboBox()
+        self.preset_combo = RoomyCombo()
         for name, label in accounts.choices():
             self.preset_combo.addItem(label, name)
         self.preset_combo.currentIndexChanged.connect(self._preset_changed)
@@ -995,7 +996,7 @@ class SettingsDialog(QDialog):
         form = QFormLayout(page)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
-        self.provider_combo = QComboBox()
+        self.provider_combo = RoomyCombo()
         for name, label, _blurb in providers.provider_choices():
             self.provider_combo.addItem(label, name)
         self.provider_combo.currentIndexChanged.connect(self._provider_changed)
@@ -1032,7 +1033,7 @@ class SettingsDialog(QDialog):
         self._keychain_worker = None
         self.ollama_button.clicked.connect(self._do_ollama_step)
 
-        self.model_combo = QComboBox()
+        self.model_combo = RoomyCombo()
         self.model_combo.setEditable(True)
         self.model_combo.setMinimumWidth(280)
         self.model_combo.currentIndexChanged.connect(self._model_changed)
@@ -1082,7 +1083,7 @@ class SettingsDialog(QDialog):
         model_test_widget.setLayout(model_test_row)
         model_test_row.setContentsMargins(0, 0, 0, 0)
 
-        self.effort_combo = QComboBox()
+        self.effort_combo = RoomyCombo()
         self.effort_combo.addItems(list(EFFORT_LEVELS))
         self.effort_label = QLabel("Reasoning effort")
 
@@ -1736,7 +1737,7 @@ class SettingsDialog(QDialog):
 
         match_row = QHBoxLayout()
         match_row.addWidget(QLabel("Match"))
-        self.rule_match = QComboBox()
+        self.rule_match = RoomyCombo()
         self.rule_match.addItem("all of these conditions", "all")
         self.rule_match.addItem("any of these conditions", "any")
         self.rule_match.currentIndexChanged.connect(self._rule_edited)
@@ -2289,12 +2290,12 @@ class SettingsDialog(QDialog):
         form = QFormLayout(page)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
-        self.mode_combo = QComboBox()
+        self.mode_combo = RoomyCombo()
         for value, label in theme.MODES:
             self.mode_combo.addItem(label, value)
         form.addRow("Appearance", self.mode_combo)
 
-        self.contrast_combo = QComboBox()
+        self.contrast_combo = RoomyCombo()
         for value, label in theme.CONTRASTS:
             self.contrast_combo.addItem(label, value)
         form.addRow("Contrast", self.contrast_combo)
@@ -2308,7 +2309,7 @@ class SettingsDialog(QDialog):
         contrast_note.setProperty("dim", "true")
         form.addRow("", contrast_note)
 
-        self.density_combo = QComboBox()
+        self.density_combo = RoomyCombo()
         for value, label, _blurb in theme.DENSITIES:
             self.density_combo.addItem(label, value)
         form.addRow("Spacing", self.density_combo)
@@ -2509,7 +2510,7 @@ class SettingsDialog(QDialog):
             "The folder everything else is filed under, when non-job mail is "
             "being sorted by topic.")
 
-        self.routing_combo = QComboBox()
+        self.routing_combo = RoomyCombo()
         self.routing_combo.setToolTip(
             "What happens to mail that is not job related. The same choice is "
             "in the Sorting menu in the toolbar, where it can be changed "

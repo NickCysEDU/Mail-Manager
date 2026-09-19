@@ -253,3 +253,53 @@ class TestTheVersionIsStatedOnce:
         import version
         with pytest.raises(ValueError):
             version.bumped("one point two", "patch")
+
+
+class TestShowingEverythingButJobMail:
+    """"Create a show option for non job mail only as well."
+
+    The view could show everything, job mail only, or ticked rows only.
+    The one missing was the other half of the job filter, which is the
+    half somebody checking what the sorter is about to file away wants.
+    """
+
+    @staticmethod
+    def _rows(window):
+        """Which source rows the table is showing."""
+        return {window.proxy.mapToSource(window.proxy.index(row, 0)).row()
+                for row in range(window.proxy.rowCount())}
+
+    def test_it_shows_exactly_the_mail_the_job_filter_hides(self, window):
+        from gui import SHOW_JOB_ONLY, SHOW_OTHER_ONLY
+
+        window.show_combo.setCurrentIndex(
+            window.show_combo.findData(SHOW_JOB_ONLY))
+        job = self._rows(window)
+        window.show_combo.setCurrentIndex(
+            window.show_combo.findData(SHOW_OTHER_ONLY))
+        other = self._rows(window)
+        assert job and other, (
+            f"the demo inbox showed {len(job)} job rows and {len(other)} "
+            f"others, so this cannot tell the two apart")
+        assert not (job & other), (
+            f"{len(job & other)} rows are in both views")
+        assert job | other == set(range(len(window.model.items))), (
+            "some rows are in neither view")
+
+    def test_every_row_it_shows_is_not_job_mail(self, window):
+        from gui import SHOW_OTHER_ONLY
+
+        window.show_combo.setCurrentIndex(
+            window.show_combo.findData(SHOW_OTHER_ONLY))
+        shown = [window.model.items[row] for row in self._rows(window)]
+        wrong = [i for i in shown if i.classification.is_job_related]
+        assert not wrong, f"{len(wrong)} job rows are showing"
+
+    def test_clearing_the_filters_clears_it(self, window):
+        from gui import SHOW_OTHER_ONLY
+
+        window.show_combo.setCurrentIndex(
+            window.show_combo.findData(SHOW_OTHER_ONLY))
+        assert "showing everything but job mail" in window.proxy.active_filters()
+        window.proxy.clear_filters()
+        assert window.proxy._hide_job is False
