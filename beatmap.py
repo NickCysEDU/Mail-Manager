@@ -160,10 +160,51 @@ LOW, MID, HIGH = (0.00, 0.25), (0.25, 0.64), (0.64, 1.00)
 #: lands on a kick the frame's rise is thirty times more kick than hat,
 #: so no share of it can recover the hat - and asking for one lost half
 #: of them, which reads as lighting that stops during the loud parts.
+#: The snare's and the hats' bounds were then measured again, against
+#: eleven styles written to known times rather than one - see STYLES in
+#: tests/drumkit.py. Held against those, the bounds above scored a mean F1
+#: of 49 for the snare, and the way they failed was not subtle:
+#:
+#:      house 0    trance 0    techno 8    trap 8    hiphop 12
+#:      rock 100   jazz 100    breaks 92   dnb 80
+#:
+#: Perfect on the two patterns they were measured from and nothing at all
+#: on four-to-floor. The reason is that a clap in house, trance or techno
+#: lands on beats two and four, where there is *also* a kick - so the
+#: frame's rise is mostly kick, and a rule reading shares of that rise
+#: sees a kick. Moving the kick off those beats took house from 0 to 19,
+#: and taking the sub out as well took it to 100, which is what proves it.
+#:
+#: What separates a kick from a kick with a clap on it is not the middle,
+#: where they are 0.11 against 0.13 and no threshold can help. It is that
+#: a kick alone has *nothing* up top - 0.00 against the clap's 0.03 - and
+#: the old floor of 0.04 sat just above the clap. Lowering it to 0.01,
+#: letting the bottom go to 0.85 since a kick may legitimately own the
+#: frame, and asking the middle for 0.14 rather than 0.26, takes the mean
+#: from 49 to 79 with rock and jazz still perfect.
+#:
+#: The hats' floor of 0.10 is left where it is, and the reason is worth
+#: writing down because the numbers argue for moving it. Over the eleven
+#: styles it costs 46 per cent of the hats - 54 per cent recall against 86
+#: at 0.04 - and on two real recordings lowering it changes nothing at all
+#: (402 hats a minute against 409). It still cannot move: a kick alone
+#: comes in at 0.085 up top, so any floor under 0.09 calls every kick a
+#: hat, and ``test_kicks_alone_are_never_called_hats`` duly failed on 24
+#: hats in a track with no hats in it. Asking instead for the top to
+#: *lead* separates them perfectly and finds 20 per cent of the hats,
+#: because a hat landing on a kick is mostly kick.
+#:
+#: The eleven styles cannot see this, because every one of them has hats
+#: all the way through. That is what the older tests are for.
+#:
+#: The kick's cap is deliberately left alone. See the note on CLICK in
+#: tests/drumkit.py: the written kicks are too clean up top for that bound
+#: to be measured here, and the sweep's answer of 0.06 took a real
+#: recording from 27 kicks a minute to 9.
 PROFILE: Dict[str, dict] = {
     "Kick":  {"top": (0.00, 0.20), "leads": "bottom"},
-    "Snare": {"bottom": (0.04, 0.74), "middle": (0.26, 1.01),
-              "top": (0.04, 0.25)},
+    "Snare": {"bottom": (0.00, 0.85), "middle": (0.14, 1.01),
+              "top": (0.01, 0.25)},
     "Hats":  {"top": (0.10, 1.01)},
     "Bass":  {"bottom": (0.55, 1.01), "top": (0.00, 0.14)},
     "Synth": {"bottom": (0.00, 0.62), "middle": (0.30, 1.01),

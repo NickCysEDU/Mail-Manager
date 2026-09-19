@@ -807,3 +807,142 @@ class TestEveryKindOfSnare:
             sample = drumkit.snare(kind)
             assert abs(sample[-1]) < 1e-9, (
                 f"the {kind} snare stops at {sample[-1]:.4f}")
+
+
+class TestTheKitIsReadInEveryStyle:
+    """"Test your instrument detection on many different songs of
+    different genres to dial it in, especially EDM subgenres."
+
+    The bounds the detector used were measured off one kit playing one
+    pattern: kick on one and three, snare on two and four. Held against
+    eleven styles written to known times - see STYLES in tests/drumkit.py -
+    they were perfect on that pattern and nothing at all on four-to-floor:
+
+        house 0    trance 0    techno 8    trap 8    hiphop 12
+        rock 100   jazz 100    breaks 92   dnb 80
+
+    A clap in house lands on beats two and four, where there is also a
+    kick, so the frame's rise is mostly kick and a rule reading shares of
+    that rise sees a kick. The fix is in beatmap.PROFILE, and what makes it
+    possible is that a kick alone has nothing at all up top while a kick
+    with a clap on it has a little.
+
+    Mean F1 over the eleven went from 66.0 to 75.8.
+    """
+
+    #: One analysis per style, shared by every test here: each is twelve
+    #: seconds of audio to synthesise and analyse.
+    _read: dict = {}
+
+    #: The least each style may score, as a mean F1 over kick, snare and
+    #: hats, against what it measures at now. Several points of room each,
+    #: because the point of a floor is to catch a change of behaviour
+    #: rather than to pin a number.
+    FLOORS = {
+        "house": 60, "techno": 68, "trance": 75, "dubstep": 57,
+        "trap": 48, "dnb": 61, "garage": 67, "breaks": 69,
+        "rock": 85, "hiphop": 59, "jazz": 80,
+    }
+
+    @classmethod
+    def _scores(cls, style):
+        """(recall, precision, F1) per part, for one style."""
+        if style in cls._read:
+            return cls._read[style]
+        import attachment_audio
+        import drumkit
+
+        pcm, truth = drumkit.styled(style, seconds=12.0)
+        frames = attachment_audio.onset_frames(pcm, drumkit.RATE, 2)
+        found = beatmap.elements(frames, attachment_audio.ONSET_RATE)
+        out = {}
+        for part in ("Kick", "Snare", "Hats"):
+            hits = [b.at for b in found[part].beats]
+            _n, recall, precision = drumkit.score(hits, truth[part])
+            f1 = (0.0 if recall + precision == 0 else
+                  2 * recall * precision / (recall + precision))
+            out[part] = (recall, precision, f1)
+        cls._read[style] = out
+        return out
+
+    @pytest.mark.parametrize("style", sorted(FLOORS))
+    def test_every_style_is_read(self, style):
+        got = self._scores(style)
+        mean = sum(v[2] for v in got.values()) / len(got) * 100
+        assert mean >= self.FLOORS[style], (
+            f"{style} scores {mean:.0f}, under its floor of "
+            f"{self.FLOORS[style]}: " + ", ".join(
+                f"{part} {v[0]*100:.0f}/{v[1]*100:.0f}"
+                for part, v in got.items()))
+
+    def test_the_kit_is_read_as_well_across_the_styles_as_it_was(self):
+        """The whole point: one style improving at another's expense is
+        not tuning, it is moving the problem."""
+        means = []
+        for style in self.FLOORS:
+            got = self._scores(style)
+            means.append(sum(v[2] for v in got.values()) / len(got))
+        mean = sum(means) / len(means) * 100
+        assert mean >= 70, (
+            f"mean F1 over {len(means)} styles is {mean:.1f}, and it was "
+            f"75.8 when this was written (66.0 before that)")
+
+    @pytest.mark.parametrize("style", ["house", "trance", "techno"])
+    def test_the_clap_is_found_under_a_four_to_floor_kick(self, style):
+        """Where it scored nothing at all. The clap is on two and four and
+        so is a kick, so the frame's rise is mostly kick."""
+        recall = self._scores(style)["Snare"][0]
+        assert recall > 0.20, (
+            f"{recall*100:.0f} per cent of {style}'s claps were found, and "
+            f"a four-to-floor kick is what hides them")
+
+    def test_the_hats_floor_is_where_it_is_for_a_reason(self):
+        """Half the hats are missed, and this is not the file that can
+        say whether that is worth fixing.
+
+        Over these eleven the floor of 0.10 on the top share costs 46 per
+        cent of the hats, and every number here argues for lowering it:
+        0.04 finds 86 per cent of them for five points of precision, and on
+        two real recordings the floor changes nothing at all. It cannot
+        move. A kick on its own comes in at 0.085 up top, so any floor
+        under 0.09 calls every kick a hat - and every style written here
+        has hats going all the way through it, so nothing in this class can
+        see that. ``test_kicks_alone_are_never_called_hats`` can, and did.
+
+        Recorded as a test rather than a comment because the next person to
+        read these numbers will have the same idea.
+        """
+        import beatmap as under_test
+
+        low, _high = under_test.PROFILE["Hats"]["top"]
+        assert low >= 0.09, (
+            f"the hats floor is at {low}, and under 0.09 a kick on its own "
+            f"is called a hat - see test_kicks_alone_are_never_called_hats")
+        recalls = [self._scores(style)["Hats"][0] for style in self.FLOORS]
+        mean = sum(recalls) / len(recalls)
+        assert mean > 0.40, (
+            f"only {mean*100:.0f} per cent of hats are found across the "
+            f"styles, against 55 when this was written")
+
+    def test_the_written_kick_has_a_beater_on_it(self):
+        """Which is what stops this file giving bad advice.
+
+        A kick is a falling pitch *and* a click. Written without the click
+        it has almost nothing above 2 kHz, and a sweep of the detector's
+        cap on the top share then says 0.06 - which on a real recording
+        took 27 kicks a minute down to 9.
+        """
+        import drumkit
+
+        assert drumkit.CLICK > 0.2, "the beater has been turned off"
+        quiet = drumkit.kick()
+        # The click lives in the first few milliseconds and is the part
+        # that changes fastest, so it shows up as the largest step between
+        # one sample and the next.
+        early = max(abs(b - a) for a, b in
+                    zip(quiet[:400], quiet[1:400]))
+        late = max(abs(b - a) for a, b in
+                   zip(quiet[2000:4000], quiet[2001:4000]))
+        assert early > late * 3, (
+            f"the kick's first milliseconds move by {early:.3f} and its "
+            f"body by {late:.3f}, so there is no beater on the front")
