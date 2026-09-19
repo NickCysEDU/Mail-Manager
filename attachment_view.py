@@ -701,7 +701,7 @@ class AudioPane(QWidget):
         def bands(result) -> None:
             """The picture, as soon as there is one to show.
 
-            Seven of the eight scenes draw from the bands alone, and the
+            Eight of the nine scenes draw from the bands alone, and the
             two passes that follow take another two thirds as long again -
             so waiting for all of it before showing anything is most of
             the wait anybody sees. The scene starts here and the traces
@@ -975,6 +975,11 @@ class AudioPane(QWidget):
         Qt.Key.Key_M: ("by-hand", 0),
         Qt.Key.Key_G: ("flash", 1),
         Qt.Key.Key_H: ("spam", 1),
+        # The lanes, for the scene that is a game. They do nothing at all
+        # in the other eight, and ``vj`` says so by returning False, which
+        # leaves the key to whatever else wanted it.
+        Qt.Key.Key_Left: ("lane", -1),
+        Qt.Key.Key_Right: ("lane", 1),
     }
 
     @staticmethod
@@ -1002,6 +1007,12 @@ class AudioPane(QWidget):
                 return False
             self.scene_box.setCurrentText(visualizers.SCENES[value].name)
             return True
+        if action == "lane":
+            return self._steer(value)
+        if action == "reaction" and self._steering() is not None:
+            # A and D drive the game while the game is on screen. They step
+            # through what the strobe listens to the rest of the time.
+            return self._steer(value)
         if action == "strobe":
             self.strobe_box.setChecked(not self.strobe_box.isChecked())
             return True
@@ -1026,6 +1037,20 @@ class AudioPane(QWidget):
                 self.spectrum.hold_flash(wants)
             return True
         return False
+
+    def _steering(self):
+        """The scene that wants the arrow keys, if the current one does."""
+        scene = getattr(self.spectrum, "_scene", None)
+        return scene if callable(getattr(scene, "steer", None)) else None
+
+    def _steer(self, way: int) -> bool:
+        """Move a lane, if there is a lane to move."""
+        scene = self._steering()
+        if scene is None:
+            return False
+        scene.steer(way)
+        self.spectrum.update()
+        return True
 
     def _show_by_hand(self, source: str) -> None:
         """Say which key flashes it, whenever the strobe waits for one."""
@@ -1648,6 +1673,11 @@ class AttachmentViewer(QDialog):
 
     def _nudge(self, delta: int) -> None:
         if self.stack.currentWidget() is self.audio:
+            # The arrows drive the game while the game is on screen. The
+            # shortcut gets the key before any widget does, so the choice
+            # has to be made here rather than in a key handler.
+            if self.audio.vj("lane", -1 if delta < 0 else 1):
+                return
             target = max(0, min(self.audio.position.maximum(),
                                 self.audio.position.value() + delta))
             self.audio.position.setValue(target)

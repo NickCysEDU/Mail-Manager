@@ -156,7 +156,7 @@ class SpectrumState:
                  "dials", "dial_labels", "dial_colour", "background",
                  "trace", "vector", "calibration", "history",
                  "trace_history", "vector_history", "kit", "tempo",
-                 "beat_at")
+                 "beat_at", "at", "chart")
 
     def __init__(self) -> None:
         self.levels: List[float] = []
@@ -186,6 +186,13 @@ class SpectrumState:
         #: than the beat list, so it never has to know where the playhead
         #: is or how long a frame took.
         self.kit: dict = {}
+        #: Where the playhead is, in seconds, on the pane's own clock.
+        self.at = 0.0
+        #: Every hit in the track, by name, in seconds. A scene that has
+        #: to put something on screen *before* the beat it belongs to
+        #: cannot work from the kit levels, which only say what is
+        #: happening now.
+        self.chart: dict = {}
         #: The track's tempo in beats a minute, or 0 where none was
         #: found, and how far through the current beat the playhead is,
         #: from 0 at the beat to just under 1 at the next.
@@ -330,6 +337,7 @@ class Spectrum(QWidget):
         self._beats: dict = {}
         #: The kit on its own, for scenes that want to know which is which.
         self._elements: dict = {}
+        self._chart_from = None
         #: How far through each element's list the playhead has got.
         self._kit_at: dict = {}
         self._kit_seen = -1.0
@@ -550,6 +558,7 @@ class Spectrum(QWidget):
         reading them has to cope with their not being there yet.
         """
         self._elements = dict(maps or {})
+        self._chart_from = None
         self._beats.update(self._elements)
         self._beat_at = 0
         self._beat_seen = -1.0
@@ -1150,6 +1159,15 @@ class Spectrum(QWidget):
         is the pulse. Falls back to the source the strobe is watching, and
         then to nothing, which scenes read as "free running".
         """
+        state.at = self._heard()
+        if self._chart_from is not self._elements:
+            # Built once per analysis. The maps arrive a few seconds after
+            # the rest, and rebuilding this every frame would walk every
+            # hit in the track sixty times a second.
+            self._chart_from = self._elements
+            state.chart = {name: tuple(beat.at for beat in found.beats)
+                           for name, found in self._elements.items()
+                           if getattr(found, "beats", None)}
         found = None
         for name in ("Kick", "Bass", self._strobe_source, "Mids"):
             candidate = self._beats.get(name)
@@ -1161,6 +1179,7 @@ class Spectrum(QWidget):
             return
         state.tempo = found.bpm
         period = 60.0 / max(1e-6, found.bpm)
+        state.at = self._heard()
         # Against the first beat rather than against zero: a grid that
         # starts where the track starts is a grid that is wrong by
         # whatever the intro was.
@@ -1531,7 +1550,8 @@ class _KeysCard(QWidget):
 
     #: The keys, in the order they are worth learning.
     KEYS = (
-        ("1 – 8", "the scenes, in the order the menu lists them"),
+        ("1 – 9", "the scenes, in the order the menu lists them"),
+        ("← →", "change lane, in Music rider"),
         ("S", "strobe on or off"),
         ("A / D", "step through what the strobe listens to"),
         ("M", "listen to nobody: nothing fires but G and H"),
