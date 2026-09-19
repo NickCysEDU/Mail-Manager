@@ -927,6 +927,11 @@ class AudioPane(QWidget):
         self._full = None
         self._full_play = None
         self._by_hand_echo = []
+        card = getattr(self, "_full_card", None)
+        if card is not None and shiboken6.isValid(card):
+            card.setParent(None)
+            card.deleteLater()
+        self._full_card = None
 
     def transport(self, action: str) -> None:
         """J, K and L, wherever they were pressed."""
@@ -957,8 +962,9 @@ class AudioPane(QWidget):
     #: the combo box happens to be showing. The rest sit under the left
     #: hand while the right hand is on the numbers: S switches the strobe
     #: on and off, A and D walk through what it is listening to, M goes
-    #: straight to listening to nobody, and G is the strobe itself - tap
-    #: it for a flash, hold it for a held light.
+    #: straight to listening to nobody, and G and H are the strobe itself.
+    #: G held is a light that stays on; H held is a strobe at twelve a
+    #: second. One key cannot be both, and both are worth having.
     #:
     #: J, K, L, space and escape are the transport and are handled where
     #: they always were; these are the ones that are new.
@@ -968,6 +974,7 @@ class AudioPane(QWidget):
         Qt.Key.Key_D: ("reaction", 1),
         Qt.Key.Key_M: ("by-hand", 0),
         Qt.Key.Key_G: ("flash", 1),
+        Qt.Key.Key_H: ("spam", 1),
     }
 
     @staticmethod
@@ -1005,15 +1012,18 @@ class AudioPane(QWidget):
                     else self.spectrum.cycle_strobe_source(value))
             self.strobe_source.setCurrentText(name)
             return True
-        if action in ("flash", "unflash"):
-            wants = action == "flash"
+        if action in ("flash", "unflash", "spam", "unspam"):
+            wants = action in ("flash", "spam")
             # Pressing the strobe key with the strobe switched off did
             # nothing at all, because the master switch is what scenes
             # ask before they light up. Reaching for the light is asking
             # for the light, so the box is ticked rather than ignored.
             if wants and not self.strobe_box.isChecked():
                 self.strobe_box.setChecked(True)
-            self.spectrum.hold_flash(wants)
+            if action in ("spam", "unspam"):
+                self.spectrum.spam_flash(wants)
+            else:
+                self.spectrum.hold_flash(wants)
             return True
         return False
 
@@ -1044,8 +1054,16 @@ class AudioPane(QWidget):
         """
         from attachment_widgets import FullScreenSpectrum
 
+        home = self.spectrum.parentWidget()
+        layout = home.layout() if home is not None else None
+        where = layout.indexOf(self.spectrum) if layout is not None else -1
         full = FullScreenSpectrum(self.spectrum, self)
         self._full = full
+        # Something in the hole the scene left. Without it the pane simply
+        # has a gap in it and nothing anywhere says where the picture went,
+        # so a full-screen window on another display is lost.
+        if layout is not None and where >= 0:
+            layout.insertWidget(where, self._full_notice(full))
 
         play = QPushButton()
         play.setFixedWidth(52)
@@ -1061,18 +1079,27 @@ class AudioPane(QWidget):
         # Connections from the pane's own widgets to widgets that only
         # exist while full screen does. They have to be undone when it
         # closes, or the next seek calls into a deleted label.
+        # Both signals. valueChanged carries a seek or a track change;
+        # ``moved`` carries the player's own reports, which are the ones
+        # that arrive while a track is playing. Following only the first
+        # left this bar at zero for the whole song.
         self._full_links = [
             (self.position.valueChanged, self.position.valueChanged.connect(
-                seek.report))]
+                seek.report)),
+            (self.position.moved, self.position.moved.connect(seek.report))]
 
         clock = QLabel(self.clock.text())
         clock.setFont(system_font())
         clock.setMinimumWidth(104)
         clock.setStyleSheet("color: #e8e8ee;")
+        def tick(value: int) -> None:
+            clock.setText(f"{_mmss(value)} / {_mmss(self.position.maximum())}")
+
         self._full_links.append(
-            (self.position.valueChanged, self.position.valueChanged.connect(
-                lambda value: clock.setText(
-                    f"{_mmss(value)} / {_mmss(self.position.maximum())}"))))
+            (self.position.valueChanged,
+             self.position.valueChanged.connect(tick)))
+        self._full_links.append(
+            (self.position.moved, self.position.moved.connect(tick)))
 
         volume = QSlider(Qt.Orientation.Horizontal)
         volume.setRange(0, 100)
@@ -1158,6 +1185,37 @@ class AudioPane(QWidget):
         self.title.setText(self.title.text() + "  (this file will not play)")
         self.play.setEnabled(False)
         self.spectrum.clear()
+
+    def _full_notice(self, full) -> QWidget:
+        """The card that stands in for the scene while it is full screen."""
+        card = QWidget()
+        card.setObjectName("fullScreenNotice")
+        card.setMinimumHeight(72)
+        row = QHBoxLayout(card)
+        row.setContentsMargins(14, 12, 14, 12)
+        row.setSpacing(10)
+        said = QLabel("Playing full screen.")
+        said.setFont(system_font())
+        row.addWidget(said)
+        row.addStretch(1)
+        find = QPushButton("Bring it to the front")
+        find.setToolTip("Raise the full screen window.")
+        find.clicked.connect(lambda: self._raise_full_screen())
+        row.addWidget(find)
+        leave = QPushButton("Leave full screen")
+        leave.clicked.connect(full.close)
+        row.addWidget(leave)
+        self._full_card = card
+        return card
+
+    def _raise_full_screen(self) -> None:
+        """Put the full screen window back in front of everything."""
+        full = getattr(self, "_full", None)
+        if full is None or not shiboken6.isValid(full):
+            return
+        full.showFullScreen()
+        full.raise_()
+        full.activateWindow()
 
     def _show_clock(self, position: int) -> None:
         self.clock.setText(f"{_mmss(position)} / {_mmss(self.position.maximum())}")
@@ -1543,6 +1601,46 @@ class AttachmentViewer(QDialog):
             full.close()
         else:
             self.audio._go_full_screen()
+
+    # -- the playing keys, in a window as well as full screen -------------
+    def _plays(self, event, held: bool) -> bool:
+        """Hand a playing key to the audio pane, if it wants it.
+
+        These worked only in full screen. The keys that play the scene are
+        the same keys wherever the scene is, and a strobe you can only
+        reach by leaving the window is not much of a strobe.
+
+        Auto-repeat is dropped on both sides, as it is full screen: a
+        keyboard repeating a held key would switch a held light off and on
+        again at its own rate.
+        """
+        if event.isAutoRepeat():
+            return False
+        if self.stack.currentWidget() is not self.audio:
+            return False
+        if getattr(self.audio, "_full", None) is not None:
+            return False      # the full screen window is handling them
+        found = self.audio.vj_action(event.key())
+        if found is None:
+            return False
+        action, value = found
+        if action in ("flash", "spam"):
+            action = action if held else "un" + action
+        elif not held:
+            return False
+        return bool(self.audio.vj(action, value))
+
+    def keyPressEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        if self._plays(event, held=True):
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        if self._plays(event, held=False):
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
 
     def _space(self) -> None:
         if self.stack.currentWidget() is self.audio and self.audio.play.isEnabled():
