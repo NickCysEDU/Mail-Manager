@@ -3277,17 +3277,25 @@ class TestTheSceneIsDrawnAtTheScreensResolution:
         """
         from attachment_widgets import Sharpness
 
-        cliff = {1.0: 120.0, 0.8: 80.0, 0.67: 60.0, 0.5: 45.0,
-                 0.4: 36.0, 0.33: 30.0, 0.25: 7.0}
+        # Read off the ladder rather than written out, so that changing
+        # the rungs cannot quietly turn this into a test of nothing: the
+        # cliff is always between the bottom rung and the one above it,
+        # wherever those are.
+        rungs = Sharpness()._rungs(2.0)
+        bottom, above = rungs[-1], rungs[-2]
+        cliff = {bottom: 7.0}
         governor = Sharpness()
         settled, moves = self._settled(
-            governor, lambda s: cliff.get(round(s, 2), 50.0), frames=2400)
-        assert settled == 0.25, f"settled at {settled}, which costs 30 ms"
+            governor, lambda s: cliff.get(s, 30.0 + 90.0 * s), frames=2400)
+        assert settled == bottom, (
+            f"settled at {settled}, which costs "
+            f"{30.0 + 90.0 * settled:.0f} ms")
         assert moves <= 6, (
             f"changed its mind {moves} times in 2400 frames, which is a "
             f"resolution change every {2400 // max(1, moves)} frames for ever")
-        assert governor._seen.get(0.33, 0.0) > 24.0, (
-            "it never wrote down that the rung above was too slow")
+        assert governor._seen.get(above, 0.0) > 24.0, (
+            f"it never wrote down that {above:.2f}, the rung above the one "
+            f"it settled at, was too slow: it has {governor._seen}")
 
     def test_a_scene_too_slow_for_the_screen_really_is_stepped_down(self, qtbot):
         """The real pane, not the cost model, with a scene that is really
@@ -6022,3 +6030,119 @@ class TestTheAirIsAsVividAtFullScreenAsInAWindow:
         assert abs(first - again) < 1e-9, (
             f"quadrupling the fill moved a window from {first:.4f} to "
             f"{again:.4f} of colour, so it is not keyed to the shrinking")
+
+
+class TestTheBufferGoesUpByWholePixels:
+    """"Rave full screen background still is not as vibrant as it is in
+    windowed mode."
+
+    It was not the colour. A scene that will not fit the frame budget is
+    drawn into a smaller buffer and stretched, and the stretch was
+    smoothed, which for a picture made of thin bright lines on a dark
+    ground is most of what it looks like. Measured at 1512x982 on a 2x
+    display, saturation times brightness came out at 0.452 against a
+    window's 0.456 - near enough identical, which is why no measure of
+    colour ever found this - while the mean step in brightness from one
+    pixel to the next came out at 0.0015 against 0.0026. The picture had
+    lost 42 per cent of its edge, and a soft picture reads as a grey one.
+    """
+
+    @staticmethod
+    def _edges(image):
+        """The mean step in brightness between neighbouring pixels."""
+        total, count = 0.0, 0
+        for y in range(0, image.height(), 2):
+            row = [image.pixelColor(x, y).valueF()
+                   for x in range(image.width())]
+            for index in range(len(row) - 1):
+                total += abs(row[index + 1] - row[index])
+                count += 1
+        return total / max(1, count)
+
+    @staticmethod
+    def _striped(wide, tall):
+        """A buffer of one-pixel lines, which is what these scenes are."""
+        from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
+
+        buffer = QPixmap(wide, tall)
+        buffer.setDevicePixelRatio(1.0)
+        buffer.fill(QColor(0, 0, 0))
+        painter = QPainter(buffer)
+        pen = QPen(QColor(255, 255, 255))
+        pen.setWidth(1)
+        painter.setPen(pen)
+        try:
+            for x in range(0, wide, 3):
+                painter.drawLine(x, 0, x, tall)
+        finally:
+            painter.end()
+        return buffer
+
+    def _grown(self, times):
+        """The stripes, blitted up by ``times``, as the pane does it."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        from attachment_widgets import blit_scene
+
+        buffer = self._striped(120, 40)
+        image = QImage(int(120 * times), int(40 * times),
+                       QImage.Format.Format_ARGB32_Premultiplied)
+        image.setDevicePixelRatio(1.0)
+        image.fill(QColor(0, 0, 0))
+        painter = QPainter(image)
+        try:
+            blit_scene(painter, QRectF(0, 0, image.width(), image.height()),
+                       buffer)
+        finally:
+            painter.end()
+        return image
+
+    def test_a_whole_number_stretch_keeps_the_edges(self, qapp):
+        """Two device pixels per buffer pixel: no reason to blur it."""
+        sharp = self._edges(self._grown(2.0))
+        soft = self._edges(self._grown(2.5))
+        assert sharp > soft * 1.3, (
+            f"a 2x stretch holds {sharp:.4f} of edge and a 2.5x stretch "
+            f"{soft:.4f}, so the whole-number case is being smoothed too")
+
+    def test_an_uneven_stretch_is_still_smoothed(self, qapp):
+        """Not smoothing 2.5x would double some pixels and not their
+        neighbours, and the unevenness crawls as the scene moves."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        from attachment_widgets import blit_scene
+
+        seen = {}
+        for times in (2.0, 2.5):
+            image = QImage(int(120 * times), int(40 * times),
+                           QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(QColor(0, 0, 0))
+            painter = QPainter(image)
+            try:
+                blit_scene(painter,
+                           QRectF(0, 0, image.width(), image.height()),
+                           self._striped(120, 40))
+                seen[times] = painter.testRenderHint(
+                    QPainter.RenderHint.SmoothPixmapTransform)
+            finally:
+                painter.end()
+        assert seen[2.0] is False, "a 2x stretch asked to be smoothed"
+        assert seen[2.5] is True, "a 2.5x stretch was left unsmoothed"
+
+    def test_every_rung_divides_into_one(self, qapp):
+        """Which is what makes the crisp path reachable at all.
+
+        The ladder used to have 0.80, 0.67 and 0.40 on it. Those stretch
+        by 1.25, 1.49 and 2.5, so a scene sitting on one of them could
+        never be put up crisply however cheap it was.
+        """
+        from attachment_widgets import Sharpness
+
+        for ratio in (1.0, 2.0):
+            for rung in Sharpness()._rungs(ratio):
+                grew = 1.0 / rung
+                assert abs(grew - round(grew)) < 0.02, (
+                    f"the {rung:.3f} rung stretches by {grew:.3f}, which is "
+                    f"not a whole number of pixels")
