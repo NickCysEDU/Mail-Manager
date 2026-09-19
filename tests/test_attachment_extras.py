@@ -3615,20 +3615,34 @@ class TestTheKeysThatPlayIt:
             lit = max(lit, spectrum._state.hit)
         assert lit == 0.0, f"the light came up to {lit:.2f} on its own"
 
-    def test_f_flashes_by_hand_and_letting_go_puts_it_out(self, qtbot):
+    @staticmethod
+    def _flash_key():
+        """Whichever key the pane says flashes by hand.
+
+        Read rather than written out. These used to name F, which was also
+        the key that leaves full screen, and naming it again would hide the
+        same clash next time.
+        """
         from PySide6.QtCore import Qt as _Qt
+
+        from attachment_view import AudioPane
+
+        return getattr(_Qt.Key, f"Key_{AudioPane.BY_HAND_KEY.upper()}")
+
+    def test_the_flash_key_flashes_by_hand_and_letting_go_puts_it_out(
+            self, qtbot):
         from attachment_widgets import Spectrum
 
         pane, window = self._full(qtbot)
         self._feed(pane.spectrum)
         pane.spectrum.set_strobe_source(Spectrum.BY_HAND)
-        self._press(window, _Qt.Key.Key_F)
+        self._press(window, self._flash_key())
         assert pane.spectrum._state.hit > 0.9
         # Held: it does not decay while the key is down.
         for _ in range(20):
             pane.spectrum._tick()
         assert pane.spectrum._state.hit > 0.9, "the held light sagged"
-        self._press(window, _Qt.Key.Key_F, release=True)
+        self._press(window, self._flash_key(), release=True)
         for _ in range(20):
             pane.spectrum._tick()
         assert pane.spectrum._state.hit == 0.0, "the light stayed on"
@@ -3641,7 +3655,7 @@ class TestTheKeysThatPlayIt:
 
         pane, window = self._full(qtbot)
         pane.strobe_box.setChecked(False)
-        self._press(window, _Qt.Key.Key_F)
+        self._press(window, self._flash_key())
         assert pane.strobe_box.isChecked()
         assert pane.spectrum._state.strobe
 
@@ -3652,9 +3666,10 @@ class TestTheKeysThatPlayIt:
         from PySide6.QtGui import QKeyEvent
 
         pane, window = self._full(qtbot)
-        self._press(window, _Qt.Key.Key_F)
+        held = self._flash_key()
+        self._press(window, held)
         window.keyReleaseEvent(QKeyEvent(
-            QEvent.Type.KeyRelease, _Qt.Key.Key_F,
+            QEvent.Type.KeyRelease, held,
             _Qt.KeyboardModifier.NoModifier, autorep=True))
         pane.spectrum._tick()
         assert pane.spectrum._holding, "auto-repeat let go of the key"
@@ -4692,8 +4707,8 @@ class TestTheListOfPlayingKeys:
         from attachment_widgets import _KeysCard
 
         listed = " ".join(f"{k} {w}" for k, w in _KeysCard.KEYS if k)
-        for key in ("1", "8", "S", "A", "D", "M", "F", "J", "K", "L",
-                    "space", "esc"):
+        for key in ("1", "8", "S", "A", "D", "M", AudioPane.BY_HAND_KEY,
+                    "J", "K", "L", "space", "esc"):
             assert key in listed, f"{key} does something and is not listed"
         # And every letter the pane acts on is in there.
         from PySide6.QtCore import Qt as _Qt
@@ -4726,8 +4741,11 @@ class TestTheListOfPlayingKeys:
 
         _pane, window = self._full(qtbot)
         woke = self._counting(window)
+        from attachment_view import AudioPane
+
+        flash = getattr(_Qt.Key, f"Key_{AudioPane.BY_HAND_KEY.upper()}")
         for key in (_Qt.Key.Key_3, _Qt.Key.Key_S, _Qt.Key.Key_D,
-                    _Qt.Key.Key_F, _Qt.Key.Key_M, _Qt.Key.Key_Question):
+                    flash, _Qt.Key.Key_M, _Qt.Key.Key_Question):
             self._press(window, key)
             assert woke == [], f"{chr(key)} brought the control bar back"
 
@@ -5505,7 +5523,14 @@ class TestTheScenesSitOnTheBeat:
         def through(bass, part):
             scene = visualizers.Rave()
             scene._last = None
-            scene._advance(self._state(beat_at=0.0, bass=bass))
+            # The push behind the room follows the bass rather than being
+            # it, so that a band wobbling frame to frame moves how fast
+            # the room is going and not where it is. That means the bass
+            # has to have been playing for a moment before it is pushing:
+            # the beat stands still here while it arrives, so nothing
+            # travels during the warm-up.
+            for _ in range(60):
+                scene._advance(self._state(beat_at=0.0, bass=bass))
             start = scene._z
             scene._advance(self._state(beat_at=part, bass=bass))
             return (scene._z - start) / visualizers.Rave.TRUSS
@@ -5709,7 +5734,12 @@ class TestTheRingSweepsPastYou:
     W, H = 640, 360
 
     def _run(self, monkeypatch, frames=110):
-        """Every frame of one ring's life, as the radius it would draw."""
+        """Every frame of one ring's life, as the radius it would draw.
+
+        A ring is fired by the room getting louder than it has been - see
+        ``TestTheRingsMarkBigMoments`` - so this holds a quiet passage long
+        enough to be believed and then lifts it.
+        """
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -5719,11 +5749,13 @@ class TestTheRingSweepsPastYou:
         clock = [1000.0]
         monkeypatch.setattr(visualizers.time, "monotonic", lambda: clock[0])
 
-        def state(snare=0.0):
+        def state(loud):
             one = SpectrumState()
             one.levels = [0.3] * 48
-            one.bass = one.mid = one.synth = one.high = 0.5
-            one.kit = {"Kick": 0.0, "Snare": snare, "Hats": 0.0,
+            one.bass = loud
+            one.mid = one.high = loud * 0.9
+            one.synth = 0.3
+            one.kit = {"Kick": 0.0, "Snare": 0.0, "Hats": 0.0,
                        "Synth": 0.0}
             return one
 
@@ -5735,47 +5767,69 @@ class TestTheRingSweepsPastYou:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         # The same focal length the scene works out for itself.
         focal = min(self.W, self.H) * 0.62
+        quiet = int((visualizers.Rave.RING_SETTLE + 0.2) * 60)
         seen = []
+        # One ring, followed by identity. A moment sends several, staggered
+        # down the room, so reading _rings[0] each frame hops from one to
+        # the next as the front one leaves - which shows up as the radius
+        # jumping backwards and has nothing to do with how a ring travels.
+        tracked = None
         try:
-            for step in range(frames):
+            for step in range(quiet + frames):
                 clock[0] += 1 / 60.0
                 scene.paint(painter, QRectF(0, 0, self.W, self.H),
-                            state(0.95 if step == 2 else 0.0))
-                if scene._rings:
-                    z, force = scene._rings[0]
+                            state(0.18 if step < quiet else 0.75))
+                if tracked is None and scene._rings:
+                    tracked = scene._rings[0]
+                if tracked is not None:
+                    if not any(ring is tracked for ring in scene._rings):
+                        break
+                    z, force = tracked
                     seen.append(focal * (1.9 * force + 0.6) / z)
         finally:
             painter.end()
         return seen
 
-    def test_a_snare_is_what_fires_it(self, monkeypatch):
-        """And nothing else: the rings are the scene's big moments, so
-        they have to mean something when they happen."""
+    def test_no_single_drum_fires_one(self, monkeypatch):
+        """This used to read the other way round: a snare fired a ring and
+        nothing else did. A snare is every other beat in most tracks, so
+        the ring signified nothing, which is "I am not sure what's going on
+        with the circle that gets bigger". What fires one now is the room
+        getting louder than it has been, and
+        ``TestTheRingsMarkBigMoments`` is where that is held to."""
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
         import visualizers
         from attachment_widgets import SpectrumState
 
-        for part, wanted in (("Snare", True), ("Kick", False),
-                             ("Hats", False), ("Synth", False)):
+        clock = [1000.0]
+        monkeypatch.setattr(visualizers.time, "monotonic", lambda: clock[0])
+        for part in ("Snare", "Kick", "Hats", "Synth"):
             scene = visualizers.Rave()
-            state = SpectrumState()
-            state.levels = [0.3] * 48
-            state.bass = 0.5
-            state.kit = {"Kick": 0.0, "Snare": 0.0, "Hats": 0.0,
-                         "Synth": 0.0}
-            state.kit[part] = 0.95
             image = QImage(self.W, self.H,
                            QImage.Format.Format_ARGB32_Premultiplied)
-            image.fill(QColor(0, 0, 0))
             painter = QPainter(image)
             try:
-                scene.paint(painter, QRectF(0, 0, self.W, self.H), state)
+                for step in range(int((visualizers.Rave.RING_SETTLE + 1.0)
+                                      * 60)):
+                    clock[0] += 1 / 60.0
+                    state = SpectrumState()
+                    state.levels = [0.3] * 48
+                    state.bass = state.mid = state.high = 0.5
+                    state.synth = 0.3
+                    state.kit = {"Kick": 0.0, "Snare": 0.0, "Hats": 0.0,
+                                 "Synth": 0.0}
+                    # Hit on every other beat, at full force, over a level
+                    # that does not change.
+                    state.kit[part] = 0.95 if step % 30 == 0 else 0.0
+                    image.fill(QColor(0, 0, 0))
+                    scene.paint(painter, QRectF(0, 0, self.W, self.H), state)
             finally:
                 painter.end()
-            assert bool(scene._rings) is wanted, (
-                f"a {part} {'did not fire' if wanted else 'fired'} a ring")
+            assert not scene._rings, (
+                f"a {part} on every other beat fired {len(scene._rings)} "
+                f"rings over a passage that never gets louder")
 
     def test_it_grows_evenly_rather_than_all_at_the_end(self, monkeypatch):
         """Moving at a steady speed through the room, a ring doubles in
@@ -6146,3 +6200,499 @@ class TestTheBufferGoesUpByWholePixels:
                 assert abs(grew - round(grew)) < 0.02, (
                     f"the {rung:.3f} rung stretches by {grew:.3f}, which is "
                     f"not a whole number of pixels")
+
+
+class TestThePlayingKeysDoNotCollide:
+    """"Bind manual strobe to something else. F is already fullscreen."
+
+    It was, in two places: the viewer registers F as a shortcut and the
+    button's own tip said "Full screen (F)". So the one key somebody who
+    picks Manual has to know was also the key that left the room.
+    """
+
+    @staticmethod
+    def _shortcut_keys():
+        """The single letters the viewer binds as window shortcuts.
+
+        Read out of the source rather than by building a viewer, because
+        what matters is the binding, and a viewer needs a window, a file
+        and a media player before it has any.
+        """
+        import re
+        from pathlib import Path
+
+        import attachment_view
+
+        text = Path(attachment_view.__file__).read_text(encoding="utf-8")
+        body = text[text.index("def _add_shortcuts"):]
+        body = body[:body.index("\n    def ", 10)]
+        return {found.upper() for found in re.findall(r'add\("([A-Za-z])"',
+                                                      body)}
+
+    def test_no_playing_key_is_also_a_window_shortcut(self):
+        from PySide6.QtCore import Qt
+
+        from attachment_view import AudioPane
+
+        taken = self._shortcut_keys()
+        assert "F" in taken, (
+            "the test cannot see the viewer's shortcuts any more, so it "
+            "would pass whatever the playing keys were bound to")
+        clashes = []
+        for key in AudioPane.VJ_KEYS:
+            letter = Qt.Key(key).name.replace("Key_", "").upper()
+            if letter in taken:
+                clashes.append(letter)
+        assert not clashes, (
+            f"{', '.join(sorted(clashes))} both plays the visualiser and "
+            f"works a window shortcut, so pressing it does two things")
+
+    def test_the_key_the_labels_promise_is_the_key_that_flashes(self):
+        """Three places name it: the label under the box, the tip on the
+        box, and the list of playing keys."""
+        from PySide6.QtCore import Qt
+
+        import attachment_widgets
+        from attachment_view import AudioPane
+
+        named = AudioPane.BY_HAND_KEY
+        wanted = getattr(Qt.Key, f"Key_{named.upper()}")
+        assert AudioPane.VJ_KEYS.get(wanted) == ("flash", 1), (
+            f"the labels tell people to press {named}, which is not the "
+            f"key bound to the flash")
+        listed = [key for key, _what in attachment_widgets._KeysCard.KEYS
+                  if key == named]
+        assert listed, (
+            f"{named} flashes the strobe and the list of playing keys does "
+            f"not mention it")
+
+
+class TestTheRaveRigFiresIntoTheRoom:
+    """"There are some random beams coming from the wireframe occasionally
+    in rave, fix that."
+
+    There were. A hat threw one line from the vanishing point at an angle
+    taken from the spin and a length taken from nothing, so one would go
+    up through the ceiling, the next across the walls, and none of them
+    belonged to any surface. The thing in the middle sits at the vanishing
+    point, which is why they looked like they came out of it.
+    """
+
+    @staticmethod
+    def _asked(frames=180):
+        """Every point the beams ask to have projected, as (x, y, z)."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        clock = [1000.0]
+        was = visualizers.time.monotonic
+        visualizers.time.monotonic = lambda: clock[0]
+        scene = visualizers.Rave()
+        scene._last = None
+        state = SpectrumState()
+        state.levels = [0.4] * 48
+        state.bass = 0.5
+        state.mid = state.synth = state.high = 0.4
+
+        seen = []
+        watching = [False]
+        real = visualizers.Rave._project
+        beams = visualizers.Rave._beams_now
+
+        def spy(self, horizon, focal, x, y, z):
+            if watching[0]:
+                seen.append((x, y, z))
+            return real(self, horizon, focal, x, y, z)
+
+        def watched(self, *a, **k):
+            watching[0] = True
+            try:
+                return beams(self, *a, **k)
+            finally:
+                watching[0] = False
+
+        visualizers.Rave._project = spy
+        visualizers.Rave._beams_now = watched
+        image = QImage(900, 500, QImage.Format.Format_ARGB32_Premultiplied)
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        try:
+            for frame in range(frames):
+                clock[0] += 1 / 60.0
+                state.kit = {"Kick": 0.1, "Snare": 0.1,
+                             "Hats": 0.9 if frame % 10 == 0 else 0.05,
+                             "Synth": 0.3}
+                image.fill(QColor(0, 0, 0))
+                scene.paint(painter, QRectF(0, 0, 900, 500), state)
+        finally:
+            painter.end()
+            visualizers.Rave._project = real
+            visualizers.Rave._beams_now = beams
+            visualizers.time.monotonic = was
+        return seen, scene
+
+    def test_a_beam_hangs_on_the_ceiling_and_lands_on_the_floor(self):
+        import visualizers
+
+        seen, _scene = self._asked()
+        assert len(seen) >= 20, f"only {len(seen)} beam points were drawn"
+        lift = visualizers.Rave._lift(0.5)
+        heights = {round(y, 6) for _x, y, _z in seen}
+        assert heights <= {round(lift, 6), round(-lift, 6)}, (
+            f"beams were drawn at heights {sorted(heights)}, and the room "
+            f"only has surfaces at {-lift:.3f} and {lift:.3f}")
+        assert round(lift, 6) in heights and round(-lift, 6) in heights, (
+            "every beam ended on the same surface, so none of them crosses "
+            "the room")
+
+    def test_no_beam_starts_at_the_vanishing_point(self):
+        """Which is where the thing in the middle is, and where every one
+        of them used to start."""
+        seen, _scene = self._asked()
+        from_middle = [p for p in seen if abs(p[0]) < 1e-9 and abs(p[1]) < 1e-9]
+        assert not from_middle, (
+            f"{len(from_middle)} beam points sit on the axis of the room, "
+            f"so they radiate from the vanishing point")
+
+    def test_every_beam_is_inside_the_room(self):
+        import visualizers
+
+        seen, _scene = self._asked()
+        out = [p for p in seen
+               if not visualizers.Rave.NEAR <= p[2] <= visualizers.Rave.FAR]
+        assert not out, (
+            f"{len(out)} beam points are outside the room's depth, the "
+            f"furthest at z={max(p[2] for p in out):.2f} in a room that "
+            f"ends at {visualizers.Rave.FAR}")
+
+    def test_they_come_in_mirrored_pairs(self):
+        """One line on its own reads as a stray; two read as a rig."""
+        seen, _scene = self._asked()
+        across = sorted({round(x, 5) for x, _y, _z in seen})
+        for value in across:
+            assert round(-value, 5) in across, (
+                f"a beam at {value:.3f} across the room has nothing "
+                f"mirroring it")
+
+
+class TestTheRingsMarkBigMoments:
+    """"I am not sure what's going on with the circle that gets bigger in
+    rave. Make these fancier and more consistent to signify big changes in
+    a song."
+
+    A ring used to fire on any snare over 0.75, which in most tracks is
+    every other beat, so it signified nothing. What fires one now is the
+    room getting louder than it has been.
+    """
+
+    FPS = 60
+
+    #: One replay per length, shared by the tests below. Each one is 2400
+    #: painted frames and they all ask the same question of the same
+    #: deterministic run, so playing it five times only made the suite
+    #: slower.
+    _replays: dict = {}
+
+    @staticmethod
+    def _arrangement(second):
+        """Quiet intro, a build, a drop, a breakdown, a second drop."""
+        if second < 6:
+            return 0.18
+        if second < 12:
+            return 0.18 + (second - 6) * 0.04
+        if second < 22:
+            return 0.72
+        if second < 27:
+            return 0.20
+        return 0.76
+
+    def _played(self, seconds=40):
+        """Where the rings fire, in seconds, over a written arrangement."""
+        if seconds not in self._replays:
+            self._replays[seconds] = self._replay(seconds)
+        return self._replays[seconds]
+
+    def _replay(self, seconds):
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        clock = [1000.0]
+        was = visualizers.time.monotonic
+        visualizers.time.monotonic = lambda: clock[0]
+        scene = visualizers.Rave()
+        scene._last = None
+        state = SpectrumState()
+        state.levels = [0.4] * 48
+        image = QImage(640, 360, QImage.Format.Format_ARGB32_Premultiplied)
+        painter = QPainter(image)
+        fired, snares = [], 0
+        try:
+            for frame in range(int(seconds * self.FPS)):
+                clock[0] += 1 / self.FPS
+                at = frame / self.FPS
+                loud = self._arrangement(at)
+                state.bass = loud
+                state.mid = loud * 0.9
+                state.high = loud * 0.8
+                state.synth = 0.3
+                beat = frame % 30
+                if beat == 15:
+                    snares += 1
+                state.kit = {"Kick": 0.9 if beat == 0 else 0.1,
+                             "Snare": 0.95 if beat == 15 else 0.05,
+                             "Hats": 0.5 if beat % 7 == 0 else 0.05,
+                             "Synth": 0.3}
+                before = len(scene._rings)
+                image.fill(QColor(0, 0, 0))
+                scene.paint(painter, QRectF(0, 0, 640, 360), state)
+                if len(scene._rings) > before:
+                    fired.append(round(at, 2))
+        finally:
+            painter.end()
+            visualizers.time.monotonic = was
+        return fired, snares
+
+    def test_it_fires_on_the_drops_and_not_on_the_snares(self):
+        fired, snares = self._played()
+        assert snares >= 60, f"the arrangement only had {snares} snares"
+        assert len(fired) == 2, (
+            f"{len(fired)} rings over a track with {snares} snares in it, "
+            f"at {fired}")
+
+    def test_it_fires_where_the_track_actually_lifts(self):
+        """The two drops are at twelve seconds and twenty-seven."""
+        fired, _snares = self._played()
+        for when, at in zip(fired, (12.0, 27.0)):
+            assert abs(when - at) < 0.6, (
+                f"a ring fired at {when}s, and the track lifts at {at}s")
+
+    def test_a_long_loud_passage_is_one_moment(self):
+        """Not a ring every time the wait runs out.
+
+        The slow average takes seconds to climb, so while it was climbing
+        the room stayed louder than it had been: measured before this was
+        seen to, one drop sent three rings 0.45 apart.
+        """
+        fired, _snares = self._played()
+        apart = [b - a for a, b in zip(fired, fired[1:])]
+        assert all(gap > 4.0 for gap in apart), (
+            f"rings fired {apart} seconds apart, which is one moment being "
+            f"counted more than once")
+
+    def test_nothing_fires_before_it_has_heard_anything(self):
+        """A slow average starting at zero makes the first sound of any
+        track louder than everything before it."""
+        fired, _snares = self._played()
+        assert not [at for at in fired if at < 5.0], (
+            f"a ring fired at {fired[0]}s, during the quiet intro")
+
+    def test_a_moment_sends_more_than_one_ring(self):
+        """"Fancier": one outline was hard to read as anything."""
+        import visualizers
+
+        assert visualizers.Rave.RING_ECHOES >= 2
+        fired, _snares = self._played(seconds=13)
+        assert fired, "no ring fired at all"
+
+
+class TestTheRoomTravelsSteadily:
+    """"Rave is still a bit jittery, make it smoother but keep the energy."
+
+    The room is locked to the tempo: a fixed distance per beat, with the
+    bass deciding how that distance is spent within the beat, so that a
+    heavy bass reads as a lunge on the beat and a coast before the next
+    one. The curve doing the front-loading was ``t ** (1 / (1 + bass *
+    SURGE))``, whose slope at the start of a beat is not 2.6 times the
+    average, it is infinite - so the whole lunge landed in one frame and
+    the rest of the beat crawled.
+    """
+
+    FPS = 60
+    _runs: dict = {}
+
+    def _travel(self, tempo=128.0, noise=0.10, seconds=8):
+        """How far the room moves each frame, over a steady tempo."""
+        import math
+
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        key = (tempo, noise, seconds)
+        if key in self._runs:
+            return self._runs[key]
+
+        clock = [1000.0]
+        was = visualizers.time.monotonic
+        visualizers.time.monotonic = lambda: clock[0]
+        scene = visualizers.Rave()
+        scene._last = None
+        state = SpectrumState()
+        state.levels = [0.4] * 48
+        state.tempo = tempo
+        image = QImage(480, 270, QImage.Format.Format_ARGB32_Premultiplied)
+        painter = QPainter(image)
+        seen = []
+        try:
+            for frame in range(int(seconds * self.FPS)):
+                clock[0] += 1 / self.FPS
+                at = frame / self.FPS
+                # A bass that moves the way a tracked band does: a slow
+                # swell with per-frame noise on top of it.
+                swell = 0.45 + 0.35 * math.sin(at * 1.3)
+                bass = max(0.0, min(1.0, swell + noise * math.sin(at * 47.0)))
+                state.bass = bass
+                state.mid = state.high = 0.4
+                state.synth = 0.3
+                if tempo:
+                    state.beat_at = (at * tempo / 60.0) % 1.0
+                beat = frame % 30
+                state.kit = {"Kick": 0.9 if beat == 0 else 0.1,
+                             "Snare": 0.9 if beat == 15 else 0.05,
+                             "Hats": 0.4, "Synth": 0.3, "Bass": bass}
+                image.fill(QColor(0, 0, 0))
+                scene.paint(painter, QRectF(0, 0, 480, 270), state)
+                seen.append(scene._z)
+        finally:
+            painter.end()
+            visualizers.time.monotonic = was
+        steps = [b - a for a, b in zip(seen, seen[1:])]
+        self._runs[key] = steps
+        return steps
+
+    def test_the_room_never_travels_backwards(self):
+        """Which it did, twice in eight seconds, and a room that goes
+        backwards for a frame is the jitter itself."""
+        steps = self._travel()
+        back = [step for step in steps if step < 0.0]
+        assert not back, (
+            f"{len(back)} frames of {len(steps)} travelled backwards, the "
+            f"worst by {min(back):.4f} rows")
+
+    def test_the_lunge_is_as_hard_as_it_says_and_no_harder(self):
+        """SURGE is a multiple of the average speed, so the fastest frame
+        of a beat should be about that multiple and not seven times it."""
+        import statistics
+
+        import visualizers
+
+        steps = self._travel()
+        middle = statistics.median(steps)
+        allowed = (1.0 + visualizers.Rave.SURGE) * 1.15
+        assert max(steps) < middle * allowed, (
+            f"the worst frame travels {max(steps) / middle:.1f} times the "
+            f"median, and SURGE asks for at most "
+            f"{1.0 + visualizers.Rave.SURGE:.1f}")
+
+    def test_it_still_lunges(self):
+        """The point of the curve. A room that travels evenly is smooth
+        and has no energy in it."""
+        import statistics
+
+        steps = self._travel()
+        middle = statistics.median(steps)
+        assert max(steps) > middle * 1.5, (
+            f"the worst frame travels {max(steps) / middle:.2f} times the "
+            f"median, so the beat has been smoothed flat")
+
+    def test_a_bass_that_wobbles_does_not_shake_the_room(self):
+        """The curve is chosen by the bass, so an unsmoothed bass moves
+        where the room *is* rather than how fast it is going."""
+        import statistics
+
+        quiet = self._travel(noise=0.0)
+        noisy = self._travel(noise=0.10)
+
+        def roughness(steps):
+            return statistics.pstdev(steps) / statistics.median(steps)
+
+        assert roughness(noisy) < roughness(quiet) * 1.20, (
+            f"a steady bass gives {roughness(quiet):.2f} of roughness and a "
+            f"wobbling one {roughness(noisy):.2f}, so the wobble is being "
+            f"drawn")
+
+
+class TestTheSceneGivesWayToTheControls:
+    """"Bringing up cursor and menu bar is janky in fullscreen."
+
+    The pane paces itself to spend almost all of a sixtieth of a second
+    painting - 8.5 ms for the scene and 6.5 for the polish out of 16 -
+    which leaves about a millisecond a frame for the cursor, the bar
+    fading in and a button lighting up under the pointer. That is enough
+    while nothing else is happening.
+    """
+
+    @staticmethod
+    def _full(qapp):
+        from attachment_widgets import FullScreenSpectrum, Spectrum
+
+        spectrum = Spectrum()
+        full = FullScreenSpectrum(spectrum)
+        full.resize(1280, 800)
+        full.show()
+        qapp.processEvents()
+        return spectrum, full
+
+    def test_the_frame_rate_halves_while_the_controls_are_up(self, qapp):
+        from attachment_widgets import Spectrum
+
+        pane = Spectrum()
+        pane._pace()
+        ordinary = pane._timer.interval()
+        pane.set_giving_way(True)
+        giving = pane._timer.interval()
+        pane.set_giving_way(False)
+        back = pane._timer.interval()
+        assert giving > ordinary, (
+            f"the timer asks for a frame every {giving} ms while the "
+            f"controls are up and every {ordinary} ms otherwise")
+        assert giving == int(ordinary * Spectrum.GIVE_WAY), (
+            f"expected {int(ordinary * Spectrum.GIVE_WAY)} ms, got {giving}")
+        assert back == ordinary, (
+            f"the rate stayed at {back} ms after the controls went away")
+
+    def test_showing_the_controls_is_what_asks_for_it(self, qapp):
+        spectrum, full = self._full(qapp)
+        try:
+            full._hide_controls()
+            assert spectrum._giving_way is False
+            full._show_controls()
+            assert spectrum._giving_way is True, (
+                "the controls came up and the scene carried on at full rate")
+            full._hide_controls()
+            assert spectrum._giving_way is False, (
+                "the controls went away and the scene stayed slowed down")
+        finally:
+            full.close()
+
+    def test_the_cursor_is_shown_once_and_not_on_every_mouse_move(self, qapp):
+        """Asking Qt to change a cursor walks the widget tree and tells the
+        window system. This ran on every mouse move event."""
+        from attachment_widgets import FullScreenSpectrum
+
+        spectrum, full = self._full(qapp)
+        asked = []
+        real = FullScreenSpectrum.unsetCursor
+
+        def counted(self):
+            asked.append(1)
+            return real(self)
+
+        FullScreenSpectrum.unsetCursor = counted
+        try:
+            full._hide_controls()          # blank it first
+            for _ in range(40):
+                full._show_controls()      # as a moving mouse does
+        finally:
+            FullScreenSpectrum.unsetCursor = real
+            full.close()
+        assert len(asked) == 1, (
+            f"forty mouse moves asked for the cursor {len(asked)} times")

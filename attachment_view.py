@@ -472,9 +472,9 @@ class AudioPane(QWidget):
         self.strobe_source = _combo(
             list(_Spec.STROBE_SOURCES),
             "Which part of the sound sets the strobe off.\n\n"
-            f"{_Spec.BY_HAND} means nothing fires by itself: the F key is "
-            f"the only light. F works on the other settings too, adding a "
-            f"flash to whatever the track is doing.")
+            f"{_Spec.BY_HAND}: only the "
+            f"{AudioPane.BY_HAND_KEY} key flashes. It works on the other "
+            f"settings too.")
         self.strobe_source.currentTextChanged.connect(
             self.spectrum.set_strobe_source)
         # What to press, said where the choice is made.
@@ -948,7 +948,13 @@ class AudioPane(QWidget):
 
     #: The key that flashes the strobe by hand, written where somebody
     #: choosing "Manual" will see it.
-    BY_HAND_KEY = "F"
+    #:
+    #: G rather than F. F was already the key that goes full screen, in
+    #: this pane and in the viewer above it, so the one key somebody in
+    #: Manual has to know was the one key that also left the room. G is
+    #: next to it and next to A, S and D, so the left hand still covers
+    #: everything.
+    BY_HAND_KEY = "G"
 
     #: The keys that play the visualiser, and what each one does.
     #:
@@ -957,7 +963,7 @@ class AudioPane(QWidget):
     #: the combo box happens to be showing. The rest sit under the left
     #: hand while the right hand is on the numbers: S switches the strobe
     #: on and off, A and D walk through what it is listening to, M goes
-    #: straight to listening to nobody, and F is the strobe itself - tap
+    #: straight to listening to nobody, and G is the strobe itself - tap
     #: it for a flash, hold it for a held light.
     #:
     #: J, K, L, space and escape are the transport and are handled where
@@ -967,7 +973,7 @@ class AudioPane(QWidget):
         Qt.Key.Key_A: ("reaction", -1),
         Qt.Key.Key_D: ("reaction", 1),
         Qt.Key.Key_M: ("by-hand", 0),
-        Qt.Key.Key_F: ("flash", 1),
+        Qt.Key.Key_G: ("flash", 1),
     }
 
     @staticmethod

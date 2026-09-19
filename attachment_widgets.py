@@ -281,6 +281,8 @@ class Spectrum(QWidget):
         self._target = 0.0
         self._unbounded = False
         self._reserve = 0
+        #: Set while somebody is working the controls. See GIVE_WAY.
+        self._giving_way = False
         #: None when idle, else 0..1 while the track is being analysed.
         self._working = None
         self._post = True
@@ -866,6 +868,30 @@ class Spectrum(QWidget):
         high = max(low + 1, int(span[1] * count))
         return sum(row[low:high]) / max(1, high - low)
 
+    #: What a frame is allowed to be while somebody is working the
+    #: controls, as a multiple of the ordinary one.
+    #:
+    #: The pane paces itself to spend almost all of a sixtieth of a second
+    #: painting - 8.5 ms for the scene and 6.5 for the polish, out of 16 -
+    #: which leaves about a millisecond an frame for everything else: the
+    #: cursor, the bar fading in, a button lighting up under the pointer.
+    #: That is fine while nothing else is happening and it is not fine
+    #: while somebody is reaching for the controls, which is "bringing up
+    #: cursor and menu bar is janky in fullscreen".
+    #:
+    #: So the scene halves its rate while the controls are up. Nobody
+    #: watching a scene at thirty a second for the second and a half it
+    #: takes to move a slider is going to mind, and it hands the rest of
+    #: the frame to the thing being looked at.
+    GIVE_WAY = 2.0
+
+    def set_giving_way(self, giving: bool) -> None:
+        """Ask for fewer frames, because the controls are on screen."""
+        giving = bool(giving)
+        if giving != self._giving_way:
+            self._giving_way = giving
+            self._pace()
+
     def _pace(self) -> None:
         """Ask the timer for frames at a rate the scene can actually meet.
 
@@ -883,6 +909,8 @@ class Spectrum(QWidget):
         wanted = self._sharpness.interval_ms(
             self.devicePixelRatioF(), self.FRAME_MS,
             extra=self._effects.cost_ms())
+        if self._giving_way:
+            wanted = int(wanted * self.GIVE_WAY)
         if self._timer.interval() != wanted:
             self._timer.setInterval(wanted)
 
@@ -1459,8 +1487,8 @@ class _KeysCard(QWidget):
         ("1 – 8", "the scenes, in the order the menu lists them"),
         ("S", "strobe on or off"),
         ("A / D", "step through what the strobe listens to"),
-        ("M", "listen to nobody: nothing fires but F"),
-        ("F", "flash by hand: tap for a flash, hold for a held light"),
+        ("M", "listen to nobody: nothing fires but G"),
+        ("G", "flash by hand: tap for a flash, hold for a held light"),
         (None, None),
         ("J / K / L", "back ten seconds, play or pause, forward ten"),
         ("space", "play or pause"),
@@ -1644,6 +1672,10 @@ class FullScreenSpectrum(QWidget):
         self._owner = owner
         self._home = spectrum.parentWidget()
         self._layout_index = None
+        #: Whether the pointer is currently hidden, so that showing it
+        #: again is something that happens once rather than on every mouse
+        #: move event.
+        self._hidden_cursor = False
 
         parent_layout = self._home.layout() if self._home else None
         self._stretch = 0
@@ -1718,7 +1750,14 @@ class FullScreenSpectrum(QWidget):
             self._fade.setStartValue(self._effect.opacity())
             self._fade.setEndValue(1.0)
             self._fade.start()
-        self.unsetCursor()
+        if self._hidden_cursor:
+            # Only when it is actually hidden. This ran on every mouse
+            # move event, and asking Qt to change a cursor walks the widget
+            # tree and tells the window system - a hundred times a second,
+            # for a cursor that was already showing.
+            self._hidden_cursor = False
+            self.unsetCursor()
+        self._spectrum.set_giving_way(True)
         self._idle.start()
 
     def _hide_controls(self) -> None:
@@ -1729,7 +1768,10 @@ class FullScreenSpectrum(QWidget):
         self._fade.setStartValue(self._effect.opacity())
         self._fade.setEndValue(0.0)
         self._fade.start()
-        self.setCursor(Qt.CursorShape.BlankCursor)
+        if not self._hidden_cursor:
+            self._hidden_cursor = True
+            self.setCursor(Qt.CursorShape.BlankCursor)
+        self._spectrum.set_giving_way(False)
 
     def keyPressEvent(self, event) -> None:      # noqa: N802 - Qt's name
         """Escape leaves; J, K and L work the transport; the rest play it.

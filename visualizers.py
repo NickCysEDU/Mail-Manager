@@ -2304,10 +2304,52 @@ class Rave(Scene):
     #: walls and every line width in the single frame it landed on, and
     #: back over the six after it. What a kick does to a room is push it,
     #: and a push takes time to arrive and longer to fade.
-    #: How much a full bass front-loads the travel within a beat. At 0
-    #: the room moves evenly; at 1.6 it covers three quarters of the beat's
-    #: distance in the first third of it.
+    #: How much a full bass front-loads the travel within a beat, as a
+    #: multiple of the average speed. At 0 the room moves evenly; at 1.6
+    #: the first frame of a beat travels 2.6 times as far as the mean and
+    #: the last barely moves.
+    #:
+    #: A multiple, because the curve is what the room's smoothness is.
+    #: This was ``through ** (1 / (1 + bass * SURGE))``, whose slope at the
+    #: start of a beat is not 2.6 times the mean, it is infinite: measured
+    #: at 128 bpm, the worst frame travelled 1.02 rows against a median of
+    #: 0.145, so the whole lunge happened in one frame and the rest of the
+    #: beat crawled. With a bass that moves the way a tracked band does,
+    #: two frames in eight seconds travelled *backwards*. That is "rave is
+    #: still a bit jittery".
+    #:
+    #: ``1 - (1 - t) ** k`` front-loads the same way and its slope at the
+    #: start is exactly k, so the lunge is as hard as it says and no
+    #: harder.
     SURGE = 1.6
+
+    #: How fast the push behind the room follows the bass. The curve above
+    #: is chosen by it, so a value that jumps about changes where the room
+    #: is rather than how fast it is going.
+    PUSH_RISE, PUSH_FALL = 0.22, 0.045
+
+    #: A ring is a big moment, not a snare.
+    #:
+    #: It used to fire on any snare over 0.75, which in most tracks is
+    #: every other beat: a thing that happens twice a bar cannot signify
+    #: anything, which is "I am not sure what's going on with the circle
+    #: that gets bigger". What fires one now is the room getting louder
+    #: than it has been - the energy over the last breath against the
+    #: energy over the last several seconds - which is what a drop, a
+    #: chorus arriving or a break coming back in actually is.
+    QUICK_RISE, QUICK_FALL = 0.40, 0.03
+    CALM_RATE = 0.010
+    #: How much louder than the last several seconds counts as a moment,
+    #: how quiet the room can be and still have one, and how long before
+    #: another can fire.
+    RING_OVER = 1.30
+    RING_QUIET = 0.04
+    RING_WAIT = 0.45
+    #: Seconds of listening before the first ring can fire. The slow
+    #: average starts at nothing, so for the first moment of a track
+    #: everything is louder than it has been and the room fired three
+    #: rings before it had heard anything.
+    RING_SETTLE = 1.5
 
     THUMP_RISE, THUMP_FALL = 0.34, 0.075
     CRACK_RISE, CRACK_FALL = 0.85, 0.22
@@ -2331,6 +2373,15 @@ class Rave(Scene):
         self._wash = 0.0
         self._wash_hue = 0.0
         self._fizz = 0.0
+        #: How loud the room is over the last breath, and over the last
+        #: several seconds. A big moment is the first running away from
+        #: the second - see ``RING_OVER``.
+        self._push = 0.0
+        self._quick = 0.0
+        self._calm = None
+        self._loud = 0.0
+        self._ring_wait = 0.0
+        self._heard_for = 0.0
 
     # -- the clock --------------------------------------------------------
     def _beats_done(self, state) -> float:
@@ -2389,6 +2440,7 @@ class Rave(Scene):
         # them; it is the one that should be felt, because how fast a room
         # comes at you is how hard the track is pushing.
         bass = max(state.bass, kit.get("Bass", 0.0))
+        self._push = ease(self._push, bass, self.PUSH_RISE, self.PUSH_FALL)
         tempo = getattr(state, "tempo", 0.0)
         if tempo > 0.0:
             # On the grid: one truss passes you every beat, exactly.
@@ -2403,24 +2455,69 @@ class Rave(Scene):
             # first part of it, which is a lunge on the beat and a coast
             # before the next one. Same tempo, much more push.
             beats = self._beats_done(state)
-            surge = 1.0 / (1.0 + bass * self.SURGE)
+            lunge = 1.0 + self._push * self.SURGE
             whole = math.floor(beats)
             through = beats - whole
-            self._z = (whole + through ** surge) * self.TRUSS
+            went = 1.0 - (1.0 - through) ** lunge
+            # Never backwards. The curve is chosen by the push, so a push
+            # that moves within a beat moves the whole mapping, and the
+            # room can be asked to stand where it stood two frames ago.
+            # Beats only ever go forwards, so neither does the room.
+            self._z = max(self._z, (whole + went) * self.TRUSS)
         else:
-            self._z += step * self.DRIFT * (1.0 + bass * 3.4
+            self._z += step * self.DRIFT * (1.0 + self._push * 3.4
                                             + self._thump * 0.9)
         self._spin += step * (0.25 + kit.get("Synth", 0.0) * 1.1
                               + self._fizz * 2.2)
+
+        # How loud the room is now against how loud it has been.
+        loud = (bass + state.mid + state.high) / 3.0
+        self._loud = loud
+        self._quick = ease(self._quick, loud,
+                           self.QUICK_RISE, self.QUICK_FALL)
+        if self._calm is None:
+            # Seeded from the first frame rather than from nothing. A slow
+            # average starting at zero means that for the first second of
+            # any track everything is louder than it has been, and the
+            # room fired a ring before it had heard anything.
+            self._calm = loud
+        self._calm += (loud - self._calm) * self.CALM_RATE
+        self._ring_wait = max(0.0, self._ring_wait - step)
+        self._heard_for += step
         return step
+
+    def _big_moment(self) -> float:
+        """How much of a moment this frame is, from 0 to 1.
+
+        Zero unless the room has got louder than it has been, and zero for
+        ``RING_WAIT`` seconds afterwards, so a long loud passage gives one
+        ring at the start of it rather than one a frame.
+        """
+        if (self._ring_wait > 0.0 or (self._calm or 0.0) < self.RING_QUIET
+                or self._heard_for < self.RING_SETTLE):
+            return 0.0
+        over = self._quick / max(1e-6, self._calm)
+        if over < self.RING_OVER:
+            return 0.0
+        self._ring_wait = self.RING_WAIT
+        # The moment becomes the new normal. Without this a drop fires
+        # again every RING_WAIT for as long as it stays loud, because the
+        # slow average takes several seconds to climb: measured on a
+        # written arrangement, one drop sent three rings 0.45 apart.
+        #
+        # From the loudness itself rather than from the quick envelope,
+        # which is still on its way up when the first ring goes: taking
+        # the envelope left the bar low enough that the rest of the same
+        # rise cleared it again half a second later.
+        self._calm = max(self._calm, self._loud * 0.92)
+        return max(0.35, min(1.0, (over - self.RING_OVER) * 1.4))
 
     def paint(self, painter, rect, state) -> None:
         step = self._advance(state)
-        # The eased kick everywhere the room moves. The raw one still
-        # fires the things that are *meant* to be sudden - the rings and
-        # the beams - because a snare hit is an event and the room is not.
+        # The eased kick everywhere the room moves. The raw hats still
+        # fire the beams, which are meant to be sudden; the snare no longer
+        # fires anything directly - it moves the colour, in _advance.
         kick = self._thump
-        snare = state.kit.get("Snare", 0.0)
         hats = state.kit.get("Hats", 0.0)
         synth = state.kit.get("Synth", 0.0)
         bass = max(state.kit.get("Bass", 0.0), state.bass)
@@ -2438,8 +2535,10 @@ class Rave(Scene):
 
         self._haze(painter, rect, horizon, bass, synth, flash)
         self._grid(painter, rect, horizon, focal, hue, bass, kick, flash)
-        self._rings_now(painter, rect, horizon, focal, snare, step, hue, flash)
-        self._beams_now(painter, rect, horizon, focal, hats, step, hue)
+        self._rings_now(painter, rect, horizon, focal, self._big_moment(),
+                        step, hue, flash)
+        self._beams_now(painter, rect, horizon, focal, hats, step, hue,
+                        bass)
         self._core(painter, horizon, span, hue, bass, kick, synth, flash,
                    self._weight(rect))
 
@@ -2714,6 +2813,19 @@ class Rave(Scene):
     #: and read as hatching rather than as a grid.
     UPRIGHTS = 3
 
+    #: How far the floor and the ceiling are from the eye, and how much
+    #: further a bass note pushes them. The corridor opening up is most of
+    #: what makes the room feel big.
+    #:
+    #: One definition, because the beams have to land on the floor the
+    #: grid drew rather than somewhere near it.
+    LIFT_AT_REST = 0.55
+    LIFT_ON_BASS = 0.22
+
+    @classmethod
+    def _lift(cls, bass: float) -> float:
+        return cls.LIFT_AT_REST + bass * cls.LIFT_ON_BASS
+
     def _surfaces(self, lift, span):
         """The four walls of the corridor: where a point across each one
         is, how far its colour is turned, and how many lines it gets.
@@ -2754,9 +2866,7 @@ class Rave(Scene):
         painter.setBrush(Qt.BrushStyle.NoBrush)
         weight = self._weight(rect)
         glow = self._glow(rect)
-        # How far the surfaces are from the eye - the corridor opening up
-        # on a bass note is most of what makes the room feel big.
-        lift = 0.55 + bass * 0.22
+        lift = self._lift(bass)
         span = self.ACROSS * 0.5
         offset = self._z % 1.0
         reach = self.FAR - self.NEAR
@@ -2954,11 +3064,23 @@ class Rave(Scene):
     RING_CLOSE = 2.1
     RING_GONE = 0.34
 
-    def _rings_now(self, painter, rect, horizon, focal, snare, step, hue,
+    #: How many rings a moment sends, and how far apart they start. A
+    #: single outline was hard to read as anything; three, staggered down
+    #: the room, arrive as one shape with a depth to it.
+    RING_ECHOES = 3
+    RING_APART = 1.7
+
+    def _rings_now(self, painter, rect, horizon, focal, moment, step, hue,
                    flash):
-        """A ring per snare, leaving the far end and sweeping past you."""
-        if snare > 0.75 and (not self._rings or self._rings[-1][0] > 1.2):
-            self._rings.append([self.FAR * 0.9, snare])
+        """Rings from a big moment, leaving the far end and sweeping past.
+
+        See ``RING_OVER`` for what a moment is. This used to fire on any
+        snare over 0.75.
+        """
+        if moment > 0.0:
+            for echo in range(self.RING_ECHOES):
+                self._rings.append([self.FAR * 0.9 + echo * self.RING_APART,
+                                    moment * (1.0 - echo * 0.22)])
         alive = []
         painter.setBrush(Qt.BrushStyle.NoBrush)
         weight = self._weight(rect)
@@ -2977,38 +3099,86 @@ class Rave(Scene):
             # goes by, so it arrives out of the distance and leaves
             # through the walls rather than blinking out at full strength.
             going = max(0.0, min(1.0, (z - self.RING_GONE) / 0.9))
-            colour = QColor.fromHsvF((hue + 0.5) % 1.0, 0.62, 1.0,
-                                     min(1.0, (1.0 - fade) * 1.15 * force
-                                         * going))
-            pen = QPen(colour, (1.2 + (1.0 - fade) * 5.5 + flash * 2.0)
-                       * weight)
-            pen.setCosmetic(True)
-            painter.setPen(pen)
-            painter.drawEllipse(horizon, radius, radius * 0.62)
+            lit = min(1.0, (1.0 - fade) * 1.15 * force * going)
+            wide = (1.2 + (1.0 - fade) * 5.5 + flash * 2.0) * weight
+            # Three passes, cheapest first: a wide soft one under a narrow
+            # bright one, and a thin line just inside the rim. One outline
+            # of one width reads as a circle drawn on the picture; this
+            # reads as something with an edge that is lit.
+            for grow, share, thin in ((1.0, 0.30, 2.6),
+                                      (1.0, 1.00, 1.0),
+                                      (0.90, 0.45, 0.45)):
+                colour = QColor.fromHsvF(
+                    (hue + 0.5 + (0.06 if thin < 0.5 else 0.0)) % 1.0,
+                    0.62 if thin > 0.5 else 0.30, 1.0,
+                    min(1.0, lit * share))
+                pen = QPen(colour, max(0.8, wide * thin))
+                pen.setCosmetic(True)
+                painter.setPen(pen)
+                painter.drawEllipse(horizon, radius * grow,
+                                    radius * grow * 0.62)
         # Never more than a bar's worth on screen at once.
         self._rings = alive[-8:]
 
-    def _beams_now(self, painter, rect, horizon, focal, hats, step, hue):
-        """A beam per hat, flicked out along the floor and gone."""
+    #: The hat beams. Where the lamps hang across the ceiling, how far
+    #: down the room a beam is thrown, how many rows back it starts, and
+    #: how quickly one fades.
+    BEAM_HANG = 0.62
+    BEAM_THROW = 3.2
+    BEAM_ROWS = 8.0
+    BEAM_FADE = 4.6
+
+    def _beams_now(self, painter, rect, horizon, focal, hats, step, hue,
+                   bass):
+        """A pair of beams per hat, thrown from the rig down onto the floor.
+
+        These used to be single lines from the vanishing point, at an
+        angle taken from the spin and a length taken from nothing: so one
+        would appear pointing up through the ceiling, the next across the
+        walls, none of them belonging to any surface. The thing in the
+        middle sits at the vanishing point, which is why they read as
+        "random beams coming from the wireframe" - they came out of it.
+
+        Now a beam hangs from a lamp on the ceiling and lands on the floor
+        nearer the eye, so both of its ends are somewhere in the room and
+        it crosses the space instead of floating in it. They come in
+        mirrored pairs, so a hat reads as the rig firing rather than as one
+        line going somewhere on its own.
+        """
+        lift = self._lift(bass)
+        span = self.ACROSS * 0.5
         if hats > 0.5 and (not self._beams or self._beams[-1][2] < 0.72):
-            angle = (self._spin * 2.3 + len(self._beams) * 1.7) % math.tau
-            self._beams.append([angle, hats, 1.0])
+            # Where across the rig this pair hangs, and how far its feet
+            # are swept out - both from the spin, so a run of hats walks
+            # along the rig rather than firing the same pair each time.
+            hang = 0.35 + 0.55 * abs(math.sin(self._spin * 1.9))
+            sweep = 0.30 + 0.85 * abs(math.sin(self._spin * 1.3))
+            self._beams.append([self._z + self.BEAM_ROWS, hats, 1.0,
+                                hang, sweep])
         alive = []
+        reach = self.FAR - self.NEAR
+        weight = self._weight(rect)
         for beam in self._beams:
-            beam[2] -= step * 5.5
-            if beam[2] <= 0.0:
+            beam[2] -= step * self.BEAM_FADE
+            row = beam[0] - self._z
+            if beam[2] <= 0.0 or row <= 0.0:
                 continue
             alive.append(beam)
-            angle, force, life = beam
+            _at, force, life, hang, sweep = beam
+            top = self.NEAR + row * reach / self.DEPTH
+            foot = max(self.NEAR, top - self.BEAM_THROW)
             colour = QColor.fromHsvF((hue + 0.18) % 1.0, 0.35, 1.0,
-                                     life * 0.7 * force)
-            pen = QPen(colour, (1.0 + life * 2.4) * self._weight(rect))
+                                     min(1.0, life * 0.7 * force))
+            pen = QPen(colour, (1.0 + life * 2.4) * weight)
             pen.setCosmetic(True)
             painter.setPen(pen)
-            far = self._project(horizon, focal,
-                                math.cos(angle) * 4.5,
-                                math.sin(angle) * 1.6, self.FAR * 0.55)
-            painter.drawLine(horizon, far)
+            path = QPainterPath()
+            for side in (-1.0, 1.0):
+                across = side * hang * self.BEAM_HANG * span
+                path.moveTo(self._project(horizon, focal, across, -lift, top))
+                path.lineTo(self._project(horizon, focal,
+                                          across * sweep, lift, foot))
+            painter.drawPath(path)
         self._beams = alive[-14:]
 
     def _core(self, painter, horizon, span, hue, bass, kick, synth, flash,
