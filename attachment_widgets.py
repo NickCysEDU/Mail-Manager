@@ -1921,7 +1921,13 @@ class FullScreenSpectrum(QWidget):
                                        self._stretch)
         elif self._home is not None:
             spectrum.setParent(self._home)
-        spectrum.show()
+        if spectrum.parentWidget() is not None:
+            spectrum.show()
+        else:
+            # Nowhere to go back to. Showing it here would put a bare
+            # spectrum on screen as a window of its own, which then
+            # outlives everything that knew about it.
+            spectrum.hide()
         if self._owner is not None:
             release = getattr(self._owner, "release_full_screen", None)
             if release is not None:
