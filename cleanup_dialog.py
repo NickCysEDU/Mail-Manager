@@ -198,15 +198,13 @@ class ClearOutDialog(QDialog):
         self.only_seen = QCheckBox("Only mail I have already read")
         self.only_seen.setChecked(True)
         self.only_seen.setToolTip(
-            "Unread mail is the mail you have not decided about yet, so it "
-            "is left alone unless you say otherwise.")
+            "Leave unread mail alone.")
         self.only_seen.toggled.connect(self._changed)
         form.addRow("", self.only_seen)
 
         self.only_bulk = QCheckBox("Only mail sent to a list")
         self.only_bulk.setToolTip(
-            "Mail carrying an unsubscribe link: newsletters, promotions and "
-            "notifications, rather than mail a person sent you.")
+            "Newsletters, promotions and notifications.")
         self.only_bulk.toggled.connect(self._changed)
         form.addRow("", self.only_bulk)
         return box
@@ -247,7 +245,7 @@ class ClearOutDialog(QDialog):
         self.delete_button = QPushButton("Delete")
         widgets._paint_button(self.delete_button, "destructive")
         self.delete_button.setEnabled(False)
-        self.delete_button.setToolTip("Count first, so you can see how many.")
+        self.delete_button.setToolTip("Count first.")
         self.delete_button.clicked.connect(self._delete)
         buttons.addButton(self.delete_button,
                           QDialogButtonBox.ButtonRole.DestructiveRole)
@@ -294,9 +292,7 @@ class ClearOutDialog(QDialog):
         if not criteria.is_armed:
             self.sentence.setText(
                 "Choose a sender, a subject, an age or "
-                "“only mail sent to a list”. With none of those this would "
-                "mean every message in the folder, which this window will "
-                "not do.")
+                "“only mail sent to a list”.")
             self.count_button.setEnabled(False)
             return
         self.count_button.setEnabled(True)
@@ -378,8 +374,7 @@ class ClearOutDialog(QDialog):
             self.delete_button.setText(f"Delete {count:,}")
         else:
             self.count_label.setText(
-                f"Nothing in {criteria.folder} matches, so there is nothing "
-                "to delete.")
+                f"Nothing in {criteria.folder} matches.")
             self.delete_button.setEnabled(False)
             self.delete_button.setText("Delete")
 

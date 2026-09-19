@@ -124,14 +124,13 @@ UNDO_DEPTH = 10
 #: them, and they are the difference between a setting and a decision.
 _ROUTING_HELP = {
     NonJobRouting.LEAVE:
-        "Nothing that is not job mail is touched. It stays in your inbox and "
-        "cannot be ticked - which is why those rows look inert.",
+        "Other mail stays in your inbox and cannot be ticked.",
     NonJobRouting.REVIEW:
         "Non-job mail is gathered into Job Search / Needs Review so you can "
         "look through it in one place.",
     NonJobRouting.FILE:
-        "Non-job mail is filed by topic into Sorted Mail - receipts with "
-        "receipts, travel with travel - and can be ticked like anything else.",
+        "Other mail is filed by topic into Sorted Mail, and can be ticked "
+        "like anything else.",
 }
 
 
@@ -689,7 +688,7 @@ class MainWindow(QMainWindow):
                 section.addAction(action)
             if spec.needs_api_key and not self.store_has_key(name, probe=False):
                 section.addSeparator()
-                missing = QAction("No API key stored - open Settings…", self)
+                missing = QAction("No API key stored. Open Settings…", self)
                 missing.triggered.connect(self.open_settings)
                 section.addAction(missing)
         self.model_menu.addSeparator()
@@ -1017,7 +1016,7 @@ class MainWindow(QMainWindow):
         self.model_button.setText(menu_text(f"⚙︎  {pretty}") + ("  ⚠︎" if warn else ""))
         self.model_button.setToolTip(
             f"{spec.label} · {self.settings.model}\n"
-            + ("No API key stored for this backend - click to fix.\n" if warn else "")
+            + ("No API key stored for this backend.\n" if warn else "")
             + "Click to switch backend or model (⌘M)"
         )
         self._sync_menu_bar_model()
@@ -1153,8 +1152,8 @@ class MainWindow(QMainWindow):
             if self.settings.needs_api_key and not key:
                 QMessageBox.warning(
                     self, "API key needed",
-                    f"{self.settings.provider_label} has no stored key, so the running "
-                    "scan is continuing on the previous backend.",
+                    f"{self.settings.provider_label} has no stored key. "
+                    "The running scan is continuing on the previous backend.",
                 )
                 return
             switched = worker.switch_model(
@@ -1257,8 +1256,8 @@ class MainWindow(QMainWindow):
         self.ticks_button = QToolButton()
         self.ticks_button.setText("Ticks")
         self.ticks_button.setToolTip(
-            "Tick or untick the rows the table is showing. Nothing has "
-            "moved, so this only changes what Apply would do.")
+            "Tick or untick the rows on screen. Changes what Apply will "
+            "do.")
         self.ticks_button.setPopupMode(
             QToolButton.ToolButtonPopupMode.InstantPopup)
         self.ticks_menu = QMenu(self)
@@ -1409,9 +1408,7 @@ class MainWindow(QMainWindow):
             name = f"{len(showing)} of {len(linked)} mailboxes"
         self.view_button.setText(menu_text(f"Show: {name}"))
         self.view_button.setToolTip(
-            "Which mailboxes' messages are shown in the table. Separate from "
-            "which ones get scanned - you can pull several in and read them "
-            "one at a time."
+            "Which mailboxes are shown in the table."
         )
 
     # -- which columns are on screen --------------------------------------
@@ -1589,15 +1586,14 @@ class MainWindow(QMainWindow):
 
         clear_action = QAction("Clear out mail…", self)
         clear_action.setStatusTip(
-            "Delete mail by sender, subject or age - thousands at a time, "
-            "with the count from the server before anything goes.")
+            "Delete mail by sender, subject or age. The server gives a "
+            "count before anything goes.")
         clear_action.triggered.connect(self._clear_out_mail)
         file_menu.addAction(clear_action)
 
         empty_action = QAction("Empty a folder…", self)
         empty_action.setStatusTip(
-            "Delete everything in one folder on the server in one go, "
-            "rather than a few hundred messages at a time.")
+            "Delete everything in one folder on the server.")
         empty_action.triggered.connect(self._empty_a_folder)
         file_menu.addAction(empty_action)
         file_menu.addSeparator()
@@ -2063,9 +2059,8 @@ class MainWindow(QMainWindow):
             confirm.setIcon(QMessageBox.Icon.Question)
             confirm.setText("Let background scans file mail without asking?")
             confirm.setInformativeText(
-                "Only messages the app would have pre-ticked are filed: high "
-                "confidence, job related, and never anything it sends to Needs "
-                "Review. Everything else waits for you."
+                "Files high confidence job mail only. Needs Review and "
+                "everything else waits for you."
             )
             confirm.setStandardButtons(
                 QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Ok
@@ -2329,8 +2324,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self, "Missing API key",
                 f"No {self.settings.provider_label} API key is stored.\n\n"
-                "Add one in Settings, or switch to a backend that needs no key "
-                "(On this Mac, or Local rules) from the ⚙︎ button.",
+                "Add one in Settings, or pick On this Mac or Local rules "
+                "from the ⚙︎ button.",
             )
             self.open_settings(tab=1)
             return
@@ -2514,10 +2509,8 @@ class MainWindow(QMainWindow):
         if not self.settings.replies_armed:
             QMessageBox.information(
                 self, "Auto reply is off",
-                "No reply rules are switched on.\n\nSettings → Auto Reply has "
-                "ready-made rules to start from, and you can build your own out "
-                "of any conditions you like. Tick the ones you want and turn on "
-                "\u201cRun these rules after a scan\u201d.",
+                "No reply rules are switched on.\n\nSettings → Auto "
+                "Reply has rules to start from.",
             )
             self.open_settings(tab=3)
             return
@@ -3571,9 +3564,8 @@ class MainWindow(QMainWindow):
         if account is None or not password:
             QMessageBox.information(
                 self, "Attachments",
-                "The mailbox this message came from is not connected, so its "
-                "attachments cannot be fetched. Add its password in Settings "
-                "and scan again.")
+                "This mailbox is not connected. Add its password in "
+                "Settings and scan again.")
             return
 
         self._set_status(f"Fetching what is attached to \u201c{subject[:40]}\u201d...")

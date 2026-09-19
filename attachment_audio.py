@@ -671,8 +671,8 @@ class _Analysis(QObject_base):
                     # the process - so it is kept instead, and the
                     # process exits while it finishes on its own.
                     log.warning(
-                        "An analysis did not stop in time; letting it "
-                        "finish on its own rather than destroying it.")
+                        "An analysis did not stop in time. Letting it "
+                        "finish.")
                     if thread not in _ABANDONED:
                         _ABANDONED.append(thread)
         _LIVE.discard(self)

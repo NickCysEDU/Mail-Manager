@@ -209,3 +209,77 @@ class TestTheLicencesTravelWithTheBinary:
     def test_the_lexicon_provenance_is_recorded(self):
         notice = (ROOT / "THIRD-PARTY-LICENSES.md").read_text(encoding="utf-8")
         assert "OurAirports" in notice and "Wikidata" in notice
+
+
+class TestTheWordingStaysPlain:
+    """"Audit all help tips and text in the application. Make it less
+    verbose, not AI sounding in structure. No em dashes. No 'this isn't
+    this, it's this'. No 'x, because y' structured sentences. Users don't
+    need every little feature explained with logic behind it."
+
+    Thirty-seven tooltips, labels and dialogs explained themselves at
+    length. A tooltip says what a control does; why it works that way
+    belongs in the code, where this file's own comments live.
+
+    Only text that reaches a person is checked. The sample inbox is
+    pretend mail and the prompts are written for a model, so both keep
+    their own voice.
+    """
+
+    #: The calls that put words in front of somebody.
+    SHOWN = {"setToolTip", "setStatusTip", "setText", "setPlaceholderText",
+             "setWindowTitle", "setTitle", "addItem", "setInformativeText",
+             "setLabelText"}
+
+    @classmethod
+    def _shown_strings(cls):
+        """Every literal handed to one of those calls, with where it is."""
+        import ast
+
+        found = []
+        for path in sorted(ROOT.glob("*.py")):
+            if path.name.startswith("test"):
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                name = (node.func.attr if isinstance(node.func, ast.Attribute)
+                        else getattr(node.func, "id", ""))
+                if name not in cls.SHOWN:
+                    continue
+                parts = [sub.value for sub in ast.walk(node)
+                         if isinstance(sub, ast.Constant)
+                         and isinstance(sub.value, str)]
+                if parts:
+                    found.append((path.name, node.lineno, " ".join(parts)))
+        return found
+
+    def test_there_is_text_to_check(self):
+        """So that a change to how this reads the source cannot quietly
+        turn the rest of the class into a test of nothing."""
+        assert len(self._shown_strings()) > 200
+
+    def test_nothing_shown_has_an_em_dash_in_it(self):
+        bad = [(f, line) for f, line, text in self._shown_strings()
+               if "—" in text or "–" in text]
+        assert not bad, "em dashes at " + ", ".join(
+            f"{f}:{line}" for f, line in bad)
+
+    def test_nothing_shown_explains_itself_with_because(self):
+        """"No 'x, because y' structured sentences." """
+        import re
+
+        bad = [(f, line, text) for f, line, text in self._shown_strings()
+               if re.search(r",\s+(because|so that|since|which is why|so )",
+                            text)]
+        assert not bad, "\n".join(
+            f"{f}:{line}: {text[:90]}" for f, line, text in bad)
+
+    def test_nothing_shown_runs_on(self):
+        """A tooltip is a few words. Twenty-five is already generous."""
+        bad = [(f, line, len(text.split()))
+               for f, line, text in self._shown_strings()
+               if len(text.split()) > 25]
+        assert not bad, "\n".join(
+            f"{f}:{line} is {count} words" for f, line, count in bad)
