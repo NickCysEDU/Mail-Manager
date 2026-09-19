@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 import briefing
 from briefing import Urgency
 from models import (Category, Classification, EmailMessage, FolderPlan,
@@ -256,3 +258,226 @@ class TestTheDialog:
         dialog = BriefingDialog(briefing.build([]))
         qtbot.addWidget(dialog)
         assert dialog.findChildren(type(dialog)) is not None
+
+
+class TestTheBriefingLinesShareTheirEdges:
+    """"The briefing window text field looks messy, ensure it has a
+    professional clean layout."
+
+    Each card is three columns: a count, the line, and where it is bound
+    for. They were laid out well enough one line at a time and read as a
+    mess down the page.
+    """
+
+    @pytest.fixture(params=["comfortable", "compact", "dense"])
+    def card(self, qapp, request):
+        """Under every density.
+
+        The theme gives every button one height so a row of mixed controls
+        lines up, and that height changes with the density - so a clickable
+        line matched its neighbours under one setting and not another. This
+        passed on its own and failed in the suite, depending on which theme
+        the test before it had left behind.
+        """
+        import theme
+
+        from briefing_dialog import _Card
+
+        theme.apply(qapp, "light", "normal", spacing=request.param)
+        card = _Card("Needs a reply", "the ones with a deadline")
+        card.add("3", "A short line")
+        card.add("", "A clickable line", on_click=lambda: None)
+        card.add("12", "A line long enough that it wraps onto a second line "
+                       "inside the card, which is the case that floated the "
+                       "count away from the line it counts",
+                 folder="Sorted Mail/Finance")
+        card.add("1", "Another short line",
+                 folder="Sorted Mail/A Very Long Folder Name Indeed")
+        card.resize(640, 300)
+        card.show()
+        qapp.processEvents()
+        yield card
+        card.close()
+        card.deleteLater()
+        theme.apply(qapp, "light", "normal")
+
+    @staticmethod
+    def _boxes(card, column):
+        grid = card._grid
+        found = []
+        for row in range(grid.rowCount()):
+            item = grid.itemAtPosition(row, column)
+            if item is not None and item.widget() is not None:
+                found.append((row, item.widget().geometry()))
+        return found
+
+    def test_every_line_starts_in_the_same_place(self, card):
+        edges = {box.x() for _row, box in self._boxes(card, 1)}
+        assert len(edges) == 1, (
+            f"the lines start at {sorted(edges)}, so the column is ragged")
+
+    def test_every_line_ends_in_the_same_place(self, card):
+        edges = {box.right() for _row, box in self._boxes(card, 1)}
+        assert len(edges) == 1, (
+            f"the lines end at {sorted(edges)}, so a folder name is eating "
+            f"into them")
+
+    def test_two_cards_end_their_lines_in_the_same_place(self, qapp):
+        """Where the raggedness actually was.
+
+        Within one card the column was always uniform: the widest folder
+        name in it set the width for every line in it. Down the page it was
+        not, because the next card had different names in it - so the eye
+        followed a column that stepped in and out from section to section.
+        """
+        from briefing_dialog import _Card
+
+        made = []
+        for folder in ("Sorted Mail/Finance",
+                       "Sorted Mail/A Very Long Folder Name Indeed"):
+            one = _Card("Section")
+            one.add("2", "A line of about the usual length", folder=folder)
+            one.resize(640, 120)
+            one.show()
+            qapp.processEvents()
+            made.append(one)
+        try:
+            edges = {self._boxes(one, 1)[0][1].right() for one in made}
+            assert len(edges) == 1, (
+                f"one card's lines end at {sorted(edges)[0]} and another's "
+                f"at {sorted(edges)[-1]}, so the column steps in and out "
+                f"down the page")
+        finally:
+            for one in made:
+                one.close()
+                one.deleteLater()
+
+    def test_a_clickable_line_is_the_same_height_as_a_plain_one(self, card):
+        heights = [box.height() for row, box in self._boxes(card, 1)
+                   if row in (0, 1, 3)]
+        assert len(set(heights)) == 1, (
+            f"the single-line rows are {heights} tall, so the clickable one "
+            f"does not match its neighbours")
+
+    def test_a_count_sits_on_the_first_line_of_what_it_counts(self, card):
+        """Row two wraps onto two lines. Its count used to be centred
+        against the whole of it.
+
+        Measured from the pixels. The count's *box* is the whole of the
+        grid cell either way, and the label centres its text inside that
+        box, so reading the geometry cannot tell the two apart - a version
+        of this test that did passed against the layout it was written to
+        reject.
+        """
+        from PySide6.QtCore import QPoint
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        counts = dict(self._boxes(card, 0))
+        bodies = dict(self._boxes(card, 1))
+        wrapped = max(bodies, key=lambda row: bodies[row].height())
+        assert bodies[wrapped].height() > min(
+            box.height() for box in bodies.values()) * 1.5, (
+            "no row wrapped, so this proves nothing")
+
+        image = QImage(card.size(), QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(255, 255, 255))
+        painter = QPainter(image)
+        try:
+            card.render(painter, QPoint(0, 0))
+        finally:
+            painter.end()
+
+        def first_ink(box):
+            """The topmost row of pixels with any writing in it."""
+            for y in range(max(0, box.top()), min(image.height(), box.bottom())):
+                for x in range(max(0, box.left()),
+                               min(image.width(), box.right())):
+                    if image.pixelColor(x, y).lightness() < 200:
+                        return y
+            return None
+
+        top_of_count = first_ink(counts[wrapped])
+        top_of_line = first_ink(bodies[wrapped])
+        assert top_of_count is not None and top_of_line is not None, (
+            f"found no writing: count {top_of_count}, line {top_of_line}")
+        drift = abs(top_of_count - top_of_line)
+        assert drift <= 3, (
+            f"the count is written {drift}px from the top of the two-line "
+            f"entry it belongs to, at y={top_of_count} against y="
+            f"{top_of_line}")
+
+    def test_a_long_folder_name_is_shortened_rather_than_widening_it(self,
+                                                                    card):
+        from briefing_dialog import _Card
+
+        for _row, box in self._boxes(card, 2):
+            assert box.width() <= _Card.FOLDER_WIDTH, (
+                f"the folder column is {box.width()}px wide against a "
+                f"{_Card.FOLDER_WIDTH}px budget")
+
+
+class TestTheBriefingCardsClearTheScrollBar:
+    """"The scroll bar especially looks weird in briefing."
+
+    The cards ran into it. Measured at 700x520 with the bar showing, a card
+    ended one pixel from the scroll bar while the same card had eleven to
+    the dialog's edge on the other side, so a column of bordered panels
+    butted straight up against it.
+    """
+
+    #: Written out rather than read from BriefingDialog.BAR_GAP, so that
+    #: setting the constant to zero cannot make this pass.
+    LEAST = 6
+
+    @pytest.fixture
+    def dialog(self, qapp, tmp_path, monkeypatch):
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        import demo_data
+        from briefing_dialog import BriefingDialog
+
+        report = briefing.build(demo_data.demo_items())
+        dialog = BriefingDialog(report)
+        dialog.resize(700, 480)
+        dialog.show()
+        qapp.processEvents()
+        yield dialog
+        dialog.close()
+        dialog.deleteLater()
+
+    @staticmethod
+    def _parts(dialog):
+        from PySide6.QtWidgets import QFrame, QScrollArea
+
+        scroll = dialog.findChild(QScrollArea)
+        cards = [child for child in scroll.widget().findChildren(QFrame)
+                 if child.objectName() == "briefingCard"]
+        return scroll, cards
+
+    def test_the_bar_is_actually_showing(self, dialog):
+        """Otherwise the test below proves nothing."""
+        scroll, cards = self._parts(dialog)
+        assert cards, "the briefing drew no cards"
+        assert scroll.verticalScrollBar().isVisible(), (
+            "the briefing fits without scrolling, so this cannot see the bar")
+
+    def test_the_cards_do_not_run_into_it(self, dialog):
+        scroll, cards = self._parts(dialog)
+        bar = scroll.verticalScrollBar()
+        left = bar.mapTo(dialog, bar.rect().topLeft()).x()
+        for card in cards:
+            right = card.mapTo(dialog, card.rect().topRight()).x()
+            assert left - right >= self.LEAST, (
+                f"a card ends at {right} and the scroll bar starts at "
+                f"{left}, a gap of {left - right}px")
+
+    def test_the_gap_matches_the_margin_on_the_other_side(self, dialog):
+        """What made it look wrong was the asymmetry."""
+        scroll, cards = self._parts(dialog)
+        bar = scroll.verticalScrollBar()
+        card = cards[0]
+        left_margin = card.mapTo(dialog, card.rect().topLeft()).x()
+        right_gap = (bar.mapTo(dialog, bar.rect().topLeft()).x()
+                     - card.mapTo(dialog, card.rect().topRight()).x())
+        assert abs(left_margin - right_gap) <= 3, (
+            f"{left_margin}px to the left of the cards and {right_gap}px to "
+            f"the right of them")

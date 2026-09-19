@@ -41,7 +41,27 @@ MARK = {
 
 
 class _Card(QFrame):
-    """One section: a heading and the lines under it."""
+    """One section: a heading and the lines under it.
+
+    Three columns, the same in every card: a count on the left, the line
+    itself, and where it is bound for on the right. They were laid out well
+    enough one card at a time and read as a mess down the page, for four
+    reasons, all of them about lines not sharing an edge.
+
+    A clickable line is a flat button and a plain one is a label, and the
+    button carried padding the label did not, so the two were different
+    heights and their text sat at different places. A wrapped line is two
+    lines tall and its count was centred against the whole of it, so the
+    number drifted away from the line it counts. The right-hand column took
+    its width from whatever folder name happened to be in it, so no two
+    cards agreed where the middle column ended. And a long folder name took
+    that room from the line itself.
+    """
+
+    #: The two outer columns, which are the same width in every card so that
+    #: the middle one starts and ends in the same place down the page.
+    COUNT_WIDTH = 34
+    FOLDER_WIDTH = 150
 
     def __init__(self, title: str, blurb: str = "", parent=None) -> None:
         super().__init__(parent)
@@ -67,6 +87,7 @@ class _Card(QFrame):
         self._grid.setHorizontalSpacing(12)
         self._grid.setVerticalSpacing(4)
         self._grid.setColumnStretch(1, 1)
+        self._grid.setColumnMinimumWidth(0, self.COUNT_WIDTH)
         self._column.addLayout(self._grid)
         self._rows = 0
 
@@ -74,10 +95,13 @@ class _Card(QFrame):
             urgency: int = Urgency.NOTE, tooltip: str = "",
             on_click=None, dim: bool = False) -> None:
         number = QLabel(count)
+        # Top, not centre: a line that wraps onto two is twice as tall, and
+        # a count centred against the whole of it floats away from the line
+        # it belongs to.
         number.setAlignment(Qt.AlignmentFlag.AlignRight
-                            | Qt.AlignmentFlag.AlignVCenter)
+                            | Qt.AlignmentFlag.AlignTop)
         number.setProperty("dim", "true")
-        number.setFixedWidth(34)
+        number.setFixedWidth(self.COUNT_WIDTH)
 
         marker, colour = MARK.get(urgency, ("", ""))
         if marker and not count:
@@ -97,8 +121,17 @@ class _Card(QFrame):
             # the theme still draws a border, and eight bordered boxes
             # stacked up read as a form to fill in rather than a list to
             # read.
-            rule = ("text-align: left; padding: 1px 2px; background: none; "
-                    "border: none;")
+            # No padding of its own. A plain line is a label with none, and
+            # a list whose clickable lines are two pixels taller than its
+            # plain ones is the mess this was.
+            # No padding and no minimum height of its own. The theme
+            # gives every button one height so that a row of mixed
+            # controls lines up, which is right for a row of buttons and
+            # wrong for something pretending to be a line of text: it made
+            # the clickable lines taller than the plain ones, by however
+            # much the current density asks for.
+            rule = ("text-align: left; padding: 0px; margin: 0px; "
+                    "min-height: 0px; background: none; border: none;")
             if colour:
                 rule += f" color: {colour};"
             button.setStyleSheet(rule)
@@ -107,6 +140,18 @@ class _Card(QFrame):
         else:
             label = QLabel(text)
             label.setWordWrap(True)
+            # Inside the label as well as in the grid.
+            #
+            # A wrapped label works out how tall it wants to be from a
+            # width it is told before the grid has settled on one, and it
+            # comes out a line taller than the text it ends up holding:
+            # 45 pixels for two 15-pixel lines. The spare line's worth is
+            # then shared above and below the text, so a two-line entry
+            # started seven pixels below the count beside it. Where the
+            # box ends up does not matter if the text starts at the top
+            # of it.
+            label.setAlignment(Qt.AlignmentFlag.AlignLeft
+                               | Qt.AlignmentFlag.AlignTop)
             if dim:
                 label.setProperty("dim", "true")
             body = label
@@ -115,20 +160,45 @@ class _Card(QFrame):
         if tooltip:
             body.setToolTip(tooltip)
 
-        self._grid.addWidget(number, self._rows, 0)
-        self._grid.addWidget(body, self._rows, 1)
+        self._grid.addWidget(number, self._rows, 0,
+                             Qt.AlignmentFlag.AlignRight
+                             | Qt.AlignmentFlag.AlignTop)
+        # Top, like its count. Left to fill the cell, a single-line label
+        # given spare room centres its text in it while the fixed-height
+        # count beside it stays at the top, so the two drift apart by
+        # however much room the card happens to have.
+        self._grid.addWidget(body, self._rows, 1,
+                             Qt.AlignmentFlag.AlignTop)
         if folder:
-            where = QLabel(folder)
+            where = QLabel()
             where.setProperty("dim", "true")
             where.setAlignment(Qt.AlignmentFlag.AlignRight
-                               | Qt.AlignmentFlag.AlignVCenter)
+                               | Qt.AlignmentFlag.AlignTop)
             where.setToolTip(f"Bound for {folder}")
-            self._grid.addWidget(where, self._rows, 2)
+            where.setFixedWidth(self.FOLDER_WIDTH)
+            where.setText(where.fontMetrics().elidedText(
+                folder, Qt.TextElideMode.ElideLeft, self.FOLDER_WIDTH))
+            # Once a card has a folder in it, the column is that wide in
+            # that card whatever the names turn out to be - so the middle
+            # column ends in the same place on every line.
+            self._grid.setColumnMinimumWidth(2, self.FOLDER_WIDTH)
+            self._grid.addWidget(where, self._rows, 2,
+                                 Qt.AlignmentFlag.AlignRight
+                                 | Qt.AlignmentFlag.AlignTop)
         self._rows += 1
 
 
 class BriefingDialog(QDialog):
     """What the last scan found, in the order somebody wants to be told it."""
+
+    #: Room between the cards and the scroll bar.
+    #:
+    #: Measured at 700x520 with the bar showing, the cards ended one pixel
+    #: from it while the same cards had eleven to the dialog's edge on the
+    #: left: a column of bordered panels running straight into the bar,
+    #: which is "the scroll bar especially looks weird in briefing". This
+    #: matches the margin on the other side.
+    BAR_GAP = 11
 
     #: A row in the table the reader wants to look at.
     show_row = Signal(int)
@@ -159,7 +229,7 @@ class BriefingDialog(QDialog):
 
         inner = QWidget()
         column = QVBoxLayout(inner)
-        column.setContentsMargins(0, 0, 0, 0)
+        column.setContentsMargins(0, 0, self.BAR_GAP, 0)
         column.setSpacing(12)
         for card in self._cards(report):
             column.addWidget(card)
