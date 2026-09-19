@@ -5804,14 +5804,27 @@ class TestTheAirIsColouredByTheBass:
 
     @staticmethod
     def _air(width, height, bass=0.5, flash=0.0):
-        """What the room looks like, as saturation and brightness."""
+        """What the room looks like, as saturation and brightness.
+
+        On a clock this file controls. The room travels by however long
+        the last frame took, so on a slower machine it moves further
+        between the six frames drawn here and different lines land in
+        different places - which moved the brightest twentieth of the
+        frame from 0.77 here to 0.88 on a build runner, and failed a
+        bound that had nothing to do with the machine.
+        """
         import statistics
+        import time
 
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
         import visualizers
         from attachment_widgets import SpectrumState
+
+        clock = [1000.0]
+        was = visualizers.time.monotonic
+        visualizers.time.monotonic = lambda: clock[0]
 
         scene = visualizers.Rave()
         scene._last = None
@@ -5829,9 +5842,11 @@ class TestTheAirIsColouredByTheBass:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         try:
             for _ in range(6):
+                clock[0] += 1 / 60.0
                 scene.paint(painter, QRectF(0, 0, width, height), state)
         finally:
             painter.end()
+            visualizers.time.monotonic = was
         seen = [image.pixelColor(x, y)
                 for y in range(0, height, 5) for x in range(0, width, 5)]
         values = sorted(colour.valueF() for colour in seen)
@@ -5855,7 +5870,10 @@ class TestTheAirIsColouredByTheBass:
         for bass, flash in ((0.95, 0.0), (0.95, 1.0), (1.0, 1.0)):
             for width, height in ((640, 360), (1920, 1080)):
                 _sat, mean, top = self._air(width, height, bass, flash)
-                assert top < 0.85, (
+                # 0.88 with the peak measuring 0.82: the strobe is
+                # allowed to be bright, and what this catches is the old
+                # range, which reached 0.91 even without one.
+                assert top < 0.88, (
                     f"at bass {bass} and flash {flash}, the brightest "
                     f"twentieth of a {width}x{height} frame is at {top:.2f}")
                 assert mean < 0.62, (
