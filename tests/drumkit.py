@@ -61,14 +61,41 @@ def taper(samples: List[float], share: float = 0.12) -> List[float]:
     return samples
 
 
+#: How much beater there is in a kick, and how fast it goes.
+#:
+#: A kick is not only a falling pitch. A beater striking a head makes a
+#: click, and the click is broadband: real kicks carry real energy above
+#: 2 kHz for the first few milliseconds.
+#:
+#: Leaving it out is a way of drawing wrong conclusions. Without it the
+#: written kicks had almost nothing up top, so a sweep of the detector's
+#: cap on the top share said 0.06 was best - and on real recordings 0.06
+#: took one track from 27 kicks a minute to 9 and another from 25 to none.
+#:
+#: **The cap on the kick's top share cannot be tuned from this file.**
+#: Even with a beater the written kicks only reach 0.09 up top, and real
+#: ones plainly go well past 0.10: capping there cost 45 per cent of them
+#: on a real recording. A mix has cymbals, synths and room in it, and they
+#: all land on the kick sometimes. What is written here is one kick alone
+#: in silence, which is the wrong question to ask of that bound.
+#:
+#: 0.6 and 90 is an 11 ms beater at a bit over half the body's height,
+#: which is a kick. It is not chosen to make any number come out.
+CLICK = 0.6
+CLICK_FALL = 90.0
+
+
 def kick(length: float = 0.16) -> List[float]:
-    """A pitch falling from 120 Hz to 45, which is what a kick is."""
+    """A pitch falling from 120 Hz to 45, with a beater on the front."""
+    rng = random.Random(7)
     out = []
     for index in range(int(length * RATE)):
         moment = index / RATE
         hertz = 45.0 + 75.0 * _fall(moment, 34.0)
-        out.append(math.sin(2 * math.pi * hertz * moment)
-                   * _fall(moment, 26.0))
+        body = (math.sin(2 * math.pi * hertz * moment)
+                * _fall(moment, 26.0))
+        click = rng.uniform(-1.0, 1.0) * CLICK * _fall(moment, CLICK_FALL)
+        out.append(body + click)
     return taper(out)
 
 
@@ -239,3 +266,137 @@ def score(found: Sequence[float], truth: Sequence[float],
             matched += 1
     return (matched, matched / max(1, len(truth)),
             matched / max(1, len(found)))
+
+
+# --------------------------------------------------------------------------
+# Styles
+# --------------------------------------------------------------------------
+#: Patterns, written as where each drum falls within a bar of four beats.
+#:
+#: ``track`` above writes one pattern, which is the oldest one there is and
+#: the one anything has to work on first. It is not the one this is used on.
+#: A detector tuned against a rock beat meets half-time, breakbeats, hat
+#: rolls at three times the tempo, and four-to-floor kicks buried under a
+#: sub that never stops - and "kick on one and three" tells you nothing
+#: about any of them.
+#:
+#: Each entry is (bpm, kick beats, snare beats, hat beats, snare kind,
+#: how loud the sub is, whether it is limited, swing). Beats are counted
+#: from zero and may be fractions. Swing delays every off-beat by that
+#: share of a half-beat, the way a shuffle does.
+STYLES: Dict[str, dict] = {
+    # Four to the floor, offbeat hats, a clap on two and four, and a sub
+    # that never gets out of the kick's way.
+    "house": dict(bpm=124.0, kick=(0, 1, 2, 3), snare=(1, 3),
+                  hat=(0.5, 1.5, 2.5, 3.5), kind="clap", sub=0.55,
+                  limit=True),
+    # Faster, harder, sixteenth hats, and the snare barely there.
+    "techno": dict(bpm=132.0, kick=(0, 1, 2, 3), snare=(1, 3),
+                   hat=tuple(i / 2 for i in range(8)), kind="rim",
+                   sub=0.6, limit=True, snare_gain=0.35),
+    "trance": dict(bpm=138.0, kick=(0, 1, 2, 3), snare=(1, 3),
+                   hat=(0.5, 1.5, 2.5, 3.5), kind="bright", sub=0.5,
+                   limit=True),
+    # Half time: the snare waits until the third beat, and the space
+    # between is the whole point of the genre.
+    "dubstep": dict(bpm=140.0, kick=(0, 2.5), snare=(2,),
+                    hat=(0.5, 1, 1.5, 2.5, 3, 3.5), kind="bright",
+                    sub=0.8, limit=True),
+    # Half time again, with hat rolls at four times the tempo and an 808
+    # that slides under everything.
+    "trap": dict(bpm=140.0, kick=(0, 0.75, 2.5), snare=(2,),
+                 hat=(0, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75,
+                      2, 2.25, 2.5, 2.75, 3, 3.125, 3.25, 3.375,
+                      3.5, 3.625, 3.75, 3.875),
+                 kind="clap", sub=0.75, limit=True),
+    # Twice the tempo of everything else, and a broken kick pattern.
+    "dnb": dict(bpm=174.0, kick=(0, 2.5), snare=(1, 3),
+                hat=(0.5, 1.5, 2.5, 3.5), kind="bright", sub=0.55,
+                limit=True),
+    # Swung, syncopated, and the kick off the grid.
+    "garage": dict(bpm=132.0, kick=(0, 2.5), snare=(1, 3),
+                   hat=(0.5, 1.5, 2.5, 3.5), kind="clap", sub=0.5,
+                   limit=True, swing=0.28),
+    "breaks": dict(bpm=130.0, kick=(0, 1.75, 2.5), snare=(1, 3),
+                   hat=tuple(i / 2 for i in range(8)), kind="bright",
+                   sub=0.4, limit=True),
+    # Not dance music, as a control. No sub, no limiter, nothing buried.
+    "rock": dict(bpm=120.0, kick=(0, 2), snare=(1, 3),
+                 hat=tuple(i / 2 for i in range(8)), kind="bright",
+                 sub=0.0, limit=False),
+    "hiphop": dict(bpm=90.0, kick=(0, 1.5, 2.75), snare=(1, 3),
+                   hat=tuple(i / 2 for i in range(8)), kind="clap",
+                   sub=0.5, limit=True),
+    # Swung ride, brushed snare off the beat, kick barely there.
+    "jazz": dict(bpm=120.0, kick=(0,), snare=(1.5, 3.5),
+                 hat=(0, 0.66, 1, 1.66, 2, 2.66, 3, 3.66), kind="rim",
+                 sub=0.0, limit=False, kick_gain=0.5, swing=0.2),
+}
+
+
+def styled(style: str, seconds: float = 22.0
+           ) -> Tuple[array, Dict[str, List[float]]]:
+    """One of ``STYLES``, as stereo PCM, and where every hit really is."""
+    if style not in STYLES:
+        raise ValueError(f"no such style: {style}")
+    spec = STYLES[style]
+    bpm = float(spec["bpm"])
+    beat = 60.0 / bpm
+    swing = float(spec.get("swing", 0.0))
+    frames = int(seconds * RATE)
+    buffer = [0.0] * frames
+    truth: Dict[str, List[float]] = {"Kick": [], "Snare": [], "Hats": []}
+
+    def put(at: float, sample: Sequence[float], gain: float) -> None:
+        start = int(at * RATE)
+        for index, value in enumerate(sample):
+            where = start + index
+            if 0 <= where < frames:
+                buffer[where] += value * gain
+
+    def when(top: float, position: float) -> float:
+        """Where in the bar a beat lands, swung if the style swings."""
+        whole = math.floor(position)
+        part = position - whole
+        if swing and 0.4 < part < 0.6:
+            part += swing * 0.5
+        return top + (whole + part) * beat
+
+    one_kick = kick()
+    one_hat = hat()
+    one_snare = snare(str(spec["kind"]))
+    bassline = [sub(hz, beat * BEATS) for hz in (55.0, 65.4, 49.0, 58.3)]
+    kick_gain = float(spec.get("kick_gain", 0.95))
+    snare_gain = float(spec.get("snare_gain", 0.7))
+    bars = max(1, int(seconds / (beat * BEATS)))
+    for bar in range(bars):
+        top = bar * beat * BEATS
+        if spec.get("sub"):
+            put(top, bassline[bar % len(bassline)], float(spec["sub"]))
+        for position in spec["hat"]:
+            at = when(top, float(position))
+            put(at, one_hat, 0.45)
+            truth["Hats"].append(at)
+        for position in spec["kick"]:
+            at = when(top, float(position))
+            put(at, one_kick, kick_gain)
+            truth["Kick"].append(at)
+        for position in spec["snare"]:
+            at = when(top, float(position))
+            put(at, one_snare, snare_gain)
+            truth["Snare"].append(at)
+
+    peak = max(1e-9, max(abs(v) for v in buffer))
+    pcm = array("h")
+    for value in buffer:
+        level = value / peak
+        if spec.get("limit"):
+            # What a master limiter does, which is most of what makes a
+            # dance record hard to read.
+            level = math.tanh(level * 3.4) / math.tanh(3.4)
+        one = int(max(-1.0, min(1.0, level * 0.88)) * 32000)
+        pcm.append(one)
+        pcm.append(one)
+    for name in truth:
+        truth[name] = sorted(truth[name])
+    return pcm, truth
