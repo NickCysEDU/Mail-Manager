@@ -4525,6 +4525,48 @@ class TestTheRaveIsARoom:
             f"dimmest ends at y={dimmest[2]:.0f}, so they are spread "
             f"through each other rather than one being nearer")
 
+    def test_the_air_keeps_its_colour_at_full_screen(self):
+        """"I like how the rave background has more variety in windowed
+        mode. Make the lamp smaller in full screen to get this effect."
+
+        The room has a fixed number of lines in it, so a big frame has
+        more bare air between them - and a lamp that keeps the same share
+        of the frame fills that air with one smooth gradient and flattens
+        the colour right out. Measured as the spread of hue over the
+        frame: 0.175 small and 0.170 full with the lamp the same size,
+        which is the flattening, against 0.178 and 0.285 with it shrunk.
+        """
+        import statistics
+
+        def spread(width, height):
+            from PySide6.QtCore import QRectF
+            from PySide6.QtGui import QColor, QImage, QPainter
+
+            scene = self._pinned(self._rave())
+            image = QImage(width, height,
+                           QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(QColor(0, 0, 0))
+            painter = QPainter(image)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            try:
+                scene.paint(painter, QRectF(0, 0, width, height),
+                            self._state())
+            finally:
+                painter.end()
+            hues = [image.pixelColor(x, y).hueF()
+                    for y in range(0, height, 5)
+                    for x in range(0, width, 5)
+                    if image.pixelColor(x, y).value() > 20
+                    and image.pixelColor(x, y).saturation() > 20]
+            assert len(hues) > 100
+            return statistics.pstdev(hues)
+
+        small = spread(640, 360)
+        full = spread(1920, 1080)
+        assert full > small * 0.95, (
+            f"the air has {small:.3f} of hue spread in a small frame and "
+            f"{full:.3f} at full screen, so it flattens out")
+
     def test_the_far_end_is_lit_rather_than_a_hole(self):
         """A closed corridor fading to nothing has a hole in it: the lines
         run out and what is left is a dark rectangle the eye reads as a
@@ -5304,14 +5346,112 @@ class TestTheScenesSitOnTheBeat:
                       for n in range(20))
         spectrum.set_beats({"Kick": beatmap.BeatMap(beats=beats, bpm=120.0,
                                                     locked=True)})
-        for position, wanted in ((300, 0.0), (550, 0.5), (800, 0.0),
-                                 (925, 0.25)):
+        # Jumps, not steps: each of these is further than SEEK_GAP, so
+        # the pane takes it at once rather than drifting towards it. That
+        # is the behaviour being checked here - where the beat is after a
+        # seek. How it behaves *between* seeks is the next test.
+        for position, wanted in ((300, 0.0), (1050, 0.5), (1675, 0.75),
+                                 (2425, 0.25)):
             spectrum.set_position(position)
             spectrum._tick()
             assert abs(spectrum._state.tempo - 120.0) < 1e-6
             assert abs(spectrum._state.beat_at - wanted) < 0.02, (
                 f"at {position} ms the pane says {spectrum._state.beat_at:.2f} "
                 f"through the beat and it is {wanted}")
+
+    def test_a_player_that_reports_in_steps_still_gives_a_smooth_beat(
+            self, qtbot, monkeypatch):
+        """"The walls just look so laggy and stuttery", and the same of
+        the vaporwave grid.
+
+        A media player does not report its position continuously: it
+        updates on a timer of its own, so reading it every frame gives the
+        same number several times and then a jump. Anything driven
+        straight off that moves in steps - and both of those scenes now
+        drive their travel from the beat. The wireframe in the middle of
+        the rave was smooth through all of it because it runs on the frame
+        clock and never touched the playhead.
+        """
+        import time
+        from array import array
+
+        import attachment_audio
+        import beatmap
+        from attachment_widgets import Spectrum
+
+        clock = [1000.0]
+        monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+
+        spectrum = Spectrum()
+        qtbot.addWidget(spectrum)
+        spectrum.set_frames(
+            [array("f", [0.4] * attachment_audio.BANDS) for _ in range(400)],
+            attachment_audio.RATE)
+        spectrum.set_beats({"Kick": beatmap.BeatMap(
+            beats=tuple(beatmap.Beat(at=n * 0.5, strength=0.9)
+                        for n in range(40)),
+            bpm=120.0, locked=True)})
+
+        # A player that only moves every fourth frame, which is what a
+        # hundred millisecond notify interval looks like at sixty frames
+        # a second.
+        seen = []
+        for frame in range(120):
+            clock[0] += 1 / 60.0
+            if frame % 4 == 0:
+                spectrum.set_position(int(frame / 60.0 * 1000))
+            spectrum._tick()
+            seen.append(spectrum._state.beat_at)
+
+        # Unwrap the phase and look at the steps it takes.
+        steps = []
+        for before, after in zip(seen[20:], seen[21:]):
+            step = after - before
+            if step < -0.5:
+                step += 1.0
+            steps.append(step)
+        assert min(steps) > 0.0, "the beat stood still"
+        assert max(steps) < min(steps) * 3.0, (
+            f"the beat advances by between {min(steps):.4f} and "
+            f"{max(steps):.4f} of a beat a frame, which is a stutter")
+
+    def test_the_clock_leans_on_the_playhead_rather_than_running_free(
+            self, qtbot, monkeypatch):
+        """A clock of its own that never checks the music would be smooth
+        and wrong. Frames get dropped and machines run warm, so the two
+        drift - and what a scene is sitting on is the *music*."""
+        import time
+        from array import array
+
+        import attachment_audio
+        import beatmap
+        from attachment_widgets import Spectrum
+
+        clock = [1000.0]
+        monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+
+        spectrum = Spectrum()
+        qtbot.addWidget(spectrum)
+        spectrum.set_frames(
+            [array("f", [0.4] * attachment_audio.BANDS) for _ in range(600)],
+            attachment_audio.RATE)
+        spectrum.set_beats({"Kick": beatmap.BeatMap(
+            beats=tuple(beatmap.Beat(at=n * 0.5, strength=0.9)
+                        for n in range(60)),
+            bpm=120.0, locked=True)})
+
+        # Frames arriving slower than the music, as they do when a
+        # machine is struggling: four fifths of real time.
+        played = 0.0
+        for _ in range(600):
+            clock[0] += (1 / 60.0) * 0.8
+            played += 1 / 60.0
+            spectrum.set_position(int(played * 1000))
+            spectrum._tick()
+        behind = abs(spectrum._heard() - played)
+        assert behind < 0.25, (
+            f"after ten seconds the pane's clock is {behind:.2f} seconds "
+            f"from the music, so it is running free rather than following")
 
     def test_no_tempo_is_not_a_tempo_of_zero_beats(self, qtbot):
         """A track with no steady pulse has to keep running."""
@@ -5459,3 +5599,192 @@ class TestThePictureArrivesBeforeTheAnalysisFinishes:
             "bands are sent")
         guard = inspect.getsource(attachment_audio._Analysis._early)
         assert "self._stop" in guard
+
+
+class TestTheHandStrobeSaysWhichKey:
+    """"I still don't know the hotkey for strobe in manual mode, make
+    this evident somewhere."
+
+    Choosing "Manual" turns the automatic strobe off and left nothing on
+    screen to say what turns it on. It was in the full screen key card,
+    behind ?, which is no use to somebody who has just chosen it from a
+    menu and is waiting for something to happen.
+    """
+
+    @staticmethod
+    def _pane(qtbot):
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        qtbot.addWidget(pane)
+        pane.enable_box.setChecked(True)
+        return pane
+
+    def test_the_hint_appears_with_the_setting(self, qtbot):
+        from attachment_widgets import Spectrum
+
+        pane = self._pane(qtbot)
+        pane.strobe_source.setCurrentText("Bass")
+        assert not pane.by_hand.isVisibleTo(pane)
+        pane.strobe_source.setCurrentText(Spectrum.BY_HAND)
+        assert pane.by_hand.isVisibleTo(pane), (
+            "nothing on screen says what flashes it")
+        pane.strobe_source.setCurrentText("Hats")
+        assert not pane.by_hand.isVisibleTo(pane)
+
+    def test_it_names_the_key_the_pane_actually_acts_on(self, qtbot):
+        """A hint that has fallen behind the keys is worse than none."""
+        from PySide6.QtCore import Qt as _Qt
+
+        from attachment_view import AudioPane
+
+        pane = self._pane(qtbot)
+        said = pane.by_hand.text()
+        assert AudioPane.BY_HAND_KEY in said, f"the hint reads {said!r}"
+        key = getattr(_Qt.Key, f"Key_{AudioPane.BY_HAND_KEY}")
+        action, _value = AudioPane.vj_action(key)
+        assert action == "flash", (
+            f"{AudioPane.BY_HAND_KEY} is advertised and runs {action!r}")
+
+    def test_the_full_screen_bar_says_it_too(self, qtbot):
+        from PySide6.QtWidgets import QLabel
+
+        from attachment_widgets import Spectrum
+
+        pane = self._pane(qtbot)
+        pane.strobe_source.setCurrentText(Spectrum.BY_HAND)
+        pane._go_full_screen()
+        window = pane._full
+        try:
+            said = [w.text() for w in window.findChildren(QLabel)
+                    if w.isVisibleTo(window)]
+            assert any(pane.BY_HAND_KEY in text for text in said), (
+                f"the bar says {said}")
+        finally:
+            window.close()
+
+    def test_choosing_it_from_the_bar_shows_the_hint(self, qtbot):
+        """The bar's own menu is where somebody playing will choose it."""
+        from PySide6.QtWidgets import QComboBox, QLabel
+
+        from attachment_widgets import Spectrum
+
+        pane = self._pane(qtbot)
+        pane.strobe_source.setCurrentText("Bass")
+        pane._go_full_screen()
+        window = pane._full
+        try:
+            reaction = next(
+                box for box in window.findChildren(QComboBox)
+                if box.findText(Spectrum.BY_HAND) >= 0
+                and box.findText("Hats") >= 0)
+            reaction.setCurrentText(Spectrum.BY_HAND)
+            said = [w.text() for w in window.findChildren(QLabel)
+                    if w.isVisibleTo(window)]
+            assert any(pane.BY_HAND_KEY in text for text in said), (
+                f"choosing it on the bar said nothing: {said}")
+        finally:
+            window.close()
+
+
+class TestTheRingSweepsPastYou:
+    """"I don't see the big circle expand thing on big moments like there
+    used to be."
+
+    It was there. A ring's apparent size goes as one over its distance,
+    and it was moving through the room at a steady speed - so it sat far
+    away looking tiny for a second and then did the whole of its
+    expansion in the last tenth of one. It was over before you could see
+    it.
+    """
+
+    W, H = 640, 360
+
+    def _run(self, monkeypatch, frames=110):
+        """Every frame of one ring's life, as the radius it would draw."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        clock = [1000.0]
+        monkeypatch.setattr(visualizers.time, "monotonic", lambda: clock[0])
+
+        def state(snare=0.0):
+            one = SpectrumState()
+            one.levels = [0.3] * 48
+            one.bass = one.mid = one.synth = one.high = 0.5
+            one.kit = {"Kick": 0.0, "Snare": snare, "Hats": 0.0,
+                       "Synth": 0.0}
+            return one
+
+        scene = visualizers.Rave()
+        image = QImage(self.W, self.H,
+                       QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0))
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        # The same focal length the scene works out for itself.
+        focal = min(self.W, self.H) * 0.62
+        seen = []
+        try:
+            for step in range(frames):
+                clock[0] += 1 / 60.0
+                scene.paint(painter, QRectF(0, 0, self.W, self.H),
+                            state(0.95 if step == 2 else 0.0))
+                if scene._rings:
+                    z, force = scene._rings[0]
+                    seen.append(focal * (1.9 * force + 0.6) / z)
+        finally:
+            painter.end()
+        return seen
+
+    def test_a_snare_is_what_fires_it(self, monkeypatch):
+        """And nothing else: the rings are the scene's big moments, so
+        they have to mean something when they happen."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        for part, wanted in (("Snare", True), ("Kick", False),
+                             ("Hats", False), ("Synth", False)):
+            scene = visualizers.Rave()
+            state = SpectrumState()
+            state.levels = [0.3] * 48
+            state.bass = 0.5
+            state.kit = {"Kick": 0.0, "Snare": 0.0, "Hats": 0.0,
+                         "Synth": 0.0}
+            state.kit[part] = 0.95
+            image = QImage(self.W, self.H,
+                           QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(QColor(0, 0, 0))
+            painter = QPainter(image)
+            try:
+                scene.paint(painter, QRectF(0, 0, self.W, self.H), state)
+            finally:
+                painter.end()
+            assert bool(scene._rings) is wanted, (
+                f"a {part} {'did not fire' if wanted else 'fired'} a ring")
+
+    def test_it_grows_evenly_rather_than_all_at_the_end(self, monkeypatch):
+        """Moving at a steady speed through the room, a ring doubles in
+        apparent size in its last few frames and hardly changes before
+        that. Closing by a share of its own distance instead makes every
+        frame's growth the same."""
+        radii = self._run(monkeypatch)
+        steps = [b / a for a, b in zip(radii, radii[1:]) if a > 0]
+        assert len(steps) > 40
+        assert max(steps) < min(steps) * 1.25, (
+            f"the ring grows by between {min(steps):.3f} and "
+            f"{max(steps):.3f} times a frame, so it arrives all at once")
+
+    def test_it_leaves_through_the_walls_rather_than_blinking_out(
+            self, monkeypatch):
+        """The last thing it should do is sweep out past the edges."""
+        radii = self._run(monkeypatch)
+        assert radii[-1] * 2 > self.W * 1.4, (
+            f"the ring was taken away at {radii[-1] * 2:.0f} across on a "
+            f"{self.W} frame, which is while it is still on screen")

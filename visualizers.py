@@ -2474,6 +2474,23 @@ class Rave(Scene):
     #: How far the wash reaches, as a share of the frame.
     HAZE_REACH = 1.9
 
+    #: How much smaller the lamps get as the frame grows, and the least
+    #: they are allowed to shrink to.
+    #:
+    #: The room has a fixed number of lines in it, so a big frame has more
+    #: bare air between them - and a lamp that keeps the same share of the
+    #: frame then fills that air with one smooth gradient and flattens the
+    #: colour out. A smaller lamp leaves the wash showing, which is where
+    #: the variety lives: "I like how the rave background has more variety
+    #: in windowed mode."
+    LAMP_SHRINK = 0.62
+
+    @classmethod
+    def _lamp(cls, rect) -> float:
+        """How much to shrink the lamps by, for a frame this size."""
+        return max(cls.LAMP_SHRINK,
+                   min(1.0, cls.DRAWN_FOR / max(1.0, rect.height())))
+
     def _haze_tile(self, rect, horizon, bass, synth, flash):
         """The air in the room, painted small and stretched.
 
@@ -2507,7 +2524,9 @@ class Rave(Scene):
         if rect.width() < 2 or rect.height() < 2:
             return None
         hue = (0.62 + synth * 0.3) % 1.0
-        key = (round(hue, 2),
+        lamp = self._lamp(rect)
+        key = (round(lamp, 2),
+               round(hue, 2),
                round(min(1.0, 0.34 + bass * 0.5 + flash * 0.4), 2),
                round(min(1.0, 0.46 + bass * 0.42), 2),
                round(0.58 + bass * 0.35, 2),
@@ -2516,7 +2535,8 @@ class Rave(Scene):
                round(min(1.0, 0.30 + bass * 0.34 + flash * 0.25), 2))
         if self._haze_key == key and self._haze_image is not None:
             return self._haze_image
-        shade, value, alpha, spread, across, down, second = key
+        lamp, shade, value, alpha, spread, across, down, second = key
+        spread *= lamp
         size = QSize(self.HAZE, max(2, int(self.HAZE * rect.height()
                                            / max(1.0, rect.width()))))
         image = QImage(size, QImage.Format.Format_ARGB32_Premultiplied)
@@ -2818,25 +2838,49 @@ class Rave(Scene):
                                    * (0.30 + near * near * 1.4))),
                    (0.9 + near * 2.2) * (1.0 + kick * 1.1) * weight)
 
+    #: How fast a ring closes on you, as a share of its own distance a
+    #: second, and how near it gets before it is done with.
+    #:
+    #: A share of its distance, not a fixed speed. A ring's *apparent*
+    #: size goes as one over its distance, so moving it at a steady speed
+    #: through the room means it sits far away looking tiny for a second
+    #: and then does the whole of its expansion in the last tenth of one.
+    #: That is why "I don't see the big circle expand thing on big moments
+    #: like there used to be" - it was there, and it was over before you
+    #: could see it. Closing by a share of the distance each frame makes
+    #: the growth even, and the ring spends most of its life at a size
+    #: worth looking at: 0.8 of a second inside the frame rather than 0.15.
+    RING_CLOSE = 2.1
+    RING_GONE = 0.34
+
     def _rings_now(self, painter, rect, horizon, focal, snare, step, hue,
                    flash):
-        """A ring per snare, leaving the far end and passing you."""
+        """A ring per snare, leaving the far end and sweeping past you."""
         if snare > 0.75 and (not self._rings or self._rings[-1][0] > 1.2):
             self._rings.append([self.FAR * 0.9, snare])
         alive = []
         painter.setBrush(Qt.BrushStyle.NoBrush)
+        weight = self._weight(rect)
         for ring in self._rings:
-            ring[0] -= step * 9.0
-            if ring[0] <= self.NEAR:
+            ring[0] -= step * self.RING_CLOSE * ring[0]
+            # Past the eye rather than stopped at the near wall, so the
+            # last thing it does is sweep out through the edges of the
+            # frame instead of being taken away at its biggest.
+            if ring[0] <= self.RING_GONE:
                 continue
             alive.append(ring)
             z, force = ring
             fade = max(0.0, min(1.0, (z - self.NEAR) / (self.FAR - self.NEAR)))
             radius = focal * (1.9 * force + 0.6) / z
-            colour = QColor.fromHsvF((hue + 0.5) % 1.0, 0.55, 1.0,
-                                     (1.0 - fade) * 0.85 * force)
-            pen = QPen(colour, (1.0 + (1.0 - fade) * 4.0 + flash * 2.0)
-                       * self._weight(rect))
+            # Brightest in the middle of its travel and fading again as it
+            # goes by, so it arrives out of the distance and leaves
+            # through the walls rather than blinking out at full strength.
+            going = max(0.0, min(1.0, (z - self.RING_GONE) / 0.9))
+            colour = QColor.fromHsvF((hue + 0.5) % 1.0, 0.62, 1.0,
+                                     min(1.0, (1.0 - fade) * 1.15 * force
+                                         * going))
+            pen = QPen(colour, (1.2 + (1.0 - fade) * 5.5 + flash * 2.0)
+                       * weight)
             pen.setCosmetic(True)
             painter.setPen(pen)
             painter.drawEllipse(horizon, radius, radius * 0.62)

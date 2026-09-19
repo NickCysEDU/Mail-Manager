@@ -307,6 +307,9 @@ class Spectrum(QWidget):
         self._settle = 0.0
         self._last_watched = 0.0
         self._since_hit = 99
+        #: A clock of our own that leans on the playhead. See ``_heard``.
+        self._heard_now = None
+        self._heard_at = None
         #: Whether the manual key is being held down.
         self._holding = False
         #: The beats found before playback started, one map per source.
@@ -1085,12 +1088,50 @@ class Spectrum(QWidget):
             return
         state.tempo = found.bpm
         period = 60.0 / max(1e-6, found.bpm)
-        now = self._position / 1000.0
         # Against the first beat rather than against zero: a grid that
         # starts where the track starts is a grid that is wrong by
         # whatever the intro was.
-        since = now - found.beats[0].at
+        since = self._heard() - found.beats[0].at
         state.beat_at = (since / period) % 1.0 if since >= 0 else 0.0
+
+    #: How far the playhead has to disagree with our own clock before it
+    #: is treated as a seek rather than as drift, and how hard the drift
+    #: is corrected each frame.
+    SEEK_GAP = 0.30
+    PULL = 0.06
+
+    def _heard(self) -> float:
+        """The moment the music is at, as a clock rather than as a poll.
+
+        A media player does not report its position continuously: it
+        updates on a timer of its own, so reading it every frame gives the
+        same number several times and then a jump. Anything driven
+        straight off that moves in steps - which is what "the walls look
+        laggy and stuttery" and "the grid looks laggy for vaporwave" both
+        were. The wireframe in the middle of the rave was smooth through
+        all of it because it runs on the frame clock and never touched the
+        playhead.
+
+        So this runs its own clock, at real speed, and leans on the
+        playhead rather than reading it: a small correction each frame
+        towards whatever the player last said. A real seek - anything
+        further out than SEEK_GAP - is taken at once, because that is a
+        jump the picture is supposed to make.
+        """
+        import time as _time
+
+        now = _time.monotonic()
+        said = self._position / 1000.0
+        step = 0.0 if self._heard_at is None else max(
+            0.0, min(0.25, now - self._heard_at))
+        self._heard_at = now
+        if self._heard_now is None or abs(said - self._heard_now) > self.SEEK_GAP:
+            self._heard_now = said
+            return said
+        # Our own clock, pulled gently towards the truth.
+        self._heard_now += step
+        self._heard_now += (said - self._heard_now) * self.PULL
+        return self._heard_now
 
     def _decay_kit(self, state) -> None:
         """Light whichever parts of the kit are due, and fade the rest.
