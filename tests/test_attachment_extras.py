@@ -7187,3 +7187,274 @@ class TestTheTwoStrobeKeys:
                 _Qt.KeyboardModifier.NoModifier))
             assert not getattr(viewer.audio.spectrum, holds), (
                 f"{chr(key)} did not let go in a window")
+
+
+class TestTheScenesStartFresh:
+    """"When rave first opens it is laggy and all elements are present,
+    including lasers, and it just doesn't look like it starts fresh,
+    especially with a song that starts slow."
+
+    There is one of each scene for the whole session - see SCENES - so a
+    scene that keeps state keeps it between one track and the next.
+    """
+
+    def test_a_scene_forgets_what_the_last_track_left(self):
+        import visualizers
+
+        scene = visualizers.Rave()
+        fresh = dict(vars(scene))
+        scene._z = 412.0
+        scene._quiet = 0.9
+        scene._peak = 0.9
+        scene._rings = [[3.0, 1.0]]
+        scene._fan = 9.0
+        scene.reset()
+        for name, value in fresh.items():
+            assert vars(scene)[name] == value, (
+                f"{name} is {vars(scene)[name]!r} after a reset and was "
+                f"{value!r} when the scene was built")
+
+    def test_picking_a_scene_starts_it_again(self, qtbot):
+        import visualizers
+        from attachment_widgets import Spectrum
+
+        pane = Spectrum()
+        qtbot.addWidget(pane)
+        rave = visualizers.by_name("Rave")
+        pane.set_scene(visualizers.by_name("Waterfall"))
+        rave._z = 412.0
+        pane.set_scene(rave)
+        assert rave._z == 0.0, (
+            f"the room was {rave._z:.0f} rows down the corridor when it "
+            f"was picked")
+
+    def test_a_new_track_starts_it_again(self, qtbot):
+        import visualizers
+        from attachment_widgets import Spectrum
+
+        pane = Spectrum()
+        qtbot.addWidget(pane)
+        rave = visualizers.by_name("Rave")
+        pane.set_scene(rave)
+        rave._z = 412.0
+        rave._peak = 0.9
+        pane.clear()
+        assert rave._z == 0.0 and rave._peak == 0.0, (
+            "a new track got the room as the last one left it")
+
+    def test_every_scene_can_be_reset(self):
+        """It is on the base class, so this is about the ones that
+        override __init__ and might not survive being rebuilt."""
+        import visualizers
+
+        for scene in visualizers.SCENES:
+            scene.reset()
+
+
+class TestTheWaterfallIsTheSameLengthEverywhere:
+    """"Waterfall is longer in the windowed mode compared to the fullscreen
+    mode."
+
+    It was not shorter in time, it was shorter on screen. A big frame draws
+    every other row of the history, and the offset that leans each row back
+    was worked out over the rows there would have been rather than the rows
+    there are - so 21 was divided by 43 and the landscape stopped half way
+    back.
+    """
+
+    @staticmethod
+    def _extent(width, height):
+        """How much of the frame's height the landscape covers."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        state = SpectrumState()
+        state.levels = [0.3 + 0.5 * ((i * 7) % 11) / 11 for i in range(27)]
+        state.history = [[0.25 + 0.5 * ((i + n) % 6) / 6 for i in range(27)]
+                         for n in range(96)]
+        image = QImage(width, height,
+                       QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0))
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        try:
+            visualizers.by_name("Waterfall").paint(
+                painter, QRectF(0, 0, width, height), state)
+        finally:
+            painter.end()
+        rows = [y for y in range(height)
+                if sum(1 for x in range(0, width, 4)
+                       if image.pixelColor(x, y).lightness() > 40) > 3]
+        assert rows, "the waterfall drew nothing"
+        return (max(rows) - min(rows)) / height
+
+    def test_it_fills_as_much_of_a_big_frame_as_a_small_one(self):
+        small = self._extent(640, 360)
+        big = self._extent(1512, 982)
+        assert big > small * 0.9, (
+            f"the landscape fills {small*100:.0f} per cent of a small "
+            f"frame and {big*100:.0f} per cent of a big one")
+
+
+class TestTheMetersAreNotPixelated:
+    """"VU meters looks awesome but looks slightly pixelated in full
+    screen. ONLY get rid of pixelation, everything else is perfect."
+
+    A stretched buffer is put up without smoothing, which is right for a
+    picture made of thin bright lines and wrong for one made of arcs and
+    lettering.
+    """
+
+    def test_the_dials_ask_to_be_smoothed(self):
+        import visualizers
+
+        assert visualizers.by_name("VU meters").stretch_smooth is True
+
+    def test_the_scenes_made_of_lines_do_not(self):
+        """Smoothing those is what took 42 per cent of their edge away."""
+        import visualizers
+
+        for name in ("Rave", "Neon tunnel", "Oscilloscope", "Ambience"):
+            assert visualizers.by_name(name).stretch_smooth is False, (
+                f"{name} asks to be smoothed, and it is made of lines")
+
+    def test_asking_for_it_is_what_the_blit_reads(self, qapp):
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter, QPixmap
+
+        from attachment_widgets import blit_scene
+
+        buffer = QPixmap(60, 40)
+        buffer.setDevicePixelRatio(1.0)
+        buffer.fill(QColor(255, 255, 255))
+        seen = {}
+        for smooth in (False, True):
+            image = QImage(120, 80,
+                           QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(QColor(0, 0, 0))
+            painter = QPainter(image)
+            try:
+                blit_scene(painter, QRectF(0, 0, 120, 80), buffer, smooth)
+                seen[smooth] = painter.testRenderHint(
+                    QPainter.RenderHint.SmoothPixmapTransform)
+            finally:
+                painter.end()
+        assert seen[False] is False, "a whole-number stretch was smoothed"
+        assert seen[True] is True, "a scene asked for smoothing and got none"
+
+
+class TestTheLasersAnswerTheStrobe:
+    """"Rave lasers should flash when strobe is enabled, on top of their
+    existing behaviour." """
+
+    @staticmethod
+    def _drawn(hit):
+        """How many beams the rig draws on a frame with this much strobe."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        clock = [1000.0]
+        was = visualizers.time.monotonic
+        visualizers.time.monotonic = lambda: clock[0]
+        scene = visualizers.Rave()
+        scene._last = None
+        state = SpectrumState()
+        state.levels = [0.4] * 48
+        state.bass = state.mid = state.high = 0.16
+        state.synth = 0.3
+        state.kit = {"Kick": 0.1, "Snare": 0.1, "Hats": 0.1, "Synth": 0.3}
+        seen, watching = [], [False]
+        real = visualizers.Rave._project
+        beams = visualizers.Rave._beams_now
+
+        def spy(self, horizon, focal, x, y, z):
+            if watching[0]:
+                seen.append(1)
+            return real(self, horizon, focal, x, y, z)
+
+        def watched(self, *a, **k):
+            watching[0] = True
+            try:
+                return beams(self, *a, **k)
+            finally:
+                watching[0] = False
+
+        visualizers.Rave._project = spy
+        visualizers.Rave._beams_now = watched
+        image = QImage(640, 360, QImage.Format.Format_ARGB32_Premultiplied)
+        painter = QPainter(image)
+        try:
+            for frame in range(240):
+                clock[0] += 1 / 60.0
+                # The last frame is the one with the strobe on it.
+                state.strobe = frame == 239 and hit > 0
+                state.hit = hit if frame == 239 else 0.0
+                seen.clear()
+                image.fill(QColor(0, 0, 0))
+                scene.paint(painter, QRectF(0, 0, 640, 360), state)
+        finally:
+            painter.end()
+            visualizers.Rave._project = real
+            visualizers.Rave._beams_now = beams
+            visualizers.time.monotonic = was
+        return len(seen)
+
+    def test_a_strobe_hit_brings_the_rig_on(self):
+        """Over a quiet passage, where the music alone leaves it dark."""
+        assert self._drawn(0.0) == 0, (
+            "the rig is already on, so this proves nothing")
+        assert self._drawn(1.0) > 0, (
+            "a strobe hit on a quiet passage drew no beams")
+
+
+class TestTheCityIsReflectedWithItsLightsOn:
+    """"In vaporwave I like the shadow of the buildings on the ground.
+    Could you also shadow the windows in the buildings?"
+
+    The towers were reflected as solid blocks and the lit windows were
+    not, so the reflection was a silhouette of a city whose lights were
+    all out.
+    """
+
+    @staticmethod
+    def _floor(lit):
+        """How much light there is in the floor under the city."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        state = SpectrumState()
+        # Tall towers, so there are windows to reflect.
+        state.levels = [0.9 if lit else 0.1 for _ in range(27)]
+        image = QImage(900, 500, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0))
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        try:
+            visualizers.by_name("Vaporwave city").paint(
+                painter, QRectF(0, 0, 900, 500), state)
+        finally:
+            painter.end()
+        # The band just under the horizon, which is where the reflection is.
+        top = int(500 * 0.52)
+        seen = [image.pixelColor(x, y).valueF()
+                for y in range(top, top + 60) for x in range(0, 900, 3)]
+        return sum(seen) / len(seen)
+
+    def test_the_windows_reach_the_floor(self):
+        import visualizers
+
+        assert visualizers.Vaporwave.MIRROR_LIT > 0
+        bright = self._floor(lit=True)
+        dark = self._floor(lit=False)
+        assert bright > dark * 1.15, (
+            f"a city with its lights on puts {bright:.3f} into the floor "
+            f"and one with them off {dark:.3f}")

@@ -370,7 +370,14 @@ class Spectrum(QWidget):
 
     # -- what it shows ----------------------------------------------------
     def set_scene(self, scene) -> None:
-        self._scene = scene
+        was, self._scene = self._scene, scene
+        # There is one of each scene for the whole session, so picking one
+        # gets it back exactly as the last track left it. Asked for rather
+        # than required: the pane duck-types scenes everywhere else, and a
+        # stand-in that only knows how to paint has nothing to forget.
+        start = getattr(scene, "reset", None)
+        if scene is not was and callable(start):
+            start()
         self._suit_the_scene(scene)
         self.update()
 
@@ -711,6 +718,11 @@ class Spectrum(QWidget):
         self._state.vector_history = []
         for spark in self._sparks:
             spark[4] = 0.0
+        # A new track gets the scene as it was built rather than as the
+        # last one left it. See Scene.reset.
+        start = getattr(self._scene, "reset", None)
+        if callable(start):
+            start()
         self.updateGeometry()
         self.update()
 
@@ -1478,9 +1490,11 @@ class Spectrum(QWidget):
         inner.end()
         self._sharpness.record((_time.perf_counter() - started) * 1000.0, ratio)
         if recipe:
-            self._effects.apply(painter, rect, self._buffer, recipe)
+            self._effects.apply(painter, rect, self._buffer, recipe,
+                                getattr(self._scene, "stretch_smooth", False))
         else:
-            blit_scene(painter, rect, self._buffer)
+            blit_scene(painter, rect, self._buffer,
+                       getattr(self._scene, "stretch_smooth", False))
 
     def _draw_working(self, painter, rect) -> None:
         """A bar that fills, and a line saying what is happening."""
@@ -2147,11 +2161,18 @@ class FlowRow(QLayout):
         return y - rect.y()
 
 
-def blit_scene(painter, rect, buffer) -> None:
+def blit_scene(painter, rect, buffer, smooth: bool = False) -> None:
     """Put a scene's buffer on the screen at the size it has to be.
 
     Smoothly, unless the buffer goes up by a whole number of pixels, in
     which case not smoothly at all.
+
+    ``smooth`` overrides that for a scene that asks. Not smoothing is
+    right for a picture made of thin bright lines, where the alternative
+    is losing them; it is wrong for one made of arcs and lettering, where
+    doubling every pixel is plainly doubling every pixel. The meters said
+    so: "VU meters looks awesome but looks slightly pixelated in full
+    screen". See Scene.stretch_smooth.
 
     A scene that does not fit the frame budget is drawn into a smaller
     buffer and stretched, and the stretch was always smoothed. For a
@@ -2184,7 +2205,7 @@ def blit_scene(painter, rect, buffer) -> None:
     grew = target.width() * ratio / buffer.width()
     whole = abs(grew - round(grew)) < 0.02 and round(grew) >= 1
     painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform,
-                          not whole)
+                          smooth or not whole)
     painter.drawPixmap(target, buffer, QRectF(buffer.rect()))
 
 
@@ -2483,7 +2504,8 @@ class PostProcess:
             self._cost = self.BUDGET_MS
             self._settle = 120
 
-    def apply(self, painter, rect, frame, recipe: dict) -> None:
+    def apply(self, painter, rect, frame, recipe: dict,
+              smooth: bool = False) -> None:
         """Draw ``frame`` into ``painter`` with ``recipe`` applied.
 
         Every pass runs on the buffer, at the buffer's own size, and the
@@ -2544,7 +2566,7 @@ class PostProcess:
         finally:
             inner.end()
 
-        blit_scene(painter, rect, frame)
+        blit_scene(painter, rect, frame, smooth)
         self._record((_time.perf_counter() - started) * 1000.0)
 
     # -- the expensive one, kept cheap -------------------------------------

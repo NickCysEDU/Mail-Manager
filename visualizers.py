@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt
-from PySide6.QtGui import (QColor, QImage, QLinearGradient, QPainter,
+from PySide6.QtGui import (QBrush, QColor, QImage, QLinearGradient, QPainter,
                            QPainterPath,
                            QPen, QRadialGradient)
 
@@ -325,8 +325,36 @@ class Scene:
     #: to the others softens them for nothing.
     sharp_pixels = 0
 
+    #: Whether a stretched buffer should be smoothed even when it goes up
+    #: by a whole number of pixels.
+    #:
+    #: False suits a picture made of thin bright lines: smoothing spreads
+    #: a one-pixel line over two and takes most of it away. It does not
+    #: suit a picture made of arcs and lettering, where doubling every
+    #: pixel is plainly doubling every pixel.
+    stretch_smooth = False
+
     def paint(self, painter: QPainter, rect, state) -> None:
         raise NotImplementedError
+
+    def reset(self) -> None:
+        """Forget everything and start again.
+
+        There is one of each scene for the whole session - see SCENES -
+        so a scene that keeps state keeps it between one track and the
+        next and between one opening of the window and the next. The room
+        in the rave scene came back a minute down the corridor with its
+        lasers already running and its rings already in flight, which is
+        "it just doesn't look like it starts fresh, especially with a song
+        that starts slow".
+
+        A scene with nothing to forget does not need to say so. The ones
+        that hold envelopes, positions or caches put themselves back to
+        how they were built.
+        """
+        fresh = type(self)()
+        for name, value in vars(fresh).items():
+            setattr(self, name, value)
 
     # -- what every scene shares ------------------------------------------
     @staticmethod
@@ -612,6 +640,7 @@ class Vaporwave(Scene):
             return
         block = width / count
         windows = QPainterPath()
+        mirrored = QPainterPath()
         roofs = QPainterPath()
         for index, value in enumerate(levels):
             tall = horizon * (0.10 + value * 0.42)
@@ -635,17 +664,44 @@ class Vaporwave(Scene):
                 rows = int(tall / spacing)
                 for row in range(rows):
                     if (index + row) % 3 == 0:
-                        windows.addRect(QRectF(
+                        top = horizon - tall + row * spacing + 3
+                        deep = max(2.0, spacing * 0.3)
+                        windows.addRect(QRectF(x + block * 0.22, top,
+                                               block * 0.2, deep))
+                        # The same window in the floor. The towers were
+                        # already reflected as solid blocks and the lit
+                        # windows were not, so the reflection was a
+                        # silhouette of a city whose lights were all out.
+                        #
+                        # Collected in the loop that is already running
+                        # over them and filled once, like the windows
+                        # themselves: building it anywhere else would walk
+                        # every tower a second time, and several hundred
+                        # rectangles a frame was most of what this scene
+                        # used to cost.
+                        mirrored.addRect(QRectF(
                             x + block * 0.22,
-                            horizon - tall + row * spacing + 3,
-                            block * 0.2, max(2.0, spacing * 0.3)))
+                            horizon + (tall - (row * spacing + 3))
+                            * self.MIRROR,
+                            block * 0.2, deep * self.MIRROR))
         painter.setPen(Qt.PenStyle.NoPen)
+        # The floor first, so the city stands on it rather than under it.
+        painter.fillPath(mirrored, QColor.fromHsvF(
+            (state.hue + 0.6) % 1.0, 0.30 - self.flash(state) * 0.25, 1.0,
+            (0.42 + self.flash(state) * 0.45) * self.MIRROR_LIT))
         # Windows brighten together on a hit, like a block losing its blinds.
         painter.fillPath(roofs, QColor.fromHsvF(
             (state.hue + 0.68) % 1.0, 0.45, 1.0, 0.80))
         painter.fillPath(windows, QColor.fromHsvF(
             (state.hue + 0.6) % 1.0, 0.30 - self.flash(state) * 0.25, 1.0,
             0.42 + self.flash(state) * 0.45))
+
+    #: How far the floor squashes what it reflects, and how much of a
+    #: window's light survives the trip. The same squash the towers'
+    #: own reflection uses, so the lights sit on the blocks they came
+    #: from rather than beside them.
+    MIRROR = 0.5
+    MIRROR_LIT = 0.38
 
     #: How many lines of the floor go by in a bar. Four, so one arrives
     #: on every beat: the floor is the only thing in this scene that
@@ -1348,6 +1404,12 @@ class Meters(Scene):
     #: resolution of an instrument panel whose whole point is that the
     #: numbers on it are readable.
     sharp_pixels = 4_000_000
+
+    #: Smoothed when it is stretched, unlike the scenes made of lines.
+    #: A dial is arcs and lettering, and doubling every pixel of those is
+    #: plainly doubling every pixel: "VU meters looks awesome but looks
+    #: slightly pixelated in full screen".
+    stretch_smooth = True
 
     #: The needle's travel, in degrees, measured the way Qt measures arcs.
     #: Centred on straight up, so the face sits square in its cell - the
@@ -2073,7 +2135,6 @@ class Waterfall(Scene):
         width, height = rect.width(), rect.height()
 
         field = getattr(state, "history", None) or [list(levels)]
-        field = field[-self.DEPTH:]
         # Every row is a line across the whole plot, so the cost is the
         # number of rows times the number of bands - about twelve hundred
         # antialiased segments at full depth, which is more than a slow
@@ -2084,6 +2145,7 @@ class Waterfall(Scene):
         # with gaps between, which reads as tangled lines rather than as
         # a surface - the saving was not worth what it cost to look at.
         stride = 2 if rect.width() * rect.height() > 480_000 else 1
+        field = field[-self.DEPTH:]
         if stride > 1:
             # Keep the newest row whatever the stride, so the front edge
             # is always the current frame.
@@ -2111,7 +2173,16 @@ class Waterfall(Scene):
         total = len(field)
         for depth, row in enumerate(field):
             # Oldest at the back, so it is drawn first and sits behind.
-            back = (total - 1 - depth) / max(1, self.DEPTH - 1)
+            #
+            # Over the rows there are, not over the rows there would have
+            # been. A big frame draws every other one, so this divided 21
+            # by 43 and the landscape stopped half way back: "waterfall is
+            # longer in the windowed mode compared to the fullscreen
+            # mode". It was not shorter in time, it was shorter on screen.
+            # Spreading the rows it has over the whole plot costs nothing;
+            # drawing twice as many of them cost 12.2 ms a frame against
+            # 6.3, which is the other way this could have been fixed.
+            back = (total - 1 - depth) / max(1, total - 1)
             offset_x = back * width * self.SKEW_X
             offset_y = back * height * self.SKEW_Y
             count = len(row)
@@ -2553,7 +2624,7 @@ class Rave(Scene):
         self._rings_now(painter, rect, horizon, focal, self._big_moment(),
                         step, hue, flash)
         self._beams_now(painter, rect, horizon, focal, hats, step, hue,
-                        bass)
+                        bass, flash)
         self._core(painter, horizon, span, hue, bass, kick, synth, flash,
                    self._weight(rect))
 
@@ -2950,6 +3021,12 @@ class Rave(Scene):
     #: What the line width used to carry, as light instead.
     BEAM_LIFT = 1.6
 
+    #: The same for the trusses, which were the last thing drawn with a
+    #: real width. A line of width w at alpha a lays down about w times a
+    #: of ink, so the alpha is multiplied by the width it would have had.
+    #: ``_beam`` then applies BEAM_LIFT on top, so this takes it back out.
+    TRUSS_LIFT = 1.0 / BEAM_LIFT
+
     #: How much of the contrast a big frame gets back as light.
     #:
     #: All of it, now. The grid is drawn with one-pixel lines and nothing
@@ -3057,12 +3134,36 @@ class Rave(Scene):
             path.lineTo(first)
             base = QColor.fromHsvF((hue + 0.04) % 1.0,
                                    max(0.0, 0.6 - flash * 0.4), 1.0, 1.0)
-            stroke(painter, path,
-                   self._shade(base,
-                               min(1.0, (0.16 + bass * 0.22 + kick * 0.34
-                                         + flash * 0.3) * glow
-                                   * (0.30 + near * near * 1.4))),
-                   (0.9 + near * 2.2) * (1.0 + kick * 1.1) * weight)
+            # Hairlines, with the width carried as light, which is what
+            # the rest of the room already does - see ``_beam``.
+            #
+            # These were the last thing here drawn with a real width, on
+            # the grounds that a truss is meant to look solid. Five
+            # rectangles were costing 1.72 ms a frame at 1512x982 against
+            # 0.41 drawn as single passes, because a width over one pixel
+            # is faked with a stack of hairlines and the stack is the
+            # whole cost.
+            #
+            # Brightness cannot buy the width back: the near ones are
+            # already at full alpha, and what a wide line has that a thin
+            # one does not is area. Measured, the brightest twentieth of
+            # the frame fell from 0.784 to 0.643 at 1512x982 with all five
+            # on hairlines, and no amount of lift moved it. So the nearest
+            # one keeps its width and the four behind it do not.
+            wide = (0.9 + near * 2.2) * (1.0 + kick * 1.1) * weight
+            alpha = ((0.16 + bass * 0.22 + kick * 0.34 + flash * 0.3)
+                     * glow * (0.30 + near * near * 1.4))
+            if step == 0:
+                # The nearest one keeps its width. It is the one the eye
+                # is on, it is the only one wide enough for the width to
+                # show, and one of them costs about a third of a
+                # millisecond where five cost 1.7.
+                stroke(painter, path, self._shade(base, min(1.0, alpha)),
+                       wide)
+            else:
+                self._beam(painter, path,
+                           self._shade(base, min(1.0, alpha * wide
+                                                 * self.TRUSS_LIFT)))
 
     #: How fast a ring closes on you, as a share of its own distance a
     #: second, and how near it gets before it is done with.
@@ -3173,10 +3274,20 @@ class Rave(Scene):
     #: Sweeps a second at rest, and how much the hats hurry it.
     FAN_SWEEP = 0.55
     FAN_HURRY = 1.8
-    #: Where along a beam it is cut in two, and how much dimmer the far
-    #: half is. A laser is brightest where it leaves the lamp.
-    FAN_SPLIT = 0.45
-    FAN_FADE = 0.45
+    #: How dim a beam is at the lamp against the end coming at you.
+    #:
+    #: Drawn as a gradient along the beam rather than in two pieces. Two
+    #: pieces is a step, and a step at 45 per cent of the way along is
+    #: exactly "it looks like the lasers get brighter halfway through the
+    #: beam" - which they did, from 0.45 to 1.0 in one pixel. Measured at
+    #: 1512x982 with 22 beams, a gradient pen costs 2.54 ms against 2.26
+    #: for the two-piece version and 2.38 for a four-piece one, so the
+    #: smooth one is worth its 0.28 ms.
+    FAN_FADE = 0.4
+    #: How much a strobe hit adds to the rig, and how much of its colour
+    #: it takes away. A flash is white.
+    FAN_STROBE = 0.75
+    FAN_BLEACH = 0.45
     #: Below this there is no rig at all, so a quiet passage has none.
     FAN_FAINT = 0.03
     #: Seconds of listening before the rig can come on, so that the first
@@ -3240,7 +3351,7 @@ class Rave(Scene):
         return max(0.0, min(1.0, level * 0.85 + self._fizz * 0.5 * level))
 
     def _beams_now(self, painter, rect, horizon, focal, hats, step, hue,
-                   bass):
+                   bass, flash=0.0):
         """The laser rig: two fans sweeping across the floor.
 
         One line per hat is what this was, and two lines appearing and
@@ -3259,7 +3370,7 @@ class Rave(Scene):
         dubstep drop has it running for the whole drop.
         """
         lit = self._lasers_lit()
-        if lit < self.FAN_FAINT:
+        if lit + flash * self.FAN_STROBE < self.FAN_FAINT:
             return
         lift = self._lift(bass)
         span = self.ACROSS * 0.5
@@ -3268,8 +3379,7 @@ class Rave(Scene):
         # round: a fan that spins has no front.
         phase = math.sin(self._fan) * 0.8
 
-        near = QPainterPath()
-        far = QPainterPath()
+        pairs = []
         for side in (-1.0, 1.0):
             lamp = self._project(horizon, focal,
                                  side * self.FAN_HANG * span, -lift,
@@ -3284,23 +3394,24 @@ class Rave(Scene):
                     side * math.sin(angle) * span * self.FAN_REACH, lift,
                     self.FAN_NEAR + (math.cos(angle) * 0.5 + 0.5)
                     * (self.FAN_FAR - self.FAN_NEAR))
-                cut = QPointF(
-                    lamp.x() + (foot.x() - lamp.x()) * self.FAN_SPLIT,
-                    lamp.y() + (foot.y() - lamp.y()) * self.FAN_SPLIT)
-                far.moveTo(lamp)
-                far.lineTo(cut)
-                near.moveTo(cut)
-                near.lineTo(foot)
+                pairs.append((lamp, foot))
 
+        # A strobe hit takes the whole rig with it, on top of whatever the
+        # music already has it doing, and bleaches it towards white.
+        lit = min(1.0, lit + flash * self.FAN_STROBE)
         shade = (hue + 0.18) % 1.0
-        weight = self._weight(rect)
-        for path, share in ((far, self.FAN_FADE), (near, 1.0)):
-            colour = QColor.fromHsvF(shade, 0.42, 1.0,
-                                     min(1.0, lit * 0.8 * share))
-            pen = QPen(colour, (0.9 + lit * 1.8) * weight)
+        deep = max(0.0, 0.42 - flash * self.FAN_BLEACH)
+        wide = (0.9 + lit * 1.8) * self._weight(rect)
+        for lamp, foot in pairs:
+            shine = QLinearGradient(lamp, foot)
+            shine.setColorAt(0.0, QColor.fromHsvF(
+                shade, deep, 1.0, min(1.0, lit * 0.8 * self.FAN_FADE)))
+            shine.setColorAt(1.0, QColor.fromHsvF(
+                shade, deep, 1.0, min(1.0, lit * 0.8)))
+            pen = QPen(QBrush(shine), wide)
             pen.setCosmetic(True)
             painter.setPen(pen)
-            painter.drawPath(path)
+            painter.drawLine(lamp, foot)
 
     def _core(self, painter, horizon, span, hue, bass, kick, synth, flash,
               weight=1.0):
