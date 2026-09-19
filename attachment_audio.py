@@ -544,7 +544,7 @@ class _AnalysisThread(_QThread_base):
 
     done = _Signal(object)
     #: The bands, as soon as they exist, before anything else is worked
-    #: out. Seven of the eight scenes need only these, so waiting for the
+    #: out. Eight of the nine scenes need only these, so waiting for the
     #: waveform and the X-Y traces before showing anything meant a picture
     #: that could have been up in 0.39 seconds a twenty of audio arrived
     #: at 0.65 - which is most of what "initial visualizer performance is

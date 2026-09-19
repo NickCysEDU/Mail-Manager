@@ -4706,8 +4706,14 @@ class TestTheListOfPlayingKeys:
         from attachment_view import AudioPane
         from attachment_widgets import _KeysCard
 
+        import visualizers
+
         listed = " ".join(f"{k} {w}" for k, w in _KeysCard.KEYS if k)
-        for key in ("1", "8", "S", "A", "D", "M", AudioPane.BY_HAND_KEY,
+        # The scene keys are named as a range, so the two ends of it are
+        # what the list has to carry. Written out, this said "8" and went
+        # stale the moment a ninth scene was added.
+        last = str(len(visualizers.SCENES))
+        for key in ("1", last, "S", "A", "D", "M", AudioPane.BY_HAND_KEY,
                     "J", "K", "L", "space", "esc"):
             assert key in listed, f"{key} does something and is not listed"
         # And every letter the pane acts on is in there.
@@ -7458,3 +7464,178 @@ class TestTheCityIsReflectedWithItsLightsOn:
         assert bright > dark * 1.15, (
             f"a city with its lights on puts {bright:.3f} into the floor "
             f"and one with them off {dark:.3f}")
+
+
+class TestTheMusicRiderIsAGame:
+    """A playable scene: three lanes, and the chart is the song.
+
+    What makes it a rhythm game rather than a scene with keys is that the
+    obstacles are laid out *ahead* of the playhead. ``state.kit`` says what
+    is happening now, which is too late to put a wall in front of somebody:
+    a wall has to leave the horizon a second and a half before its beat so
+    that it arrives on it.
+    """
+
+    @staticmethod
+    def _rider():
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._last = None
+        return scene
+
+    @staticmethod
+    def _state(chart=None, at=0.0, loud=0.6):
+        from attachment_widgets import SpectrumState
+
+        state = SpectrumState()
+        state.levels = [0.4] * 27
+        state.bass = loud
+        state.mid = state.high = loud * 0.8
+        state.synth = 0.3
+        state.kit = {"Kick": 0.4, "Snare": 0.2, "Hats": 0.3, "Synth": 0.3}
+        state.at = at
+        state.chart = chart or {}
+        return state
+
+    def _play(self, scene, chart, seconds=6.0, steer=None, fps=60):
+        """Run the game, optionally steering it, and give back the score."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+
+        clock = [1000.0]
+        was = visualizers.time.monotonic
+        visualizers.time.monotonic = lambda: clock[0]
+        image = QImage(640, 360, QImage.Format.Format_ARGB32_Premultiplied)
+        painter = QPainter(image)
+        try:
+            for frame in range(int(seconds * fps)):
+                clock[0] += 1 / fps
+                at = frame / fps
+                if steer is not None:
+                    steer(scene, at)
+                image.fill(QColor(0, 0, 0))
+                scene.paint(painter, QRectF(0, 0, 640, 360),
+                            self._state(chart, at))
+        finally:
+            painter.end()
+            visualizers.time.monotonic = was
+        return scene.report()
+
+    def test_it_is_one_of_the_scenes(self):
+        import visualizers
+
+        assert any(s.name == "Music rider" for s in visualizers.SCENES)
+        assert "Music rider" in visualizers.POST
+
+    def test_a_kick_lays_a_wall_with_one_way_through(self):
+        """The shape that forces a move."""
+        scene = self._rider()
+        scene._shape("wall", 4.0)
+        lanes = sorted(block[1] for block in scene._blocks)
+        assert len(lanes) == scene.LANES - 1, (
+            f"a wall closed {len(lanes)} of {scene.LANES} lanes")
+        assert len(set(lanes)) == len(lanes), "a wall closed a lane twice"
+
+    def test_the_chart_is_laid_ahead_of_the_playhead(self):
+        """A wall has to leave the horizon before the beat it belongs to,
+        or it arrives after it."""
+        scene = self._rider()
+        chart = {"Kick": tuple(2.0 + i * 0.5 for i in range(20))}
+        scene._heard = 0.0
+        scene._lay(self._state(chart))
+        assert scene._blocks, "nothing was laid at all"
+        soonest = min(block[0] for block in scene._blocks)
+        assert soonest > scene._heard, (
+            f"the first block is for {soonest:.2f}s and the playhead is at "
+            f"{scene._heard:.2f}s, so it is already late")
+        assert scene._laid >= scene.READ, (
+            f"only {scene._laid:.2f}s of chart was laid, and the road is "
+            f"{scene.LOOK:.2f}s long")
+
+    def test_a_passage_with_no_hits_has_no_obstacles(self):
+        """"Silence and build-ups should have no obstacles." """
+        scene = self._rider()
+        scene._heard = 0.0
+        scene._lay(self._state({"Kick": (30.0, 30.5)}))
+        assert not scene._blocks, (
+            f"{len(scene._blocks)} blocks were laid over an empty passage")
+
+    def test_the_same_track_lays_out_the_same_way(self):
+        """A chart, not a shower: the lane comes from the hit's time."""
+        chart = {"Kick": tuple(2.0 + i * 0.5 for i in range(20)),
+                 "Snare": tuple(2.25 + i * 1.0 for i in range(10))}
+        first, second = self._rider(), self._rider()
+        for scene in (first, second):
+            scene._heard = 0.0
+            scene._lay(self._state(chart))
+        assert [b[:3] for b in first._blocks] == [b[:3] for b in
+                                                  second._blocks], (
+            "the same track laid out differently the second time")
+
+    def test_steering_moves_a_lane_and_stops_at_the_edge(self):
+        scene = self._rider()
+        assert scene._lane == 1
+        assert scene.steer(-1) is True and scene._lane == 0
+        assert scene.steer(-1) is False and scene._lane == 0, (
+            "it steered off the left of the road")
+        assert scene.steer(1) is True and scene._lane == 1
+        scene.steer(1)
+        assert scene.steer(1) is False and scene._lane == scene.LANES - 1
+
+    def test_sitting_in_a_wall_is_a_hit(self, qapp):
+        """And the streak goes with it."""
+        scene = self._rider()
+        # Three walls that all leave the *same* lane open, so the other
+        # two are shut for the whole run and sitting in one is a hit.
+        # Which lane a wall opens comes from its time (see _shape), so the
+        # times are searched for rather than written down.
+        want = 0
+        times = [when / 100.0 for when in range(200, 600)
+                 if int((when / 100.0) * 977) % 3 == want]
+        chart = {"Kick": tuple(times[:3])}
+        assert len(chart["Kick"]) == 3, "found no three walls alike"
+        scene._lane = (want + 1) % scene.LANES
+        got = self._play(scene, chart)
+        assert got["hits"] >= 1, (
+            f"sat in a closed lane for three walls and was never hit: {got}")
+
+    def test_dodging_scores(self, qapp):
+        scene = self._rider()
+        chart = {"Kick": (2.0,)}
+        open_lane = int(2.0 * 977) % 3
+        scene._lane = open_lane
+        got = self._play(scene, chart, seconds=4.0)
+        assert got["hits"] == 0, f"hit while in the open lane: {got}"
+        assert got["score"] >= 2, (
+            f"dodging two walls scored {got['score']}")
+
+    def test_it_runs_without_a_chart(self, qapp):
+        """The analysis lands a few seconds after playback starts, and the
+        game has to be on screen before then."""
+        scene = self._rider()
+        got = self._play(scene, {}, seconds=2.0)
+        assert got["hits"] == 0
+
+    def test_the_arrows_only_steer_when_the_game_is_on_screen(self, qtbot):
+        import visualizers
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        qtbot.addWidget(pane)
+        pane.spectrum.set_scene(visualizers.by_name("Rave"))
+        assert pane.vj("lane", -1) is False, (
+            "the arrows steered a scene that is not a game")
+        pane.spectrum.set_scene(visualizers.by_name("Music rider"))
+        assert pane.vj("lane", -1) is True, (
+            "the arrows did not steer the game")
+
+    def test_the_arrow_keys_are_bound(self):
+        from PySide6.QtCore import Qt
+
+        from attachment_view import AudioPane
+
+        assert AudioPane.vj_action(Qt.Key.Key_Left) == ("lane", -1)
+        assert AudioPane.vj_action(Qt.Key.Key_Right) == ("lane", 1)
