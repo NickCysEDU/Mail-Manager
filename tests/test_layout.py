@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import contextlib
 import inspect
 
 import pytest
@@ -110,6 +111,27 @@ class TestFlowLayout:
         qapp.processEvents()
         for index in range(layout.count()):
             assert layout.itemAt(index).geometry().right() <= 300
+
+
+@contextlib.contextmanager
+def painted_as(qapp, **kwargs):
+    """Apply a theme for the body of a test, then put back what was there.
+
+    ``theme.apply`` sets the application's palette, font and stylesheet.
+    Restoring it by applying "light"/"normal" afterwards assumes that is
+    what the session was using, and a test that guesses wrong leaves every
+    later test measuring a different font. Whatever was there is saved and
+    put back.
+    """
+    import theme
+
+    was = (qapp.font(), qapp.palette(), qapp.styleSheet())
+    try:
+        yield theme.apply(qapp, **kwargs)
+    finally:
+        qapp.setFont(was[0])
+        qapp.setPalette(was[1])
+        qapp.setStyleSheet(was[2])
 
 
 class TestWindowAtEverySize:
@@ -505,6 +527,14 @@ class TestTheDropdownsShowTheirOptions:
         qapp.processEvents()
         return combo
 
+    @staticmethod
+    def _done(combo):
+        """Closed and handed to Qt to delete, so the session's widget
+        reaper does not find it later."""
+        combo.hidePopup()
+        combo.close()
+        combo.deleteLater()
+
     OPTIONS = ("is", "is not", "contains", "does not contain",
                "matches this regular expression", "is one of my mailboxes")
 
@@ -523,8 +553,7 @@ class TestTheDropdownsShowTheirOptions:
                 f"the longest option needs {widest}px and the menu offers "
                 f"{room}px, so it is cut off")
         finally:
-            combo.hidePopup()
-            combo.close()
+            self._done(combo)
 
     def test_the_box_asks_for_room_for_what_it_is_showing(self, qapp):
         from PySide6.QtGui import QFontMetrics
@@ -540,7 +569,7 @@ class TestTheDropdownsShowTheirOptions:
                 f"showing {combo.currentText()!r} needs {needed}px and the "
                 f"box only asks for {combo.minimumWidth()}px")
         finally:
-            combo.close()
+            self._done(combo)
 
     def test_a_very_long_entry_still_gives_way(self, qapp):
         """A box that insists on its text would push the dialog off the
@@ -552,7 +581,7 @@ class TestTheDropdownsShowTheirOptions:
             assert combo.minimumWidth() <= combo.MOST, (
                 f"the box demands {combo.minimumWidth()}px of the layout")
         finally:
-            combo.close()
+            self._done(combo)
 
     def test_a_short_option_does_not_shrink_the_box(self, qapp):
         """The floor the dialog asked for is still the floor."""
@@ -564,7 +593,7 @@ class TestTheDropdownsShowTheirOptions:
                 f"the box shrank to {combo.minimumWidth()}px, under the 88 "
                 f"the row asked for")
         finally:
-            combo.close()
+            self._done(combo)
 
     def test_the_rules_dialog_uses_them(self, qapp):
         """Where the report came from."""
@@ -600,17 +629,13 @@ class TestMaximumContrastReachesTheRows:
 
     def _foreground(self, qapp, contrast, column):
         """What the model says to paint a row's text in."""
-        import theme
         from triage_table import TriageTableModel
 
-        theme.apply(qapp, "light", contrast)
-        try:
+        with painted_as(qapp, mode="light", contrast=contrast):
             model = TriageTableModel()
             model.set_items([self._item(moved=True)])
             index = model.index(0, column)
             return model.data(index, Qt.ItemDataRole.ForegroundRole)
-        finally:
-            theme.apply(qapp, "light", "normal")
 
     def test_a_filed_rows_text_follows_the_palette(self, qapp):
         from triage_table import TriageTableModel
@@ -626,32 +651,24 @@ class TestMaximumContrastReachesTheRows:
     def test_the_monochrome_flag_follows_what_was_applied(self, qapp):
         import theme
 
-        try:
-            theme.apply(qapp, "light", "maximum")
+        with painted_as(qapp, mode="light", contrast="maximum"):
             assert theme.monochrome() is True
             assert theme.active_contrast() == "maximum"
-            theme.apply(qapp, "light", "high")
+        with painted_as(qapp, mode="light", contrast="high"):
             assert theme.monochrome() is False
-            theme.apply(qapp, "light", "normal")
+        with painted_as(qapp, mode="light", contrast="normal"):
             assert theme.monochrome() is False
-        finally:
-            theme.apply(qapp, "light", "normal")
 
     def test_the_category_chip_gives_up_its_hue(self, qapp):
         """The dot still carries the colour; the words do not."""
         import theme
         from PySide6.QtGui import QPalette
 
-        theme.apply(qapp, "light", "maximum")
-        try:
-            palette = qapp.palette()
-            ink = palette.color(QPalette.ColorRole.Text)
+        with painted_as(qapp, mode="light", contrast="maximum"):
+            ink = qapp.palette().color(QPalette.ColorRole.Text)
             assert theme.monochrome()
             assert ink.name() == "#000000", (
-                f"maximum contrast in light mode should write in black, not "
-                f"{ink.name()}")
-        finally:
-            theme.apply(qapp, "light", "normal")
+                f"maximum contrast in light mode writes in {ink.name()}")
 
 
 class TestNothingTouchesTheSplitterBar:

@@ -6631,20 +6631,33 @@ class TestTheSceneGivesWayToTheControls:
     """
 
     @staticmethod
-    def _full(qapp):
+    def _full(qapp, qtbot):
+        """Both widgets handed to qtbot, the way the other full-screen
+        tests do it.
+
+        A FullScreenSpectrum reparents the pane it is given. Closing the
+        window leaves the pane parented to a closed one with its frame
+        timer still running, and the session's widget reaper then deletes
+        the pair in whatever order it finds them: on a build runner that
+        aborted the whole worker from inside the teardown.
+        """
         from attachment_widgets import FullScreenSpectrum, Spectrum
 
         spectrum = Spectrum()
+        qtbot.addWidget(spectrum)
         full = FullScreenSpectrum(spectrum)
+        qtbot.addWidget(full)
         full.resize(1280, 800)
         full.show()
         qapp.processEvents()
         return spectrum, full
 
-    def test_the_frame_rate_halves_while_the_controls_are_up(self, qapp):
+    def test_the_frame_rate_halves_while_the_controls_are_up(self, qapp,
+                                                             qtbot):
         from attachment_widgets import Spectrum
 
         pane = Spectrum()
+        qtbot.addWidget(pane)
         pane._pace()
         ordinary = pane._timer.interval()
         pane.set_giving_way(True)
@@ -6659,8 +6672,8 @@ class TestTheSceneGivesWayToTheControls:
         assert back == ordinary, (
             f"the rate stayed at {back} ms after the controls went away")
 
-    def test_showing_the_controls_is_what_asks_for_it(self, qapp):
-        spectrum, full = self._full(qapp)
+    def test_showing_the_controls_is_what_asks_for_it(self, qapp, qtbot):
+        spectrum, full = self._full(qapp, qtbot)
         try:
             full._hide_controls()
             assert spectrum._giving_way is False
@@ -6673,12 +6686,13 @@ class TestTheSceneGivesWayToTheControls:
         finally:
             full.close()
 
-    def test_the_cursor_is_shown_once_and_not_on_every_mouse_move(self, qapp):
+    def test_the_cursor_is_shown_once_and_not_on_every_mouse_move(
+            self, qapp, qtbot):
         """Asking Qt to change a cursor walks the widget tree and tells the
         window system. This ran on every mouse move event."""
         from attachment_widgets import FullScreenSpectrum
 
-        spectrum, full = self._full(qapp)
+        spectrum, full = self._full(qapp, qtbot)
         asked = []
         real = FullScreenSpectrum.unsetCursor
 
