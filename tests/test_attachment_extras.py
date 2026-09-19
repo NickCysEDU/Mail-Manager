@@ -6641,11 +6641,19 @@ class TestTheSceneGivesWayToTheControls:
         the pair in whatever order it finds them: on a build runner that
         aborted the whole worker from inside the teardown.
         """
+        from PySide6.QtWidgets import QVBoxLayout, QWidget
+
         from attachment_widgets import FullScreenSpectrum, Spectrum
 
+        # In a holder, so that closing the full-screen window has somewhere
+        # to put the spectrum back. With no parent it went back to being a
+        # window of its own and outlived the test.
+        home = QWidget()
+        layout = QVBoxLayout(home)
         spectrum = Spectrum()
-        qtbot.addWidget(spectrum)
-        full = FullScreenSpectrum(spectrum)
+        layout.addWidget(spectrum)
+        qtbot.addWidget(home)
+        full = FullScreenSpectrum(spectrum, None)
         qtbot.addWidget(full)
         full.resize(1280, 800)
         full.show()
@@ -6710,3 +6718,54 @@ class TestTheSceneGivesWayToTheControls:
             full.close()
         assert len(asked) == 1, (
             f"forty mouse moves asked for the cursor {len(asked)} times")
+
+
+class TestLeavingFullScreenLeavesNothingBehind:
+    """A build runner aborted its worker from inside the session's widget
+    reaper, three runs in a row, in whichever test happened to be running.
+
+    The full-screen window takes the spectrum out of whatever was holding
+    it. On the way back it puts it where it came from, and when there was
+    nowhere to put it back, it called show() on a widget with no parent.
+    That is a new top-level window, made during teardown, that outlives
+    everything that knew about it.
+    """
+
+    def test_a_spectrum_with_nowhere_to_go_back_to_is_not_left_on_screen(
+            self, qapp, qtbot):
+        from attachment_widgets import FullScreenSpectrum, Spectrum
+
+        spectrum = Spectrum()
+        qtbot.addWidget(spectrum)
+        full = FullScreenSpectrum(spectrum, None)
+        qtbot.addWidget(full)
+        full.show()
+        qapp.processEvents()
+        full.close()
+        qapp.processEvents()
+        assert spectrum.parentWidget() is None, "this is the case being tested"
+        assert not spectrum.isVisible(), (
+            "the spectrum was left on screen as a window of its own")
+
+    def test_a_spectrum_that_has_a_home_goes_back_to_it(self, qapp, qtbot):
+        """The ordinary path, which must keep working."""
+        from PySide6.QtWidgets import QVBoxLayout, QWidget
+
+        from attachment_widgets import FullScreenSpectrum, Spectrum
+
+        home = QWidget()
+        layout = QVBoxLayout(home)
+        spectrum = Spectrum()
+        layout.addWidget(spectrum)
+        qtbot.addWidget(home)
+        home.show()
+        qapp.processEvents()
+        full = FullScreenSpectrum(spectrum, None)
+        qtbot.addWidget(full)
+        full.show()
+        qapp.processEvents()
+        full.close()
+        qapp.processEvents()
+        assert spectrum.parentWidget() is home, (
+            "the spectrum did not go back into the widget it came from")
+        assert spectrum.isVisible(), "it came back hidden"
