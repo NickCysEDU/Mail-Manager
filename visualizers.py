@@ -2537,7 +2537,7 @@ class Rave(Scene):
                # and "blinding at some points" at once. The floor is
                # higher and the ceiling lower, and what moves with the
                # music now is mostly the *depth* of the colour.
-               round(min(1.0, 0.38 + bass * 0.26 + flash * 0.18), 2),
+               round(min(1.0, 0.38 + bass * 0.24 + flash * 0.13), 2),
                round(min(1.0, 0.52 + bass * 0.26), 2),
                round(0.58 + bass * 0.35, 2),
                round((horizon.x() - rect.left()) / rect.width(), 2),
