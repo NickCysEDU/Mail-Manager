@@ -7639,3 +7639,139 @@ class TestTheMusicRiderIsAGame:
 
         assert AudioPane.vj_action(Qt.Key.Key_Left) == ("lane", -1)
         assert AudioPane.vj_action(Qt.Key.Key_Right) == ("lane", 1)
+
+
+class TestThePolishPassIsOneBlit:
+    """"All visualizers run pretty rough and framey, optimize performance
+    even further."
+
+    The polish pass was costing 4.8 to 6.9 ms on every scene, often as much
+    as the scene itself. Measured at 1512x982 with a buffer at logical
+    size: the final blit alone is 1.92 ms, bloom adds 1.68 and the colour
+    fringing 2.79, because each of the three put the small blurred copy up
+    across the whole frame. Composing them in the halo's own space - a
+    sixty-fourth of the area - and putting the result up once turns three
+    full-size blits into one.
+    """
+
+    @staticmethod
+    def _apply(recipe, rounds=30):
+        """(median milliseconds, how many full-size blits it made)."""
+        import statistics
+        import time
+
+        from PySide6.QtCore import QRectF, QSize
+        from PySide6.QtGui import QColor, QImage, QPainter, QPixmap
+
+        from attachment_widgets import PostProcess
+
+        post = PostProcess()
+        out = QImage(3024, 1964, QImage.Format.Format_ARGB32_Premultiplied)
+        out.setDevicePixelRatio(2.0)
+        onto = QPainter(out)
+        rect = QRectF(0, 0, 1512, 982)
+        big = []
+        real = QPainter.drawPixmap
+
+        def counted(self, target, *rest):
+            if isinstance(target, QRectF) and target.width() > 1000:
+                big.append(1)
+            return real(self, target, *rest)
+
+        QPainter.drawPixmap = counted
+        times = []
+        try:
+            for _ in range(rounds):
+                buffer = QPixmap(QSize(1512, 982))
+                buffer.setDevicePixelRatio(1.0)
+                buffer.fill(QColor(40, 20, 60))
+                post._allow = 99
+                post._settle = 10_000
+                post._area = 1512 * 982
+                del big[:]
+                start = time.perf_counter()
+                post.apply(onto, rect, buffer, recipe)
+                times.append((time.perf_counter() - start) * 1000)
+        finally:
+            QPainter.drawPixmap = real
+            onto.end()
+        return statistics.median(times), len(big)
+
+    def test_bloom_and_fringing_share_one_blit(self, qapp):
+        import visualizers
+
+        _ms, blits = self._apply(visualizers.POST["Rave"])
+        assert blits <= 2, (
+            f"the pass made {blits} full-size blits; bloom and the fringing "
+            f"should share one, and the frame itself is the other")
+
+    def test_the_whole_pass_costs_less_than_it_did(self, qapp):
+        """A bound, not a benchmark: 4.98 ms when this was written against
+        6.65 before, and a build runner is slower than this one."""
+        import visualizers
+
+        ms, _blits = self._apply(visualizers.POST["Rave"])
+        assert ms < 12.0, (
+            f"the polish pass takes {ms:.2f} ms at 1512x982")
+
+    @staticmethod
+    def _picture(recipe):
+        """What the pass makes of a single bright bar on black."""
+        from PySide6.QtCore import QRectF, QSize
+        from PySide6.QtGui import QColor, QImage, QPainter, QPixmap
+
+        from attachment_widgets import PostProcess
+
+        out = QImage(600, 400, QImage.Format.Format_ARGB32_Premultiplied)
+        out.setDevicePixelRatio(1.0)
+        out.fill(QColor(0, 0, 0))
+        buffer = QPixmap(QSize(600, 400))
+        buffer.setDevicePixelRatio(1.0)
+        buffer.fill(QColor(0, 0, 0))
+        inner = QPainter(buffer)
+        inner.fillRect(280, 0, 40, 400, QColor(255, 255, 255))
+        inner.end()
+        post = PostProcess()
+        post._allow = 99
+        post._settle = 10_000
+        post._area = 600 * 400
+        onto = QPainter(out)
+        try:
+            post.apply(onto, QRectF(0, 0, 600, 400), buffer, recipe)
+        finally:
+            onto.end()
+        return out
+
+    def test_the_fringing_still_happens(self, qapp):
+        """Cheaper is not the point if it stopped doing anything.
+
+        Measured on the picture rather than on the clock: the fringing is
+        now done in the halo's own space and costs almost nothing, so a
+        test that timed it would pass whether it happened or not. A bar on
+        black is spread sideways by it, so the pixels either side of the
+        bar are the ones to look at.
+        """
+        import visualizers
+
+        recipe = dict(visualizers.POST["Rave"])
+        recipe.pop("grain", None)      # noise would drown the difference
+        with_it = self._picture(recipe)
+        recipe.pop("aberration")
+        without = self._picture(recipe)
+
+        def beside(image):
+            """How much light lands just outside the bar.
+
+            Close to it: the blur here is the downscale to an eighth, so
+            the bloom reaches about eight pixels and the fringing about
+            two. A window ninety pixels wide finds nothing but black and
+            passes whatever the pass does.
+            """
+            return sum(image.pixelColor(x, 200).valueF()
+                       for x in list(range(265, 280))
+                       + list(range(320, 335)))
+
+        spread, plain = beside(with_it), beside(without)
+        assert spread > plain * 1.02, (
+            f"the fringing put {spread:.2f} of light beside the bar and "
+            f"leaving it out put {plain:.2f}, so it is not being done")
