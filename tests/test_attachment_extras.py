@@ -4396,7 +4396,7 @@ class TestTheRaveIsARoom:
         scene._thump = scene._fizz = scene._wash = scene._crack = 0.0
         scene._wash_hue = 0.0
         scene._rings = []
-        scene._beams = []
+        scene._fan = 0.0
         return scene
 
     def _drawn(self, scene=None):
@@ -6278,9 +6278,21 @@ class TestTheRaveRigFiresIntoTheRoom:
     point, which is why they looked like they came out of it.
     """
 
-    @staticmethod
-    def _asked(frames=180):
-        """Every point the beams ask to have projected, as (x, y, z)."""
+    #: One run, shared. It plays a quiet passage and then a loud one,
+    #: because the rig only comes on for a drop - see
+    #: ``TestTheLaserRigRunsThroughTheDrop``.
+    _run: dict = {}
+
+    @classmethod
+    def _asked(cls, frames=900):
+        """Every point the rig asks to have projected, as (x, y, z).
+
+        Collected only while the loud passage is playing, which is the
+        only time there is a rig to look at.
+        """
+        if frames in cls._run:
+            return cls._run[frames]
+
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -6294,8 +6306,6 @@ class TestTheRaveRigFiresIntoTheRoom:
         scene._last = None
         state = SpectrumState()
         state.levels = [0.4] * 48
-        state.bass = 0.5
-        state.mid = state.synth = state.high = 0.4
 
         seen = []
         watching = [False]
@@ -6322,6 +6332,12 @@ class TestTheRaveRigFiresIntoTheRoom:
         try:
             for frame in range(frames):
                 clock[0] += 1 / 60.0
+                # Eight seconds of verse, then the drop.
+                loud = 0.16 if frame < 8 * 60 else 0.78
+                state.bass = loud
+                state.mid = loud * 0.9
+                state.high = loud * 0.8
+                state.synth = 0.3
                 state.kit = {"Kick": 0.1, "Snare": 0.1,
                              "Hats": 0.9 if frame % 10 == 0 else 0.05,
                              "Synth": 0.3}
@@ -6332,6 +6348,7 @@ class TestTheRaveRigFiresIntoTheRoom:
             visualizers.Rave._project = real
             visualizers.Rave._beams_now = beams
             visualizers.time.monotonic = was
+        cls._run[frames] = (seen, scene)
         return seen, scene
 
     def test_a_beam_hangs_on_the_ceiling_and_lands_on_the_floor(self):
@@ -6339,7 +6356,7 @@ class TestTheRaveRigFiresIntoTheRoom:
 
         seen, _scene = self._asked()
         assert len(seen) >= 20, f"only {len(seen)} beam points were drawn"
-        lift = visualizers.Rave._lift(0.5)
+        lift = visualizers.Rave._lift(0.78)
         heights = {round(y, 6) for _x, y, _z in seen}
         assert heights <= {round(lift, 6), round(-lift, 6)}, (
             f"beams were drawn at heights {sorted(heights)}, and the room "
@@ -6769,3 +6786,182 @@ class TestLeavingFullScreenLeavesNothingBehind:
         assert spectrum.parentWidget() is home, (
             "the spectrum did not go back into the widget it came from")
         assert spectrum.isVisible(), "it came back hidden"
+
+
+class TestTheLaserRigRunsThroughTheDrop:
+    """"I like the laser effects but they still look like random lines.
+    Build these out more, make them more consistent for the dubstep drop,
+    make more of them so they look more intentional, and make them longer
+    so they look 3D."
+
+    Each hat threw one line. Two lines appearing and going out again read
+    as random however carefully each one is placed, because nothing
+    connects one to the next. The rig is a fan now: eleven beams a side
+    leaving one lamp together and sweeping together.
+    """
+
+    FPS = 60
+    _runs: dict = {}
+
+    @staticmethod
+    def _arrangement(second):
+        """Intro, build, drop, breakdown, second drop."""
+        if second < 8:
+            return 0.16
+        if second < 14:
+            return 0.16 + (second - 8) * 0.10
+        if second < 28:
+            return 0.78
+        if second < 33:
+            return 0.18
+        return 0.80
+
+    def _played(self, seconds=40):
+        """How hard the rig runs each frame, and how many beams it draws."""
+        if seconds in self._runs:
+            return self._runs[seconds]
+
+        import math
+
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        clock = [1000.0]
+        was = visualizers.time.monotonic
+        visualizers.time.monotonic = lambda: clock[0]
+        scene = visualizers.Rave()
+        scene._last = None
+        state = SpectrumState()
+        state.levels = [0.4] * 48
+
+        watching = [False]
+        real = visualizers.Rave._project
+        beams = visualizers.Rave._beams_now
+        points = []
+
+        def spy(self, horizon, focal, x, y, z):
+            point = real(self, horizon, focal, x, y, z)
+            if watching[0]:
+                points.append(point)
+            return point
+
+        def watched(self, *a, **k):
+            watching[0] = True
+            points.clear()
+            try:
+                return beams(self, *a, **k)
+            finally:
+                watching[0] = False
+
+        visualizers.Rave._project = spy
+        visualizers.Rave._beams_now = watched
+        image = QImage(900, 500, QImage.Format.Format_ARGB32_Premultiplied)
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rows = []
+        try:
+            for frame in range(int(seconds * self.FPS)):
+                clock[0] += 1 / self.FPS
+                at = frame / self.FPS
+                loud = self._arrangement(at)
+                state.bass = loud
+                state.mid = loud * 0.9
+                state.high = loud * 0.8
+                state.synth = 0.3
+                beat = frame % 30
+                state.kit = {"Kick": 0.9 if beat == 0 else 0.1,
+                             "Snare": 0.9 if beat == 15 else 0.05,
+                             "Hats": 0.6 if beat % 7 == 0 else 0.05,
+                             "Synth": 0.3}
+                image.fill(QColor(0, 0, 0))
+                scene.paint(painter, QRectF(0, 0, 900, 500), state)
+                # One lamp then FAN feet, per side.
+                lengths = []
+                half = len(points) // 2
+                if half:
+                    for start in (0, half):
+                        lamp = points[start]
+                        for foot in points[start + 1:start + half]:
+                            lengths.append(math.hypot(foot.x() - lamp.x(),
+                                                      foot.y() - lamp.y()))
+                rows.append((at, scene._lasers_lit(), len(lengths), lengths))
+        finally:
+            painter.end()
+            visualizers.Rave._project = real
+            visualizers.Rave._beams_now = beams
+            visualizers.time.monotonic = was
+        self._runs[seconds] = rows
+        return rows
+
+    def test_it_stays_on_for_the_whole_drop(self):
+        """What "consistent for the dubstep drop" means. The measure the
+        rings use reads a change, and dies about two seconds in."""
+        rows = self._played()
+        drop = [lit for at, lit, _n, _l in rows if 15 <= at <= 27]
+        assert drop, "the arrangement has no drop in it"
+        import visualizers
+
+        out = [lit for lit in drop if lit < visualizers.Rave.FAN_FAINT]
+        assert not out, (
+            f"the rig went out for {len(out)} of {len(drop)} frames of the "
+            f"drop, the dimmest at {min(drop):.2f}")
+        assert min(drop) > 0.5, (
+            f"the rig fell to {min(drop):.2f} during the drop")
+
+    def test_it_is_off_for_the_verse(self):
+        """Otherwise it is not marking anything."""
+        rows = self._played()
+        quiet = [lit for at, lit, _n, _l in rows if 2 <= at <= 7]
+        assert max(quiet) < 0.05, (
+            f"the rig ran at {max(quiet):.2f} during the intro")
+
+    def test_it_goes_out_again_in_the_breakdown(self):
+        rows = self._played()
+        gone = [lit for at, lit, _n, _l in rows if 30 <= at <= 32]
+        assert max(gone) < 0.05, (
+            f"the rig stayed at {max(gone):.2f} through the breakdown")
+
+    def test_there_are_enough_of_them_to_read_as_a_rig(self):
+        """"Make more of them so they look more intentional." One line per
+        hat was two on screen at a time."""
+        import visualizers
+
+        rows = self._played()
+        lit = [count for _at, _l, count, _lengths in rows if count]
+        assert min(lit) == visualizers.Rave.FAN * 2, (
+            f"the rig drew {min(lit)} beams, and there are "
+            f"{visualizers.Rave.FAN} a side")
+        assert min(lit) >= 16, (
+            f"{min(lit)} beams is not a fan")
+
+    def test_the_beams_are_long(self):
+        """"Make them longer so they look 3D."
+
+        Length on screen, not in the room. A beam from z 8.5 to z 6.5
+        crosses two metres and draws 151 pixels, because both ends are far
+        away. The lamps stay deep and the feet land in front of the eye.
+        """
+        rows = self._played()
+        lengths = [one for _at, _lit, _n, batch in rows for one in batch]
+        assert lengths, "no beams were drawn at all"
+        lengths.sort()
+        middle = lengths[len(lengths) // 2]
+        assert middle > 250, (
+            f"the median beam is {middle:.0f}px on a 900x500 frame")
+        assert max(lengths) > 600, (
+            f"the longest beam is {max(lengths):.0f}px, so none of them "
+            f"comes near the eye")
+
+    def test_the_fan_sweeps(self):
+        """A rig that does not move is a picture of a rig."""
+        rows = [row for row in self._played() if row[2]]
+        assert len(rows) > 120
+        first = rows[0][3]
+        later = rows[90][3]
+        moved = sum(1 for a, b in zip(first, later) if abs(a - b) > 4.0)
+        assert moved > len(first) * 0.5, (
+            f"only {moved} of {len(first)} beams moved over a second and a "
+            f"half, so the fan is standing still")

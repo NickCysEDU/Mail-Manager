@@ -2360,7 +2360,8 @@ class Rave(Scene):
         self._z = 0.0
         self._last = None
         self._rings: list = []
-        self._beams: list = []
+        #: How far through its sweep the laser rig is.
+        self._fan = 0.0
         self._spin = 0.0
         self._haze_key = None
         self._haze_image = None
@@ -2377,6 +2378,8 @@ class Rave(Scene):
         #: several seconds. A big moment is the first running away from
         #: the second - see ``RING_OVER``.
         self._push = 0.0
+        self._peak = 0.0
+        self._quiet = None
         self._quick = 0.0
         self._calm = None
         self._loud = 0.0
@@ -2482,6 +2485,18 @@ class Rave(Scene):
             # room fired a ring before it had heard anything.
             self._calm = loud
         self._calm += (loud - self._calm) * self.CALM_RATE
+        # The loudest the room has been lately, which is what a drop is
+        # measured against. From the eased level rather than the raw one,
+        # so a single frame cannot set it.
+        self._peak = max(self._quick, self._peak * self.PEAK_FALL)
+        if self._quiet is None:
+            # Seeded from the frame's own loudness, not from the eased
+            # level, which starts at nothing and takes a second to arrive.
+            # Seeded from that, the floor sat far below the room for the
+            # whole of an intro and the rig read the intro as a drop.
+            self._quiet = loud
+        self._quiet += (self._quick - self._quiet) * (
+            self.QUIET_DOWN if self._quick < self._quiet else self.QUIET_UP)
         self._ring_wait = max(0.0, self._ring_wait - step)
         self._heard_for += step
         return step
@@ -3123,63 +3138,169 @@ class Rave(Scene):
     #: The hat beams. Where the lamps hang across the ceiling, how far
     #: down the room a beam is thrown, how many rows back it starts, and
     #: how quickly one fades.
-    BEAM_HANG = 0.62
-    BEAM_THROW = 3.2
-    BEAM_ROWS = 8.0
-    BEAM_FADE = 4.6
+    #: The laser rig.
+    #:
+    #: One lamp either side, hung on the ceiling deep down the room, each
+    #: throwing a fan of beams onto the floor in front of you. The fan
+    #: sweeps back and forth rather than firing one beam at a time.
+    #:
+    #: A beam used to be one line per hat, thrown a couple of metres. Two
+    #: lines appearing and going out again at whatever the hats were doing
+    #: read as "random lines" however carefully they were placed: nothing
+    #: connected one to the next, and nothing in the room made a shape out
+    #: of them. A fan does. Nine beams from one point, all of them moving
+    #: together, is a thing somebody aimed.
+    #:
+    #: Long, too, and that is a matter of where the ends are rather than
+    #: how far apart they are in the room. A beam from z 8.5 to z 6.5
+    #: crosses two metres of room and draws 151 pixels, because both of
+    #: its ends are far away and perspective shrinks them together. The
+    #: lamps stay deep, at 8.5, where they sit near the vanishing point
+    #: and the fan opens towards you; the feet land between 0.7 and 2.5,
+    #: right in front of the eye, where perspective makes them large.
+    #: Measured across a sweep: 340 pixels of beam against 151, and
+    #: against 320 for the one line a hat used to throw.
+    #:
+    #: The feet stay on the floor. Reaching past the walls measured much
+    #: longer again, 604 pixels, and a beam that ends outside the room is
+    #: the floating line this was meant to stop being.
+    FAN = 11
+    FAN_HANG = 0.78
+    FAN_AT = 8.5
+    FAN_NEAR, FAN_FAR = 0.7, 2.5
+    FAN_OPEN = 0.95
+    FAN_REACH = 1.0
+    #: Sweeps a second at rest, and how much the hats hurry it.
+    FAN_SWEEP = 0.55
+    FAN_HURRY = 1.8
+    #: Where along a beam it is cut in two, and how much dimmer the far
+    #: half is. A laser is brightest where it leaves the lamp.
+    FAN_SPLIT = 0.45
+    FAN_FADE = 0.45
+    #: Below this there is no rig at all, so a quiet passage has none.
+    FAN_FAINT = 0.03
+    #: Seconds of listening before the rig can come on, so that the first
+    #: sound of a track is not read as the loudest it has ever been.
+    FAN_SETTLE = 2.0
+
+    #: How the rig decides a drop is happening.
+    #:
+    #: Not the question the rings ask. A ring marks the moment the room
+    #: gets louder, and the ratio it reads dies about two seconds into a
+    #: drop as the slow average catches up with it. Measured over a
+    #: written dubstep arrangement, that ratio came out at 0.16 through
+    #: the drop against 0.15 through the intro before it, which is no
+    #: difference at all - and a rig that goes out two seconds into the
+    #: drop is worse than one that never came on.
+    #:
+    #: A drop is a level, not a change. What the rig reads is where the
+    #: room sits between the quiet it keeps coming back to and the loudest
+    #: it has been: ``(now - quiet) / (loudest - quiet)``. That holds at 1
+    #: for as long as the drop lasts, falls to nothing in the breakdown,
+    #: and is 0 through an intro, an intro being the quiet. See QUIET_DOWN
+    #: for what "the quiet" is and why it is not an average.
+    #:
+    #: The loudest decays slowly, so the rig still knows about the first
+    #: drop a minute later. A track with no dynamics in it has no drop,
+    #: and the span guard leaves the rig off rather than on for ever.
+    PEAK_FALL = 0.9996
+    PEAK_SPAN = 0.08
+
+    #: The quiet the track keeps coming back to.
+    #:
+    #: Not ``_calm``, which the rings use. That is an average over about a
+    #: second and three quarters, so four seconds into a drop it has risen
+    #: to 0.685 against the drop's own 0.702 and there is no span left to
+    #: measure anything in. An average of a loud passage is loud.
+    #:
+    #: A floor is not an average. It follows the room down quickly and
+    #: climbs back slowly, so it stays near the verse for the length of a
+    #: drop and is back where it belongs a second into the breakdown.
+    QUIET_DOWN = 0.02
+    QUIET_UP = 0.0004
+
+    def _lasers_lit(self) -> float:
+        """How hard the rig is running, from 0 to 1.
+
+        Held up for as long as the passage is loud, rather than fired by
+        each hat. A drop is not an event, it is a minute. See PEAK_FALL
+        for what is being read and why it is not what the rings read.
+
+        The hats add to it, scaled by the level, so a roll inside a drop
+        shows and a roll in the intro does not bring the rig on.
+        """
+        quiet = self._quiet
+        if (quiet is None or self._peak < self.RING_QUIET
+                or self._heard_for < self.FAN_SETTLE):
+            return 0.0
+        span = self._peak - quiet
+        if span < self.PEAK_SPAN:
+            return 0.0      # nothing to drop from
+        level = max(0.0, min(1.0, (self._quick - quiet) / span))
+        return max(0.0, min(1.0, level * 0.85 + self._fizz * 0.5 * level))
 
     def _beams_now(self, painter, rect, horizon, focal, hats, step, hue,
                    bass):
-        """A pair of beams per hat, thrown from the rig down onto the floor.
+        """The laser rig: two fans sweeping across the floor.
 
-        These used to be single lines from the vanishing point, at an
-        angle taken from the spin and a length taken from nothing: so one
-        would appear pointing up through the ceiling, the next across the
-        walls, none of them belonging to any surface. The thing in the
-        middle sits at the vanishing point, which is why they read as
-        "random beams coming from the wireframe" - they came out of it.
+        One line per hat is what this was, and two lines appearing and
+        going out again read as "random lines" however carefully each one
+        was placed. Nothing connected one to the next. A fan does: nine
+        beams leaving one point together, sweeping together, is a thing
+        somebody aimed.
 
-        Now a beam hangs from a lamp on the ceiling and lands on the floor
-        nearer the eye, so both of its ends are somewhere in the room and
-        it crosses the space instead of floating in it. They come in
-        mirrored pairs, so a hat reads as the rig firing rather than as one
-        line going somewhere on its own.
+        Each beam runs from a lamp deep down the room to a foot on the
+        floor in front of you, so it crosses most of the room rather than
+        a fifteenth of it, and the perspective has a length to work on.
+        Each is drawn in two parts, brighter at the lamp end, which is
+        what a beam in haze does.
+
+        See ``_lasers_lit``: the rig follows how loud the passage is, so a
+        dubstep drop has it running for the whole drop.
         """
+        lit = self._lasers_lit()
+        if lit < self.FAN_FAINT:
+            return
         lift = self._lift(bass)
         span = self.ACROSS * 0.5
-        if hats > 0.5 and (not self._beams or self._beams[-1][2] < 0.72):
-            # Where across the rig this pair hangs, and how far its feet
-            # are swept out - both from the spin, so a run of hats walks
-            # along the rig rather than firing the same pair each time.
-            hang = 0.35 + 0.55 * abs(math.sin(self._spin * 1.9))
-            sweep = 0.30 + 0.85 * abs(math.sin(self._spin * 1.3))
-            self._beams.append([self._z + self.BEAM_ROWS, hats, 1.0,
-                                hang, sweep])
-        alive = []
-        reach = self.FAR - self.NEAR
+        self._fan += step * (self.FAN_SWEEP + self._fizz * self.FAN_HURRY)
+        # Back and forth, the way a rig sweeps, rather than round and
+        # round: a fan that spins has no front.
+        phase = math.sin(self._fan) * 0.8
+
+        near = QPainterPath()
+        far = QPainterPath()
+        for side in (-1.0, 1.0):
+            lamp = self._project(horizon, focal,
+                                 side * self.FAN_HANG * span, -lift,
+                                 self.FAN_AT)
+            for index in range(self.FAN):
+                spread = (index / (self.FAN - 1.0)) * 2.0 - 1.0
+                angle = phase + spread * self.FAN_OPEN
+                # Mirrored exactly, so the two fans are one rig rather
+                # than two that happen to be near each other.
+                foot = self._project(
+                    horizon, focal,
+                    side * math.sin(angle) * span * self.FAN_REACH, lift,
+                    self.FAN_NEAR + (math.cos(angle) * 0.5 + 0.5)
+                    * (self.FAN_FAR - self.FAN_NEAR))
+                cut = QPointF(
+                    lamp.x() + (foot.x() - lamp.x()) * self.FAN_SPLIT,
+                    lamp.y() + (foot.y() - lamp.y()) * self.FAN_SPLIT)
+                far.moveTo(lamp)
+                far.lineTo(cut)
+                near.moveTo(cut)
+                near.lineTo(foot)
+
+        shade = (hue + 0.18) % 1.0
         weight = self._weight(rect)
-        for beam in self._beams:
-            beam[2] -= step * self.BEAM_FADE
-            row = beam[0] - self._z
-            if beam[2] <= 0.0 or row <= 0.0:
-                continue
-            alive.append(beam)
-            _at, force, life, hang, sweep = beam
-            top = self.NEAR + row * reach / self.DEPTH
-            foot = max(self.NEAR, top - self.BEAM_THROW)
-            colour = QColor.fromHsvF((hue + 0.18) % 1.0, 0.35, 1.0,
-                                     min(1.0, life * 0.7 * force))
-            pen = QPen(colour, (1.0 + life * 2.4) * weight)
+        for path, share in ((far, self.FAN_FADE), (near, 1.0)):
+            colour = QColor.fromHsvF(shade, 0.42, 1.0,
+                                     min(1.0, lit * 0.8 * share))
+            pen = QPen(colour, (0.9 + lit * 1.8) * weight)
             pen.setCosmetic(True)
             painter.setPen(pen)
-            path = QPainterPath()
-            for side in (-1.0, 1.0):
-                across = side * hang * self.BEAM_HANG * span
-                path.moveTo(self._project(horizon, focal, across, -lift, top))
-                path.lineTo(self._project(horizon, focal,
-                                          across * sweep, lift, foot))
             painter.drawPath(path)
-        self._beams = alive[-14:]
 
     def _core(self, painter, horizon, span, hue, bass, kick, synth, flash,
               weight=1.0):
