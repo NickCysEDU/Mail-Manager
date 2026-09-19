@@ -1807,7 +1807,23 @@ class TestItHoldsSixtyFramesASecond:
     #: which is a fix, and it would have failed this test by lowering the
     #: floor that every other scene is held against. The median of eight
     #: does not move when one of them changes.
-    SPREAD = 2.6
+    #:
+    #: The number is loose because the *ordering* turns out not to survive
+    #: a change of machine. A wide line is drawn as a stack of one-pixel
+    #: ones, and how much that wins by depends entirely on how fast the
+    #: raster engine is at short cosmetic lines. Measured on the same
+    #: commit:
+    #:
+    #:                     here      a build runner
+    #:      Waterfall      0.70x           2.71x
+    #:      Rave           2.27x           1.70x
+    #:      Ambience       1.26x           2.16x
+    #:
+    #: So this catches a scene that has become absurd and nothing finer.
+    #: What actually holds the frame rate on a slow machine is the pane
+    #: measuring each scene and choosing a resolution it can hold, which
+    #: test_a_scene_too_slow_for_the_screen_really_is_stepped_down covers.
+    SPREAD = 3.2
 
     def test_no_scene_costs_far_more_than_the_others(self, qtbot):
         import statistics
