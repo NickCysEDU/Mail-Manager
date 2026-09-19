@@ -19,7 +19,8 @@ from typing import List, Optional, Sequence
 from PySide6.QtCore import QDate, QEvent, QObject, QRect, QSize, Qt
 from PySide6.QtGui import (QColor, QFont, QFontDatabase, QFontMetrics, QIcon,
                            QPainter, QPalette, QPixmap)
-from PySide6.QtWidgets import (QApplication, QFrame, QLabel, QLineEdit,
+from PySide6.QtWidgets import (QApplication, QComboBox, QFrame, QLabel,
+                               QLineEdit,
                                QListWidget, QMessageBox, QScrollArea,
                                QSizePolicy, QStyle, QStyleOptionViewItem,
                                QToolButton, QWidget)
@@ -51,6 +52,7 @@ ACCENT_AMBER = "#D08A1E"    # needs a human
 #: "Show" filter modes.
 SHOW_ALL = "all"
 SHOW_JOB_ONLY = "job"
+SHOW_OTHER_ONLY = "other"
 SHOW_SELECTED = "selected"
 
 EMPTY_STATE = (
@@ -202,6 +204,94 @@ def _confidence_rgb(ratio: float, threshold: float) -> tuple:
 # ==========================================================================
 # Preview pane
 # ==========================================================================
+class ElidingLabel(QLabel):
+    """A label that shows as much of its text as it has room for.
+
+    Eliding once, when the text is set, is not enough. How much room a
+    label has is decided by the layout, and the layout changes for reasons
+    that have nothing to do with the text: the status bar's message was cut
+    to the width the label had at the time, and then the usage figure
+    beside it grew and took some of that width away, so a message that
+    fitted when it was set ran off the end of the label afterwards. This
+    re-cuts it whenever its width changes.
+
+    ``text()`` is what is on screen and ``full_text()`` is all of it.
+    """
+
+    def __init__(self, text: str = "", parent=None) -> None:
+        super().__init__(text, parent)
+        self._full = text or ""
+
+    def setText(self, text) -> None:      # noqa: N802 - Qt's name
+        self._full = "" if text is None else str(text)
+        self._fit()
+
+    def full_text(self) -> str:
+        return self._full
+
+    def resizeEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        super().resizeEvent(event)
+        self._fit()
+
+    def _fit(self) -> None:
+        room = max(0, self.width() - 2)
+        if room <= 0:
+            shown = self._full
+        else:
+            shown = self.fontMetrics().elidedText(
+                self._full, Qt.TextElideMode.ElideRight, room)
+        if shown != super().text():
+            super().setText(shown)
+
+
+class RoomyCombo(QComboBox):
+    """A dropdown whose menu is as wide as its longest option.
+
+    Qt sizes the menu to the box, and these boxes are deliberately narrow:
+    they sit in rows that divide their width between three or four
+    controls. So a long option was cut short in the menu, where there is
+    nothing beside it and no reason to cut it, and the box went on showing
+    a shortened version of whatever was picked.
+
+    The menu is measured from the options. The box asks for enough room
+    for the option it is showing, up to ``MOST``, so an ordinary entry fits
+    and a pathological one still gives way rather than pushing the dialog
+    off the screen.
+
+    Tooltips are left alone. Several of these carry an explanation of the
+    field they are setting, which is worth more than a copy of the label.
+    """
+
+    #: Room for the arrow, the padding either side and a scroll bar.
+    EXTRA = 44
+    #: The most room the box will ask the layout for.
+    MOST = 280
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._floor = 0
+        self.currentIndexChanged.connect(lambda _index: self._fit())
+
+    def setMinimumWidth(self, width: int) -> None:      # noqa: N802 - Qt
+        """Remembered, so that fitting the text cannot undercut it."""
+        self._floor = int(width)
+        self._fit()
+
+    def showPopup(self) -> None:      # noqa: N802 - Qt's name
+        view = self.view()
+        if view is not None and self.count():
+            metrics = self.fontMetrics()
+            widest = max(metrics.horizontalAdvance(self.itemText(index))
+                         for index in range(self.count()))
+            view.setMinimumWidth(max(self.width(), widest + self.EXTRA))
+        super().showPopup()
+
+    def _fit(self) -> None:
+        wanted = self.fontMetrics().horizontalAdvance(self.currentText())
+        super().setMinimumWidth(
+            max(self._floor, min(self.MOST, wanted + self.EXTRA)))
+
+
 class VersionLabel(QLabel):
     """The build, bottom right. Click to copy it for a bug report."""
 
