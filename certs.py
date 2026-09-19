@@ -94,8 +94,7 @@ def ensure() -> Optional[Path]:
             return found
 
     log.warning(
-        "No certificate bundle was found, so TLS connections will fail to "
-        "verify. This usually means the app was built without certifi."
+        "No certificate bundle found. TLS connections cannot be verified."
     )
     return None
 
@@ -110,6 +109,6 @@ def describe() -> str:
     was_compiled_in = compiled_bundle() is not None
     found = ensure()
     if found is None:
-        return "no CA bundle found - TLS verification will fail"
+        return "no CA bundle found. TLS verification will fail"
     origin = "compiled in" if was_compiled_in else "shipped with the app"
     return f"{found} ({origin})"

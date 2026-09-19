@@ -55,10 +55,9 @@ class HelpButton(QToolButton):
     def _sync_text(self) -> None:
         on = self.isChecked()
         self.setToolTip(
-            "Help is on. Hover anything for a moment and it will explain "
-            "itself. Click to turn it off."
+            "Help is on. Hover anything to see what it does."
             if on else
-            "Turn on help. Hovering anything then explains what it does."
+            "Turn on help."
         )
         self.setAccessibleName("Help" + (" (on)" if on else ""))
         self.update()

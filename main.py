@@ -374,7 +374,7 @@ def set_credentials() -> int:
         stored = bool(store.get_provider_key(settings.provider))
         print(f"  {settings.provider_label + ' key':.<24} {'stored' if stored else 'MISSING'}")
     else:
-        print("  API key ................. not needed - this backend runs on your Mac")
+        print("  API key ................. not needed, runs on your Mac")
     print("\nReady. Try:  ./dev check   then   ./dev scan")
     return 0
 

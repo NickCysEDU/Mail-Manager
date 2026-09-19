@@ -679,8 +679,7 @@ class PreviewPane(QWidget):
         self.attachments_button = QPushButton("Attachments")
         self.attachments_button.setEnabled(False)
         self.attachments_button.setToolTip(
-            "Open what was attached. Images, audio, PDFs and text are shown "
-            "here; anything else can be saved. Nothing is ever run.")
+            "Open what was attached. Nothing is ever run.")
         self.attachments_button.clicked.connect(self._open_attachments)
 
         self.body_mode = QComboBox()
@@ -700,9 +699,8 @@ class PreviewPane(QWidget):
 
         self.folder_combo = QComboBox()
         self.folder_combo.setToolTip(
-            "Where this message will go when you press Apply. Change it to "
-            "override the suggestion - the app remembers, and files the next "
-            "message from this sender the same way.")
+            "Where this message goes when you press Apply. Change it and "
+            "the next one from this sender follows.")
         self.folder_combo.setEditable(True)
         self.folder_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.folder_combo.setMinimumWidth(280)

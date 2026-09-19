@@ -2983,7 +2983,8 @@ class RuleClassifier:
             other_category=best_topic,
             confidence=confidence,
             summary=_summarise(
-                "", "", f"Not part of your job search - this looks like {best_topic.label.lower()}."
+                "", "",
+                f"This looks like {best_topic.label.lower()}."
             ),
             reasoning=(
                 f"The local rules engine found no job-search context "

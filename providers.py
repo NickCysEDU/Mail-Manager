@@ -368,8 +368,8 @@ class Provider:
     def _require_key(self) -> str:
         if self.needs_api_key and not self.api_key:
             raise ProviderAuthError(
-                f"{self.label} needs an API key. Add one in Settings - it is stored "
-                "in your macOS Keychain."
+                f"{self.label} needs an API key. Add one in Settings. "
+                "It is stored in your macOS Keychain."
             )
         return self.api_key
 
@@ -407,7 +407,7 @@ class AnthropicProvider(Provider):
     key_hint = "Anthropic keys start with “sk-ant-”."
     default_model = "claude-haiku-4-5"
     models = (
-        ModelChoice("claude-haiku-4-5", "Claude Haiku 4.5", "fastest and cheapest - a good default"),
+        ModelChoice("claude-haiku-4-5", "Claude Haiku 4.5", "fastest and cheapest. A good default"),
         ModelChoice("claude-sonnet-5", "Claude Sonnet 5", "balanced"),
         ModelChoice("claude-sonnet-4-6", "Claude Sonnet 4.6", "previous generation"),
         ModelChoice("claude-opus-5", "Claude Opus 5", "most accurate"),
@@ -551,7 +551,7 @@ class GeminiProvider(Provider):
     default_model = "gemini-flash-lite-latest"
     models = (
         ModelChoice("gemini-flash-lite-latest", "Gemini Flash-Lite (latest)",
-                    "cheapest, always current - a good default"),
+                    "cheapest, always current. A good default"),
         ModelChoice("gemini-flash-latest", "Gemini Flash (latest)", "balanced, always current"),
         ModelChoice("gemini-pro-latest", "Gemini Pro (latest)", "most accurate, always current"),
         ModelChoice("gemini-3.6-flash", "Gemini 3.6 Flash", "pinned version"),
@@ -657,14 +657,15 @@ def _to_gemini_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
 class OpenAIProvider(Provider):
     name = "openai"
     label = "OpenAI-compatible"
-    blurb = "OpenAI, OpenRouter, Groq, Together, LM Studio, vLLM - anything with a /chat/completions endpoint."
+    blurb = ("OpenAI, OpenRouter, Groq, Together, LM Studio, vLLM. "
+             "Anything with a /chat/completions endpoint.")
     key_url = "https://platform.openai.com/api-keys"
     key_hint = "OpenAI keys start with “sk-”. Other gateways use their own format."
     supports_base_url = True
     default_model = "gpt-4o-mini"
     models = (
         ModelChoice("gpt-4.1-nano", "GPT-4.1 nano", "cheapest"),
-        ModelChoice("gpt-4o-mini", "GPT-4o mini", "cheap and quick - a good default"),
+        ModelChoice("gpt-4o-mini", "GPT-4o mini", "cheap and quick. A good default"),
         ModelChoice("gpt-4.1-mini", "GPT-4.1 mini", "a step up"),
         ModelChoice("gpt-4.1", "GPT-4.1", "most accurate"),
         ModelChoice("gpt-4o", "GPT-4o", "previous generation"),
@@ -866,8 +867,8 @@ class RulesProvider(Provider):
     name = "rules"
     label = "Local rules (no AI)"
     blurb = (
-        "Instant, free, offline and deterministic. Less capable than a model, "
-        "so it sends more mail to Needs Review - and never sends any of it anywhere."
+        "Instant, free, offline and deterministic. Sends more mail to "
+        "Needs Review, and never sends any of it anywhere."
     )
     needs_api_key = False
     on_device = True

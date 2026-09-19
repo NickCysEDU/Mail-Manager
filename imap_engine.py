@@ -707,7 +707,8 @@ class IMAPEngine:
         try:
             typ, data = func(*args)
         except imaplib.IMAP4.abort as exc:
-            raise IMAPConnectionError(f"{description} failed - the server closed the connection: {_error_text(exc)}") from exc
+            raise IMAPConnectionError(f"{description} failed. The server closed the connection: "
+                f"{_error_text(exc)}") from exc
         except imaplib.IMAP4.error as exc:
             raise IMAPError(f"{description} failed: {_error_text(exc)}") from exc
         except (OSError, socket.timeout) as exc:

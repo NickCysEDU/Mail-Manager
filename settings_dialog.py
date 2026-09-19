@@ -334,7 +334,7 @@ class ModelsDialog(QDialog):
         self.catalogue.setEditable(True)
         self.catalogue.setMinimumWidth(220)
         for choice in providers.provider_class("ollama").models:
-            self.catalogue.addItem(f"{choice.label} — {choice.note}", choice.value)
+            self.catalogue.addItem(f"{choice.label} · {choice.note}", choice.value)
         self.catalogue.setToolTip(
             "Any name from ollama.com/library works, not only these.")
         add.addWidget(self.catalogue, 1)
@@ -443,8 +443,7 @@ class ModelsDialog(QDialog):
             return
         command = ondevice.remove_command(name)
         if not command:
-            self.status.setText("Ollama is not installed, so there is nothing "
-                                "to remove it with.")
+            self.status.setText("Ollama is not installed.")
             return
         self._run("remove", command, f"Removing {name}…")
 
@@ -759,7 +758,7 @@ class SettingsDialog(QDialog):
         if not accounts.valid_address(account.address):
             return "that address does not look right"
         if not account.host:
-            return "no server - choose a provider, or type a host"
+            return "no server. Choose a provider, or type a host"
         if not self._password_for(account):
             return "no password yet"
         return "ready" if account.enabled else "ready, not scanned"
@@ -876,7 +875,7 @@ class SettingsDialog(QDialog):
         account = self._accounts[index]
         name = account.describe() if account.address else "New mailbox"
         self.account_list.blockSignals(True)
-        item.setText(f"{name}   —   {self._account_status(account)}")
+        item.setText(f"{name}   ·   {self._account_status(account)}")
         self.account_list.blockSignals(False)
         ready = sum(1 for a in self._accounts
                     if self._account_status(a).startswith("ready"))
@@ -941,8 +940,8 @@ class SettingsDialog(QDialog):
             self.password_edit.clear()
             self.account_label_edit.clear()
             self.status.setText(
-                f"{_html(address)} is {belongs_to.label}, so it has been "
-                f"cleared. Enter the {spec.label} address for this mailbox."
+                f"{_html(address)} is {belongs_to.label}. Cleared. Enter "
+                f"the {spec.label} address for this mailbox."
             )
             address = ""
 
@@ -1071,8 +1070,7 @@ class SettingsDialog(QDialog):
         _paint_button(self.test_model_button, "primary")
         self.refresh_models_button = QPushButton("Refresh model list")
         self.refresh_models_button.setToolTip(
-            "Ask the service which models it currently serves. Providers retire "
-            "model ids without warning, so a built-in list goes stale."
+            "Ask the service which models it serves now."
         )
         self.refresh_models_button.clicked.connect(self._refresh_models)
         model_test_row = QHBoxLayout()
@@ -1123,10 +1121,8 @@ class SettingsDialog(QDialog):
         self.batch_spin = QSpinBox()
         self.batch_spin.setRange(1, 25)
         self.batch_spin.setToolTip(
-            "Emails per request. The instructions are ~2,800 tokens and are re-sent "
-            "with every request, so batching is the single biggest saving available. "
-            "Larger batches are cheaper but give each email less attention. "
-            "Set to 1 to send one email per request."
+            "Emails per request. Larger batches cost less and give each "
+            "email less attention. 1 sends one email per request."
         )
 
         self.body_chars_spin = QSpinBox()
@@ -1147,8 +1143,8 @@ class SettingsDialog(QDialog):
             "If the backend is unreachable, classify locally with the built-in rules"
         )
         self.fallback_check.setToolTip(
-            "Keeps a scan useful when the network, the key or the quota fails. "
-            "Rows classified this way say so, and are held to the same confidence bar."
+            "Keeps a scan going when the network, the key or the quota "
+            "fails. Rows classified this way say so."
         )
 
         form.addRow("Model backend", self.provider_combo)
@@ -1183,10 +1179,9 @@ class SettingsDialog(QDialog):
         form.addRow("", self.fallback_check)
 
         note = QLabel(
-            "The confidence threshold does the real safety work here, not the model: "
-            "anything the backend is unsure about goes to Needs Review whichever one you "
-            "pick. A small local model is a perfectly reasonable choice - it will simply "
-            "send more mail to Needs Review."
+            "Anything the backend is unsure about goes to Needs Review, "
+            "whichever one you pick. A small local model sends more mail "
+            "there."
         )
         note.setWordWrap(True)
         form.addRow(note)
@@ -1231,16 +1226,14 @@ class SettingsDialog(QDialog):
             command = ondevice.install_command()
             if command:
                 self.ollama_note.setText(
-                    "Ollama is not installed. It runs a model on this Mac, so "
-                    "nothing leaves it and there is nothing to pay for. "
-                    "Homebrew is available, so this can install it for you."
+                    "Ollama is not installed. It runs a model on this "
+                    "Mac, free and offline. Homebrew can install it."
                 )
                 self.ollama_button.setText("Install Ollama")
             else:
                 self.ollama_note.setText(
-                    "Ollama is not installed. It runs a model on this Mac, so "
-                    "nothing leaves it and there is nothing to pay for. "
-                    "Download it from "
+                    "Ollama is not installed. It runs a model on this "
+                    "Mac, free and offline. Download it from "
                     f'<a href="{_attr_url(ondevice.DOWNLOAD_URL)}">'
                     f"{_html(ondevice.DOWNLOAD_URL)}</a>, then come back here."
                 )
@@ -1283,7 +1276,7 @@ class SettingsDialog(QDialog):
                  for i in range(self.model_combo.count())}
         for name in state.models:
             if name not in known:
-                self.model_combo.addItem(f"{name} — installed", name)
+                self.model_combo.addItem(f"{name} (installed)", name)
         self._loading_models = False
         index = self.model_combo.findData(wanted)
         if index >= 0:
@@ -1522,8 +1515,7 @@ class SettingsDialog(QDialog):
             "Not used: local backends gain nothing from batching, and small local "
             "models handle it badly."
             if spec.on_device else
-            "Emails per request. The instructions are ~2,800 tokens and are re-sent "
-            "with every request, so batching is the single biggest saving available."
+            "Emails per request. Larger batches cost less."
         )
         self.fallback_check.setEnabled(not is_rules)
         if is_rules:
@@ -1637,8 +1629,7 @@ class SettingsDialog(QDialog):
         # end of every scan; one that writes a draft waits to be asked.
         self.sorting_rules_check = QCheckBox("Apply filing rules after a scan")
         self.sorting_rules_check.setToolTip(
-            "Rules whose only actions are filing, ticking or leaving a "
-            "message alone. They change nothing on the server, so they run "
+            "Rules that only file, tick or leave mail alone. They run "
             "with every scan.")
         top.addWidget(self.sorting_rules_check)
         self.auto_reply_check = QCheckBox("Draft replies after a scan")
@@ -1677,8 +1668,7 @@ class SettingsDialog(QDialog):
         self.rule_search.setPlaceholderText("Find a rule…")
         self.rule_search.setClearButtonEnabled(True)
         self.rule_search.setToolTip(
-            "Matches the rule's name and what it does, so typing “draft” "
-            "finds every rule that writes something.")
+            "Matches a rule's name and what it does.")
         self.rule_search.textChanged.connect(self._refresh_rule_list)
         left.addWidget(self.rule_search)
 
@@ -1786,9 +1776,8 @@ class SettingsDialog(QDialog):
         switches = QHBoxLayout()
         self.rule_skip_bulk = QCheckBox("Skip bulk mail")
         self.rule_skip_bulk.setToolTip(
-            "Anything carrying an unsubscribe header. Leave this on for rules "
-            "that reply: writing back to a mailing list is at best useless and "
-            "at worst embarrassing."
+            "Anything carrying an unsubscribe header. Leave on for rules "
+            "that reply."
         )
         self.rule_skip_bulk.toggled.connect(self._rule_edited)
         switches.addWidget(self.rule_skip_bulk)
@@ -1816,9 +1805,7 @@ class SettingsDialog(QDialog):
         self.rule_once_days.setSpecialValueText("every time")
         self.rule_once_days.setSuffix(" days")
         self.rule_once_days.setToolTip(
-            "Write to the same person at most once in this long. Without "
-            "it, somebody who sends four messages in a morning gets four "
-            "identical drafts, and a list you are on gets one per post.")
+            "Write to the same person at most once in this long.")
         self.rule_once_days.valueChanged.connect(self._rule_edited)
         limits.addRow("At most once in", self.rule_once_days)
 
@@ -1831,9 +1818,7 @@ class SettingsDialog(QDialog):
         self.rule_to_hour.setSuffix(":00")
         for spin in (self.rule_from_hour, self.rule_to_hour):
             spin.setToolTip(
-                "Drafts are written while you are awake. A reply composed "
-                "at three in the morning reads as three in the morning, "
-                "even though you send it yourself later.")
+                "Only write drafts between these hours.")
             spin.valueChanged.connect(self._rule_edited)
         hours.addWidget(self.rule_from_hour)
         hours.addWidget(QLabel("to"))
@@ -2339,10 +2324,8 @@ class SettingsDialog(QDialog):
         self.readable_check = QCheckBox("Tune the layout for reading")
         form.addRow("", self.readable_check)
         readable_note = QLabel(
-            "Larger type with a little more tracking, taller rows, heavier "
-            "column headings, a wider focus ring, and more space inside every "
-            "control. Independent of contrast - it changes the spacing rather "
-            "than the colours."
+            "Larger type, taller rows, heavier column headings and more "
+            "space inside every control. Spacing only, not colours."
         )
         readable_note.setWordWrap(True)
         readable_note.setProperty("dim", "true")
@@ -2374,9 +2357,8 @@ class SettingsDialog(QDialog):
         transfer.addStretch(1)
         form.addRow("Settings file", transfer)
         transfer_note = QLabel(
-            "Plain JSON with a comment header. Passwords and API keys are not "
-            "in it - they stay in the macOS Keychain and are entered again on "
-            "the other Mac."
+            "Plain JSON with a comment header. Passwords and API keys "
+            "stay in the macOS Keychain."
         )
         transfer_note.setWordWrap(True)
         transfer_note.setProperty("dim", "true")
@@ -2512,9 +2494,8 @@ class SettingsDialog(QDialog):
 
         self.routing_combo = RoomyCombo()
         self.routing_combo.setToolTip(
-            "What happens to mail that is not job related. The same choice is "
-            "in the Sorting menu in the toolbar, where it can be changed "
-            "without opening Settings.")
+            "What happens to mail that is not job related. Also in the "
+            "Sorting menu.")
         for member in NonJobRouting:
             self.routing_combo.addItem(member.label, member.value)
         self.routing_combo.currentIndexChanged.connect(self._routing_changed)
@@ -2523,9 +2504,8 @@ class SettingsDialog(QDialog):
             "Pre-tick confidently classified non-job mail as well"
         )
         self.auto_non_job_check.setToolTip(
-            "Off by default: misfiling a bank alert is a worse outcome than "
-            "leaving it in the inbox, so non-job mail is not pre-ticked "
-            "unless you ask for it.")
+            "Applies the same confidence bar to non-job mail. Off by "
+            "default.")
         self.subscribe_check = QCheckBox("Subscribe to folders this app creates")
         self.subscribe_check.setToolTip(
             "Subscribed folders show up in Mail and on your phone without "
@@ -2566,9 +2546,8 @@ class SettingsDialog(QDialog):
 
         self.reuse_check = QCheckBox("Reuse verdicts from earlier scans")
         self.reuse_check.setToolTip(
-            "A message cannot change once it is sent, so re-scanning an "
-            "overlapping window need not pay to analyze it twice. Turning "
-            "this off analyzes everything, every time.")
+            "Re-uses an earlier analysis of the same message. Off "
+            "analyzes everything, every time.")
         layout.addWidget(self.reuse_check)
 
         self.cache_summary = QLabel("")
@@ -2590,9 +2569,8 @@ class SettingsDialog(QDialog):
         self.learn_check = QCheckBox(
             "File mail the way I corrected it last time")
         self.learn_check.setToolTip(
-            "When you move a message to a folder the app did not suggest, it "
-            "remembers, and files the next message from that sender the same "
-            "way.")
+            "Remembers where you move a message, and files the next one "
+            "from that sender the same way.")
         layout.addWidget(self.learn_check)
 
         self.learned_summary = QLabel("")
@@ -2642,9 +2620,8 @@ class SettingsDialog(QDialog):
             return
         confirmed = QMessageBox.question(
             self, "Discard kept verdicts?",
-            f"This throws away {len(cache):,} verdict(s). Nothing is lost "
-            "except the time it took to produce them - the next scan will "
-            "analyze every message again.",
+            f"This throws away {len(cache):,} verdict(s). The next scan "
+            "will analyze every message again.",
             QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Yes,
             QMessageBox.StandardButton.Cancel)
         if confirmed is not QMessageBox.StandardButton.Yes:
@@ -2946,7 +2923,7 @@ class SettingsDialog(QDialog):
             price = "free (on this Mac)" if result.get("on_device") else f"≈${cost:.5f} for this call"
             message = (
                 f"{result.get('provider_label', 'The model')} · {result['model']} replied in "
-                f"{result['seconds']}s - the test email was classified as "
+                f"{result['seconds']}s. The test email was classified as "
                 f"{result['category']} at {result['confidence'] * 100:.0f}% confidence "
                 f"({result['input_tokens']:,} in / {result['output_tokens']:,} out, {price})."
             )

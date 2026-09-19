@@ -376,19 +376,13 @@ class AudioPane(QWidget):
         self.scene_box.currentTextChanged.connect(self._scene_chosen)
         self.enable_box = QCheckBox("Visualiser")
         self.enable_box.setToolTip(
-            "Draw the music while it plays. Off by default: it is decoration, "
-            "and with it off nothing is analysed and nothing is drawn.")
+            "Draw the music while it plays. Off by default.")
         self.enable_box.toggled.connect(self._enable_visualiser)
         self.strobe_box = QCheckBox("Strobe")
         self.strobe_box.setToolTip(
-            "Flash the scene on the beat, in whatever way the scene "
-            "flashes. Off by default.\n\n"
-            "With both Rate and Sensitivity turned most of the way up it "
-            "runs much faster through a held note - up to about ten "
-            "flashes a second. That is a rate some people with "
-            "photosensitive epilepsy react to, which is why it takes two "
-            "deliberate movements to reach and why this is off until you "
-            "switch it on.")
+            "Flash the scene on the beat. Off by default.\n\n"
+            "High Rate and Sensitivity reach about ten flashes a second. "
+            "This can trigger photosensitive epilepsy.")
         self.strobe_box.toggled.connect(self.spectrum.set_strobe)
         self.colour_button = QPushButton("Colours")
         self.colour_button.setToolTip(
@@ -1096,8 +1090,8 @@ class AudioPane(QWidget):
         scene.currentTextChanged.connect(self._scene_chosen)
 
         strobe = QCheckBox("Strobe")
-        strobe.setToolTip("Flash the scene on the beat.  Key S.\n\n"
-                          "F flashes it by hand - tap for a flash, hold "
+        strobe.setToolTip("Flash the scene on the beat. Key S.\n\n"
+                          "G flashes it by hand. Tap for a flash, hold "
                           "for a held light.")
         strobe.setChecked(self.strobe_box.isChecked())
         strobe.toggled.connect(self.strobe_box.setChecked)
@@ -1399,8 +1393,7 @@ class AttachmentViewer(QDialog):
         self.info_button.toggled.connect(self._toggle_metadata)
         self.save_button = QPushButton("Save…")
         self.save_button.setToolTip(
-            "Keep a copy of this attachment. It is saved with the same "
-            "quarantine mark a download gets, so macOS will check it.")
+            "Save a copy. Quarantined like a download.")
         self.save_all = QPushButton("Save all…")
         self.save_all.setToolTip(
             "Choose a folder and keep a copy of everything attached.")
@@ -1733,8 +1726,7 @@ class AttachmentViewer(QDialog):
                     "fine; running it is not something this app will do, and "
                     "macOS will ask you about it if you try.")
         if item.archive:
-            return ("An archive. It is saved as one file - nothing here opens "
-                    "it, because what is inside chose its own paths.")
+            return "An archive. It is saved as one file."
         if item.signature:
             return "A cryptographic signature part, not a document."
         if item.ext in ("svg", "html", "htm", "xml"):
@@ -1757,7 +1749,7 @@ class AttachmentViewer(QDialog):
         if item is None:
             return
         if item.data is None:
-            self.status.setText("Still fetching that one - try again in a moment.")
+            self.status.setText("Still fetching that one. Try again in a moment.")
             return
         if item.executable and not self._confirm_program(item):
             return
@@ -1794,9 +1786,8 @@ class AttachmentViewer(QDialog):
     def _confirm_program(self, item) -> bool:
         answer = QMessageBox.warning(
             self, "That is a program",
-            f"{item.shown} is an executable, whatever its name suggests.\n\n"
-            "It will be saved with the same quarantine flag a download gets, "
-            "so macOS will check it before anything runs. Save it anyway?",
+            f"{item.shown} is an executable.\n\nIt will be quarantined "
+            "like a download. Save it anyway?",
             QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel)
         return answer == QMessageBox.StandardButton.Save
