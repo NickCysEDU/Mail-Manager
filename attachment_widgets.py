@@ -39,6 +39,16 @@ class SeekBar(QSlider):
     """A slider that goes where you click and stays where you put it."""
 
     seeked = Signal(int)
+    #: Where the player says it is, for anything following this bar.
+    #:
+    #: ``report`` sets the value with signals blocked, so that a position
+    #: coming back from the player cannot be mistaken for somebody dragging
+    #: the handle. That also means ``valueChanged`` never fires while a
+    #: track plays - and the full-screen bar was following ``valueChanged``,
+    #: so it sat at zero for the whole song. It moved again after a few
+    #: trips in and out of full screen because the transport keys and the
+    #: track change set the value the ordinary way, which does emit.
+    moved = Signal(int)
 
     def __init__(self) -> None:
         super().__init__(Qt.Orientation.Horizontal)
@@ -126,6 +136,7 @@ class SeekBar(QSlider):
         self.blockSignals(True)
         self.setValue(position)
         self.blockSignals(False)
+        self.moved.emit(position)
 
 
 def _hz_label(value) -> str:
@@ -314,6 +325,7 @@ class Spectrum(QWidget):
         self._heard_at = None
         #: Whether the manual key is being held down.
         self._holding = False
+        self._spamming = False
         #: The beats found before playback started, one map per source.
         self._beats: dict = {}
         #: The kit on its own, for scenes that want to know which is which.
@@ -470,6 +482,11 @@ class Spectrum(QWidget):
     #: press yourself is the one thing on screen that should not be shy.
     HAND_HIT = 1.0
 
+    #: Frames between flashes while the rapid-fire key is held. Five is
+    #: twelve a second at sixty frames, which is about as fast as anybody
+    #: can hit a key and is the rate the strobe's own warning is about.
+    SPAM_EVERY = 5
+
     def flash(self, strength: float = 1.0) -> None:
         """Fire the strobe now, whatever it is listening to.
 
@@ -483,8 +500,20 @@ class Spectrum(QWidget):
         self.update()
 
     def hold_flash(self, on: bool) -> None:
-        """Keep the light up for as long as the key is down."""
+        """Keep the light up for as long as the key is down.
+
+        The steady one. Its opposite is ``spam_flash``, which fires over
+        and over instead of holding: one key for a held light and one for
+        a strobe, because those are two different things to want and one
+        key cannot be both.
+        """
         self._holding = bool(on)
+        if on:
+            self.flash(self.HAND_HIT)
+
+    def spam_flash(self, on: bool) -> None:
+        """Fire over and over for as long as the key is down."""
+        self._spamming = bool(on)
         if on:
             self.flash(self.HAND_HIT)
 
@@ -979,7 +1008,11 @@ class Spectrum(QWidget):
                    "Synths": state.synth}.get(self._strobe_source, bass)
         self._since_hit += 1
         self._decay_kit(state)
-        if self._holding:
+        if self._spamming:
+            # Hit again and again, as fast as a person could manage it.
+            if self._since_hit >= self.SPAM_EVERY:
+                self.flash(self.HAND_HIT)
+        elif self._holding:
             # Held, so it does not decay: the key is the light switch.
             state.hit = self.HAND_HIT
         elif self._strobe_source == self.BY_HAND:
@@ -1487,8 +1520,9 @@ class _KeysCard(QWidget):
         ("1 – 8", "the scenes, in the order the menu lists them"),
         ("S", "strobe on or off"),
         ("A / D", "step through what the strobe listens to"),
-        ("M", "listen to nobody: nothing fires but G"),
+        ("M", "listen to nobody: nothing fires but G and H"),
         ("G", "flash by hand: tap for a flash, hold for a held light"),
+        ("H", "hold for a strobe, twelve a second"),
         (None, None),
         ("J / K / L", "back ten seconds, play or pause, forward ten"),
         ("space", "play or pause"),
@@ -1854,8 +1888,8 @@ class FullScreenSpectrum(QWidget):
         if found is None:
             return False
         action, value = found
-        if action == "flash":
-            action = "flash" if held else "unflash"
+        if action in ("flash", "spam"):
+            action = action if held else "un" + action
         elif not held:
             return False      # everything else acts on the way down only
         if handler(action, value):
@@ -1866,6 +1900,15 @@ class FullScreenSpectrum(QWidget):
     def mouseMoveEvent(self, event) -> None:      # noqa: N802 - Qt's name
         self._show_controls()
         super().mouseMoveEvent(event)
+
+    def mousePressEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        """A click brings the controls back, like a move does.
+
+        On a trackpad the pointer can be somewhere the bar has already
+        faded from, and the first thing anybody does then is click.
+        """
+        self._show_controls()
+        super().mousePressEvent(event)
 
     def resizeEvent(self, event) -> None:      # noqa: N802 - Qt's name
         super().resizeEvent(event)
@@ -1934,6 +1977,13 @@ class FullScreenSpectrum(QWidget):
                 release()
             else:
                 self._owner._full = None
+        # The window the scene came from, back in front. Closing this one
+        # handed the front to whatever was behind it, which is the main
+        # window, leaving the viewer the scene belongs to underneath it.
+        home = spectrum.window()
+        if home is not None and home is not self:
+            home.raise_()
+            home.activateWindow()
         super().closeEvent(event)
 
 

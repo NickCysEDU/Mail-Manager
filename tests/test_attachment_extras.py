@@ -6965,3 +6965,225 @@ class TestTheLaserRigRunsThroughTheDrop:
         assert moved > len(first) * 0.5, (
             f"only {moved} of {len(first)} beams moved over a second and a "
             f"half, so the fan is standing still")
+
+
+class TestTheFullScreenControlsWork:
+    """Four reports about the full-screen window, all of them true."""
+
+    @staticmethod
+    def _pane(qtbot):
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        qtbot.addWidget(pane)
+        pane.position.setRange(0, 300_000)
+        return pane
+
+    def test_the_seek_bar_follows_the_player(self, qapp, qtbot):
+        """"Full screen seek bar does not move and does not work."
+
+        SeekBar.report sets the value with signals blocked, so that a
+        position coming back from the player is not mistaken for somebody
+        dragging the handle. The full-screen bar followed valueChanged,
+        which therefore never fired while a track played. It moved again
+        after a few trips in and out because the transport keys set the
+        value the ordinary way, which does emit.
+        """
+        pane = self._pane(qtbot)
+        pane._go_full_screen()
+        qapp.processEvents()
+        try:
+            bar = [w for w in pane._full.bar.findChildren(type(pane.position))]
+            assert bar, "the full screen window has no seek bar"
+            pane._moved(42_000)
+            qapp.processEvents()
+            assert bar[0].value() == 42_000, (
+                f"the player is at 42,000 and the full screen bar is at "
+                f"{bar[0].value()}")
+        finally:
+            pane._full.close()
+            qapp.processEvents()
+
+    def test_the_clock_follows_it_too(self, qapp, qtbot):
+        from PySide6.QtWidgets import QLabel
+
+        pane = self._pane(qtbot)
+        pane._go_full_screen()
+        qapp.processEvents()
+        try:
+            pane._moved(65_000)
+            qapp.processEvents()
+            shown = [w.text() for w in pane._full.bar.findChildren(QLabel)]
+            assert any("1:05" in text for text in shown), (
+                f"no clock reads 1:05 at 65 seconds: {shown}")
+        finally:
+            pane._full.close()
+            qapp.processEvents()
+
+    def test_the_pane_says_where_the_picture_went(self, qapp, qtbot):
+        """"There is no message that states so, which means the full
+        screen window can get lost." """
+        pane = self._pane(qtbot)
+        pane._go_full_screen()
+        qapp.processEvents()
+        try:
+            card = getattr(pane, "_full_card", None)
+            assert card is not None, "nothing stands in for the scene"
+            from PySide6.QtWidgets import QLabel, QPushButton
+
+            said = " ".join(w.text() for w in card.findChildren(QLabel))
+            assert "full screen" in said.lower(), (
+                f"the card does not say what is going on: {said!r}")
+            buttons = [w.text() for w in card.findChildren(QPushButton)]
+            assert any("front" in text.lower() for text in buttons), (
+                f"no way to find the lost window: {buttons}")
+        finally:
+            pane._full.close()
+            qapp.processEvents()
+
+    def test_the_card_goes_away_again(self, qapp, qtbot):
+        pane = self._pane(qtbot)
+        pane._go_full_screen()
+        qapp.processEvents()
+        pane._full.close()
+        qapp.processEvents()
+        assert getattr(pane, "_full_card", None) is None, (
+            "the stand-in card was left in the pane")
+
+    def test_a_click_brings_the_controls_back(self, qapp, qtbot):
+        """On a trackpad the pointer can already be where the bar faded
+        from, and the first thing anybody does then is click."""
+        from PySide6.QtCore import QPoint, QPointF, Qt as _Qt
+        from PySide6.QtGui import QMouseEvent
+
+        pane = self._pane(qtbot)
+        pane._go_full_screen()
+        qapp.processEvents()
+        try:
+            woke = []
+            pane._full._show_controls = lambda: woke.append(1)
+            pane._full.mousePressEvent(QMouseEvent(
+                QMouseEvent.Type.MouseButtonPress, QPointF(10, 10),
+                _Qt.MouseButton.LeftButton, _Qt.MouseButton.LeftButton,
+                _Qt.KeyboardModifier.NoModifier))
+            assert woke, "clicking did not bring the controls back"
+        finally:
+            pane._full.close()
+            qapp.processEvents()
+
+
+class TestTheTwoStrobeKeys:
+    """"When the manual strobe button is held I want rapid fire strobes.
+    At the same time I like how I can hold the button on VU meters to keep
+    the red mist strobe active, so maybe two strobe buttons, one for steady
+    and the other for flash?"
+
+    One key cannot be both, so there are two: G holds a light on, H fires
+    over and over.
+    """
+
+    @staticmethod
+    def _pane(qtbot):
+        """A pane with something to draw.
+
+        Without frames ``_tick`` returns before it reaches the strobe at
+        all, and a test of what the strobe does measures nothing.
+        """
+        from array import array
+
+        import attachment_audio
+        from attachment_view import AudioPane
+        from attachment_widgets import Spectrum
+
+        pane = AudioPane()
+        qtbot.addWidget(pane)
+        bands = attachment_audio.BANDS
+        pane.spectrum.set_frames(
+            [array("f", [0.95 if step % 4 == 0 else 0.1
+                         for _ in range(bands)]) for step in range(120)],
+            attachment_audio.RATE)
+        pane.spectrum.set_strobe_source(Spectrum.BY_HAND)
+        return pane
+
+    def test_the_steady_key_holds_the_light_up(self, qtbot):
+        pane = self._pane(qtbot)
+        pane.vj("flash", 1)
+        for _ in range(30):
+            pane.spectrum._tick()
+        assert pane.spectrum._state.hit > 0.9, "the held light sagged"
+        pane.vj("unflash", 1)
+        for _ in range(30):
+            pane.spectrum._tick()
+        assert pane.spectrum._state.hit == 0.0, "the light stayed on"
+
+    def test_the_rapid_key_fires_over_and_over(self, qtbot):
+        """As if somebody were hitting the key as fast as they could."""
+        from attachment_widgets import Spectrum
+
+        pane = self._pane(qtbot)
+        pane.vj("spam", 1)
+        fired, was = 0, 0.0
+        for _ in range(60):
+            pane.spectrum._tick()
+            now = pane.spectrum._state.hit
+            if now > was + 0.2:
+                fired += 1
+            was = now
+        pane.vj("unspam", 1)
+        wanted = 60 // Spectrum.SPAM_EVERY
+        assert fired >= wanted - 2, (
+            f"{fired} flashes in a second of holding, and the rate asks "
+            f"for about {wanted}")
+
+    def test_the_rapid_key_is_not_a_held_light(self, qtbot):
+        """The whole point of having two: this one has to go dark between
+        flashes or it is the other one."""
+        pane = self._pane(qtbot)
+        pane.vj("spam", 1)
+        seen = []
+        for _ in range(60):
+            pane.spectrum._tick()
+            seen.append(pane.spectrum._state.hit)
+        pane.vj("unspam", 1)
+        assert min(seen) < 0.5, (
+            f"the light never fell below {min(seen):.2f}, so it is held "
+            f"rather than strobing")
+
+    def test_letting_go_of_the_rapid_key_stops_it(self, qtbot):
+        pane = self._pane(qtbot)
+        pane.vj("spam", 1)
+        for _ in range(10):
+            pane.spectrum._tick()
+        pane.vj("unspam", 1)
+        for _ in range(40):
+            pane.spectrum._tick()
+        assert pane.spectrum._state.hit < 0.05, (
+            f"it kept firing after the key went up: "
+            f"{pane.spectrum._state.hit:.2f}")
+
+    def test_both_keys_work_in_a_window(self, qtbot):
+        """"Manual strobe doesn't work in windowed mode." It did not: the
+        keys were read only by the full-screen window."""
+        from PySide6.QtCore import Qt as _Qt
+        from PySide6.QtGui import QKeyEvent
+        from PySide6.QtCore import QEvent
+
+        import attachments
+        from attachment_view import AttachmentViewer
+
+        found = [attachments.Attachment(
+            part="1", name="a.mp3", content_type="audio/mpeg", size=10)]
+        viewer = AttachmentViewer(found, fetch=lambda item: b"x" * 10)
+        qtbot.addWidget(viewer)
+        viewer.stack.setCurrentWidget(viewer.audio)
+        for key, holds in ((_Qt.Key.Key_G, "_holding"),
+                           (_Qt.Key.Key_H, "_spamming")):
+            viewer.keyPressEvent(QKeyEvent(
+                QEvent.Type.KeyPress, key, _Qt.KeyboardModifier.NoModifier))
+            assert getattr(viewer.audio.spectrum, holds), (
+                f"{chr(key)} did nothing in a window")
+            viewer.keyReleaseEvent(QKeyEvent(
+                QEvent.Type.KeyRelease, key,
+                _Qt.KeyboardModifier.NoModifier))
+            assert not getattr(viewer.audio.spectrum, holds), (
+                f"{chr(key)} did not let go in a window")
