@@ -2474,6 +2474,30 @@ class Rave(Scene):
     #: How far the wash reaches, as a share of the frame.
     HAZE_REACH = 1.9
 
+    #: How much of the light a shrunken lamp hands back to the wash, as a
+    #: share of the way to full light. 1.0 would take the bare air all the
+    #: way there on the widest frame the lamp shrinks for.
+    #:
+    #: Two things were tried before this and are worth not trying again.
+    #: Lamps down the two sides, in two more hues, to light the edges that
+    #: had gone dark: they *cost* colour, 0.245 down to 0.234, because a
+    #: hue laid over a different hue at part alpha mixes towards grey - so
+    #: adding coloured light to a region took the colour out of it. And
+    #: simply shrinking the lamp less, which does work (0.245 shrunk
+    #: against 0.296 at full size) but is the change that flattened the
+    #: air in the first place - and is held off by
+    #: ``test_the_air_keeps_its_colour_at_full_screen``, which fails on it.
+    #:
+    #: The wash has neither problem: it is already the colour that is
+    #: there, so more of it raises the light without touching the hue, and
+    #: the lamp is drawn over the top of it so the middle of the frame -
+    #: which was never the part that went grey - hardly changes.
+    #:
+    #: Swept at 1920x1080 against a 640x360 window's 0.288 of colour, and
+    #: 0.207 over the outer thirds: 0.257/0.198 at 0.8, 0.277/0.231 at
+    #: 1.8, 0.293/0.257 at 2.4, 0.305/0.276 at 2.8. 2.4 is the match.
+    WASH_FILL = 2.4
+
     #: How much smaller the lamps get as the frame grows, and the least
     #: they are allowed to shrink to.
     #:
@@ -2516,10 +2540,15 @@ class Rave(Scene):
         with it, a third apart, so a change of colour is a change of
         *light* rather than a tint over the top.
 
-        Rebuilt only when what it looks like changes enough to see, which
-        for a gradient is not often: the colour is quantised to a few
-        dozen steps and the rest of the time the same image is stretched
-        again. So all of this costs one blit a frame.
+        Rebuilt when what it looks like changes enough to see, which on
+        moving music is most frames: the key is quantised to a hundredth
+        and a tracked band does not sit that still, so the cache turns out
+        to earn its keep mainly while the music is quiet - 540 rebuilds in
+        600 frames on a bass envelope that actually moves. It does not
+        matter, which is worth knowing before anyone tries to fix it: a
+        rebuild is 59 us against a 7.3 ms frame at 1920x1080, because the
+        tile is 128 across however big the frame is. The saving was never
+        the caching, it was painting the air small.
         """
         if rect.width() < 2 or rect.height() < 2:
             return None
@@ -2553,6 +2582,38 @@ class Rave(Scene):
         (lamp, shade, value, alpha, spread, across, down, second,
          deep) = key
         spread *= lamp
+        # How much of the frame the shrunken lamp left bare.
+        #
+        # Shrinking the lamp on a big frame is what put the variety back
+        # into the air, and it is also what took the colour out of it.
+        # Measured in sixths across the frame, at a full bass, as
+        # saturation times brightness - which is how much colour is
+        # actually *in* a region rather than how bright or how deep it is
+        # on its own - a 1920x1080 frame holds more colour than a 640x360
+        # window down the middle two columns (0.40 against 0.35) and much
+        # less down the outer four (0.13 against 0.22 at the far left).
+        # So the room is not uniformly grey at full screen, as it looked:
+        # it is lit in the middle and bare at the edges, and the edges are
+        # most of a wide frame.
+        #
+        # ``edge`` is how much of it is bare, and it is 0 for any frame
+        # the lamp is not shrunk on. Everything below keyed to it is
+        # therefore something a window never draws, which is the point:
+        # "the background of rave looks awesome in windowed but is still
+        # grey and unsaturated full screen" - so the window keeps exactly
+        # the look it has and the light goes where it is missing.
+        edge = 1.0 - lamp
+
+        def lit(share: float) -> float:
+            """A share of the light, carried towards full by ``edge``.
+
+            Towards, rather than multiplied by: the wash's brightest stop
+            is already at 0.86 of the light and its alpha at 0.86 of
+            opaque, so a factor clamps almost at once - which is why
+            multiplying stopped helping at all past about a third more
+            light, well short of what the window has.
+            """
+            return share + (1.0 - share) * min(1.0, edge * self.WASH_FILL)
 
         def rich(base: float) -> float:
             """A saturation, taken as deep as the bass asks."""
@@ -2569,15 +2630,28 @@ class Rave(Scene):
         try:
             into.setPen(Qt.PenStyle.NoPen)
 
-            # The room's own light: dim at the ceiling, warmer at the floor.
+            # The room's own light: dim at the ceiling, warmer at the
+            # floor. On a big frame ``lit`` carries all three stops most
+            # of the way to full and that shape largely goes - which was
+            # worth checking rather than assuming, because it sounds like
+            # a loss. Holding the shape by carrying each stop only as far
+            # as its own ceiling costs the vibrancy this was for, 0.276
+            # against 0.293 where the window is 0.288; and the spread of
+            # brightness down the bare left sixth of a full frame is 0.024
+            # even with the shape gone, against 0.019 in the window that
+            # was the one that looked right. There is more of the room
+            # left in it than there is in the picture it is copying.
             wash = QLinearGradient(0.0, 0.0, 0.0, tall)
             wash.setColorAt(0.0, QColor.fromHsvF(other, rich(0.92),
-                                                 value * 0.52, alpha * 0.80))
+                                                 value * lit(0.52),
+                                                 alpha * lit(0.80)))
             wash.setColorAt(down, QColor.fromHsvF(shade, rich(0.80),
-                                                  value * 0.34, alpha * 0.34))
+                                                  value * lit(0.34),
+                                                  alpha * lit(0.34)))
             wash.setColorAt(1.0, QColor.fromHsvF((shade + 0.12) % 1.0,
                                                  rich(0.88),
-                                                 value * 0.86, alpha * 0.86))
+                                                 value * lit(0.86),
+                                                 alpha * lit(0.86)))
             into.setBrush(wash)
             into.drawRect(box)
 

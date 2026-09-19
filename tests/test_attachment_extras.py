@@ -5889,3 +5889,136 @@ class TestTheAirIsColouredByTheBass:
                 f"which is too dark for a colour to show")
             assert sat > 0.35, (
                 f"a quiet {width}x{height} frame is {sat:.2f} saturated")
+
+
+class TestTheAirIsAsVividAtFullScreenAsInAWindow:
+    """"The background of rave looks awesome in windowed but is still grey
+    and unsaturated full screen. I want it to be as vibrant as windowed."
+
+    The lamp at the far end is shrunk on a big frame, which is what gives
+    the air its variety there - see
+    ``test_the_air_keeps_its_colour_at_full_screen``. It is also most of
+    the light in the room, so shrinking it left the frame dark, and a
+    colour you cannot see is grey.
+
+    What is counted here is saturation times brightness, per pixel. Either
+    one alone says nothing: the full-screen frame was *more* saturated than
+    the window while looking far greyer, because it was too dark for the
+    saturation to show. It is their product that is how much colour is
+    actually in a region.
+    """
+
+    #: Both frames are of the same room, and a window was never the thing
+    #: that looked wrong, so "as vibrant as windowed" is the bar. A twenty
+    #: fifth of slack, because the two frames cannot be identical: the room
+    #: has a fixed number of lines in it, so they cover more of a small
+    #: frame and the ink is part of what is measured.
+    SLACK = 0.96
+
+    @staticmethod
+    def _frame(width, height, bass=0.95):
+        """The room, on a clock this file controls.
+
+        The same reason as in ``TestTheAirIsColouredByTheBass._air``: the
+        room travels by however long the last frame took, so left on the
+        wall clock this measures the build runner.
+        """
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        clock = [1000.0]
+        was = visualizers.time.monotonic
+        visualizers.time.monotonic = lambda: clock[0]
+
+        scene = visualizers.Rave()
+        scene._last = None
+        state = SpectrumState()
+        state.levels = [0.3 + 0.3 * ((i * 5) % 7) / 7 for i in range(48)]
+        state.bass = bass
+        state.mid = state.synth = state.high = 0.4
+        state.kit = {"Kick": 0.3, "Snare": 0.2, "Hats": 0.2, "Synth": 0.3}
+        image = QImage(width, height,
+                       QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0))
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        try:
+            for _ in range(6):
+                clock[0] += 1 / 60.0
+                scene.paint(painter, QRectF(0, 0, width, height), state)
+        finally:
+            painter.end()
+            visualizers.time.monotonic = was
+        return image
+
+    @staticmethod
+    def _colour(image, sides=False):
+        """How much colour is in the frame, or in its outer thirds."""
+        import statistics
+
+        wide, tall = image.width(), image.height()
+        if sides:
+            columns = (list(range(0, wide // 6, 5))
+                       + list(range(5 * wide // 6, wide, 5)))
+        else:
+            columns = list(range(0, wide, 5))
+        seen = [image.pixelColor(x, y)
+                for y in range(0, tall, 5) for x in columns]
+        return statistics.mean(one.saturationF() * one.valueF()
+                               for one in seen)
+
+    def test_the_whole_frame_holds_as_much_colour(self):
+        """0.245 against the window's 0.288 when this was reported."""
+        window = self._colour(self._frame(640, 360))
+        full = self._colour(self._frame(1920, 1080))
+        assert full > window * self.SLACK, (
+            f"a 640x360 window holds {window:.3f} of colour and a "
+            f"1920x1080 frame {full:.3f}, so full screen is the greyer of "
+            f"the two")
+
+    def test_the_edges_hold_as_much_colour_as_the_middle_does(self):
+        """Where the fault actually was, and the reason the whole-frame
+        number above understates it.
+
+        Measured in sixths across the frame, full screen held *more*
+        colour than the window down the middle two columns - 0.40 against
+        0.35 - and much less down the outer four, 0.13 against 0.22 at the
+        far left. The room was never uniformly grey; it was lit in the
+        middle and bare at the edges, and the edges are most of a wide
+        frame. A change that lifted the middle would pass the test above
+        and leave what was complained about exactly as it was.
+        """
+        window = self._colour(self._frame(640, 360), sides=True)
+        full = self._colour(self._frame(1920, 1080), sides=True)
+        assert full > window * self.SLACK, (
+            f"the outer thirds hold {window:.3f} of colour in a 640x360 "
+            f"window and {full:.3f} at 1920x1080")
+
+    def test_a_window_is_left_alone(self):
+        """None of this applies to a frame the lamp is not shrunk on.
+
+        A window was the one that looked right, so the light that fills a
+        big frame has to be keyed to the shrinking and to nothing else -
+        which means it has to be exactly nothing until the frame is taller
+        than the lamp shrinks for.
+        """
+        from PySide6.QtCore import QRectF
+
+        import visualizers
+
+        assert visualizers.Rave._lamp(QRectF(0, 0, 640, 360)) == 1.0, (
+            "the lamp is already shrunk at 640x360, so a window does not "
+            "get the look this was measured against")
+        was = visualizers.Rave.WASH_FILL
+        first = self._colour(self._frame(640, 360))
+        visualizers.Rave.WASH_FILL = was * 4.0
+        try:
+            again = self._colour(self._frame(640, 360))
+        finally:
+            visualizers.Rave.WASH_FILL = was
+        assert abs(first - again) < 1e-9, (
+            f"quadrupling the fill moved a window from {first:.4f} to "
+            f"{again:.4f} of colour, so it is not keyed to the shrinking")
