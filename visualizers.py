@@ -3463,79 +3463,118 @@ class Rave(Scene):
                (1.4 + kick * 2.4 + flash * 1.6 + fizz * 1.2) * weight)
 
 
+#: One empty chart, shared. See Rider._lay.
+_NO_CHART: dict = {}
+
+
 class Rider(Scene):
     """A game you play on the track the music builds.
 
-    Three lanes down a twisting road. The road bends, climbs and drops
-    with the track; obstacles arrive on the drums. You move between lanes
-    with the arrow keys and try not to hit anything.
+    Three lanes down a road that climbs, dives and twists with the song.
+    Blocks sit on the road on the beat; you move between lanes with the
+    arrow keys and try not to hit them.
 
     What makes it a rhythm game rather than a scene with keys is that the
     chart is laid out *ahead* of the playhead. ``state.kit`` says what is
-    happening now, which is too late to put a wall in front of somebody:
-    a wall has to leave the horizon a second and a half before its beat so
-    that it arrives on it. ``state.chart`` carries every hit in the track
-    by name, from the same element detection the strobe uses, so this can
-    read forward.
+    happening now, which is too late to put a block in front of somebody:
+    it has to leave the horizon seconds before its beat so that it arrives
+    on it. ``state.chart`` carries every hit in the track by name, from the
+    same element detection the strobe uses, so this can read forward.
 
-    The patterns come from what the detection found rather than from a
-    random number:
-
-        kick      a wall across two lanes, leaving one way through
-        snare     a single block, on the off lane from the last one
-        hats      a run of three, stepping across the lanes
-        drop      a gate: both outside lanes closed at once
-
-    and a passage with nothing in it is left empty, which is what a
-    build-up should feel like. The road narrows and speeds up instead.
+    The first version of this put a block on every hit it found, which on a
+    house track is two kicks a second with hats between them: "they are
+    hitting way too fast and it's unplayable". Hits are now a *candidate*
+    list, and the chart takes from it at a pace somebody can play - see
+    ``GAP`` - choosing the shape from whichever drum won the slot.
     """
 
     name = "Music rider"
     blurb = "a game: three lanes, and the track is the song"
 
-    #: Lanes, and how far apart they are in world units.
+    # -- the road ---------------------------------------------------------
     LANES = 3
-    LANE_WIDE = 1.15
-    #: The road, in the same units the rave's corridor uses.
-    NEAR, FAR = 0.55, 22.0
-    #: How many cross-pieces the road is drawn with.
-    RUNGS = 30
-    #: Where the rider sits, and how fast it slides between lanes.
-    RIDER_AT = 1.5
-    SNAP = 0.22
+    LANE_WIDE = 1.30
+    #: The near and far ends of the road. FAR was 34, which converges to
+    #: a sliver: two thirds of the road was a few pixels tall and the
+    #: whole thing read as a cone rather than as a road.
+    #: Zero, so the road runs off the bottom of the frame rather than
+    #: stopping short of it with a hard edge across the picture. The eye
+    #: is EYE_BACK behind this, so there is still depth in front of it.
+    NEAR, FAR = 0.0, 20.0
+    #: Cross-pieces down the road. The road is filled between them, so
+    #: this is also how smooth its bends look.
+    RUNGS = 44
 
-    #: How long a wall takes to come from the far end to the rider, in
-    #: seconds. This is the reaction time the game gives you, and it is
-    #: the one number that decides whether it is playable.
-    LOOK = 1.7
+    #: Where the eye sits above the road and how far back from the rider.
+    #:
+    #: High and back, which is the whole difference between seeing what is
+    #: coming and not: "the current camera angle will make it hard to see
+    #: what's coming up if more things are opaque". From 0.55 up and level
+    #: with the rider to 2.1 up and 2.4 behind, the road ahead goes from a
+    #: thin band across the middle of the frame to most of the picture.
+    EYE_UP = 2.1
+    EYE_BACK = 2.4
+
+    #: Where the rider sits along the road, and how fast it slides lanes.
+    RIDER_AT = 3.0
+    SNAP = 0.30
+
+    # -- pace -------------------------------------------------------------
+    #: Seconds from the horizon to the rider. This is the reaction time the
+    #: game gives you and it is the number that decides whether it can be
+    #: played at all.
+    LOOK = 2.6
     #: How far ahead the chart is read, which has to be more than LOOK.
-    READ = 3.0
+    READ = 5.0
+    #: The least time between one figure and the next.
+    #:
+    #: Every kick and hat in a 128 bpm house track is six hits a second,
+    #: which is a wall of blocks rather than a game. At 0.62 the fastest
+    #: the road can throw something at you is once every two beats at that
+    #: tempo, which is a chart somebody can read.
+    #:
+    #: This applies to every figure, a run of hats included. Letting runs
+    #: through on a shorter gap was tried and is what "they are hitting way
+    #: too fast and it's unplayable" still looked like: 63 obstacles in the
+    #: first five seconds, 0.07 apart.
+    GAP = 0.62
+    #: How far apart the three blocks of one run are. Inside a figure, not
+    #: between figures.
+    RUN_GAP = 0.16
 
-    #: Speed, in road units a second: at rest, and what a full bass adds.
-    RUN = 7.5
-    RUN_BASS = 5.0
+    #: Road units a second: at rest, and what a full bass adds.
+    #:
+    #: "Make the ground speed effect change with bass as well." The road
+    #: moves under you at RUN plus the bass, and the *look* of the speed -
+    #: the field of view and the blur of the ground pattern - moves with
+    #: it, so a heavy passage reads as fast rather than merely being fast.
+    RUN = 9.0
+    RUN_BASS = 7.0
 
-    #: How much the road bends, climbs and rolls, and how fast those move.
-    BEND = 0.55
-    CLIMB = 0.40
-    TWIST = 0.30
+    #: How hard the road bends, climbs and rolls.
+    #:
+    #: "Make the track curve and go up and down wayyyy more
+    #: dramatically." Three or four times what it was, and all three grow
+    #: with how loud the passage is, so a drop throws the road about and a
+    #: quiet passage is nearly straight.
+    BEND = 2.6
+    CLIMB = 1.9
+    TWIST = 0.55
 
-    #: How close a hit has to be. Half a lane, and the rider is given the
-    #: benefit of it: a rhythm game that is strict about the edges is a
-    #: rhythm game nobody finishes.
-    FORGIVE = 0.42
-    #: Seconds of flashing red, and of not being hit again, after a hit.
+    #: How far past the rider a block is still drawn. It has to go
+    #: somewhere rather than stop dead on the rider's nose.
+    GONE = 1.2
+
+    #: Half a lane, and the rider gets the benefit of it.
+    FORGIVE = 0.45
+    #: Seconds of flashing, and of not being hit again, after a hit.
     SORE = 0.9
 
-    #: How hard a kick shakes the camera, and how quickly that dies.
     SHAKE = 0.030
     SHAKE_FALL = 0.10
 
     def __init__(self) -> None:
         self._lane = 1
-        #: Where the rider actually is, which slides towards the lane it
-        #: has been told to be in. Listed here so that ``reset`` clears it
-        #: with everything else.
         self._lane_here = 0.0
         self._at = 0.0
         self._last = None
@@ -3549,12 +3588,18 @@ class Rider(Scene):
         self._blocks: list = []
         self._laid = 0.0
         self._chart_from = None
+        #: When the last figure was put down, so the next one can be held
+        #: off until there is room for it.
+        self._placed = -99.0
+        self._loudness = 0.0
+        self._speed = self.RUN
         self._bend = 0.0
         self._climb = 0.0
         self._spin = 0.0
         self._quick = 0.0
         self._quiet = None
         self._peak = 0.0
+        self._plasma = Plasma()
 
     # -- playing ----------------------------------------------------------
     def steer(self, way: int) -> bool:
@@ -3563,26 +3608,15 @@ class Rider(Scene):
         self._lane = max(0, min(self.LANES - 1, self._lane + int(way)))
         return self._lane != was
 
-    def playing(self) -> bool:
-        """Whether this scene wants the arrow keys."""
-        return True
-
     def report(self) -> dict:
-        """The score, for anything that wants to show it."""
         return {"score": self._score, "streak": self._streak,
                 "best": self._best, "hits": self._hits}
 
     # -- the chart --------------------------------------------------------
-    #: The shapes a hit can take, and which detected part fires each.
-    #:
-    #: Written as a table rather than as branches so that a pattern can be
-    #: added without touching the code that lays them out, and so that
-    #: what each drum does is readable in one place.
-    PATTERNS = {
-        "Kick": "wall",
-        "Snare": "block",
-        "Hats": "run",
-    }
+    #: Which drum makes which shape, and the order they win a slot in.
+    #: A kick beats a snare beats a run of hats, so the heaviest thing in
+    #: a slot is what you see.
+    PATTERNS = (("Kick", "wall"), ("Snare", "block"), ("Hats", "run"))
 
     def _lay(self, state) -> None:
         """Put the next stretch of chart on the road.
@@ -3590,68 +3624,75 @@ class Rider(Scene):
         Only the part that has come into view since the last frame, so
         this walks each hit once however long the track is.
         """
-        chart = getattr(state, "chart", None) or {}
+        # The same empty table every time, so that a track with no chart
+        # yet does not look like a new chart on every frame and throw the
+        # road away sixty times a second.
+        chart = getattr(state, "chart", None) or _NO_CHART
         if chart is not self._chart_from:
             self._chart_from = chart
             self._blocks = []
             self._laid = self._heard
+            self._placed = -99.0
         ahead = self._heard + self.READ
         if ahead <= self._laid:
             return
-        window = (self._laid, ahead)
-        self._laid = ahead
-        for name, pattern in self.PATTERNS.items():
+        low, self._laid = self._laid, ahead
+
+        # Every hit in the window, heaviest first at the same moment, so a
+        # kick and a hat on the same beat give a wall rather than both.
+        due = []
+        for order, (name, shape) in enumerate(self.PATTERNS):
             for when in chart.get(name, ()):
-                if not window[0] < when <= window[1]:
-                    continue
-                self._shape(pattern, when)
-        self._blocks = self._blocks[-160:]
+                if low < when <= ahead:
+                    due.append((when, order, shape))
+        due.sort()
+        for when, _order, shape in due:
+            if when - self._placed < self.GAP:
+                continue
+            self._placed = when
+            self._shape(shape, when)
+        self._blocks = self._blocks[-200:]
 
     def _shape(self, pattern: str, when: float) -> None:
         """One hit, as one or more blocks in lanes."""
-        # The lane is chosen from the time rather than from a random
-        # number, so the same track lays out the same way every time -
-        # which is what makes it a chart rather than a shower.
-        seed = int(when * 977) % 3
+        # The lane comes from the time rather than from a random number,
+        # so a track lays out the same way every time it is played.
+        seed = int(when * 977) % self.LANES
         if pattern == "wall":
-            # Two lanes closed, one open: the shape that forces a move.
             for lane in range(self.LANES):
                 if lane != seed:
                     self._blocks.append([when, lane, "wall", False])
         elif pattern == "block":
             self._blocks.append([when, seed, "block", False])
         elif pattern == "run":
-            # Three, stepping across, an eighth apart.
             for step in range(3):
                 lane = (seed + step) % self.LANES
-                self._blocks.append([when + step * 0.11, lane, "run", False])
+                self._blocks.append([when + step * self.RUN_GAP, lane,
+                                     "run", False])
 
     # -- the world --------------------------------------------------------
     def _road(self, at: float) -> tuple:
         """Where the road is at distance ``at``: across, up, and rolled.
 
-        One function, called for every rung and every block, so the road
-        and the things on it agree about where they are. A track drawn by
-        one rule and populated by another is a track whose walls float.
+        One function, called for every rung, every block and the rider, so
+        that everything on the road agrees about where the road is.
         """
-        return (math.sin(at * 0.21 + self._bend) * self.BEND * at * 0.08,
-                math.sin(at * 0.13 + self._climb) * self.CLIMB * at * 0.06,
-                math.sin(at * 0.09 + self._spin) * self.TWIST)
+        push = 0.35 + self._loudness * 0.65
+        return (math.sin(at * 0.17 + self._bend) * self.BEND * push,
+                math.sin(at * 0.11 + self._climb) * self.CLIMB * push,
+                math.sin(at * 0.07 + self._spin) * self.TWIST * push)
 
-    def _eye(self, horizon, focal, lane_x: float, up: float, at: float,
-             roll: float):
+    def _eye(self, horizon, focal, lane_x: float, up: float, at: float):
         """A point on the road, on the glass."""
-        z = max(0.35, at)
-        across, lift, _turn = self._road(at)
+        z = max(0.35, at + self.EYE_BACK)
+        across, lift, roll = self._road(at)
         x = across + lane_x
         y = up + lift
-        # The roll leans the whole road, which is what a bend feels like
-        # from inside it.
-        turn = roll * 0.55
+        turn = roll * 0.5
         sx = x * math.cos(turn) - y * math.sin(turn)
         sy = x * math.sin(turn) + y * math.cos(turn)
         return QPointF(horizon.x() + focal * sx / z,
-                       horizon.y() + focal * (sy + 0.55) / z)
+                       horizon.y() + focal * (sy + self.EYE_UP) / z)
 
     def _advance(self, state) -> float:
         now = time.monotonic()
@@ -3668,9 +3709,8 @@ class Rider(Scene):
         self._quiet += (self._quick - self._quiet) * (
             0.02 if self._quick < self._quiet else 0.0004)
         self._peak = max(self._quick, self._peak * 0.9996)
+        self._loudness = self._surge()
 
-        # The playhead if there is one, our own clock if there is not, so
-        # the game is playable with the analysis still running.
         said = getattr(state, "at", 0.0) or 0.0
         if said > 0.0 and abs(said - self._heard) > 0.35:
             self._heard = said
@@ -3679,11 +3719,11 @@ class Rider(Scene):
         else:
             self._heard += step
 
-        self._at += step * (self.RUN + bass * self.RUN_BASS)
-        # Bends move on their own clock, and harder when the room is loud.
-        self._bend += step * (0.35 + self._surge() * 0.9)
-        self._climb += step * (0.22 + self._surge() * 0.5)
-        self._spin += step * (0.17 + self._surge() * 0.8)
+        self._speed = self.RUN + bass * self.RUN_BASS
+        self._at += step * self._speed
+        self._bend += step * (0.30 + self._loudness * 0.85)
+        self._climb += step * (0.19 + self._loudness * 0.55)
+        self._spin += step * (0.14 + self._loudness * 0.7)
         self._shake = max(0.0, self._shake - self._shake * self.SHAKE_FALL
                           - step * 0.9)
         self._shake = min(1.0, self._shake + kit.get("Kick", 0.0) * 0.5)
@@ -3691,7 +3731,7 @@ class Rider(Scene):
         return step
 
     def _surge(self) -> float:
-        """How loud this passage is against the quiet and the loudest."""
+        """How loud this passage is between the quiet and the loudest."""
         quiet = self._quiet
         if quiet is None or self._peak < 0.04:
             return 0.0
@@ -3700,18 +3740,13 @@ class Rider(Scene):
             return 0.0
         return max(0.0, min(1.0, (self._quick - quiet) / span))
 
-    def _collide(self, state) -> None:
-        """Anything that reached the rider, and what it did."""
-        lane_now = self._lane_x()
+    def _collide(self) -> None:
         for block in self._blocks:
             when, lane, _kind, done = block
-            if done:
-                continue
-            gone = self._heard - when
-            if gone < 0.0:
+            if done or self._heard < when:
                 continue
             block[3] = True
-            if abs(self._lane_at(lane) - lane_now) < self.FORGIVE:
+            if abs(self._lane_at(lane) - self._lane_here) < self.FORGIVE:
                 if self._sore <= 0.0:
                     self._hits += 1
                     self._streak = 0
@@ -3725,147 +3760,248 @@ class Rider(Scene):
     def _lane_at(self, lane: int) -> float:
         return (lane - (self.LANES - 1) / 2.0) * self.LANE_WIDE
 
-    def _lane_x(self) -> float:
-        return self._lane_here
+    def _where(self, when: float) -> float:
+        """How far down the road a hit due at ``when`` is now."""
+        return ((when - self._heard) / self.LOOK) * (self.FAR - self.NEAR)
 
     # -- drawing ----------------------------------------------------------
     def paint(self, painter, rect, state) -> None:
         self._advance(state)
         self._lay(state)
         wanted = self._lane_at(self._lane)
-        here = getattr(self, "_lane_here", wanted)
-        self._lane_here = here + (wanted - here) * self.SNAP
-        self._collide(state)
+        self._lane_here += (wanted - self._lane_here) * self.SNAP
+        self._collide()
 
         flash = self.flash(state)
-        surge = self._surge()
+        surge = self._loudness
         kit = state.kit or {}
         bass = max(state.bass, kit.get("Bass", 0.0))
-        painter.fillRect(rect, QColor(3, 3, 9))
+
+        painter.fillRect(rect, QColor(3, 2, 8))
+        # The same morphing field the Ambience scene is built on, behind
+        # everything and dim: "make the background of music rider more
+        # similar to the ambience background". It reads the same state, so
+        # it moves with the music on its own.
+        # Dim. It is the room the road is in, not the subject: at the
+        # strength Ambience uses it for its own sake it drowns the track.
+        self._plasma.paint(painter, rect, state,
+                           strength=0.16 + surge * 0.20 + flash * 0.14,
+                           flash=flash)
 
         span = min(rect.width(), rect.height())
-        # The field of view opens as the road speeds up, which is most of
-        # what makes speed feel like speed.
-        focal = span * (0.70 - surge * 0.10 - bass * 0.05)
+        focal = span * (0.78 - surge * 0.10 - bass * 0.06)
         shake = self._shake * self.SHAKE * span
         centre = rect.center()
         horizon = QPointF(
             centre.x() + math.sin(self._spin * 7.3) * shake,
-            centre.y() - rect.height() * 0.06
+            centre.y() - rect.height() * 0.10
             + math.sin(self._spin * 9.1) * shake)
         hue = (0.58 + state.synth * 0.25 + surge * 0.12) % 1.0
 
-        self._sky(painter, rect, horizon, hue, surge, flash)
-        self._rails(painter, rect, horizon, focal, hue, surge, flash)
+        self._surface(painter, rect, horizon, focal, hue, surge, flash)
+        self._markings(painter, horizon, focal, hue, kit, flash)
+        self._edges(painter, rect, horizon, focal, hue, kit, flash)
         self._walls(painter, rect, horizon, focal, hue, flash)
         self._ship(painter, rect, horizon, focal, hue, flash)
         self._card(painter, rect, hue)
 
-    def _sky(self, painter, rect, horizon, hue, surge, flash) -> None:
-        """A wash behind the road, so it is not drawn on flat black."""
-        glow = QRadialGradient(horizon, max(1.0, rect.height()
-                                            * (0.6 + surge * 0.35)))
-        glow.setColorAt(0.0, QColor.fromHsvF(
-            hue, 0.72, min(1.0, 0.30 + surge * 0.35 + flash * 0.25),
-            min(1.0, 0.55 + surge * 0.3)))
-        glow.setColorAt(1.0, QColor(0, 0, 0, 0))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(glow)
-        painter.drawRect(rect)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
+    def _rung(self, horizon, focal, at: float, out: float = 0.0):
+        """The two ends of the road at ``at``, as a pair of points."""
+        edge = self.LANE_WIDE * self.LANES / 2.0 + out
+        return (self._eye(horizon, focal, -edge, 0.0, at),
+                self._eye(horizon, focal, edge, 0.0, at))
 
-    def _rails(self, painter, rect, horizon, focal, hue, surge, flash) -> None:
-        """The road: four rails and a ladder of rungs."""
+    def _surface(self, painter, rect, horizon, focal, hue, surge,
+                 flash) -> None:
+        """The road itself, filled.
+
+        "Make the track opaque." One path of quads between consecutive
+        rungs, filled once: a road drawn as lines is a ladder floating in
+        the dark, and blocks standing on nothing read as floating too.
+        """
         reach = self.FAR - self.NEAR
         offset = self._at % 1.0
-        edge = self.LANE_WIDE * self.LANES / 2.0
-        rails = QPainterPath()
-        for lane in range(self.LANES + 1):
-            across = -edge + lane * self.LANE_WIDE
+        deck = QPainterPath()
+        last = None
+        near_y = far_y = None
+        for step in range(self.RUNGS + 1):
+            at = self.NEAR + (step + offset) * reach / self.RUNGS
+            here = self._rung(horizon, focal, at)
+            if last is not None:
+                deck.moveTo(last[0])
+                deck.lineTo(last[1])
+                deck.lineTo(here[1])
+                deck.lineTo(here[0])
+                deck.closeSubpath()
+            else:
+                near_y = here[0].y()
+            far_y = here[0].y()
+            last = here
+        painter.setPen(Qt.PenStyle.NoPen)
+        # Into fog rather than to a point.
+        #
+        # The road ends somewhere, and where it ended it was a hard little
+        # vertex: the whole thing read as a cone with a tip rather than as
+        # a road going away. Filled with a gradient down its length, the
+        # far end simply stops being there.
+        shade = QColor.fromHsvF(
+            (hue + 0.02) % 1.0, 0.80 - flash * 0.3,
+            0.16 + surge * 0.10 + flash * 0.16, 0.94)
+        gone = QColor(shade)
+        gone.setAlphaF(0.0)
+        fog = QLinearGradient(0.0, far_y if far_y is not None else 0.0,
+                              0.0, near_y if near_y is not None else 1.0)
+        fog.setColorAt(0.0, gone)
+        fog.setColorAt(self.FOG, shade)
+        fog.setColorAt(1.0, shade)
+        painter.fillPath(deck, QBrush(fog))
+
+    #: How far down the road the fog has finished clearing, as a share of
+    #: the way from the far end to the rider.
+    FOG = 0.35
+
+    #: How far apart the chevrons under the road are, in road units, and
+    #: how many rungs of it each one covers.
+    MARK_EVERY = 2.0
+
+    def _markings(self, painter, horizon, focal, hue, kit, flash) -> None:
+        """The pattern on the road, which moves under you.
+
+        "Add patterns under the track that react to music." Chevrons at a
+        fixed spacing in road units, so they stream towards you at the
+        road's own speed, brightening on the kick.
+        """
+        kick = kit.get("Kick", 0.0)
+        marks = QPainterPath()
+        first = math.ceil((self.NEAR + self._at) / self.MARK_EVERY)
+        for index in range(first, first + int(self.FAR / self.MARK_EVERY) + 2):
+            at = index * self.MARK_EVERY - self._at
+            if not self.NEAR <= at <= self.FAR:
+                continue
+            for lane in range(self.LANES):
+                across = self._lane_at(lane)
+                wide = self.LANE_WIDE * 0.30
+                marks.moveTo(self._eye(horizon, focal, across - wide, 0.0, at))
+                marks.lineTo(self._eye(horizon, focal, across, 0.0,
+                                       at + self.MARK_EVERY * 0.22))
+                marks.lineTo(self._eye(horizon, focal, across + wide, 0.0, at))
+        self._beam(painter, marks, QColor.fromHsvF(
+            (hue + 0.10) % 1.0, 0.55, 1.0,
+            min(1.0, 0.20 + kick * 0.45 + flash * 0.3)))
+
+    def _edges(self, painter, rect, horizon, focal, hue, kit, flash) -> None:
+        """The rails either side, which answer the kit.
+
+        "Add effects along the edges of the track that react to elements
+        in the music as well." The left rail is the snare and the right is
+        the hats, so the two sides of the road are doing different things
+        and the difference is the music.
+        """
+        reach = self.FAR - self.NEAR
+        offset = self._at % 1.0
+        snare = kit.get("Snare", 0.0)
+        hats = kit.get("Hats", 0.0)
+        for side, lit in ((-1.0, snare), (1.0, hats)):
+            rail = QPainterPath()
+            edge = self.LANE_WIDE * self.LANES / 2.0
             first = None
             for step in range(self.RUNGS + 1):
                 at = self.NEAR + (step + offset) * reach / self.RUNGS
-                point = self._eye(horizon, focal, across, 0.0, at,
-                                  self._road(at)[2])
+                point = self._eye(horizon, focal, side * edge,
+                                  -0.10 - lit * 0.45, at)
                 if first is None:
-                    rails.moveTo(point)
+                    rail.moveTo(point)
                     first = point
                 else:
-                    rails.lineTo(point)
-        self._beam(painter, rails, QColor.fromHsvF(
-            hue, max(0.0, 0.55 - flash * 0.4), 1.0,
-            min(1.0, 0.30 + surge * 0.35 + flash * 0.3)))
+                    rail.lineTo(point)
+            self._beam(painter, rail, QColor.fromHsvF(
+                (hue + (0.42 if side < 0 else 0.16)) % 1.0,
+                max(0.0, 0.85 - flash * 0.4), 1.0,
+                min(1.0, 0.35 + lit * 0.6 + flash * 0.3)))
 
-        rungs = QPainterPath()
-        for step in range(self.RUNGS):
-            at = self.NEAR + (step + offset) * reach / self.RUNGS
-            roll = self._road(at)[2]
-            rungs.moveTo(self._eye(horizon, focal, -edge, 0.0, at, roll))
-            rungs.lineTo(self._eye(horizon, focal, edge, 0.0, at, roll))
-        near = QColor.fromHsvF(hue, 0.45, 1.0,
-                               min(1.0, 0.16 + surge * 0.25 + flash * 0.25))
-        self._beam(painter, rungs, near)
-
-    #: How the four kinds of block are coloured, as a turn of the wheel
-    #: from the road's own hue.
-    BLOCK_HUE = {"wall": 0.42, "block": 0.30, "run": 0.16, "gate": 0.5}
+    #: The colour of each kind of block, as a turn from the road's hue.
+    BLOCK_HUE = {"wall": 0.42, "block": 0.30, "run": 0.16}
 
     def _walls(self, painter, rect, horizon, focal, hue, flash) -> None:
-        """Everything on the road that can be hit."""
-        edge = self.LANE_WIDE * 0.5 * 0.86
+        """The blocks, filled, with a lit edge.
+
+        "Make obstacles opaque neon blocks on the track." Filled so they
+        sit on the road rather than floating over it, and outlined bright
+        so they read against it.
+        """
+        edge = self.LANE_WIDE * 0.5 * 0.82
+        tall = 0.62
+        painter.setPen(Qt.PenStyle.NoPen)
         for kind in ("wall", "block", "run"):
-            path = QPainterPath()
-            drawn = 0
+            faces = QPainterPath()
+            rims = QPainterPath()
             for when, lane, shape, _done in self._blocks:
                 if shape != kind:
                     continue
-                gone = when - self._heard
-                if gone < -0.15 or gone > self.LOOK:
+                at = self._where(when)
+                # Gone once it is behind the rider. Clamping it to NEAR
+                # instead left everything that had already gone past
+                # stacked against the bottom of the frame at the size of a
+                # house, which is most of what the first attempt looked
+                # like.
+                if at < self.GONE or at > self.FAR:
                     continue
-                at = self.NEAR + (gone / self.LOOK) * (self.FAR - self.NEAR)
-                roll = self._road(at)[2]
+                # Out of the fog with the road, rather than appearing
+                # whole at the far end of it.
+                near = max(0.0, min(1.0, 1.0 - (at - self.NEAR)
+                                    / max(1e-6, self.FAR - self.NEAR)))
+                seen = min(1.0, near / max(1e-6, self.FOG))
                 across = self._lane_at(lane)
-                low = self._eye(horizon, focal, across - edge, 0.0, at, roll)
-                high = self._eye(horizon, focal, across + edge, 0.0, at, roll)
-                top = self._eye(horizon, focal, across + edge, -0.55, at, roll)
-                back = self._eye(horizon, focal, across - edge, -0.55, at, roll)
-                path.moveTo(low)
-                path.lineTo(high)
-                path.lineTo(top)
-                path.lineTo(back)
-                path.lineTo(low)
-                drawn += 1
-            if not drawn:
-                continue
-            self._beam(painter, path, QColor.fromHsvF(
-                (hue + self.BLOCK_HUE[kind]) % 1.0,
-                max(0.0, 0.85 - flash * 0.4), 1.0,
-                min(1.0, 0.75 + flash * 0.25)))
+                foot_l = self._eye(horizon, focal, across - edge, 0.0, at)
+                foot_r = self._eye(horizon, focal, across + edge, 0.0, at)
+                top_r = self._eye(horizon, focal, across + edge, -tall, at)
+                top_l = self._eye(horizon, focal, across - edge, -tall, at)
+                faces.moveTo(foot_l)
+                faces.lineTo(foot_r)
+                faces.lineTo(top_r)
+                faces.lineTo(top_l)
+                faces.closeSubpath()
+                rims.moveTo(top_l)
+                rims.lineTo(top_r)
+                # One path per block rather than one for the lot, because
+                # each is a different distance into the fog.
+                shade = (hue + self.BLOCK_HUE[kind]) % 1.0
+                painter.fillPath(faces, QColor.fromHsvF(
+                    shade, max(0.0, 0.90 - flash * 0.4),
+                    0.55 + flash * 0.35, 0.90 * seen))
+                self._beam(painter, rims, QColor.fromHsvF(
+                    shade, max(0.0, 0.45 - flash * 0.4), 1.0,
+                    min(1.0, (0.85 + flash * 0.15) * seen)))
+                faces = QPainterPath()
+                rims = QPainterPath()
 
     def _ship(self, painter, rect, horizon, focal, hue, flash) -> None:
-        """The rider: a triangle, low on the road."""
+        """The rider: a lit triangle, low on the road."""
         at = self.RIDER_AT
-        roll = self._road(at)[2]
         across = self._lane_here
-        wide = self.LANE_WIDE * 0.30
-        nose = self._eye(horizon, focal, across, -0.30, at - 0.35, roll)
-        left = self._eye(horizon, focal, across - wide, 0.0, at, roll)
-        right = self._eye(horizon, focal, across + wide, 0.0, at, roll)
+        wide = self.LANE_WIDE * 0.42
+        # Nose forward and up, tail low and wide, so it reads as a craft
+        # leaning into the road rather than as a bar lying on it.
+        # Nose down the road, tail towards the camera: pointed the other
+        # way it read as an arrow aimed at the viewer.
+        nose = self._eye(horizon, focal, across, -0.26, at + 1.4)
+        left = self._eye(horizon, focal, across - wide, -0.02, at)
+        right = self._eye(horizon, focal, across + wide, -0.02, at)
         path = QPainterPath()
         path.moveTo(nose)
         path.lineTo(left)
         path.lineTo(right)
-        path.lineTo(nose)
+        path.closeSubpath()
         hurt = self._sore > 0.0 and int(self._sore * 14) % 2 == 0
-        colour = (QColor.fromHsvF(0.0, 0.85, 1.0, 0.95) if hurt
-                  else QColor.fromHsvF((hue + 0.5) % 1.0,
-                                       max(0.0, 0.45 - flash * 0.4), 1.0,
-                                       min(1.0, 0.85 + flash * 0.15)))
-        stroke(painter, path, colour, 2.0 * max(0.75, min(
-            1.3, rect.height() / 700.0)))
+        shade = 0.0 if hurt else (hue + 0.5) % 1.0
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.fillPath(path, QColor.fromHsvF(
+            shade, 0.85 if hurt else max(0.0, 0.40 - flash * 0.3),
+            1.0, 0.85))
+        stroke(painter, path, QColor.fromHsvF(shade, 0.2, 1.0, 1.0),
+               2.0 * max(0.75, min(1.3, rect.height() / 700.0)))
 
     def _card(self, painter, rect, hue) -> None:
-        """The score, small, in the corner."""
         painter.save()
         font = painter.font()
         font.setPointSizeF(max(9.0, rect.height() * 0.022))
@@ -3879,7 +4015,7 @@ class Rider(Scene):
 
     @staticmethod
     def _beam(painter, path, colour) -> None:
-        """One pass, one pixel. The same trade the rave scene makes."""
+        """One pass, one pixel, as the rave's room is drawn."""
         pen = QPen(colour, 0.0)
         pen.setCosmetic(True)
         painter.setPen(pen)

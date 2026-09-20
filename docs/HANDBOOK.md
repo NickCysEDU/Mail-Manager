@@ -726,7 +726,7 @@ numbers.
 | **S** | Strobe on or off |
 | **A** / **D** | Step through what the strobe listens to |
 | **M** | Set it to listen to nobody, so the hotkeys are the only light |
-| **G** | Flash by hand: tap for a flash, hold for a held light |
+| **G** | Flash by hand: tap for a flash, hold for a light that stays on |
 | **H** | Hold for a strobe, twelve a second |
 | **J** / **K** / **L** | Back ten seconds / play or pause / forward ten |
 | **Space** | Play or pause |
@@ -739,11 +739,13 @@ a kick closes two lanes and leaves one open, a snare drops a single block,
 a run of hats steps across the three. The arrow keys change lane.
 
 The chart comes from the same element detection the strobe uses, read
-*ahead* of the playhead: an obstacle leaves the horizon about a second and
-three quarters before the beat it belongs to, so it arrives on it. A
-passage with no drums in it has no obstacles, which is what a build-up
-should feel like. The lane a hit opens is worked out from its time, so a
-track lays out the same way every time you play it.
+*ahead* of the playhead: an obstacle leaves the horizon about two and a
+half seconds before the beat it belongs to, so it arrives on it. Hits are
+candidates rather than obstacles - at 128 bpm the kicks and hats alone are
+six a second - and the road takes from them no faster than one figure
+every 0.62 seconds. A passage with no drums in it has no obstacles, which
+is what a build-up should feel like. The lane a hit opens is worked out
+from its time, so a track lays out the same way every time you play it.
 
 The playing keys deliberately do not bring the control bar back: they
 exist so the scene can be played without the furniture. **?** is there
@@ -783,7 +785,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,507 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,521 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1144,7 +1146,7 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 3,507 tests, about three minutes
+./dev test        # 3,521 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

@@ -7775,3 +7775,215 @@ class TestThePolishPassIsOneBlit:
         assert spread > plain * 1.02, (
             f"the fringing put {spread:.2f} of light beside the bar and "
             f"leaving it out put {plain:.2f}, so it is not being done")
+
+
+class TestTheRiderIsPlayable:
+    """"They are hitting way too fast and it's unplayable."
+
+    Every kick and hat in a 128 bpm house track is six hits a second. The
+    first version put a block on each of them.
+    """
+
+    #: A house track: kicks on the beat, hats on the eighths.
+    BEAT = 60.0 / 128.0
+    CHART = {
+        "Kick": tuple(i * (60.0 / 128.0) for i in range(600)),
+        "Snare": tuple((60.0 / 128.0) * (1 + 2 * i) for i in range(300)),
+        "Hats": tuple(i * (60.0 / 128.0) / 2 for i in range(1200)),
+    }
+
+    @staticmethod
+    def _laid(seconds=12.0):
+        """Every figure the chart lays over ``seconds`` of a house track."""
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        scene = visualizers.Rider()
+        scene._last = None
+        state = SpectrumState()
+        state.levels = [0.4] * 27
+        state.chart = TestTheRiderIsPlayable.CHART
+        while scene._heard < seconds:
+            scene._heard += 0.25
+            scene._lay(state)
+        return sorted({block[0] for block in scene._blocks}), scene
+
+    def test_the_figures_are_far_enough_apart_to_read(self):
+        import visualizers
+
+        times, scene = self._laid()
+        assert times, "nothing was laid at all"
+        # Inside a run the blocks are close on purpose; between figures
+        # they are not.
+        figures = [t for i, t in enumerate(times)
+                   if i == 0 or t - times[i - 1] > scene.RUN_GAP + 0.01]
+        gaps = [b - a for a, b in zip(figures, figures[1:])]
+        assert min(gaps) >= scene.GAP - 0.05, (
+            f"two figures {min(gaps):.2f}s apart, and the road asks for "
+            f"{scene.GAP}s")
+
+    def test_there_are_not_dozens_of_them_a_second(self):
+        """Figures, not blocks. A run is three blocks and one thing to
+        react to, so counting blocks says the road is busier than it is."""
+        times, scene = self._laid()
+        figures = [t for i, t in enumerate(times)
+                   if i == 0 or t - times[i - 1] > scene.RUN_GAP + 0.01]
+        a_second = len(figures) / 12.0
+        assert a_second < 2.5, (
+            f"{a_second:.1f} figures a second on a house track")
+
+    def test_it_still_lays_something(self):
+        """Spacing them out is not the same as removing them."""
+        times, _scene = self._laid()
+        assert len(times) / 12.0 > 0.8, (
+            f"only {len(times)} blocks over twelve seconds")
+
+    def test_a_block_that_has_gone_past_is_not_drawn(self):
+        """They were clamped to the near end instead, which stacked
+        everything that had already gone by against the bottom of the
+        frame at the size of a house."""
+        import visualizers
+
+        scene = visualizers.Rider()
+        assert scene.GONE > 0.0
+        scene._heard = 10.0
+        # A block due five seconds ago is a long way behind the rider.
+        assert scene._where(5.0) < scene.GONE
+
+    def test_the_eye_is_above_the_road(self):
+        """"The current camera angle will make it hard to see what's
+        coming up if more things are opaque." """
+        import visualizers
+
+        assert visualizers.Rider.EYE_UP >= 1.5
+        assert visualizers.Rider.EYE_BACK > 0.0
+
+    def test_the_road_bends_and_climbs_a_long_way(self):
+        """"Make the track curve and go up and down wayyyy more
+        dramatically." """
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._loudness = 1.0
+        across = [scene._road(at)[0] for at in range(0, 40)]
+        up = [scene._road(at)[1] for at in range(0, 40)]
+        assert max(across) - min(across) > 3.0, (
+            f"the road wanders {max(across) - min(across):.1f} lanes over "
+            f"its length")
+        assert max(up) - min(up) > 2.0, (
+            f"the road rises and falls {max(up) - min(up):.1f}")
+
+    def test_the_speed_follows_the_bass(self):
+        """"Make the ground speed effect change with bass as well." """
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        seen = []
+        for bass in (0.0, 1.0):
+            scene = visualizers.Rider()
+            scene._last = None
+            state = SpectrumState()
+            state.levels = [0.4] * 27
+            state.bass = bass
+            state.kit = {}
+            scene._advance(state)
+            seen.append(scene._speed)
+        assert seen[1] > seen[0] * 1.4, (
+            f"the road runs at {seen[0]:.1f} with no bass and {seen[1]:.1f} "
+            f"with all of it")
+
+    def test_an_empty_chart_does_not_throw_the_road_away(self):
+        """A track with no chart yet handed over a new empty table every
+        frame, which read as a new chart and cleared the road sixty times
+        a second."""
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        scene = visualizers.Rider()
+        scene._last = None
+        state = SpectrumState()
+        state.levels = [0.4] * 27
+        state.chart = {}
+        scene._heard = 0.0
+        scene._lay(state)
+        first = scene._chart_from
+        scene._heard = 1.0
+        scene._lay(state)
+        assert scene._chart_from is first, (
+            "an empty chart looked like a new one the second time")
+
+
+class TestANewSceneFadesIn:
+    """"If you are loading music rider at the same time as other
+    visualizers, don't, and then fade it in if the user hits its hotkey."
+
+    Building all nine scenes costs 0.007 ms and 0.3 KiB each, and only the
+    one on screen is ever painted, so there is nothing to defer. What there
+    was not is the fade.
+    """
+
+    def test_picking_a_scene_starts_it_faded_out(self, qtbot):
+        import visualizers
+        from attachment_widgets import Spectrum
+
+        pane = Spectrum()
+        qtbot.addWidget(pane)
+        pane.set_scene(visualizers.by_name("Rave"))
+        pane._fresh = 1.0
+        pane.set_scene(visualizers.by_name("Music rider"))
+        assert pane._fresh < 0.2, (
+            f"the new scene came up at {pane._fresh:.2f} of full strength")
+
+    def test_it_comes_all_the_way_up(self, qtbot):
+        import visualizers
+        from attachment_widgets import Spectrum
+
+        pane = Spectrum()
+        qtbot.addWidget(pane)
+        pane.set_scene(visualizers.by_name("Music rider"))
+        for _ in range(int(1.0 / Spectrum.FRESH_STEP) + 4):
+            pane._tick()
+        assert pane._fresh == 1.0, (
+            f"the fade stalled at {pane._fresh:.2f}")
+
+    def test_picking_the_same_scene_again_does_not_fade(self, qtbot):
+        import visualizers
+        from attachment_widgets import Spectrum
+
+        pane = Spectrum()
+        qtbot.addWidget(pane)
+        rider = visualizers.by_name("Music rider")
+        pane.set_scene(rider)
+        pane._fresh = 1.0
+        pane.set_scene(rider)
+        assert pane._fresh == 1.0, "choosing what is already on screen faded"
+
+
+class TestBothStrobeKeysAreNamed:
+    """"Tell the user about both strobe keys as well." """
+
+    def test_the_label_names_both(self, qtbot):
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        qtbot.addWidget(pane)
+        said = pane.by_hand.text()
+        assert AudioPane.BY_HAND_KEY in said and AudioPane.SPAM_KEY in said, (
+            f"the label under the strobe box says {said!r}")
+
+    def test_the_tip_says_what_each_one_does(self, qtbot):
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        qtbot.addWidget(pane)
+        tip = pane.strobe_source.toolTip()
+        assert AudioPane.BY_HAND_KEY in tip and AudioPane.SPAM_KEY in tip
+        assert "held" in tip.lower() and "strobe" in tip.lower()
+
+    def test_the_list_of_playing_keys_names_both(self):
+        from attachment_view import AudioPane
+        from attachment_widgets import _KeysCard
+
+        listed = [key for key, _what in _KeysCard.KEYS if key]
+        assert AudioPane.BY_HAND_KEY in listed
+        assert AudioPane.SPAM_KEY in listed

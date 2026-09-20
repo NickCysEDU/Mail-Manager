@@ -466,9 +466,10 @@ class AudioPane(QWidget):
         self.strobe_source = _combo(
             list(_Spec.STROBE_SOURCES),
             "Which part of the sound sets the strobe off.\n\n"
-            f"{_Spec.BY_HAND}: only the "
-            f"{AudioPane.BY_HAND_KEY} key flashes. It works on the other "
-            f"settings too.")
+            f"{_Spec.BY_HAND}: only the keys flash it.\n\n"
+            f"{AudioPane.BY_HAND_KEY} held is a light that stays on. "
+            f"{AudioPane.SPAM_KEY} held is a strobe, twelve a second. "
+            f"Both work on the other settings too.")
         self.strobe_source.currentTextChanged.connect(
             self.spectrum.set_strobe_source)
         # What to press, said where the choice is made.
@@ -478,7 +479,8 @@ class AudioPane(QWidget):
         # screen key card, behind ?, which is no use to somebody who has
         # just chosen it from a menu and is waiting for something to
         # happen.
-        self.by_hand = QLabel(f"press {AudioPane.BY_HAND_KEY}")
+        self.by_hand = QLabel(
+            f"{AudioPane.BY_HAND_KEY} hold · {AudioPane.SPAM_KEY} strobe")
         self.by_hand.setFont(system_font())
         self.by_hand.setStyleSheet("color: #8fd0ff;")
         self.by_hand.setToolTip(
@@ -955,6 +957,11 @@ class AudioPane(QWidget):
     #: everything.
     BY_HAND_KEY = "G"
 
+    #: The other one: held, it fires over and over instead of holding the
+    #: light up. Named beside the first wherever the first is named, so
+    #: that somebody who finds one finds both.
+    SPAM_KEY = "H"
+
     #: The keys that play the visualiser, and what each one does.
     #:
     #: Numbers for scenes because there are eight of them and they are in
@@ -1156,7 +1163,8 @@ class AudioPane(QWidget):
         reaction.currentTextChanged.connect(self.strobe_source.setCurrentText)
 
         # And the same hint, on the bar, for the same reason.
-        by_hand = QLabel(f"press {self.BY_HAND_KEY}")
+        by_hand = QLabel(
+            f"{self.BY_HAND_KEY} hold · {self.SPAM_KEY} strobe")
         by_hand.setFont(system_font())
         by_hand.setStyleSheet("color: #8fd0ff;")
         by_hand.setVisible(reaction.currentText() == _Spec.BY_HAND)
