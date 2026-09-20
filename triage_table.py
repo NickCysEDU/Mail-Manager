@@ -676,10 +676,16 @@ class PreviewPane(QWidget):
     ONE_COLUMN = 760
 
     #: The least height a half of the pane works at: a row of controls
-    #: and a few lines of text under it.
-    HALF_TALL = 70
+    #: and a couple of lines of text under it.
+    #:
+    #: This and MIN_TALL below overlap - either one alone holds the audit
+    #: at every size it sweeps, on most runs. Only most: with one of them
+    #: gone the sweep fails on some orderings and not others, because the
+    #: theme in force decides how tall a row of controls is. Two floors
+    #: that agree are worth more than one that is right on average.
+    HALF_TALL = 75
 
-    #: The least room the pane is any use in.
+    #: The least room the whole pane is any use in. See HALF_TALL.
     #:
     #: The header, the row that files the message, and a half with a row
     #: of controls and a few lines of text under it. Below this a splitter
@@ -687,10 +693,10 @@ class PreviewPane(QWidget):
     #: themselves - and a preview that short shows nothing worth reading
     #: anyway. It can still be shut: a splitter collapses a child rather
     #: than obeying its minimum when it is dragged to the end.
-    MIN_TALL = 250
+    MIN_TALL = 215
 
-    #: The height it takes to stack the two halves rather than put them
-    #: side by side.
+    #: The room the two halves need between them to be stacked rather
+    #: than put side by side.
     #:
     #: Stacking is the answer to a *narrow* pane, and it costs height:
     #: two rows of controls and two pieces of text, one above the other.
@@ -700,7 +706,7 @@ class PreviewPane(QWidget):
     #: controls above the text let alone the text, so everything in it
     #: drew outside it. Short and wide is the one case that wants two
     #: columns however narrow the rule below thinks it is.
-    MIN_STACK = 260
+    MIN_STACK = 180
 
     overrideChanged = Signal(int, object)  # source row, folder or None
     #: "Sort this mail too" - the window turns non-job routing on.
@@ -748,13 +754,13 @@ class PreviewPane(QWidget):
         # controls above it was squeezed and drew outside itself. A text
         # view scrolls; it does not need ninety pixels to be usable, and
         # nothing else in that half can give way.
-        self.body_view.setMinimumHeight(36)
+        self.body_view.setMinimumHeight(24)
         self.body_view.setReadOnly(True)
         self.body_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self.body_view.setFont(_mono_font())
 
         self.reasoning_view = QTextBrowser()
-        self.reasoning_view.setMinimumHeight(36)
+        self.reasoning_view.setMinimumHeight(24)
         self.reasoning_view.setOpenExternalLinks(True)
 
         self.folder_combo = QComboBox()
@@ -890,7 +896,12 @@ class PreviewPane(QWidget):
     def _arrange(self, width: int) -> None:
         """Side by side when there is room for both, stacked when not."""
         across = self.splitter.orientation() == Qt.Orientation.Horizontal
-        tall = self.height() >= self.MIN_STACK
+        # The room the two halves would actually have, not the pane's
+        # height: the header and the row that files the message take
+        # their share first, and in a preview beside the table on a small
+        # window that is most of it.
+        room = self.splitter.height() or self.height()
+        tall = room >= self.MIN_STACK
         if across and width < self.ONE_COLUMN and tall:
             self._stack(Qt.Orientation.Vertical, (0, self.GUTTER, 0, 0),
                         (0, 0, 0, 0))
@@ -912,6 +923,12 @@ class PreviewPane(QWidget):
                 else self.splitter.height())
         if span > 1:
             self.splitter.setSizes([int(span * 0.55), int(span * 0.45)])
+
+    def _header_lines(self, lines: int) -> int:
+        """How tall that many lines of the header are, in this theme."""
+        metrics = QFontMetrics(self.header.font())
+        # 150 per cent, which is what the markup asks for.
+        return int(metrics.lineSpacing() * 1.5 * lines) + 6
 
     def set_backend_label(self, label: str) -> None:
         """Name the backend that produced the reasoning shown on the right."""
@@ -963,13 +980,25 @@ class PreviewPane(QWidget):
             self.sort_these_button.setVisible(item.left_because_not_job)
 
         badge = _disposition_badge(item)
+        # A shorter date than "Monday 20 September 2026", because this
+        # label wraps and every line it gains comes off the two halves
+        # under it. In a preview beside the table on an 800px window it
+        # was four and five lines deep - 113 px of a pane that has 310 -
+        # and left them too short for the controls in them.
         self.header.setText(
             f"<div style='line-height:150%'>"
             f"<b>{_html(message.subject_display)}</b><br>"
             f"<span style='opacity:0.85'>{_html(message.sender_display)}</span> · "
-            f"{_html(message.date_display('%A %d %B %Y, %H:%M'))}<br>"
+            f"{_html(message.date_display('%a %d %b %Y, %H:%M'))}<br>"
             f"{badge}</div>"
         )
+        # Three lines is what it is written to be; past that it is a long
+        # subject wrapping, and the whole of it is in the table row above
+        # and in the tooltip.
+        self.header.setToolTip(
+            f"{message.subject_display}\n{message.sender_display}\n"
+            f"{message.date_display('%A %d %B %Y, %H:%M')}")
+        self.header.setMaximumHeight(self._header_lines(3))
 
         self._updating = True
         self.folder_combo.setEnabled(not item.moved)

@@ -198,7 +198,17 @@ class MainWindow(QMainWindow):
         self._prompt_engine_key: Optional[tuple] = None
 
         self.setWindowTitle(APP_DISPLAY_NAME)
-        self.setMinimumSize(760, 520)
+        # 580 tall rather than 520.
+        #
+        # What the window has to hold between the toolbars and the status
+        # bar is a table and a preview, and the preview has a floor of its
+        # own: a header, a row that files the message, and two halves with
+        # a row of controls and a couple of lines of text in each. At 560
+        # the three of them came to 319 px of a 310 px splitter and the
+        # preview drew nine pixels past the bottom of it. A window that
+        # cannot draw what is in it is not a smaller window, it is a
+        # broken one.
+        self.setMinimumSize(760, 580)
 
         self._build_ui()
         self._build_menus()
@@ -264,6 +274,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._build_filter_bar())
 
         self.table = QTableView()
+        # Room for a row or two, not for Qt's own idea of a table. The
+        # splitter has to fit this and the preview between them, and on
+        # an 800x560 window it has about 310 px: the preview needs 215 of
+        # those to hold what is in it, and the table's own minimum of 76
+        # left the two of them 8 px over.
+        self.table.setMinimumHeight(40)
         self.table.setModel(self.proxy)
         self.table.setSortingEnabled(True)
         self.table.setAlternatingRowColors(True)
@@ -3230,12 +3246,14 @@ class MainWindow(QMainWindow):
         self.status_label.setToolTip(message)
 
     def resizeEvent(self, event) -> None:  # noqa: N802
-        # Both of these re-fit text to the new width. They were once two
-        # separate resizeEvents, which meant only the second one ran.
+        # All three re-fit something to the new width. The first two were
+        # once two separate resizeEvents, which meant only the second ran.
         super().resizeEvent(event)
         self._fit_window_label()
         if getattr(self, "_status_text", None):
             self._set_status(self._status_text)
+        if hasattr(self, "splitter"):
+            self._apply_preview_position(self.settings.preview_position)
 
     def _toggle_log(self, visible: bool) -> None:
         self.log_view.setVisible(visible)
@@ -3243,6 +3261,16 @@ class MainWindow(QMainWindow):
             sizes = self.outer_splitter.sizes()
             if sizes[-1] < 60:
                 self.outer_splitter.setSizes([max(240, sizes[0] - 140), 140])
+
+    #: How wide the window has to be before the preview will sit beside
+    #: the table.
+    #:
+    #: Beside is right on a wide screen and impossible on a narrow one: at
+    #: 800 px the preview gets about 306 of them, which is not enough for a
+    #: folder path and a button on one line, and the pane is too short to
+    #: give them two. The setting is kept either way - widen the window and
+    #: the preview goes back where it was asked to be.
+    BESIDE_NEEDS = 1100
 
     def _apply_preview_position(self, position: str) -> None:
         """Put the preview under the table or beside it.
@@ -3252,7 +3280,7 @@ class MainWindow(QMainWindow):
         where the table has more width than it can use and the preview would
         otherwise be reading a paragraph across sixteen hundred pixels.
         """
-        beside = position == "right"
+        beside = position == "right" and self.width() >= self.BESIDE_NEEDS
         self.splitter.setOrientation(
             Qt.Orientation.Horizontal if beside else Qt.Orientation.Vertical)
         span = self.splitter.width() if beside else self.splitter.height()
@@ -3262,6 +3290,9 @@ class MainWindow(QMainWindow):
                 [int(span * (1 - share)), int(span * share)])
         if hasattr(self, "preview_actions"):
             for value, action in self.preview_actions.items():
+                # The choice, not where it ended up: a narrow window puts
+                # the preview below whatever was asked for, and the menu
+                # should still show what was asked for.
                 action.setChecked(value == position)
 
     @Slot(str)

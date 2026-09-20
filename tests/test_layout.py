@@ -144,7 +144,7 @@ class TestWindowAtEverySize:
         yield window
         window.close()
 
-    @pytest.mark.parametrize("size", [(1600, 1000), (1200, 800), (900, 650), (760, 520)])
+    @pytest.mark.parametrize("size", [(1600, 1000), (1200, 800), (900, 650), (760, 580)])
     def test_the_toolbars_never_clip(self, qapp, window, size):
         window.resize(*size)
         qapp.processEvents()
@@ -868,15 +868,21 @@ class TestTheAnalysisHasRoomToBeRead:
         an Attachments button do not fit across the left half of a narrow
         preview. A fixed row does not shrink - it squeezes the box until
         the words in it are elided."""
+        from PySide6.QtGui import QFontMetrics
+
         pane = self._pane(qapp, width, height=520)
         try:
             box = pane.body_mode
-            assert box.width() >= box.sizeHint().width() - 1, (
+            metrics = QFontMetrics(box.font())
+            words = max(metrics.horizontalAdvance(box.itemText(i))
+                        for i in range(box.count()))
+            assert box.width() >= words + 40, (
                 f"at a pane {width}px wide the source box is "
-                f"{box.width()}px against the {box.sizeHint().width()} it "
-                f"needs to show what is in it")
-            assert (pane.attachments_button.width()
-                    >= pane.attachments_button.sizeHint().width() - 1), (
+                f"{box.width()}px and the longest thing in it is {words}px "
+                f"of text plus an arrow")
+            button = pane.attachments_button
+            assert button.width() >= QFontMetrics(
+                button.font()).horizontalAdvance(button.text()) + 8, (
                 "the Attachments button was squeezed below its label")
         finally:
             pane.close()

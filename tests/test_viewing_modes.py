@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (QAbstractScrollArea, QApplication,  # noqa: E402
                                QWidget)
 
 import attachment_audio  # noqa: E402
+import theme  # noqa: E402
 from config import InMemoryCredentialStore, Settings  # noqa: E402
 from gui import MainWindow  # noqa: E402
 
@@ -45,8 +46,25 @@ def qapp():
 
 
 @pytest.fixture
-def window(qapp, tmp_path, monkeypatch):
+def dressed(qapp):
+    """A known appearance, and the default one back afterwards.
+
+    How tall a row of controls is depends on the theme in force, and
+    every test file in this process shares one application: run after
+    something that left a different density applied, the same window lays
+    out differently and a sweep of it passes or fails by what ran before
+    it. So it is set here, and put back.
+    """
+    def dress(spacing="comfortable"):
+        theme.apply(qapp, "dark", "normal", False, spacing=spacing)
+    yield dress
+    theme.apply(qapp, "system", "normal", False, spacing="comfortable")
+
+
+@pytest.fixture
+def window(qapp, tmp_path, monkeypatch, dressed):
     monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+    dressed()
     made = MainWindow(Settings(icloud_email="a@b.com"),
                       InMemoryCredentialStore())
     made.model.set_items([make_item(str(i)) for i in range(8)])
@@ -117,11 +135,17 @@ def faults(widget) -> list:
 class TestTheMainWindow:
     """Both places the preview can sit, at every size the window can be."""
 
-    SIZES = ((1600, 1000), (1280, 820), (1024, 700), (900, 650), (800, 560))
+    #: The last of these is the smallest window the app allows. See
+    #: MainWindow.setMinimumSize: below it there is not room to draw what
+    #: is in the window, which is not a smaller window but a broken one.
+    SIZES = ((1600, 1000), (1280, 820), (1024, 700), (900, 650), (800, 580))
 
     @pytest.mark.parametrize("size", SIZES)
     @pytest.mark.parametrize("place", ["below", "right"])
-    def test_everything_has_room(self, qapp, window, size, place):
+    @pytest.mark.parametrize("spacing", ["comfortable", "compact", "dense"])
+    def test_everything_has_room(self, qapp, window, dressed, size, place,
+                                 spacing):
+        dressed(spacing)
         window.resize(*size)
         window.set_preview_position(place)
         window.table.selectRow(0)
@@ -137,19 +161,33 @@ class TestTheMainWindow:
         was sent" and an Attachments button need 385px and the half they
         sit in is 306, so the row has to wrap - squeezed onto one line the
         box elides what is in it."""
-        window.resize(800, 560)
+        window.resize(800, 580)
         window.set_preview_position("right")
         window.table.selectRow(0)
         qapp.processEvents()
-        preview = window.preview
-        for control in (preview.body_mode, preview.attachments_button,
-                        preview.folder_combo, preview.reset_button):
-            assert control.width() >= control.sizeHint().width() - 1, (
-                f"{control.__class__.__name__} is {control.width()}px "
-                f"against the {control.sizeHint().width()} it needs to show "
-                f"what is on it")
+        from PySide6.QtGui import QFontMetrics
 
-    @pytest.mark.parametrize("size", [(1600, 1000), (800, 560)])
+        preview = window.preview
+        # Against the words rather than against sizeHint. A hint is the
+        # size a control would like, padding and all, and the roomiest of
+        # the three densities pads a box by more than a hundred pixels -
+        # losing some of that is not losing any of the text.
+        for control in (preview.body_mode, preview.folder_combo):
+            metrics = QFontMetrics(control.font())
+            words = max(metrics.horizontalAdvance(control.itemText(i))
+                        for i in range(control.count()) or [0]) if \
+                control.count() else 0
+            assert control.width() >= words + 40, (
+                f"the box is {control.width()}px and the longest thing in "
+                f"it is {words}px of text plus an arrow")
+        for control in (preview.attachments_button, preview.reset_button):
+            metrics = QFontMetrics(control.font())
+            words = metrics.horizontalAdvance(control.text())
+            assert control.width() >= words + 8, (
+                f"{control.text()!r} is on a button {control.width()}px "
+                f"wide and the words alone are {words}px")
+
+    @pytest.mark.parametrize("size", [(1600, 1000), (800, 580)])
     def test_the_preview_can_be_shut_and_opened(self, qapp, window, size):
         window.resize(*size)
         qapp.processEvents()

@@ -654,7 +654,7 @@ made every other drag feel wrong), only **Summary** takes the slack, and
 
 The toolbars use a wrapping layout rather than a horizontal box, so buttons move
 onto a second row instead of being squeezed past their labels or pushed off the
-edge. The window goes down to 760×520 with every control still reachable, and
+edge. The window goes down to 760×580 with every control still reachable, and
 there is a test asserting no widget overlaps another or extends past the edge at
 six different widths.
 
@@ -674,7 +674,8 @@ The row that files a message uses the same wrapping layout as the toolbars,
 because "File into:", a folder path and a button need 471 px and the pane
 can be given 420.
 
-Stacking is the answer to a pane that is *narrow*, and it costs height:
+The height matters too. Stacking is the answer to a pane that is
+*narrow*, and it costs height:
 two rows of controls and two pieces of text, one above the other. Under
 the table on an 800x560 window the pane is wide and short - 780 px across
 and about 190 tall - and stacking it there gave the half holding the
@@ -682,14 +683,26 @@ message 38 px, which is not enough for the row of controls above the text
 let alone the text, so everything in it drew outside itself. So it stacks
 only when it is both narrow and tall enough to stack in.
 
+Beside the table needs a window wide enough for it. At 800 px the preview
+gets about 306, which is not enough for a folder path and a button on one
+line and too short to give them two, so below 1100 the preview goes under
+the table whatever the setting says. The setting is kept: widen the window
+and it goes back where it was asked to be.
+
 Every mode the window can be in is swept by `test_viewing_modes.py`, which
 walks every visible widget and asks two things of each: is it inside the
 thing that holds it, and is it at least as big as it says it needs to be.
-The main window at five sizes with the preview under the table and beside
-it, the attachment viewer at three sizes with each of the scenes that
-carry extra controls, the full-screen view, and the dialogs. That is what
-found the 38 px half, and a caption and a box in the preview that needed
-328 px of a 306 px column.
+The main window at five sizes, both preview positions and all three
+densities, the attachment viewer at three sizes with each of the scenes
+that carry extra controls, the full-screen view, and the dialogs. The
+theme is pinned while it runs, because how tall a row of controls is
+depends on it, and every test file in a process shares one application -
+left to whatever ran before it, the same window laid out differently and
+the sweep passed or failed by luck.
+
+That sweep found the 38 px half, a box in the preview that asked for 237
+px of a 306 px column, a header four and five lines deep, and a window
+that would let itself be made 9 px shorter than it could draw.
 
 ---
 
@@ -930,7 +943,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,665 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,686 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1291,7 +1304,7 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 3,665 tests, about three minutes
+./dev test        # 3,686 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```
