@@ -11191,3 +11191,229 @@ class TestMonoScoring:
             seen["obstacle"].saturationF() + 0.3, (
             f"the obstacle draws {seen['obstacle'].saturationF():.2f} "
             f"saturated and the prize {seen['prize'].saturationF():.2f}")
+
+
+class TestThePuzzleGrid:
+    """Audiosurf's matrix, and the half of the game the road is the other
+    half of.
+
+    A collected block is worth nothing on its own: it drops into a grid
+    three columns wide and six deep, and three or more of a colour
+    touching each other clear it and pay. Cluster values are quadratic in
+    the size, so one run of six is worth twice two runs of three - which
+    is what makes the fuse window worth playing for rather than clearing
+    on sight.
+    """
+
+    @staticmethod
+    def _grid(cells=None):
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene.set_mode("Puzzle")
+        if cells is not None:
+            scene._cells = [list(pile) for pile in cells]
+        return scene
+
+    # -- what counts as a match --------------------------------------------
+    def test_three_of_a_colour_in_a_row_is_a_cluster(self, qapp):
+        scene = self._grid([[1], [1], [1]])
+        found = scene._clusters()
+        assert len(found) == 1, f"found {found}"
+        colour, group = found[0]
+        assert colour == 1 and len(group) == 3
+
+    def test_two_of_a_colour_is_not(self, qapp):
+        scene = self._grid([[1], [1], [2]])
+        assert scene._clusters() == []
+
+    def test_corner_to_corner_does_not_join(self, qapp):
+        """"Blocks must share flat edges. Xxxxxxxx xxxxxxx xxxx xxx xxxx
+        x xxxxx." """
+        # A staircase: (0,0), (1,1), (2,2) all the same colour, each
+        # touching the next only at a corner. The filler under them is
+        # two different colours, or the filler itself would match.
+        scene = self._grid([[1], [2, 1], [3, 0, 1]])
+        assert scene._clusters() == [], (
+            f"a diagonal staircase matched: {scene._clusters()}")
+
+    def test_a_column_of_three_is_a_cluster(self, qapp):
+        scene = self._grid([[4, 4, 4], [], []])
+        assert len(scene._clusters()) == 1
+
+    # -- the fuse ----------------------------------------------------------
+    def test_a_match_lights_a_fuse_rather_than_clearing(self, qapp):
+        import visualizers
+
+        scene = self._grid()
+        for column in range(3):
+            scene._drop(2, column)
+        assert scene._fuse == pytest.approx(visualizers.Rider.FUSE)
+        assert scene._score == 0, "it paid before the fuse ran out"
+        assert all(scene._cells), "it cleared before the fuse ran out"
+
+    def test_growing_the_cluster_gives_the_window_back(self, qapp):
+        """"Xx xxx xxxxxx xxxxxxxx xxxxxxx xxxxxxxx block xxxxxx xxxx
+        xxxxxx, xx xxxxxx xxxx xxx xxxxxxx xxx xxxxxx xxx timer." """
+        import visualizers
+
+        scene = self._grid()
+        for column in range(3):
+            scene._drop(3, column)
+        scene._burn(0.5)
+        assert scene._fuse < visualizers.Rider.FUSE * 0.5
+        scene._drop(3, 0)
+        assert scene._fuse == pytest.approx(visualizers.Rider.FUSE), (
+            f"the fuse is at {scene._fuse:.2f} after the cluster grew")
+
+    def test_a_block_that_does_not_join_leaves_the_fuse_alone(self, qapp):
+        scene = self._grid()
+        for column in range(3):
+            scene._drop(3, column)
+        scene._burn(0.4)
+        was = scene._fuse
+        scene._drop(0, 1)        # a different colour, on top
+        assert scene._fuse == pytest.approx(was), (
+            "an unrelated block restarted the fuse")
+
+    def test_the_fuse_clears_and_pays(self, qapp):
+        scene = self._grid()
+        for column in range(3):
+            scene._drop(2, column)
+        scene._burn(1.0)
+        assert scene._cells == [[], [], []], f"left {scene._cells}"
+        assert scene._cleared == 3
+        # Green is worth 30, and three of them together 30 * 3 * 3.
+        assert scene._score == 270, f"three greens paid {scene._score}"
+
+    def test_one_big_cluster_beats_two_small_ones(self, qapp):
+        """"Xxxxxxxx xxx xxxxxx xxxxxxx xx 0 xxxxxxxxx xxxxxx xxxxxx
+        xxxxxxxxxxxxx xxxx xxxxxx xxxx xxxxxxxx xxx xxxxxxxx 0-xxxxx
+        xxxxxxxxx xx xxx xxxx colour." """
+        big = self._grid([[1, 1], [1, 1], [1, 1]])
+        big._burn(0.0)
+        big._fuse_up()
+        big._burn(visualizers_fuse() + 0.1)
+        small = 0
+        for _ in range(2):
+            one = self._grid([[1], [1], [1]])
+            one._fuse_up()
+            one._burn(visualizers_fuse() + 0.1)
+            small += one._score
+        assert big._score > small * 1.5, (
+            f"one cluster of six paid {big._score} and two of three "
+            f"{small} between them")
+
+    # -- gravity -----------------------------------------------------------
+    def test_what_is_left_falls(self, qapp):
+        """"Xxx xxxxxx xxxxxxxx xxxxx xxxx xxxx xxxx xxxxxxxxxx." """
+        scene = self._grid([[2, 4], [2], [2]])
+        scene._fuse_up()
+        scene._burn(visualizers_fuse() + 0.1)
+        assert scene._cells == [[4], [], []], (
+            f"the block above the cluster ended up at {scene._cells}")
+
+    def test_a_fall_that_matches_clears_again(self, qapp):
+        """Cascades: the block that falls can land on its own colour.
+
+        A column of three greens with a yellow on top, and a yellow
+        either side of it on the floor. The yellows are not touching
+        until the greens go.
+        """
+        scene = self._grid([[2, 2, 2, 4], [4], [4]])
+        assert scene._clusters() == [(2, [(0, 0), (0, 1), (0, 2)])], (
+            f"the yellows matched before the greens went: "
+            f"{scene._clusters()}")
+        scene._fuse_up()
+        scene._burn(visualizers_fuse() + 0.1)
+        assert scene._cells == [[4], [4], [4]], (
+            f"the yellow did not fall: {scene._cells}")
+        assert scene._fuse > 0.0, "the cascade did not light a fuse"
+        scene._burn(visualizers_fuse() + 0.1)
+        assert scene._cells == [[], [], []]
+        assert scene._cleared == 6
+
+    # -- overfill ----------------------------------------------------------
+    def test_an_eighth_block_locks_the_grid(self, qapp):
+        """"Xx xxx xxxxxx xxxxxxxx xx 0xx xxxxx, xxx xxxx xxxxx
+        xxxxxxxxxx." Six deep here, so the seventh is the one that does
+        it."""
+        import visualizers
+
+        scene = self._grid()
+        for step in range(visualizers.Rider.CELLS_DEEP):
+            scene._drop(step % 2, 0)
+        assert scene._stunned == 0.0
+        deep = list(scene._cells[0])
+        scene._drop(0, 0)
+        assert scene._stunned == pytest.approx(visualizers.Rider.STUN)
+        assert scene._cells[0] == deep, (
+            "the block that overfilled the column went in anyway")
+
+    def test_the_lock_breaks_the_chain_and_wears_off(self, qapp):
+        import visualizers
+
+        scene = self._grid()
+        scene._chain = 9
+        scene._streak = 5
+        for step in range(visualizers.Rider.CELLS_DEEP + 1):
+            scene._drop(step % 2, 0)
+        assert scene._chain == 0 and scene._streak == 0
+        scene._burn(visualizers.Rider.STUN + 0.1)
+        assert scene._stunned == 0.0
+
+    def test_nothing_is_collected_while_it_is_locked(self, qapp):
+        scene = self._grid()
+        scene._stunned = 2.0
+        scene._lane = 1
+        scene._lane_here = scene._lane_at(1)
+        scene._heard = 100.0
+        scene._blocks = [[10.0, 1, "block", False, False]]
+        scene._collide()
+        assert scene._cells == [[], [], []], (
+            "a block was collected while the grid was locked")
+
+    # -- the two games -----------------------------------------------------
+    def test_the_grid_is_only_used_in_puzzle(self, qapp):
+        import visualizers
+
+        scene = visualizers.Rider()
+        assert scene.mode == "Mono"
+        scene._lane = 1
+        scene._lane_here = scene._lane_at(1)
+        scene._heard = 100.0
+        scene._blocks = [[10.0, 1, "block", False, False]]
+        scene._collide()
+        assert scene._cells == [[], [], []]
+        assert scene._score == 1, "Mono should pay the chain"
+
+    def test_changing_game_starts_it_fresh(self, qapp):
+        scene = self._grid()
+        scene._score = 500
+        scene._drop(1, 0)
+        scene.set_mode("Mono")
+        assert scene.mode == "Mono"
+        assert scene.report()["score"] == 0
+        assert scene.report()["cells"] == [[], [], []]
+
+    def test_the_colour_comes_from_the_passage(self, qapp):
+        """"Base point values scale xxxxxxxxx xx xxx xxxxxxxxx xxxxxxxxx
+        xxxx xx xxx xxxx xxxxxxx." """
+        import visualizers
+
+        scene = self._grid()
+        scene._energy = tuple([0.02] * 20 + [0.98] * 20)
+        scene._every = 1.0
+        quiet = scene._tier_of(5.0)
+        loud = scene._tier_of(30.0)
+        assert visualizers.Rider.WORTH[loud] > \
+            visualizers.Rider.WORTH[quiet] * 3, (
+            f"a block from a quiet passage is worth "
+            f"{visualizers.Rider.WORTH[quiet]} and one from a loud one "
+            f"{visualizers.Rider.WORTH[loud]}")
+
+
+def visualizers_fuse():
+    import visualizers
+
+    return visualizers.Rider.FUSE

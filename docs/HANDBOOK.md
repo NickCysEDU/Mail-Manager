@@ -864,6 +864,22 @@ on the beats you can hear coming. Tying them to the kick alone was tried
 and gives a road of nothing but obstacles: on four to the floor the kick
 wins every slot.
 
+**Puzzle** is the other game on the same road, chosen with the **game**
+box beside the scene. There a colour is worth nothing on its own: it
+drops into a grid three columns wide and six deep, and three or more of a
+colour touching - edge to edge, never corner to corner - light a fuse.
+Three quarters of a second later they clear and pay, and any block that
+was sitting on them falls, which can match again. Another block of the
+same colour joining the cluster before the fuse runs out gives you the
+whole window back, and that is the skill of it: cluster values are
+quadratic in the size, so one run of six is worth twice two runs of
+three.
+
+What a colour is worth comes from the passage that produced it - ten for
+purple up to eighty for red - so a block collected in a chorus is worth
+eight of one from an outro. Overfill a column and the grid locks for
+three seconds, flashing, collecting nothing, with the chain gone.
+
 **The road is the song.** Audiosurf does not invent its track: it reads
 the file once before anything is drawn, and the amplitude becomes the
 incline while the balance between the channels becomes the curve. The
@@ -1011,7 +1027,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,730 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,747 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1372,7 +1388,7 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 3,730 tests, about three minutes
+./dev test        # 3,747 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

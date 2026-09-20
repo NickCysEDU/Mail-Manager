@@ -474,6 +474,22 @@ class AudioPane(QWidget):
             "scope draws its picture in.")
         self.mode_box.currentTextChanged.connect(self.spectrum.set_scope_mode)
         self.mode_box.hide()
+
+        # And the rider's two games, which share a road and score
+        # nothing alike. Its own box rather than the scope's, because the
+        # two lists have nothing to do with each other and a combo that
+        # is refilled when the scene changes loses what was chosen.
+        self.game_box = _combo(
+            list(_vis.by_name("Music rider").MODES),
+            "Which game to play on the road.\n\n"
+            "Mono: colours are points on a chain and greys are hazards. "
+            "A chain breaks when you take a grey.\n\n"
+            "Puzzle: a colour is worth nothing until three of them touch "
+            "in the grid, and the grid is three columns deep by six.")
+        self.game_box.currentTextChanged.connect(self.spectrum.set_scope_mode)
+        self.game_box.hide()
+        self.game_box_holder = _labelled("game", self.game_box)
+        self.game_box_holder.hide()
         # The tick box and the two sliders that shape it, as one block: on
         # their own the sliders said "Sensitivity" and "Rate" with nothing
         # to say what of.
@@ -522,8 +538,8 @@ class AudioPane(QWidget):
         self.visual_row = FlowRow(spacing=16)
         # Grouped: what to draw, how it reacts, then what to do with it.
         groups = ((self.enable_box, self.busy, self.scene_box, self.shape_box,
-                   self.colour_button, self.mode_box, self.decay_box,
-                   self.full_button),
+                   self.colour_button, self.mode_box, self.game_box_holder,
+                   self.decay_box, self.full_button),
                   (self.strobe_group,))
         for index, group in enumerate(groups):
             if index:
@@ -537,8 +553,8 @@ class AudioPane(QWidget):
         _match_text(self.visual_holder)
         self._visual_controls = (self.scene_box, self.shape_box,
                                  self.strobe_group, self.decay_box,
-                                 self.mode_box, self.full_button,
-                                 self.colour_button)
+                                 self.mode_box, self.game_box_holder,
+                                 self.full_button, self.colour_button)
         # Everything except the tick box starts unavailable, because the
         # visualiser starts off.
         self._grey_visual_controls(False)
@@ -838,6 +854,8 @@ class AudioPane(QWidget):
                 widget.setVisible(on and scene == "VU meters")
             elif widget in (self.decay_box, self.mode_box):
                 widget.setVisible(on and scene == "Oscilloscope")
+            elif widget is self.game_box_holder:
+                widget.setVisible(on and scene == "Music rider")
             else:
                 widget.setVisible(on)
 

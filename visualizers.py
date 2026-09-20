@@ -3812,6 +3812,13 @@ class Rider(Scene):
     """
 
     name = "Music rider"
+    #: The two games Audiosurf plays on the same road.
+    #:
+    #: Mono is the road: colours are points on a chain and greys are
+    #: hazards, and the grid is only somewhere for them to go. Puzzle is
+    #: the grid: a colour is worth nothing until three of them touch, and
+    #: what the road hands you is a supply problem.
+    MODES = ("Mono", "Puzzle")
     blurb = "a game: three lanes, and the track is the song"
 
     # -- the road ---------------------------------------------------------
@@ -4124,6 +4131,15 @@ class Rider(Scene):
         self._got = 0.0
         #: Whether a grey has been touched yet. See CLEAN_BONUS.
         self._clean = True
+        #: Audiosurf's matrix, a list of colours per column from the
+        #: bottom up. See CELLS_WIDE.
+        self._cells = [[] for _ in range(self.CELLS_WIDE)]
+        self._fuse = 0.0
+        self._fused = 0
+        self._stunned = 0.0
+        self._cleared = 0
+        #: Mono or Puzzle. See MODES.
+        self._mode = self.MODES[0]
         self._score = 0
         self._streak = 0
         self._best = 0
@@ -4199,11 +4215,29 @@ class Rider(Scene):
         self._lane = max(0, min(self.LANES - 1, self._lane + int(way)))
         return self._lane != was
 
+    @property
+    def mode(self) -> str:
+        return self._mode
+
+    def set_mode(self, mode: str) -> None:
+        """Change game, and start the new one fresh.
+
+        The two do not share a score, a grid or a chain, so carrying any
+        of it across would be carrying a number that meant something
+        else. ``reset`` rebuilds this from a new one of itself, which
+        would put the mode back as well - so it is set again afterwards.
+        """
+        if mode in self.MODES and mode != self._mode:
+            self.reset()
+            self._mode = mode
+
     def report(self) -> dict:
         return {"score": self._score, "streak": self._streak,
                 "best": self._best, "hits": self._hits,
                 "chain": self._chain, "clean": self._clean,
-                "worth": self._worth()}
+                "worth": self._worth(), "cleared": self._cleared,
+                "stunned": self._stunned > 0.0,
+                "cells": [list(pile) for pile in self._cells]}
 
     # -- the chart --------------------------------------------------------
     #: Which drum makes which shape, and the order they win a slot in.
@@ -4765,6 +4799,7 @@ class Rider(Scene):
         self._sore = max(0.0, self._sore - step)
         self._hurt = max(0.0, self._hurt - step / self.HURT_FOR)
         self._got = max(0.0, self._got - step / 0.35)
+        self._burn(step)
         return step
 
     def _surge(self) -> float:
@@ -4815,13 +4850,154 @@ class Rider(Scene):
                 self._streak += 1
                 self._best = max(self._best, self._streak)
             elif on_it:
-                # A prize. See CHAIN_FIRST.
-                self._chain += 1
-                self._score += min(
-                    self.CHAIN_MOST,
-                    self.CHAIN_FIRST + (self._chain - 1) * self.CHAIN_STEP)
-                self._got = 1.0
-                self._burst(self._lane_at(lane), prize=True)
+                if self._mode == "Puzzle":
+                    # Worth nothing on its own: it goes in the grid, and
+                    # three of a colour touching is what pays.
+                    if self._stunned <= 0.0:
+                        self._drop(self._tier_of(when), lane)
+                        self._got = 1.0
+                        self._burst(self._lane_at(lane), prize=True)
+                else:
+                    # A prize. See CHAIN_FIRST.
+                    self._chain += 1
+                    self._score += min(
+                        self.CHAIN_MOST,
+                        self.CHAIN_FIRST
+                        + (self._chain - 1) * self.CHAIN_STEP)
+                    self._got = 1.0
+                    self._burst(self._lane_at(lane), prize=True)
+
+    # -- the grid ---------------------------------------------------------
+    #: Audiosurf's matrix, and the half of the game the road is the other
+    #: half of. Blocks you collect do not score on their own: they drop
+    #: into a grid of three columns, and three or more of a colour
+    #: touching each other clear it and pay.
+    #:
+    #: Three wide because there are three lanes, and six deep for Casual
+    #: and Pro - Elite gets seven, which is not a difficulty this has.
+    CELLS_WIDE = 3
+    CELLS_DEEP = 6
+
+    #: What a colour is worth, by the tier of the passage that produced
+    #: it: purple, blue, green, yellow, red. A block from a chorus is
+    #: worth eight of one from an outro.
+    WORTH = (10, 20, 30, 50, 80)
+
+    #: How long a cluster sits before it goes, and what joining it does.
+    #:
+    #: Three quarters of a second, reset every time another block of the
+    #: same colour touches it. That window is the whole skill of the
+    #: game: it is what turns three blocks into nine.
+    FUSE = 0.75
+
+    #: What an overfilled column costs. The grid locks for three seconds,
+    #: nothing can be collected, and the chain goes.
+    STUN = 3.0
+
+    def _drop(self, colour: int, column: int) -> None:
+        """Put a collected block into the grid, and see what it does."""
+        column = max(0, min(self.CELLS_WIDE - 1, column))
+        pile = self._cells[column]
+        if len(pile) >= self.CELLS_DEEP:
+            # An eighth block in a column of seven. The grid locks.
+            self._stunned = self.STUN
+            self._chain = 0
+            self._streak = 0
+            self._shake = min(1.0, self._shake + 0.6)
+            self._hurt = max(self._hurt, 0.7)
+            return
+        pile.append(colour)
+        self._fuse_up()
+
+    def _clusters(self) -> list:
+        """Every run of three or more of one colour that touch.
+
+        A flood fill over the cells, four-connected: blocks joined corner
+        to corner are not joined at all, which is the rule that makes the
+        grid a puzzle rather than a soup.
+        """
+        seen = set()
+        found = []
+        for column in range(self.CELLS_WIDE):
+            for row in range(len(self._cells[column])):
+                if (column, row) in seen:
+                    continue
+                colour = self._cells[column][row]
+                group = []
+                edge = [(column, row)]
+                seen.add((column, row))
+                while edge:
+                    at = edge.pop()
+                    group.append(at)
+                    for step in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                        near = (at[0] + step[0], at[1] + step[1])
+                        if near in seen:
+                            continue
+                        if not 0 <= near[0] < self.CELLS_WIDE:
+                            continue
+                        pile = self._cells[near[0]]
+                        if not 0 <= near[1] < len(pile):
+                            continue
+                        if pile[near[1]] != colour:
+                            continue
+                        seen.add(near)
+                        edge.append(near)
+                if len(group) >= 3:
+                    found.append((colour, group))
+        return found
+
+    def _fuse_up(self) -> None:
+        """Start or restart the fuse if anything is matched.
+
+        Restarted rather than left running, which is what lets a cluster
+        be grown: another block of the same colour landing against it
+        gives you the whole window again.
+        """
+        found = self._clusters()
+        if not found:
+            self._fuse = 0.0
+            self._fused = 0
+            return
+        size = sum(len(group) for _colour, group in found)
+        if size != self._fused:
+            self._fuse = self.FUSE
+            self._fused = size
+
+    def _burn(self, step: float) -> None:
+        """Run the fuse down, and clear what it was holding."""
+        if self._stunned > 0.0:
+            self._stunned = max(0.0, self._stunned - step)
+            return
+        if self._fuse <= 0.0:
+            return
+        self._fuse -= step
+        if self._fuse > 0.0:
+            return
+        self._fuse = 0.0
+        self._fused = 0
+        going = self._clusters()
+        if not going:
+            return
+        for colour, group in going:
+            # Quadratic in the size, so one cluster of six is worth
+            # twice two of three - which is what makes the fuse window
+            # worth playing for rather than clearing on sight.
+            self._score += self.WORTH[colour] * len(group) * len(group)
+            self._cleared += len(group)
+        going_cells = {at for _colour, group in going for at in group}
+        for column in range(self.CELLS_WIDE):
+            self._cells[column] = [
+                colour for row, colour in enumerate(self._cells[column])
+                if (column, row) not in going_cells]
+        # And anything left standing falls, which may match again.
+        self._fuse_up()
+
+    def _tier_of(self, when: float) -> int:
+        """Which colour a block laid at this moment is."""
+        if not self._energy:
+            return len(self.WORTH) // 2
+        energy = max(0.0, min(1.0, self._read(self._energy, when)))
+        return min(len(self.WORTH) - 1, int(energy * len(self.WORTH)))
 
     def _worth(self) -> int:
         """The score as it would be totted up now.
@@ -4968,7 +5144,57 @@ class Rider(Scene):
         self._ship(painter, rect, horizon, focal, hue, flash)
         painter.restore()
         self._wash(painter, rect)
+        if self._mode == "Puzzle":
+            self._matrix(painter, rect)
         self._card(painter, rect, hue)
+
+    #: Where the grid sits and how big it is, as shares of the frame.
+    #: Bottom left, out of the road's way: the road runs up the middle
+    #: and the eye that is reading it is at the top.
+    CELL_AT = (0.035, 0.96)
+    CELL_SIDE = 0.038
+    CELL_GAP = 0.15
+
+    def _matrix(self, painter, rect) -> None:
+        """Audiosurf's grid, in the corner.
+
+        Drawn from the bottom up, because that is the way it fills: a
+        column you can see the top of is a column with room in it, which
+        is the only thing you need to read off this at speed.
+        """
+        side = min(rect.width(), rect.height()) * self.CELL_SIDE
+        step = side * (1.0 + self.CELL_GAP)
+        left = rect.left() + rect.width() * self.CELL_AT[0]
+        floor = rect.top() + rect.height() * self.CELL_AT[1]
+        painter.setPen(Qt.PenStyle.NoPen)
+        # The well first, so an empty column still reads as a column.
+        stunned = self._stunned > 0.0
+        # Flashing while it is locked, which is the one thing here that
+        # has to be noticed rather than read.
+        lit = stunned and int(self._stunned * 12) % 2 == 0
+        well = (QColor(255, 60, 60, 90) if lit
+                else QColor(255, 255, 255, 28 if stunned else 16))
+        painter.setBrush(well)
+        for column in range(self.CELLS_WIDE):
+            for row in range(self.CELLS_DEEP):
+                painter.drawRect(QRectF(
+                    left + column * step,
+                    floor - (row + 1) * step, side, side))
+        for column in range(self.CELLS_WIDE):
+            for row, colour in enumerate(self._cells[column]):
+                # A cluster that is about to go pulses, so the window to
+                # grow it is visible rather than remembered.
+                going = self._fuse > 0.0
+                shade = QColor.fromHsvF(
+                    self.TIERS[min(colour, len(self.TIERS) - 1)],
+                    0.85, 1.0,
+                    0.95 if not going else 0.55 + 0.45
+                    * abs(math.sin(self._fuse * 14.0)))
+                painter.setBrush(shade)
+                painter.drawRect(QRectF(
+                    left + column * step,
+                    floor - (row + 1) * step, side, side))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
 
     def _wash(self, painter, rect) -> None:
         """What a hit does to the whole picture.
@@ -5363,7 +5589,9 @@ class Rider(Scene):
         painter.drawText(
             rect.adjusted(14, 10, -14, 0),
             int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop),
-            f"{self._worth()}   chain {self._chain}"
+            f"{self._worth()}"
+            + (f"   cleared {self._cleared}" if self._mode == "Puzzle"
+               else f"   chain {self._chain}")
             + ("   clean" if self._clean and self._score else "")
             + f"   best {self._best}")
         painter.restore()
