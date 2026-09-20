@@ -3885,6 +3885,21 @@ class Rider(Scene):
     #: 175, which is drum and bass keeping its feet.
     GAP = 0.80
     GAP_BEATS = 2.0
+    #: And how that stretches and tightens with the energy of the
+    #: passage: three beats apart where nothing is happening, one and a
+    #: half where everything is. GAP_BEATS is the middle of it and is
+    #: what the pool of shapes is still indexed by, so the shapes cycle
+    #: the same way however thick the figures come.
+    GAP_LEAST = 1.5
+    GAP_MOST = 3.0
+
+    def _apart(self, when: float) -> float:
+        """How many beats apart the figures are at this point in the
+        track. See GAP_LEAST."""
+        if not self._energy:
+            return self.GAP_BEATS
+        energy = max(0.0, min(1.0, self._read(self._energy, when)))
+        return self.GAP_MOST - (self.GAP_MOST - self.GAP_LEAST) * energy
     #: How far a heavier drum may be from the first candidate and still
     #: take its place, in beats and in seconds when there is no tempo.
     #:
@@ -3976,6 +3991,15 @@ class Rider(Scene):
     #: twelve degrees, and the energy is carried by the rig instead.
     PUSH_REST = 0.45
     PUSH_GAIN = 0.35
+
+    #: How hard the track's own lean bends the road.
+    #:
+    #: The lean is -1 to +1 and it is summed along the road, so a passage
+    #: mixed a third of the way to one side for a second adds about three
+    #: to the sum at eight readings a second. A tenth of that is about
+    #: what the free-running bend used to reach, which is as much as the
+    #: road can turn and still be read.
+    TRACK_BEND = 0.10
     #: How hard the road banks into its own turn.
     #:
     #: 1.2 puts the roll where the old free-running one was at its
@@ -4148,6 +4172,12 @@ class Rider(Scene):
         #: And how far across it is, so the eye rides the road sideways
         #: as well as up. See ``_advance``.
         self._side = 0.0
+        #: The track's shape, and the road made out of it. See ``_shape``.
+        self._shaped = None
+        self._hill = ()
+        self._curve = ()
+        self._energy = ()
+        self._every = 1.0
         #: Where the road starts, a fixed distance in front of the eye.
         #: Kept until the camera has been worked out for the frame.
         self._near = self.NEAR
@@ -4214,12 +4244,16 @@ class Rider(Scene):
                 if low < when <= ahead:
                     due.append((when, order, shape))
         due.sort()
-        gap = self.GAP
-        if self._beat > 0.0:
-            gap = max(gap, self._beat * self.GAP_BEATS)
         index = 0
         while index < len(due):
             when, _order, shape = due[index]
+            # How far apart the figures are here. Audiosurf spawns more
+            # blocks where there is more going on, and the place to ask
+            # is where the figure lands rather than where the playhead
+            # is - a figure is laid three beats before anybody sees it.
+            gap = self.GAP
+            if self._beat > 0.0:
+                gap = max(gap, self._beat * self._apart(when))
             if when - self._placed < gap - self.SLACK:
                 index += 1
                 continue
@@ -4315,6 +4349,89 @@ class Rider(Scene):
                                      "run", False])
 
     # -- the world --------------------------------------------------------
+    #: The colour of the road, by how much is going on in the music.
+    #:
+    #: Audiosurf runs a track from purple at its quietest through blue,
+    #: green and yellow to red at its loudest, and the colour is most of
+    #: how a track reads at a glance: you can see a chorus coming in the
+    #: hue of the road before you can hear it. These are the hues those
+    #: five tiers sit at on the wheel.
+    TIERS = (0.78, 0.60, 0.33, 0.15, 0.00)
+    #: How far the synth may push the colour off its tier. Small: the
+    #: tier is the point, and a synth line that moved it a fifth of the
+    #: way round would make the whole scheme mean nothing.
+    TIER_SYNTH = 0.05
+
+    def _tier(self, energy: float, synth: float) -> float:
+        """The road's colour for this much energy. See TIERS."""
+        place = max(0.0, min(1.0, energy)) * (len(self.TIERS) - 1)
+        low = min(len(self.TIERS) - 2, int(place))
+        share = place - low
+        hue = self.TIERS[low] + (self.TIERS[low + 1] - self.TIERS[low]) * share
+        return (hue + synth * self.TIER_SYNTH) % 1.0
+
+    def _carve(self, state) -> None:
+        """Take the track's shape and make a road out of it.
+
+        Audiosurf does not invent its track: it reads the song once,
+        before anything is drawn, and the amplitude becomes the incline
+        while the balance between the channels becomes the curve. That is
+        what ``attachment_audio.contour`` produces, and this turns it
+        into the two arrays the road is read out of.
+
+        The hill is the amplitude about its own middle, so a chorus runs
+        downhill and a breakdown climbs. The curve is the lean *summed*
+        along the road rather than used directly, because a lean is a
+        direction and a road is where following a direction gets you -
+        used directly it would be a road that kinks, and summed it is a
+        road that turns. What that sum drifts to does not matter: the
+        camera is pinned to the road, so only the bend is ever seen.
+
+        Built once a track, and the road is then the same road every time
+        that track is played.
+        """
+        shape = getattr(state, "contour", None)
+        if shape is self._shaped:
+            return
+        self._shaped = shape
+        loud = (shape or {}).get("loud") or ()
+        lean = (shape or {}).get("lean") or ()
+        self._every = float((shape or {}).get("rate") or 0.0) or 1.0
+        if not loud:
+            self._hill = self._curve = self._energy = ()
+            return
+        # Kept as it came as well as centred, because the colour of the
+        # road and how thickly the figures come are both "how much is
+        # going on here", which is the reading itself.
+        self._energy = tuple(loud)
+        middle = sorted(loud)[len(loud) // 2]
+        self._hill = tuple((value - middle) * 2.0 for value in loud)
+        curve, run = [], 0.0
+        for index in range(len(loud)):
+            run += (lean[index] if index < len(lean) else 0.0)
+            curve.append(run)
+        self._curve = tuple(curve)
+
+    def _read(self, table, when: float) -> float:
+        """One reading of the track's shape, between two of them."""
+        if not table:
+            return 0.0
+        place = when * self._every
+        low = int(math.floor(place))
+        if low < 0:
+            return table[0]
+        if low >= len(table) - 1:
+            return table[-1]
+        share = place - low
+        return table[low] + (table[low + 1] - table[low]) * share
+
+    def _when(self, at: float) -> float:
+        """The moment of the track a point on the road belongs to."""
+        reach = self._at + at - self.RIDER_AT
+        if self._beat > 0.0 and self._origin is not None:
+            return self._origin + reach / self.PER_BEAT * self._beat
+        return reach / self.FREE_RUN
+
     def _road(self, at: float) -> tuple:
         """Where the road is at distance ``at``: across, up, and rolled.
 
@@ -4330,6 +4447,8 @@ class Rider(Scene):
         track: "it's hard to see obstacle patterns in some angles".
         """
         push = self.PUSH_REST + self._loudness * self.PUSH_GAIN
+        if self._curve:
+            return self._from_track(at, push)
         # Behind the rider the road runs straight.
         #
         # It is drawn from 2.4 behind them so that its near edge stays
@@ -4453,6 +4572,26 @@ class Rider(Scene):
         # comes *up*. Qt's positive rotation takes it down.
         tilt = max(-self.TILT, min(self.TILT, -self._banked * self.TILT))
         return horizon, focal, tilt
+
+    def _from_track(self, at: float, push: float) -> tuple:
+        """The road where the track says it goes. See ``_shape``.
+
+        Straight behind the rider for the same reason the free-running
+        one is: that part of the road is magnified two hundred times and
+        nobody can use it.
+        """
+        line = max(at, self.RIDER_AT)
+        when = self._when(line)
+        across = self._read(self._curve, when) * self.TRACK_BEND * push
+        # The turn is what the curve is doing here, which is what the
+        # road banks into. Read over a step of road rather than
+        # differentiated, because the readings are a few a second and the
+        # difference between two of them *is* the slope.
+        on = self._read(self._curve, self._when(line + 1.0))
+        turn = (on * self.TRACK_BEND * push - across)
+        return (across,
+                self._read(self._hill, self._when(at)) * self.CLIMB * push,
+                -turn * self.BANK)
 
     def _eye(self, horizon, focal, lane_x: float, up: float, at: float):
         """A point on the road, on the glass.
@@ -4688,6 +4827,7 @@ class Rider(Scene):
 
     # -- drawing ----------------------------------------------------------
     def paint(self, painter, rect, state) -> None:
+        self._carve(state)
         self._advance(state)
         self._lay(state)
         wanted = self._lane_at(self._lane)
@@ -4711,7 +4851,7 @@ class Rider(Scene):
                            flash=flash)
 
         horizon, focal, tilt = self._camera(rect, surge, bass)
-        hue = (0.58 + state.synth * 0.25 + surge * 0.12) % 1.0
+        hue = self._tier(surge, state.synth)
         # How close the track is to a beat, 1 on it and falling away.
         beat = (1.0 - self._pulse) ** 3 if self._beat > 0.0 else 0.0
 

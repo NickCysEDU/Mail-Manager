@@ -157,7 +157,7 @@ class SpectrumState:
                  "dials", "dial_labels", "dial_colour", "background",
                  "trace", "vector", "calibration", "history",
                  "trace_history", "vector_history", "kit", "tempo",
-                 "beat_at", "at", "chart", "moving")
+                 "beat_at", "at", "chart", "moving", "contour")
 
     def __init__(self) -> None:
         self.levels: List[float] = []
@@ -194,6 +194,9 @@ class SpectrumState:
         #: cannot work from the kit levels, which only say what is
         #: happening now.
         self.chart: dict = {}
+        #: The track's shape from end to end: see attachment_audio's
+        #: ``contour``. None until the analysis has landed.
+        self.contour = None
         #: Whether the track is actually going. A paused player reports
         #: the same position every frame, and a scene that travels needs
         #: to know the difference: without it the rave's corridor crept
@@ -366,6 +369,10 @@ class Spectrum(QWidget):
         #: The kit on its own, for scenes that want to know which is which.
         self._elements: dict = {}
         self._chart_from = None
+        #: The track's shape, built once the frames and the traces are
+        #: both in. See ``set_traces``.
+        self._contour = None
+        self._contour_from = None
         self._moved_at = None
         #: How far through each element's list the playhead has got.
         self._kit_at: dict = {}
@@ -816,6 +823,11 @@ class Spectrum(QWidget):
         """The waveform slices that go with the frames."""
         self._traces = list(shapes or [])
         self._vectors = list(vectors or [])
+        # The shape of the track, for a scene that builds a world out of
+        # it. Worked out here because it needs the traces and the frames
+        # together, and once because it never changes.
+        self._contour = None
+        self._contour_from = None
 
     def set_frames(self, frames: List, rate: int) -> None:
         """The analysis, which lands a moment after playback starts."""
@@ -1347,6 +1359,18 @@ class Spectrum(QWidget):
         state.moving = (self._moved_at is None
                         or abs(self._position - self._moved_at) > 0)
         self._moved_at = self._position
+        # The track's own shape: how loud it is and which way it leans,
+        # a few times a second from end to end. Built once, from the
+        # frames and the traces, the first frame after both have landed.
+        if self._contour_from is not self._frames:
+            import attachment_audio
+
+            self._contour_from = self._frames
+            self._contour = (attachment_audio.contour(
+                self._frames, self._vectors,
+                self._state.calibration)
+                if self._frames else None)
+        state.contour = self._contour
         if self._chart_from is not self._elements:
             # Built once per analysis. The maps arrive a few seconds after
             # the rest, and rebuilding this every frame would walk every

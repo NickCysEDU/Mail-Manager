@@ -849,6 +849,23 @@ that bends and climbs with the track, and obstacles laid out on the drums:
 a kick closes two lanes and leaves one open, a snare drops a single block,
 a run of hats steps across the three. The arrow keys change lane.
 
+**The road is the song.** Audiosurf does not invent its track: it reads
+the file once before anything is drawn, and the amplitude becomes the
+incline while the balance between the channels becomes the curve. The
+same two numbers come out of the analysis this application has already
+done - the amplitude is the envelope the waveform above the transport is
+drawn from, and the lean is read off the oscilloscope's own traces - so
+the pre-pass costs about a millisecond on top of it.
+
+A chorus runs downhill and a breakdown climbs. A mix that sits to the
+left turns the road left; the lean is *summed* along the road rather than
+used directly, because a lean is a direction and a road is where
+following one gets you. The colour runs from purple at the quietest
+through blue, green and yellow to red at the loudest, and the figures
+come thicker where there is more going on - three beats apart in a
+breakdown, one and a half in a chorus. And the same track draws the same
+road every time it is played, which a free-running sine could never do.
+
 **One clock.** The road's position is a function of the beat: a beat is
 one `PER_BEAT` of road, a block laid on beat *n* sits at *n* of them, and
 the road reaches it exactly on beat *n*. That is what puts the dodge on
@@ -979,7 +996,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,711 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,722 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1340,7 +1357,7 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 3,711 tests, about three minutes
+./dev test        # 3,722 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

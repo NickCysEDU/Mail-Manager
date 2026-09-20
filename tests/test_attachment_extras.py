@@ -10788,3 +10788,209 @@ class TestTheWholeScreenFeelsAHit:
             visualizers.time.monotonic = was
         assert scene._hurt == 0.0, (
             f"the screen is still at {scene._hurt:.2f} two seconds later")
+
+
+class TestTheRoadIsBuiltFromTheSong:
+    """The Audiosurf pre-pass: the track is read once, before anything is
+    drawn, and the song becomes the road.
+
+    Amplitude is the incline - a chorus runs downhill and a breakdown
+    climbs - and the balance between the two channels is the curve. The
+    same track then draws the same road every time it is played, which a
+    free-running sine could never do.
+    """
+
+    RATE = 48000
+
+    @classmethod
+    def _song(cls, seconds=24.0, loud_from=8.0, loud_to=16.0,
+              pan_at=12.0):
+        """Quiet, then loud, then quiet; panned left, then right."""
+        import math
+        from array import array
+
+        pcm = array("h")
+        for index in range(int(cls.RATE * seconds)):
+            when = index / cls.RATE
+            loud = 0.95 if loud_from <= when < loud_to else 0.10
+            pan = 0.6 if when >= pan_at else -0.6
+            value = (math.sin(2 * math.pi * 110 * when) * 0.6
+                     + math.sin(2 * math.pi * 440 * when) * 0.4) * loud
+            pcm.append(int(max(-1.0, min(1.0, value * (1 - max(0.0, pan))))
+                           * 30000))
+            pcm.append(int(max(-1.0, min(1.0, value * (1 + min(0.0, pan))))
+                           * 30000))
+        return pcm
+
+    @classmethod
+    def _contour(cls, **kwargs):
+        import attachment_audio
+
+        pcm = cls._song(**kwargs)
+        calibration = {}
+        frames = attachment_audio.analyse(pcm, cls.RATE, 2,
+                                          calibration=calibration)
+        vectors = attachment_audio.vector_traces(pcm, cls.RATE, 2)
+        return attachment_audio.contour(frames, vectors, calibration)
+
+    @staticmethod
+    def _scene(shape, tempo=120.0):
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        scene = visualizers.Rider()
+        scene._last = None
+        state = SpectrumState()
+        state.levels = [0.4] * 27
+        state.tempo = tempo
+        state.chart = {}
+        state.kit = {}
+        state.contour = shape
+        scene._carve(state)
+        scene._beat = 60.0 / tempo
+        scene._origin = 0.0
+        return scene
+
+    @staticmethod
+    def _at(scene, when):
+        """Put the road where it is at that moment of the track."""
+        scene._at = when / scene._beat * scene.PER_BEAT
+        return scene._road(scene.RIDER_AT)
+
+    # -- the contour itself -------------------------------------------------
+    def test_the_contour_hears_how_loud_the_track_is(self):
+        shape = self._contour()
+        loud = shape["loud"]
+        rate = shape["rate"]
+        quiet = loud[int(4 * rate)]
+        chorus = loud[int(12 * rate)]
+        assert chorus > quiet * 3.0, (
+            f"the chorus reads {chorus:.2f} and the quiet part {quiet:.2f}")
+
+    def test_the_contour_hears_which_way_it_leans(self):
+        shape = self._contour()
+        lean = shape["lean"]
+        rate = shape["rate"]
+        assert lean[int(4 * rate)] < -0.2, (
+            f"a mix panned left reads {lean[int(4 * rate)]:+.2f}")
+        assert lean[int(20 * rate)] > 0.2, (
+            f"a mix panned right reads {lean[int(20 * rate)]:+.2f}")
+
+    def test_a_track_with_no_analysis_has_no_contour(self):
+        import attachment_audio
+
+        assert attachment_audio.contour([], None, None) == {
+            "loud": [], "lean": [], "rate": float(
+                attachment_audio.CONTOUR_RATE)}
+
+    # -- and what the road makes of it -------------------------------------
+    def test_a_chorus_runs_downhill(self, qapp):
+        scene = self._scene(self._contour())
+        quiet = self._at(scene, 4.0)[1]
+        chorus = self._at(scene, 12.0)[1]
+        assert chorus > quiet + 0.5, (
+            f"the road is at {quiet:+.2f} in the quiet part and "
+            f"{chorus:+.2f} in the chorus, which is not a hill")
+
+    def test_the_road_turns_the_way_the_mix_leans(self, qapp):
+        scene = self._scene(self._contour())
+        # Where the road has got to by the end of each panned stretch.
+        left = self._at(scene, 10.0)[0]
+        right = self._at(scene, 22.0)[0]
+        assert right > left, (
+            f"the road runs to {left:+.2f} across through the left-panned "
+            f"half and {right:+.2f} through the right-panned one")
+
+    def test_the_same_track_draws_the_same_road(self, qapp):
+        """Which is the whole point of reading it once, and what a
+        free-running sine could never do."""
+        shape = self._contour()
+        first = self._scene(shape)
+        second = self._scene(shape)
+        for when in (2.0, 9.0, 14.0, 21.0):
+            assert self._at(first, when) == self._at(second, when), (
+                f"two rides of the same track differ at {when}s")
+
+    def test_a_track_with_no_contour_still_gets_a_road(self, qapp):
+        """Nothing is analysed for the first few seconds of any track."""
+        scene = self._scene(None)
+        across, up, roll = self._at(scene, 4.0)
+        assert any(abs(value) > 1e-6 for value in (across, up, roll)), (
+            "a road with no contour behind it came out perfectly flat")
+
+    # -- the colour and the crowd ------------------------------------------
+    def test_the_colour_runs_from_purple_to_red(self, qapp):
+        """"Xxxx-xxxxxx xxxxxxxxx xxxxxxx xxxxxx xxx environment to hot
+        colours and low-energy segments to cool ones." """
+        import visualizers
+
+        scene = visualizers.Rider()
+        quiet = scene._tier(0.0, 0.0)
+        loud = scene._tier(1.0, 0.0)
+        # Against the colours, not against TIERS: written in terms of the
+        # constant, this passes with every tier set to the same hue.
+        assert 0.55 <= quiet <= 0.90, (
+            f"the quietest passage is at hue {quiet:.2f}, which is not the "
+            f"blue-to-purple end of the wheel")
+        assert loud <= 0.10 or loud >= 0.95, (
+            f"the loudest is at hue {loud:.2f}, which is not the red end")
+        middle = scene._tier(0.5, 0.0)
+        assert 0.20 <= middle <= 0.45, (
+            f"halfway is at hue {middle:.2f}, which is not the green "
+            f"between them")
+        # And through the tiers in order on the way, not by the short way
+        # round the wheel.
+        seen = [scene._tier(step / 20.0, 0.0) for step in range(21)]
+        for before, after in zip(seen, seen[1:]):
+            assert after <= before + 1e-9, (
+                f"the colour went back up the wheel, {before:.3f} to "
+                f"{after:.3f}")
+
+    def test_the_figures_come_thicker_where_there_is_more_going_on(self,
+                                                                   qapp):
+        """"High-energy transient density increases block spawning." """
+        import visualizers
+
+        scene = self._scene(self._contour())
+        quiet = scene._apart(4.0)
+        chorus = scene._apart(12.0)
+        assert chorus < quiet * 0.75, (
+            f"figures are {quiet:.1f} beats apart in the quiet part and "
+            f"{chorus:.1f} in the chorus")
+        assert visualizers.Rider.GAP_LEAST <= chorus <= \
+            visualizers.Rider.GAP_MOST
+
+    def test_a_loud_passage_really_gets_more_figures(self, qapp):
+        """Not just a smaller number out of ``_apart``: the chart has to
+        use it."""
+        shape = self._contour()
+        laid = {}
+        # Windows well inside each passage, and the figures counted by
+        # where they landed rather than by how many were laid: the chart
+        # reads five seconds ahead, so a run that starts in one passage
+        # finishes in the next.
+        for name, first, last in (("quiet", 2.0, 6.0),
+                                  ("chorus", 10.0, 14.0)):
+            scene = self._scene(shape)
+            beat = scene._beat
+            scene._grid = 0.0
+            scene._heard = scene._laid = first - scene.READ
+            state = type("S", (), {})()
+            state.chart = {"Kick": tuple(i * beat for i in range(400))}
+            while scene._heard < last:
+                scene._heard += 0.25
+                scene._lay(state)
+            times = sorted({block[0] for block in scene._blocks
+                            if first <= block[0] < last})
+            laid[name] = [t for i, t in enumerate(times)
+                          if i == 0 or t - times[i - 1] > scene.RUN_GAP + 0.01]
+        assert len(laid["chorus"]) > len(laid["quiet"]), (
+            f"the chart laid {len(laid['quiet'])} figures over four seconds "
+            f"of the quiet part and {len(laid['chorus'])} over four of the "
+            f"chorus")
+
+    def test_a_track_with_no_contour_keeps_the_middle_spacing(self, qapp):
+        import visualizers
+
+        scene = self._scene(None)
+        assert scene._apart(4.0) == visualizers.Rider.GAP_BEATS

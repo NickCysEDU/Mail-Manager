@@ -484,6 +484,56 @@ def analyse(samples: array, sample_rate: int, channels: int = 1,
     return frames
 
 
+#: How many readings of the track's shape a second.
+#:
+#: Eight. The road is a landscape, not a waveform: what it wants is
+#: where the choruses and the breakdowns are. Four a second was enough
+#: for the hills and not for the bends - about two seconds of road is in
+#: view at once, so eight readings of it is fifteen points to bend
+#: through and four is eight, which draws as a polygon.
+CONTOUR_RATE = 8
+
+
+def contour(frames: Sequence, vectors: Optional[Sequence] = None,
+            calibration: Optional[dict] = None) -> dict:
+    """The shape of the track, as the thing that drives a road.
+
+    Audiosurf builds its track in a pre-pass rather than as the song
+    plays: amplitude becomes the incline, and the balance between the two
+    channels becomes the curve. The same two numbers, on the same
+    schedule, come out of the analysis this application has already done.
+
+    ``loud`` is the amplitude envelope - the same one the waveform above
+    the seek bar is drawn from, so a hill and the shape on the bar are
+    the same fact.
+
+    ``lean`` is how far the mix sits to one side, -1 hard left to +1 hard
+    right, read off the oscilloscope's own traces. Those are stored one
+    per display frame at fifteen a second and a thousand points each,
+    which is four million numbers on a three minute track and far too
+    many to walk in Python for something that moves this slowly. So it
+    takes one trace in four and one point in eight of that: two thousand
+    readings a track, and the answer is the same to a hundredth.
+    """
+    loud = outline(frames, calibration, columns=max(
+        1, int(len(frames) / max(1, RATE) * CONTOUR_RATE)))
+    lean = [0.0] * len(loud)
+    if vectors and loud:
+        span = len(vectors) / max(1e-6, RATE)
+        for index in range(len(loud)):
+            when = (index + 0.5) / CONTOUR_RATE
+            at = min(len(vectors) - 1, int(when / max(1e-6, span)
+                                           * len(vectors)))
+            trace = vectors[at]
+            left = right = 0
+            for step in range(0, len(trace) - 1, 16):
+                left += abs(trace[step])
+                right += abs(trace[step + 1])
+            total = left + right
+            lean[index] = 0.0 if total <= 0 else (right - left) / total
+    return {"loud": loud, "lean": lean, "rate": float(CONTOUR_RATE)}
+
+
 #: Every analysis still in flight. A pane destroyed as somebody's child
 #: never sees a DeferredDelete of its own, so it cannot be relied on to
 #: cancel its own work - and Qt aborts the process if a running QThread is
