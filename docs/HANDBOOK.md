@@ -725,6 +725,26 @@ Press **⌘/** in the app for this list.
 | **⌘M** | Model settings |
 | **⌘,** | Settings |
 
+### Rave
+
+A corridor lit by the kit, travelling at one truss a beat: the distance
+per beat is fixed and the bass changes how it is spent, so a heavy bass
+lunges at the start of a beat and coasts before the next rather than
+running the room faster and off the music.
+
+It was travelling backwards. The offset every row was placed at counted
+up, so a row's distance rose with it - measured over one beat at 128 bpm,
+the nearest truss went from z 2.78 out to 3.33 and then snapped back to
+0.65, the room crawling away from you and jumping forward once a beat.
+The offset counts down now, and a truss closes on you through the beat
+and arrives exactly on it.
+
+Because one truss is one beat, the truss five slots down the room *is*
+the beat five beats from now, and the chart the analysis found says what
+is on it. A kick swells the frame it lands on, a snare turns its colour
+and hats thicken it, so the corridor ahead of you has the shape of the
+bar coming rather than being the same frame repeated.
+
 ### The oscilloscope
 
 The scene draws the signal itself on a phosphor that takes its time: a
@@ -893,7 +913,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,613 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,620 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1254,7 +1274,7 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 3,613 tests, about three minutes
+./dev test        # 3,620 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

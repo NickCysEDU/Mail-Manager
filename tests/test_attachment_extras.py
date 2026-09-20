@@ -9929,3 +9929,195 @@ class TestTheScopeIsATube:
         assert not over, (
             f"the beam was struck with pens {over} real pixels wide, over "
             f"the {visualizers.HAIRLINE} pixel cliff")
+
+
+class TestTheRaveRoomTravelsForwards:
+    """The corridor was flying backwards.
+
+    One truss passes you every beat - that is what fixing the distance
+    per beat is for - but the offset every row was placed at counted
+    *up*, so a row's distance rose with it. Measured over one beat at 128
+    bpm, the nearest truss went from z 2.78 out to 3.33 and then snapped
+    back to 0.65: the room crawling away from you and jumping forward
+    once a beat.
+    """
+
+    class Watched:
+        """A painter that keeps the box round everything drawn on it."""
+
+        def __init__(self, painter):
+            self._painter = painter
+            self.boxes = []
+
+        def __getattr__(self, name):
+            if name != "drawPath":
+                return getattr(self._painter, name)
+
+            def draw_path(path):
+                self.boxes.append(path.boundingRect())
+                return self._painter.drawPath(path)
+
+            return draw_path
+
+    @staticmethod
+    def _scene(chart=None, per_beat=60.0 / 128.0):
+        import visualizers
+
+        scene = visualizers.Rave()
+        scene._last = None
+        scene._chart = chart or {}
+        scene._per_beat = per_beat
+        scene._said = 0.0
+        scene._beats_now = 0.0
+        return scene
+
+    @classmethod
+    def _trusses(cls, scene, at_z):
+        """The boxes the trusses are drawn in, with the room at ``at_z``."""
+        from PySide6.QtCore import QPointF, QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        scene._z = at_z
+        scene._coming.clear()
+        image = QImage(600, 400, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0))
+        painter = QPainter(image)
+        eye = cls.Watched(painter)
+        try:
+            scene._trusses(eye, QPointF(300.0, 190.0), 300.0, 0.6,
+                           1.6, 4.5, 0.4, 0.3, 0.0,
+                           scene.FAR - scene.NEAR, 1.0, 1.0)
+        finally:
+            painter.end()
+        return eye.boxes
+
+    def test_the_nearest_truss_closes_on_you_through_a_beat(self, qapp):
+        scene = self._scene()
+        widest = []
+        for tick in range(10):
+            boxes = self._trusses(scene, 20.0 + tick * 0.45)
+            assert boxes, "no trusses were drawn"
+            widest.append(max(box.width() for box in boxes))
+        for before, after in zip(widest, widest[1:]):
+            assert after > before, (
+                f"the nearest truss went from {before:.0f}px wide to "
+                f"{after:.0f}, so the room is travelling away from you: "
+                f"{[round(w) for w in widest]}")
+
+    def test_the_next_one_takes_its_place_at_the_far_end(self, qapp):
+        """Across the wrap, not within a beat: the truss that was on top
+        of you is gone and the one behind it is where it was."""
+        scene = self._scene()
+        before = max(box.width() for box in self._trusses(scene, 24.96))
+        after = max(box.width() for box in self._trusses(scene, 25.04))
+        assert after < before * 0.6, (
+            f"at the wrap the nearest truss went from {before:.0f}px to "
+            f"{after:.0f}, so it jumped towards you rather than being "
+            f"replaced from the far end")
+
+
+class TestTheRaveRoomIsShapedLikeTheBar:
+    """"Make rave obstacles react to music as well."
+
+    The trusses are the only things in the room with a length, and every
+    one of them was the same size whatever the track did. One passes you
+    every beat, so the one five slots down the room is the beat five
+    beats from now - and the chart the analysis found already says what
+    is on it.
+    """
+
+    BEAT = 60.0 / 128.0
+    #: Half time: a kick on one and three, a snare on three, hats on the
+    #: eighths. Plenty of beats with nothing on them.
+    CHART = {
+        "Kick": tuple(b * (60.0 / 128.0) for b in range(400) if b % 4 in (0, 2)),
+        "Snare": tuple(b * (60.0 / 128.0) for b in range(400) if b % 4 == 2),
+        "Hats": tuple(b * (60.0 / 128.0) / 2 for b in range(800)),
+    }
+
+    def _scene(self, chart=None, per_beat=None):
+        return TestTheRaveRoomTravelsForwards._scene(
+            chart if chart is not None else self.CHART,
+            self.BEAT if per_beat is None else per_beat)
+
+    def _trusses(self, scene, at_z):
+        return TestTheRaveRoomTravelsForwards._trusses(scene, at_z)
+
+    def test_a_truss_knows_what_lands_on_its_beat(self, qapp):
+        scene = self._scene()
+        scene._beats_now = 8.0
+        scene._said = 8.0 * self.BEAT
+        on = scene._on_beat(8)        # a kick and nothing else
+        scene._coming.clear()
+        off = scene._on_beat(9)       # an off beat: hats only
+        assert on.get("Kick", 0.0) > 0.9, (
+            f"the beat a kick lands on reads {on}")
+        assert not off.get("Kick"), (
+            f"a beat with no kick on it reads {off}")
+
+    # Two positions, because at 20.0 the nearest truss is beat 4 and the
+    # kicks fall on the first, third and fifth frames in view - which is
+    # also where they fall if the trusses do not know which beat they are
+    # and count from zero. At 22.0 the nearest is beat 5 and they do not.
+    @pytest.mark.parametrize("at_z", [20.0, 22.0])
+    def test_the_frame_on_a_kick_is_bigger_than_one_with_nothing_on_it(
+            self, qapp, at_z):
+        """The corridor ahead of you has the shape of the bar coming.
+
+        Each frame against the same frame with no chart at all, because
+        the frames are at different distances and comparing them with
+        each other compares perspective.
+        """
+        import math
+
+        import visualizers
+
+        scene = self._scene()
+        scene._beats_now = scene._said = 0.0
+        with_music = self._trusses(scene, at_z)
+        plain = self._scene(chart={})
+        plain._beats_now = plain._said = 0.0
+        without = self._trusses(plain, at_z)
+        assert len(with_music) == len(without) >= 4, (
+            f"{len(with_music)} frames against {len(without)}")
+
+        # One truss a beat, the nearest belonging to the beat after the
+        # one the room has reached.
+        first = math.ceil(at_z / visualizers.Rave.TRUSS)
+        swell = visualizers.Rave.TRUSS_SWELL
+        for offset, (lit, flat) in enumerate(zip(with_music, without)):
+            beat = first + offset
+            ratio = lit.width() / flat.width()
+            kicked = beat % 4 in (0, 2)     # see CHART
+            if kicked:
+                assert ratio == pytest.approx(1.0 + swell, abs=0.02), (
+                    f"the frame on beat {beat}, which has a kick on it, is "
+                    f"{ratio:.3f} of its plain size")
+            else:
+                assert ratio == pytest.approx(1.0, abs=0.02), (
+                    f"the frame on beat {beat}, which has nothing on it, "
+                    f"is {ratio:.3f} of its plain size")
+
+    def test_two_trusses_the_same_distance_apart_differ(self, qapp):
+        """A kick truss and the beat after it are one slot apart, so
+        anything that is only perspective cancels."""
+        scene = self._scene()
+        scene._beats_now = 0.0
+        scene._said = 0.0
+        with_music = self._trusses(scene, 20.0)
+        plain = self._scene(chart={})
+        plain._beats_now = 0.0
+        without = self._trusses(plain, 20.0)
+        assert len(with_music) == len(without), "a different number of frames"
+        ratios = [a.width() / b.width()
+                  for a, b in zip(with_music, without)]
+        assert max(ratios) > min(ratios) * 1.05, (
+            f"every frame is the same multiple of its plain size "
+            f"({[round(r, 3) for r in ratios]}), so the swell is a global "
+            f"scale rather than one beat at a time")
+
+    def test_a_track_with_no_tempo_is_left_alone(self, qapp):
+        scene = self._scene(per_beat=0.0)
+        assert scene._on_beat(4) == {}, (
+            "the room read the chart with no tempo to place it against")
+        assert self._trusses(scene, 20.0), "and then drew nothing"

@@ -12,6 +12,7 @@ cheap enough to run at thirty frames a second beside a mail sorter.
 
 from __future__ import annotations
 
+import bisect
 import logging
 import math
 import sys
@@ -2627,6 +2628,13 @@ class Rave(Scene):
 
     def __init__(self) -> None:
         self._z = 0.0
+        #: What the trusses are built from: see TRUSS_NEAR. Filled once a
+        #: frame by ``_advance`` and read by ``_trusses``.
+        self._chart: dict = _NO_CHART
+        self._said = 0.0
+        self._per_beat = 0.0
+        self._beats_now = 0.0
+        self._coming: dict = {}
         self._last = None
         self._rings: list = []
         #: How far through its sweep the laser rig is.
@@ -2728,6 +2736,14 @@ class Rave(Scene):
         bass = max(state.bass, kit.get("Bass", 0.0))
         self._push = ease(self._push, bass, self.PUSH_RISE, self.PUSH_FALL)
         tempo = getattr(state, "tempo", 0.0)
+        # What the trusses are built from. Kept once a frame rather than
+        # read per truss, and cleared, because the answer for a given beat
+        # moves as the playhead does.
+        self._chart = getattr(state, "chart", None) or _NO_CHART
+        self._said = getattr(state, "at", 0.0) or 0.0
+        self._per_beat = 60.0 / tempo if tempo > 0.0 else 0.0
+        self._beats_now = self._beats_done(state) if tempo > 0.0 else 0.0
+        self._coming.clear()
         if tempo > 0.0:
             # On the grid: one truss passes you every beat, exactly.
             #
@@ -3127,6 +3143,23 @@ class Rave(Scene):
     #: a truss every few metres is a building.
     TRUSS = 5
 
+    #: What a truss is made of: the beat it belongs to.
+    #:
+    #: One truss passes you every beat - that is what ``_advance`` fixes
+    #: the distance per beat for - so a truss five slots away is the beat
+    #: five beats from now, and the chart the analysis found already says
+    #: what is on it. "Make rave obstacles react to music as well": these
+    #: are the only things in the room with a length, and until now every
+    #: one of them was the same size whatever the track did. A kick swells
+    #: the frame it lands on and a snare turns its colour, so the shape of
+    #: the corridor ahead of you is the shape of the bar coming.
+    #:
+    #: How far a hit may be from the beat and still belong to it, as a
+    #: share of a beat; and how much a kick swells the frame.
+    TRUSS_NEAR = 0.40
+    TRUSS_SWELL = 0.22
+    TRUSS_TURN = 0.10
+
     #: Lines across a side wall. Far fewer than the floor gets, because
     #: the corridor is about eight times wider than it is tall: laid out
     #: with the floor's count they came out a twentieth of a unit apart
@@ -3188,7 +3221,10 @@ class Rave(Scene):
         glow = self._glow(rect)
         lift = self._lift(bass)
         span = self.ACROSS * 0.5
-        offset = self._z % 1.0
+        # Counted down, not up. See ``_trusses``: with the offset rising,
+        # every row's z rises with it and the whole room travels *away*
+        # from you between one wrap and the next.
+        offset = 1.0 - (self._z % 1.0)
         reach = self.FAR - self.NEAR
         for place, shift, lines in self._surfaces(lift, span):
             base = QColor.fromHsvF(
@@ -3330,6 +3366,36 @@ class Rave(Scene):
         painter.setPen(pen)
         painter.drawPath(path)
 
+    def _on_beat(self, index: int) -> dict:
+        """What the kit plays on the beat a truss belongs to.
+
+        The chart is every hit in the track by name, from the same
+        element detection the strobe uses, so this can read *forward*:
+        the truss five slots down the room is the beat five beats from
+        now, and what is on it is known before it arrives.
+
+        Cached per frame, because six trusses ask and the answer for a
+        beat does not change within one.
+        """
+        if index in self._coming:
+            return self._coming[index]
+        found: dict = {}
+        if self._chart and self._per_beat > 0.0:
+            when = self._said + (index - self._beats_now) * self._per_beat
+            reach = self._per_beat * self.TRUSS_NEAR
+            for name in ("Kick", "Snare", "Hats"):
+                times = self._chart.get(name)
+                if not times:
+                    continue
+                at = bisect.bisect_left(times, when)
+                near = min((abs(times[i] - when)
+                            for i in (at - 1, at) if 0 <= i < len(times)),
+                           default=None)
+                if near is not None and near <= reach:
+                    found[name] = 1.0 - near / reach
+        self._coming[index] = found
+        return found
+
     def _trusses(self, painter, horizon, focal, hue, lift, span, bass, kick,
                  flash, reach, weight, glow) -> None:
         """A frame round the corridor every few metres, coming at you.
@@ -3340,7 +3406,9 @@ class Rave(Scene):
         one is much the brightest, so the eye has something travelling
         rather than a field of lines that all move together.
         """
-        corners = ((-span, lift), (span, lift), (span, -lift), (-span, -lift))
+        # The beat the nearest truss belongs to. One passes you every
+        # beat, so the one k slots away is k beats from now.
+        first = math.ceil(self._z / self.TRUSS) if self._per_beat > 0.0 else 0
         # On their own clock, not the grid's.
         #
         # They used to ride the grid's offset, which wraps every *row*:
@@ -3349,25 +3417,44 @@ class Rave(Scene):
         # is what stopped it reading as a continuous walk forward - the
         # only things in the room with a length to them stuttered, and
         # they did it whether anything was playing or not.
-        offset = self._z % self.TRUSS
+        #
+        # And it counts *down*. With the offset rising, a row's z rises
+        # with it: measured over one beat at 128 bpm, the nearest truss
+        # went from z 2.78 out to 3.33 and then snapped back to 0.65 - the
+        # room crawling backwards and jumping forwards once a beat, which
+        # is the opposite of everything written above and is most of what
+        # "rave acts weird and glitchy" was. Counting the offset down runs
+        # the wrap the other way: the nearest truss closes on you through
+        # the beat and the next one takes its place.
+        offset = self.TRUSS - (self._z % self.TRUSS)
         for step in range(0, self.DEPTH, self.TRUSS):
             row = step + offset
             if row >= self.DEPTH:
                 continue
             z = self.NEAR + row * reach / self.DEPTH
             near = max(0.0, 1.0 - (z - self.NEAR) / reach)
+            # What is on this one's beat. See TRUSS_NEAR: the frame swells
+            # on a kick and turns colour on a snare, so the corridor ahead
+            # of you has the shape of the bar coming.
+            coming = self._on_beat(first + step // self.TRUSS)
+            swell = 1.0 + coming.get("Kick", 0.0) * self.TRUSS_SWELL
+            wide, tall = span * swell, lift * swell
+            corners = ((-wide, tall), (wide, tall),
+                       (wide, -tall), (-wide, -tall))
             path = QPainterPath()
-            first = None
+            start = None
             for x, y in corners:
                 point = self._project(horizon, focal, x, y, z)
-                if first is None:
+                if start is None:
                     path.moveTo(point)
-                    first = point
+                    start = point
                 else:
                     path.lineTo(point)
-            path.lineTo(first)
-            base = QColor.fromHsvF((hue + 0.04) % 1.0,
-                                   max(0.0, 0.6 - flash * 0.4), 1.0, 1.0)
+            path.lineTo(start)
+            base = QColor.fromHsvF(
+                (hue + 0.04 + coming.get("Snare", 0.0) * self.TRUSS_TURN)
+                % 1.0,
+                max(0.0, 0.6 - flash * 0.4), 1.0, 1.0)
             # Hairlines, with the width carried as light, which is what
             # the rest of the room already does - see ``_beam``.
             #
@@ -3384,19 +3471,21 @@ class Rave(Scene):
             # the frame fell from 0.784 to 0.643 at 1512x982 with all five
             # on hairlines, and no amount of lift moved it. So the nearest
             # one keeps its width and the four behind it do not.
-            wide = (0.9 + near * 2.2) * (1.0 + kick * 1.1) * weight
+            thick = ((0.9 + near * 2.2) * (1.0 + kick * 1.1) * weight
+                     * (1.0 + coming.get("Hats", 0.0) * 0.35))
             alpha = ((0.16 + bass * 0.22 + kick * 0.34 + flash * 0.3)
-                     * glow * (0.30 + near * near * 1.4))
+                     * glow * (0.30 + near * near * 1.4)
+                     * (1.0 + coming.get("Kick", 0.0) * 0.5))
             if step == 0:
                 # The nearest one keeps its width. It is the one the eye
                 # is on, it is the only one wide enough for the width to
                 # show, and one of them costs about a third of a
                 # millisecond where five cost 1.7.
                 stroke(painter, path, self._shade(base, min(1.0, alpha)),
-                       wide)
+                       thick)
             else:
                 self._beam(painter, path,
-                           self._shade(base, min(1.0, alpha * wide
+                           self._shade(base, min(1.0, alpha * thick
                                                  * self.TRUSS_LIFT)))
 
     #: How fast a ring closes on you, as a share of its own distance a
