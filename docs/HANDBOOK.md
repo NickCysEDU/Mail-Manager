@@ -880,6 +880,15 @@ purple up to eighty for red - so a block collected in a chorus is worth
 eight of one from an outro. Overfill a column and the grid locks for
 three seconds, flashing, collecting nothing, with the chain gone.
 
+The road's shape is read off a Catmull-Rom curve through those
+readings rather than straight lines between them. Straight lines leave a
+corner at every reading, and a corner in the road is a corner in
+everything laid on it: the chevrons and lane dashes span a stretch of
+road, so their two ends land on different sides of the kink and the shape
+splays. On a real track at eight readings a second the markings came out
+as jagged spikes. The readings are also smoothed over about a second and
+a half, because a road is a landscape and a song is not.
+
 **The road is the song.** Audiosurf does not invent its track: it reads
 the file once before anything is drawn, and the amplitude becomes the
 incline while the balance between the channels becomes the curve. The
@@ -911,8 +920,27 @@ that is 12 units a second against the 6.5 the blocks used to manage.
 
 The bass cannot change how far a beat travels - that is what holds the
 timing - so it changes *when* inside the beat it travels: at a full bass
-the road covers two and a half times the average in the first frames of a
-beat and coasts into the next. Same arrival, much more push.
+the road covers nearly twice the average into a beat and coasts out of
+it. Same arrival, much more push.
+
+Part of the travel is lunged and part of it even. All lunge is a road
+that stops: the slope of that curve at the end of a beat is zero however
+hard it lunges, and the last frames of every beat ran at a two-hundredth
+of the average. Mixing in a straight run puts a floor under it and costs
+nothing in timing, because both curves are zero at the start of a beat
+and one at the end. The lunge is also chosen once a beat and held for the
+whole of it: it shapes where the road is *within* a beat, so changing it
+part-way through moves the road, and a road that may only go forwards
+stops instead and waits for the curve to catch up.
+
+**Stopped means stopped.** Every clock in the scene runs on the track's
+own time rather than the wall's: the shake, the pieces thrown off a hit,
+the wash a hit leaves, the field behind the road, the camera's easing,
+the envelope followers that decide how loud the passage is, and the
+correction that keeps the road's origin on the beat. That last one was
+the worst of them - it is an easing towards a phase error, and where the
+error sits near half a beat it is pushed away rather than settling, so a
+stopped track crept ten units of road a second.
 
 The chart comes from the same element detection the strobe uses, read
 *ahead* of the playhead: an obstacle leaves the horizon about two and a
@@ -933,8 +961,11 @@ house track, the kick it heard sat up to 222 ms off the beat; the figures
 laid from it sit on it.
 
 Hitting something turns the whole picture, not the block and not the
-ship: the frame goes red from its edges in, the light drops out of
-everything under it and the view is thrown for about a beat and a half.
+ship: the frame is multiplied by a red, which takes the green and the
+blue out of everything and leaves the red where it was, so it goes red
+*and* dark. Laying red over the picture instead can only add light to it,
+and on a world this dark that reads as a flashbulb - measured, the frame
+came out twice as bright after a hit as before one.
 
 A passage with no drums has no obstacles, which is what a build-up should
 feel like; the road speeds up instead. The ground runs from 6 to 23 units
@@ -968,6 +999,16 @@ bend, and drops to meet a climb, which holds the road ahead within about
 10 px of one row through every phase of the hill against 79 px with the
 camera held still. The shake is a knock rather than a drop: a kick moves
 the frame about 4 px in a 640-wide window, against 11 px before.
+
+**Being able to see it** is a measured property rather than a matter of
+taste, and it was not there. A block and the road it stood on differed in
+hue and not in brightness - an orange prize at a luminance of 0.400 on a
+road at 0.401, which is not dim, it is invisible - and the lamp at the
+end of the road reached over half the frame, washing out exactly the part
+where a block has to be read while there is still time to move. The road
+is held down near the floor now, the lamp is a glow at the vanishing
+point rather than a sky, every block is backed by a dark silhouette, and
+every block has a lit edge that does not fade with distance.
 
 The road is decorated to be read at speed: dashed lines between the lanes
 so the lane you are in is not a guess, gates down either side that stand
@@ -1027,7 +1068,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,747 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,759 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1388,7 +1429,7 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 3,747 tests, about three minutes
+./dev test        # 3,759 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

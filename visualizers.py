@@ -430,8 +430,13 @@ class Plasma:
         self._drift_c = 0.0
 
     def paint(self, painter, rect, state, strength: float = 1.0,
-              flash: float = None) -> None:
+              flash: float = None, going: float = 1.0) -> None:
         """The field. ``flash`` overrides the strobe this reads.
+
+        ``going`` is how much of a frame's worth of movement to take:
+        zero holds the field exactly where it is, for a scene whose track
+        has stopped. The field has its own drift and would otherwise go
+        on folding under a paused song.
 
         Ambience passes its own smoothed one: the field is half of what
         that scene shows, and a field that snaps while the ribbons bloom
@@ -455,9 +460,9 @@ class Plasma:
         # direction, make it fold and drift instead - and the music drives
         # both how fast they run and how deep the folds are, so a loud
         # passage churns and a quiet one barely moves.
-        pace = 0.55 + state.bass * 1.9 + state.mid * 0.8
+        pace = (0.55 + state.bass * 1.9 + state.mid * 0.8) * going
         self._drift_a += 0.016 * pace
-        self._drift_b -= 0.011 * pace + state.high * 0.02
+        self._drift_b -= 0.011 * pace + state.high * 0.02 * going
         self._drift_c += 0.007 * pace
         hit = self.flash_of(state) if flash is None else max(0.0, flash)
         swell = 0.55 + state.bass * 0.8 + hit * 0.9
@@ -3975,6 +3980,13 @@ class Rider(Scene):
     #: on the beat either way, because the curve is the identity at both
     #: ends of it.
     LUNGE = 1.6
+    #: And how much of the beat's travel is lunged rather than even.
+    #:
+    #: The floor under the coast is ``1 - LUNGE_MIX`` of the average
+    #: speed, so at 0.55 the road never drops below 45 per cent of its
+    #: own pace and still reaches 1.9 times it into the beat. All lunge
+    #: reached 2.5 times and dropped to a two-hundredth, which is a stop.
+    LUNGE_MIX = 0.55
 
     #: How hard the road bends, climbs and rolls.
     #:
@@ -4007,6 +4019,15 @@ class Rider(Scene):
     #: what the free-running bend used to reach, which is as much as the
     #: road can turn and still be read.
     TRACK_BEND = 0.10
+
+    #: How much of the track either side of a point is averaged into the
+    #: shape of the road there, in seconds.
+    #:
+    #: Three quarters of a second each way. A road is a landscape and a
+    #: song is not: its amplitude changes from one eighth of a second to
+    #: the next by more than any hill should, and a curve drawn through
+    #: readings that jump is a curve that jumps smoothly.
+    SMOOTH_FOR = 0.75
     #: How hard the road banks into its own turn.
     #:
     #: 1.2 puts the roll where the old free-running one was at its
@@ -4033,9 +4054,9 @@ class Rider(Scene):
     HURT_FOR = 0.6
     #: How hard a hit washes the frame, throws the camera and drops the
     #: light out of everything else.
-    HURT_WASH = 0.46
+    HURT_WASH = 0.34
     HURT_THROW = 3.4
-    HURT_DIM = 0.62
+    HURT_DIM = 0.72
 
     SHAKE = 0.030
     SHAKE_FALL = 0.10
@@ -4152,12 +4173,17 @@ class Rider(Scene):
         self._placed = -99.0
         self._loudness = 0.0
         self._speed = self.FREE_RUN
-        #: How hard the road is lunging into the beat. See LUNGE.
+        #: How hard the road is lunging into the beat, and the beat it
+        #: was chosen on. See LUNGE.
         self._lunge = 1.0
+        self._lunge_from = None
         #: Seconds in a beat, or 0 when nothing has found a tempo.
         self._beat = 0.0
         #: A moment that is known to be on the beat, for snapping to.
         self._grid = None
+        #: Where the music clock was last frame, for working out how fast
+        #: the road is going against the track rather than the wall.
+        self._last_heard = None
         #: The moment beat zero started, for measuring distance from. See
         #: ``_advance`` for why it is not the same thing as ``_grid``.
         self._origin = None
@@ -4483,15 +4509,43 @@ class Rider(Scene):
         # going on here", which is the reading itself.
         self._energy = tuple(loud)
         middle = sorted(loud)[len(loud) // 2]
-        self._hill = tuple((value - middle) * 2.0 for value in loud)
+        self._hill = self._eased(
+            [(value - middle) * 2.0 for value in loud])
         curve, run = [], 0.0
         for index in range(len(loud)):
             run += (lean[index] if index < len(lean) else 0.0)
             curve.append(run)
-        self._curve = tuple(curve)
+        self._curve = self._eased(curve)
+
+    def _eased(self, table) -> tuple:
+        """The readings with the jitter taken out of them.
+
+        A road is a landscape. The amplitude of a track changes from one
+        eighth of a second to the next by more than any hill should, and
+        a curve through readings that jump is a curve that jumps
+        smoothly. Averaged over a second or so of them, what is left is
+        the shape of the song rather than the shape of its transients.
+        """
+        reach = max(1, int(self._every * self.SMOOTH_FOR))
+        out = []
+        for index in range(len(table)):
+            low = max(0, index - reach)
+            high = min(len(table), index + reach + 1)
+            out.append(sum(table[low:high]) / (high - low))
+        return tuple(out)
 
     def _read(self, table, when: float) -> float:
-        """One reading of the track's shape, between two of them."""
+        """One reading of the track's shape, between two of them.
+
+        On a Catmull-Rom curve through the readings, which is what the
+        blueprint asks the track to be and what it has to be to be drawn
+        at all. Straight lines between readings leave a corner at every
+        one of them, and a corner in the road is a corner in everything
+        laid on the road: the chevrons and lane dashes span a stretch of
+        it, so their two ends land on different sides of the kink and the
+        shape splays. On a real track at eight readings a second that is
+        not a subtle artefact - the markings came out as jagged spikes.
+        """
         if not table:
             return 0.0
         place = when * self._every
@@ -4501,7 +4555,18 @@ class Rider(Scene):
         if low >= len(table) - 1:
             return table[-1]
         share = place - low
-        return table[low] + (table[low + 1] - table[low]) * share
+        # The two either side as well, held at the ends.
+        before = table[max(0, low - 1)]
+        here = table[low]
+        after = table[low + 1]
+        beyond = table[min(len(table) - 1, low + 2)]
+        return 0.5 * (
+            2.0 * here
+            + (-before + after) * share
+            + (2.0 * before - 5.0 * here + 4.0 * after - beyond)
+            * share * share
+            + (-before + 3.0 * here - 3.0 * after + beyond)
+            * share * share * share)
 
     def _when(self, at: float) -> float:
         """The moment of the track a point on the road belongs to."""
@@ -4580,7 +4645,14 @@ class Rider(Scene):
         #
         # Eased, because a field of view that jumped about would be a
         # strobe rather than a camera.
-        self._rushing += (self._loudness - self._rushing) * self.RUSH_EASE
+        # Every ease here is gated on whether the track is playing. A
+        # camera that goes on settling under a stopped song moves the
+        # whole picture, which is most of what "xxxxxxxxxx xxxxxx xxxx
+        # xxxx xxxxx xxxxx xx xxxxxx" was: measured, 72 per cent of the
+        # frame still changed from one frame to the next.
+        going = self._rolling
+        self._rushing += ((self._loudness - self._rushing)
+                          * self.RUSH_EASE * going)
         wide = max(0.0, min(1.0, self._rushing))
         # Never wider than FOCAL_FAST. The strobe and the bass open it a
         # little further on top of the passage's own push, and without a
@@ -4596,9 +4668,9 @@ class Rider(Scene):
         # in - which is the lag a camera on a boom would have and a
         # camera welded to the ship would not.
         pull = (self.EYE_BACK * (1.0 + wide * self.CHASE) - self._chase)
-        self._chase_to += pull * self.CHASE_SPRING
+        self._chase_to += pull * self.CHASE_SPRING * going
         self._chase_to *= self.CHASE_DAMP
-        self._chase += self._chase_to
+        self._chase += self._chase_to * going
         # Where the road starts, which is a fixed distance in front of
         # the *eye* rather than a fixed distance behind the rider. The
         # eye is on a spring now and slides back at a drop; measured from
@@ -4620,17 +4692,18 @@ class Rider(Scene):
         # Measured from the road under the rider, which is where the eye
         # now sits: what is left is the lead, the bit of the bend that is
         # still ahead of you.
-        self._aimed += (across_ahead - self._side - self._aimed) * self.AIM_EASE
+        self._aimed += ((across_ahead - self._side - self._aimed)
+                        * self.AIM_EASE * going)
         # The rise *ahead of the rider*, which is the hill. Measured from
         # the road under them, the same way everything else is.
         self._pitched += ((up_ahead - self._under - self._pitched)
-                          * self.AIM_EASE)
+                          * self.AIM_EASE * going)
         # How hard the road is turning, which is what the view banks
         # into. The aim is already measured from under the rider.
-        self._banked += (self._aimed - self._banked) * self.AIM_EASE
+        self._banked += (self._aimed - self._banked) * self.AIM_EASE * going
         # The shake is a decaying wobble on its own fast clock rather than
         # a sine of the spin, which never stopped moving.
-        self._wobble += 1.0
+        self._wobble += self._rolling
         shake = self._shake * self.SHAKE * self.SHAKE_LESS * span
         # Up the hill with the road, within reason. A climb puts the road
         # ahead higher in the frame, so the view drops to meet it - which
@@ -4707,14 +4780,6 @@ class Rider(Scene):
         kit = state.kit or {}
         bass = max(state.bass, kit.get("Bass", 0.0))
         loud = (bass + state.mid + state.high) / 3.0
-        self._quick += (loud - self._quick) * (0.40 if loud > self._quick
-                                               else 0.03)
-        if self._quiet is None:
-            self._quiet = loud
-        self._quiet += (self._quick - self._quiet) * (
-            0.02 if self._quick < self._quiet else 0.0004)
-        self._peak = max(self._quick, self._peak * 0.9996)
-        self._loudness = self._surge()
 
         said = getattr(state, "at", 0.0) or 0.0
         # Whether the track is actually playing. A paused player reports
@@ -4760,16 +4825,67 @@ class Rider(Scene):
             start = said - self._pulse * self._beat
             if self._origin is None or jumped:
                 self._origin = start
-            else:
+            elif moving:
+                # Only while the track is playing. This is a correction
+                # towards the phase the analysis reports, and with the
+                # track stopped there is nothing to correct towards - but
+                # the correction still had somewhere to go, because the
+                # error it is easing away from sits at a fixed fraction
+                # of a beat and never reaches zero. The road is measured
+                # from here, so it crept ten units a second under a
+                # stopped song.
                 off = (start - self._origin) / self._beat
                 self._origin += (off - round(off)) * self._beat * 0.1
-        self._slow = min(1.0, self._slow + self.SLOW_BACK)
-        # The lunge is frozen while the track is stopped. It is chosen by
-        # the bass, and the bass goes on easing after a pause: recomputing
-        # the curve then moves the road even though the beat has not.
+        # From here on, a frame's worth of movement is however much of a
+        # frame the *track* moved. Everything the scene animates reads
+        # this rather than the wall clock, so a stopped track stops the
+        # lot: "xxxxxx xxxxx xxx xxxxxxxxxx xxxxxx xxxx xxxx xxxxx xxxxx
+        # xx xxxxxx". The road already did; the shake, the sparks, the
+        # field behind it, the fuse under the grid and the hurt from a
+        # hit all had clocks of their own.
+        step *= self._rolling
+        # How loud this passage is, on the track's clock as well.
+        #
+        # These are envelope followers and they converge on whatever they
+        # are fed, so a held level walks them somewhere: the fast one
+        # settles on it, the slow one follows, and the peak decays
+        # towards them. What comes out is the *surge*, which colours the
+        # road, opens the field of view and lights the air - so a stopped
+        # track went on slowly changing colour and brightness. Measured,
+        # four per cent of the frame changed from one frame to the next
+        # and it grew from there.
         if self._rolling > 0.02:
+            self._quick += (loud - self._quick) * (0.40 if loud > self._quick
+                                                   else 0.03)
+            if self._quiet is None:
+                self._quiet = loud
+            self._quiet += (self._quick - self._quiet) * (
+                0.02 if self._quick < self._quiet else 0.0004)
+            self._peak = max(self._quick, self._peak * 0.9996)
+            self._loudness = self._surge()
+        elif self._quiet is None:
+            self._quiet = loud
+        self._slow = min(1.0, self._slow + self.SLOW_BACK * self._rolling)
+        # The lunge is chosen once a beat and held for the whole of it.
+        #
+        # It shapes where the road is *within* a beat, so changing it
+        # part-way through moves the road - and the road may only ever go
+        # forwards, so it stops instead and waits for the curve to catch
+        # up. Measured on a real track, the slowest the road ran was
+        # zero: "I don't xxxx xxx xxx xxxx xxxxxx xxxxx xxxxxxx xxxxx".
+        # Changing it only on a beat boundary costs nothing, because
+        # every curve in the family agrees there: they are all zero at
+        # the start of a beat and one at the end.
+        #
+        # And not at all while the track is stopped, because the bass
+        # goes on easing after a pause and the road would move without
+        # the beat having.
+        beat_now = self._beat_number(self._heard)
+        if self._rolling > 0.02 and beat_now != self._lunge_from:
+            self._lunge_from = beat_now
             self._lunge = 1.0 + bass * self._slow * self.LUNGE
-        was = self._at
+        was, was_when = self._at, self._last_heard
+        self._last_heard = self._heard
         rolled = self._world(self._heard)
         # Never backwards. The curve is chosen by the push, so a push that
         # moves within a beat moves the whole mapping and the road can be
@@ -4777,7 +4893,16 @@ class Rider(Scene):
         # forwards, so neither does the road - except across a seek, which
         # is the one time it may.
         self._at = rolled if jumped else max(self._at, rolled)
-        self._speed = (self._at - was) / step if step > 1e-6 else 0.0
+        # Against the track's own clock, not the frame's: the frame's is
+        # gated by whether the track is playing, so dividing by it at a
+        # pause divides by nothing.
+        went = self._heard - (was_when if was_when is not None
+                              else self._heard)
+        # Nothing across a seek: the road is measured from an origin and
+        # a seek re-bases it, so the step across one is a change of
+        # coordinates rather than a distance travelled.
+        self._speed = (0.0 if jumped or went <= 1e-6
+                       else (self._at - was) / went)
         self._drift_sparks(step)
         self._bend += step * (0.30 + self._loudness * 0.85)
         self._climb += step * (0.19 + self._loudness * 0.55)
@@ -5047,6 +5172,12 @@ class Rider(Scene):
     def _lane_at(self, lane: int) -> float:
         return (lane - (self.LANES - 1) / 2.0) * self.LANE_WIDE
 
+    def _beat_number(self, when: float):
+        """Which beat of the track a moment is in, or None without one."""
+        if self._beat <= 0.0 or self._origin is None:
+            return None
+        return math.floor((when - self._origin) / self._beat)
+
     def _world(self, when: float) -> float:
         """Where the road is at a moment of the track, in road units.
 
@@ -5066,7 +5197,19 @@ class Rider(Scene):
         beats = (when - self._origin) / self._beat
         whole = math.floor(beats)
         through = beats - whole
-        return (whole + 1.0 - (1.0 - through) ** self._lunge) * self.PER_BEAT
+        # Part lunged and part even.
+        #
+        # All lunge is a road that stops: the curve's slope at the end of
+        # a beat is zero however hard it lunges, so the last frames of
+        # every beat travelled 0.06 units a second against a mean of 12
+        # - "I don't xxxx xxx xxx xxxx xxxxxx xxxxx xxxxxxx xxxxx".
+        # Mixing in a straight run puts a floor under it, and costs
+        # nothing in timing because both curves are zero at zero and one
+        # at one: a beat still covers exactly one beat's worth of road
+        # and arrives exactly on time.
+        lunged = 1.0 - (1.0 - through) ** self._lunge
+        went = through * (1.0 - self.LUNGE_MIX) + lunged * self.LUNGE_MIX
+        return (whole + went) * self.PER_BEAT
 
     def _where(self, when: float) -> float:
         """How far down the road a hit due at ``when`` is now.
@@ -5094,7 +5237,8 @@ class Rider(Scene):
         self._advance(state)
         self._lay(state)
         wanted = self._lane_at(self._lane)
-        self._lane_here += (wanted - self._lane_here) * self.SNAP
+        self._lane_here += ((wanted - self._lane_here) * self.SNAP
+                            * self._rolling)
         self._collide()
 
         flash = self.flash(state)
@@ -5110,8 +5254,8 @@ class Rider(Scene):
         # Dim. It is the room the road is in, not the subject: at the
         # strength Ambience uses it for its own sake it drowns the track.
         self._plasma.paint(painter, rect, state,
-                           strength=0.16 + surge * 0.20 + flash * 0.14,
-                           flash=flash)
+                           strength=0.07 + surge * 0.07 + flash * 0.05,
+                           flash=flash, going=self._rolling)
 
         horizon, focal, tilt = self._camera(rect, surge, bass)
         hue = self._tier(surge, state.synth)
@@ -5212,23 +5356,29 @@ class Rider(Scene):
         # Strongest at the moment of the hit and gone in HURT_FOR, with
         # the curve front-loaded so it lands hard and lets go.
         hurt = self._hurt * self._hurt
-        # The light out of the scene first, so the wash sits on a dimmed
-        # picture rather than on a bright one.
-        painter.fillRect(rect, QColor(4, 2, 6,
-                                      int(255 * hurt * self.HURT_DIM)))
-        # Then the red, from the edges in: a full flat fill reads as a
-        # colour change, and this reads as being hit.
+        # Multiplied, not washed over.
+        #
+        # Laying red over the picture can only add light to it, and on a
+        # world this dark that is a flashbulb: measured, the frame came
+        # out twice as bright after a hit as before one. Multiplying by a
+        # red takes the green and the blue out of everything and leaves
+        # the red where it was, so the frame goes red *and* dark, which
+        # is what damage looks like.
+        painter.save()
+        painter.setCompositionMode(
+            QPainter.CompositionMode.CompositionMode_Multiply)
+        painter.fillRect(rect, QColor(
+            255,
+            int(255 - (255 - 46) * hurt * self.HURT_DIM),
+            int(255 - (255 - 38) * hurt * self.HURT_DIM)))
+        painter.restore()
+        # And a rim of red light from the edges in, which is the part
+        # that reads as a blow rather than as a filter.
         middle = rect.center()
         edge = QRadialGradient(middle, max(rect.width(), rect.height()) * 0.62)
-        # A deep red rather than a bright one. The wash goes over a
-        # picture that has already had its light taken out, and a bright
-        # red put it back: measured, the frame came out twice as light
-        # after a hit as before one, which reads as a flashbulb rather
-        # than as damage.
         edge.setColorAt(0.0, QColor(150, 12, 16, 0))
-        edge.setColorAt(0.55, QColor(150, 12, 16,
-                                     int(255 * hurt * self.HURT_WASH * 0.35)))
-        edge.setColorAt(1.0, QColor(130, 8, 12,
+        edge.setColorAt(0.6, QColor(150, 12, 16, 0))
+        edge.setColorAt(1.0, QColor(160, 10, 14,
                                     int(255 * hurt * self.HURT_WASH)))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(edge)
@@ -5274,9 +5424,17 @@ class Rider(Scene):
         # vertex: the whole thing read as a cone with a tip rather than as
         # a road going away. Filled with a gradient down its length, the
         # far end simply stops being there.
+        # Dark, and it has to stay dark.
+        #
+        # A block and the road it stands on used to differ in hue and not
+        # in brightness: measured on a real track, an orange prize came
+        # out at a luminance of 0.400 on a road at 0.401 - a contrast of
+        # one to one, which is not dim, it is invisible. Hue alone does
+        # not separate two things at speed. So the road is held down near
+        # the floor and the blocks are the only bright thing on it.
         shade = QColor.fromHsvF(
-            (hue + 0.02) % 1.0, 0.80 - flash * 0.3,
-            0.16 + surge * 0.10 + flash * 0.16, 0.94)
+            (hue + 0.02) % 1.0, 0.85 - flash * 0.2,
+            self.ROAD_LIT + surge * 0.04 + flash * 0.05, 1.0)
         gone = QColor(shade)
         gone.setAlphaF(0.0)
         fog = QLinearGradient(0.0, far_y if far_y is not None else 0.0,
@@ -5288,7 +5446,20 @@ class Rider(Scene):
 
     #: How far down the road the fog has finished clearing, as a share of
     #: the way from the far end to the rider.
+    #: How light the road's surface is. See ``_surface``.
+    ROAD_LIT = 0.085
+
     FOG = 0.35
+    #: How solid a block is at the far end of the road.
+    #:
+    #: The fog is there so blocks come out of the distance rather than
+    #: appearing whole, and it used to take them all the way to nothing.
+    #: Measured against the background right behind it, a block two and
+    #: a half beats out read at 1.14 to 1 - which is not dim, it is
+    #: invisible: "xxx xxxxxx xxx xxxxxxxxxx xx xxx xxxxxxxxx". Three to
+    #: one is the usual floor for something this size, and a block has to
+    #: be read while there is still time to move.
+    FOG_LEAST = 0.55
 
     #: How far apart the chevrons under the road are, in road units, and
     #: how many rungs of it each one covers.
@@ -5379,6 +5550,9 @@ class Rider(Scene):
     #: is a grey: no hue worth the name and no light in it. A prize is
     #: the road's own colour at full strength, which is the tier the
     #: passage is in - red in a chorus, blue in a verse.
+    #: How much wider than the block its dark backing is drawn.
+    BACKING = 1.16
+
     GREY_SAT = 0.10
     GREY_LIT = 0.42
     PRIZE_SAT = 0.95
@@ -5395,8 +5569,13 @@ class Rider(Scene):
             shade = hue
             wet = max(0.0, self.PRIZE_SAT - flash * 0.4)
             lit = self.PRIZE_LIT
+        # A shade bigger than the block, for the dark it is drawn on.
+        wider = edge * self.BACKING
+        taller = tall * self.BACKING
         faces = QPainterPath()
         rims = QPainterPath()
+        backs = QPainterPath()
+        edges = QPainterPath()
         for when, lane, shape, _done, grey in self._blocks:
             if shape != kind or grey is not grey_now:
                 continue
@@ -5412,7 +5591,8 @@ class Rider(Scene):
             # whole at the far end of it.
             near = max(0.0, min(1.0, 1.0 - (at - self._near)
                                 / max(1e-6, self.FAR - self._near)))
-            seen = min(1.0, near / max(1e-6, self.FOG))
+            seen = self.FOG_LEAST + (1.0 - self.FOG_LEAST) * min(
+                1.0, near / max(1e-6, self.FOG))
             across = self._lane_at(lane)
             foot_l = self._eye(horizon, focal, across - edge, 0.0, at)
             foot_r = self._eye(horizon, focal, across + edge, 0.0, at)
@@ -5423,8 +5603,20 @@ class Rider(Scene):
             faces.lineTo(top_r)
             faces.lineTo(top_l)
             faces.closeSubpath()
+            backs.moveTo(self._eye(horizon, focal, across - wider, 0.0, at))
+            backs.lineTo(self._eye(horizon, focal, across + wider, 0.0, at))
+            backs.lineTo(self._eye(horizon, focal, across + wider,
+                                   -taller, at))
+            backs.lineTo(self._eye(horizon, focal, across - wider,
+                                   -taller, at))
+            backs.closeSubpath()
             rims.moveTo(top_l)
             rims.lineTo(top_r)
+            edges.moveTo(foot_l)
+            edges.lineTo(foot_r)
+            edges.lineTo(top_r)
+            edges.lineTo(top_l)
+            edges.lineTo(foot_l)
             # The block in the road under it. Squashed and dim, the
             # way a wet floor holds a light: one more quad a block,
             # and it is most of what makes them stand on the road
@@ -5437,6 +5629,12 @@ class Rider(Scene):
             pool.lineTo(self._eye(horizon, focal, across - edge,
                                   tall * self.MIRROR, at))
             pool.closeSubpath()
+            # A dark silhouette under it first. Whatever is behind a
+            # block - the lamp at the end of the road, a bright wash, the
+            # plasma at a drop - this is what the block is actually read
+            # against, so how well it reads stops depending on the
+            # background at all.
+            painter.fillPath(backs, QColor(3, 2, 8, int(225 * seen)))
             painter.fillPath(pool, QColor.fromHsvF(
                 shade, wet, lit * 0.62, 0.30 * seen))
             # One path per block rather than one for the lot, because
@@ -5446,13 +5644,42 @@ class Rider(Scene):
             self._beam(painter, rims, QColor.fromHsvF(
                 shade, max(0.0, wet - 0.45), 1.0,
                 min(1.0, (0.85 + flash * 0.15) * seen)))
+            # And an edge all the way round it, at full strength however
+            # far away it is.
+            #
+            # A block at the far end of the road is a dozen pixels of a
+            # colour that the lamp behind it has already washed out:
+            # measured on real tracks, one eighteen units out read at
+            # 1.05 to one against what surrounded it, which is
+            # invisible. Everything else about a block fades with
+            # distance, as it should - this does not, because it is the
+            # thing that says a block is there at all.
+            self._beam(painter, edges, QColor.fromHsvF(
+                shade, max(0.0, wet - 0.55), 1.0,
+                min(1.0, 0.55 + 0.45 * seen)))
             faces = QPainterPath()
             rims = QPainterPath()
+            backs = QPainterPath()
+            edges = QPainterPath()
 
     #: The horizon lamp: how far it reaches as a share of the frame, and
     #: how much the bass opens it.
-    GLOW_REACH = 0.55
-    GLOW_BASS = 0.30
+    #: How far the lamp reaches, as a share of the frame, and how much
+    #: the bass opens it.
+    #:
+    #: It sits at the vanishing point, which is exactly where a block is
+    #: when there is still time to move out of its lane. Reaching over
+    #: half the frame it did not light the end of the road, it erased it:
+    #: measured on a real track, the brightest pixel of a block eighteen
+    #: units out came to 1.02 against what surrounded it. A glow at the
+    #: end of the road, not a sky.
+    GLOW_REACH = 0.30
+    GLOW_BASS = 0.10
+    #: The most of the frame the lamp may take. It sits exactly where the
+    #: road's far end is, which is where a block has to be read while
+    #: there is still time to move: at full strength it washed that part
+    #: of the picture out altogether.
+    GLOW_MOST = 0.26
 
     def _glow(self, painter, rect, horizon, hue, surge, bass, beat,
               flash) -> None:
@@ -5466,10 +5693,11 @@ class Rider(Scene):
         lamp = QRadialGradient(horizon, reach)
         lamp.setColorAt(0.0, QColor.fromHsvF(
             (hue + 0.08) % 1.0, max(0.0, 0.70 - flash * 0.4), 1.0,
-            min(1.0, 0.30 + surge * 0.30 + beat * 0.18 + flash * 0.25)))
+            min(self.GLOW_MOST,
+                0.14 + surge * 0.14 + beat * 0.09 + flash * 0.12)))
         lamp.setColorAt(0.45, QColor.fromHsvF(
             (hue + 0.02) % 1.0, 0.85, 0.8,
-            min(1.0, 0.12 + surge * 0.16 + beat * 0.10)))
+            min(self.GLOW_MOST, 0.06 + surge * 0.08 + beat * 0.05)))
         lamp.setColorAt(1.0, QColor(0, 0, 0, 0))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(lamp)
