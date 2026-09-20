@@ -674,6 +674,23 @@ The row that files a message uses the same wrapping layout as the toolbars,
 because "File into:", a folder path and a button need 471 px and the pane
 can be given 420.
 
+Stacking is the answer to a pane that is *narrow*, and it costs height:
+two rows of controls and two pieces of text, one above the other. Under
+the table on an 800x560 window the pane is wide and short - 780 px across
+and about 190 tall - and stacking it there gave the half holding the
+message 38 px, which is not enough for the row of controls above the text
+let alone the text, so everything in it drew outside itself. So it stacks
+only when it is both narrow and tall enough to stack in.
+
+Every mode the window can be in is swept by `test_viewing_modes.py`, which
+walks every visible widget and asks two things of each: is it inside the
+thing that holds it, and is it at least as big as it says it needs to be.
+The main window at five sizes with the preview under the table and beside
+it, the attachment viewer at three sizes with each of the scenes that
+carry extra controls, the full-screen view, and the dialogs. That is what
+found the 38 px half, and a caption and a box in the preview that needed
+328 px of a 306 px column.
+
 ---
 
 ## Watching a scan
@@ -913,7 +930,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,620 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,665 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1274,7 +1291,7 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 3,620 tests, about three minutes
+./dev test        # 3,665 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```
@@ -1307,6 +1324,7 @@ and replays scripted responses.
 | `test_providers.py` | Each backend's request shape, refusals, and the HTTP transport against a real local server |
 | `test_rules_engine.py` | Normalisation of messy text, every category and topic, precedence, and calibration |
 | `test_layout.py` | Wrapping toolbars, table readability, live switching, field rule sets |
+| `test_viewing_modes.py` | Every window, pane and dialog at every size: nothing outside its parent, nothing squeezed below what it asks for |
 | `test_integration.py` | The whole pipeline on a realistic eight-message inbox |
 
 The integration suite asserts the property that matters most: after applying

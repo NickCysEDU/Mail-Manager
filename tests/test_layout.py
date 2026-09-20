@@ -697,13 +697,25 @@ class TestNothingTouchesTheSplitterBar:
         pane.close()
         pane.deleteLater()
 
-    def test_the_attachments_button_clears_the_bar(self, qapp, pane):
-        handle = pane.splitter.handle(1)
+    def test_the_attachments_button_clears_the_edge(self, qapp, pane):
+        """It sits at the top now, beside the message it belongs to,
+        rather than in the half that holds the text: that half is 306px
+        wide at its narrowest and the button and the box beside it needed
+        328. What it has to clear up there is the edge of the pane."""
         button = pane.attachments_button
         right = button.mapTo(pane, button.rect().topRight()).x()
+        assert pane.width() - right >= self.LEAST, (
+            f"the button's right edge is at {right} in a {pane.width()}px "
+            f"pane, a gap of {pane.width() - right}px")
+
+    def test_the_source_box_clears_the_bar(self, qapp, pane):
+        """What is left in that half: the box that picks what to show."""
+        handle = pane.splitter.handle(1)
+        box = pane.body_mode
+        right = box.mapTo(pane, box.rect().topRight()).x()
         bar = handle.mapTo(pane, handle.rect().topLeft()).x()
         assert bar - right >= self.LEAST, (
-            f"the button's right edge is at {right} and the bar starts at "
+            f"the box's right edge is at {right} and the bar starts at "
             f"{bar}, a gap of {bar - right}px")
 
     def test_the_text_box_clears_the_bar(self, qapp, pane):
@@ -846,6 +858,26 @@ class TestTheAnalysisHasRoomToBeRead:
             assert least <= 420, (
                 f"the preview cannot be drawn narrower than {least}px, so "
                 f"beside the table on a small window it is cut off")
+        finally:
+            pane.close()
+
+    @pytest.mark.parametrize("width", [1600, 1000, 700, 480, 420])
+    def test_the_source_row_wraps_rather_than_squeezing_the_box(self, qapp,
+                                                                width):
+        """"Source:", a box holding "Exactly what the model was sent" and
+        an Attachments button do not fit across the left half of a narrow
+        preview. A fixed row does not shrink - it squeezes the box until
+        the words in it are elided."""
+        pane = self._pane(qapp, width, height=520)
+        try:
+            box = pane.body_mode
+            assert box.width() >= box.sizeHint().width() - 1, (
+                f"at a pane {width}px wide the source box is "
+                f"{box.width()}px against the {box.sizeHint().width()} it "
+                f"needs to show what is in it")
+            assert (pane.attachments_button.width()
+                    >= pane.attachments_button.sizeHint().width() - 1), (
+                "the Attachments button was squeezed below its label")
         finally:
             pane.close()
 

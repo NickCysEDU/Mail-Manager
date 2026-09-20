@@ -166,3 +166,54 @@ class Spacer(QWidget):
 
     def sizeHint(self) -> QSize:
         return QSize(self.minimumWidth(), 1)
+
+
+class FlowHolder(QWidget):
+    """A widget whose height follows the wrapping row inside it.
+
+    A layout asks a widget how tall it wants to be, and a plain QWidget
+    answers with a single number. A row that wraps has no single number -
+    it is taller when it is narrower - so the container has to say so, or
+    the layout hands it one line's worth and everything that wrapped onto
+    a second line is simply cut off. Which is what was happening.
+    """
+
+    def __init__(self, row, parent=None) -> None:
+        super().__init__(parent)
+        self.setLayout(row)
+        self._row = row
+        policy = self.sizePolicy()
+        policy.setHeightForWidth(True)
+        policy.setVerticalPolicy(QSizePolicy.Policy.Minimum)
+        self.setSizePolicy(policy)
+
+    def hasHeightForWidth(self) -> bool:      # noqa: N802 - Qt's name
+        return True
+
+    def heightForWidth(self, width: int) -> int:      # noqa: N802 - Qt's name
+        margins = self.contentsMargins()
+        inner = max(0, width - margins.left() - margins.right())
+        return (self._row.heightForWidth(inner)
+                + margins.top() + margins.bottom())
+
+    def sizeHint(self) -> QSize:      # noqa: N802 - Qt's name
+        width = self.width() or 600
+        return QSize(width, self.heightForWidth(width))
+
+    def minimumSizeHint(self) -> QSize:      # noqa: N802 - Qt's name
+        """As narrow as its widest single control, and as tall as it needs.
+
+        Returning the size hint here made the pane six hundred pixels wide
+        at minimum, so a narrower window could not shrink it - the layout
+        kept the width and everything past the edge was simply cut off.
+        A row that wraps has no minimum width beyond one control.
+        """
+        width = self.width() or 600
+        return QSize(self._row.minimumSize().width(),
+                     self.heightForWidth(width))
+
+    def resizeEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        super().resizeEvent(event)
+        # A new width means a new height. Without this the container keeps
+        # whatever height it had when it was last measured.
+        self.updateGeometry()

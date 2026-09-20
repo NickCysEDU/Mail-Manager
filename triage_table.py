@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QLabel,
                                QTextBrowser, QToolButton, QVBoxLayout, QWidget)
 
 import conversations
-from flowlayout import FlowLayout
+from flowlayout import FlowHolder, FlowLayout
 import theme
 from imap_engine import MoveReport
 from models import (CATEGORY_COLORS, OTHER_COLOR, TOPIC_COLORS, Category,
@@ -675,6 +675,33 @@ class PreviewPane(QWidget):
     TWO_COLUMNS = 800
     ONE_COLUMN = 760
 
+    #: The least height a half of the pane works at: a row of controls
+    #: and a few lines of text under it.
+    HALF_TALL = 70
+
+    #: The least room the pane is any use in.
+    #:
+    #: The header, the row that files the message, and a half with a row
+    #: of controls and a few lines of text under it. Below this a splitter
+    #: squeezes the halves until the controls in them draw outside
+    #: themselves - and a preview that short shows nothing worth reading
+    #: anyway. It can still be shut: a splitter collapses a child rather
+    #: than obeying its minimum when it is dragged to the end.
+    MIN_TALL = 250
+
+    #: The height it takes to stack the two halves rather than put them
+    #: side by side.
+    #:
+    #: Stacking is the answer to a *narrow* pane, and it costs height:
+    #: two rows of controls and two pieces of text, one above the other.
+    #: Under the table on an 800x560 window the pane is wide and short -
+    #: 780 px across and about 190 tall - and stacking it there gave the
+    #: half holding the message 38 px, which is not enough for the row of
+    #: controls above the text let alone the text, so everything in it
+    #: drew outside it. Short and wide is the one case that wants two
+    #: columns however narrow the rule below thinks it is.
+    MIN_STACK = 260
+
     overrideChanged = Signal(int, object)  # source row, folder or None
     #: "Sort this mail too" - the window turns non-job routing on.
     sortNonJobRequested = Signal()
@@ -699,18 +726,35 @@ class PreviewPane(QWidget):
         self.attachments_button.clicked.connect(self._open_attachments)
 
         self.body_mode = QComboBox()
-        self.body_mode.addItems(["Message text", "Exactly what the model was sent"])
+        # Short enough to sit beside the Attachments button in the half
+        # this lives in. Beside the table on an 800px window that half is
+        # 306 px wide and as little as 70 px tall, so the row cannot wrap
+        # its way out of trouble - it has to fit on one line. "Exactly
+        # what the model was sent" measured 229 px in the box and left it
+        # squeezed to 207; this measures 149. The caption in front of it
+        # said "Source:", which the two entries already say, and the long
+        # version of the second one is in the tooltip.
+        self.body_mode.addItems(["Message text", "What was sent"])
         self.body_mode.currentIndexChanged.connect(self._render_body)
         self.body_mode.setToolTip(
-            "Switch between the readable message and the verbatim payload sent to the model."
-        )
+            "Switch between the readable message and exactly what was "
+            "sent to the model.")
 
         self.body_view = QPlainTextEdit()
+        # Smaller than Qt's own idea of a text box, which is ninety
+        # pixels square. A preview beside the table on an 800px window
+        # gives this half about ninety pixels of height in total, and
+        # ninety of it spoken for by the text box meant the row of
+        # controls above it was squeezed and drew outside itself. A text
+        # view scrolls; it does not need ninety pixels to be usable, and
+        # nothing else in that half can give way.
+        self.body_view.setMinimumHeight(36)
         self.body_view.setReadOnly(True)
         self.body_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self.body_view.setFont(_mono_font())
 
         self.reasoning_view = QTextBrowser()
+        self.reasoning_view.setMinimumHeight(36)
         self.reasoning_view.setOpenExternalLinks(True)
 
         self.folder_combo = QComboBox()
@@ -758,11 +802,21 @@ class PreviewPane(QWidget):
         # bar between the two halves: "xxx xxxxxxxxxxx xxxxxx xxx xxx xxxxx
         # xxxxx xx xxx xxx xxxxx xx xxx separating bar to their right".
         left_layout.setContentsMargins(0, 0, self.GUTTER, 0)
+        # One line, and short enough to stay one line.
+        #
+        # This half is as little as 306 px across and 70 tall, and a row
+        # that wraps needs height the half has not got: wrapped there, it
+        # was handed 38 px for two lines that needed 54 and everything on
+        # the second line drew outside it. Making the row fit instead -
+        # dropping the "Source:" caption, which the two entries in the box
+        # already say, and shortening the longer of them - brings it to
+        # 273 px, which is one line at every size the half is given.
         mode_row = QHBoxLayout()
-        mode_row.addWidget(QLabel("Source:"))
+        mode_row.setContentsMargins(0, 0, 0, 0)
         mode_row.addWidget(self.body_mode, 1)
-        mode_row.addWidget(self.attachments_button)
-        left_layout.addLayout(mode_row)
+        self.mode_row = QWidget()
+        self.mode_row.setLayout(mode_row)
+        left_layout.addWidget(self.mode_row)
         left_layout.addWidget(self.body_view, 1)
 
         right = QWidget()
@@ -772,6 +826,12 @@ class PreviewPane(QWidget):
         right_layout.addWidget(self.analysis_label)
         right_layout.addWidget(self.reasoning_view, 1)
 
+        # Each half tall enough for its row of controls and a few lines
+        # of text under it. A splitter squeezes a child that has no
+        # minimum until the controls inside it draw outside themselves,
+        # which is what a 70 px half looks like from the inside.
+        left.setMinimumHeight(self.HALF_TALL)
+        right.setMinimumHeight(self.HALF_TALL)
         self._left, self._right = left, right
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.addWidget(left)
@@ -786,15 +846,39 @@ class PreviewPane(QWidget):
         folder_row.addWidget(QLabel("File into:"))
         folder_row.addWidget(self.folder_combo)
         folder_row.addWidget(self.reset_button)
-        self.folder_row = QWidget()
-        self.folder_row.setLayout(folder_row)
+        self.folder_row = FlowHolder(folder_row)
+
+        # Attachments sits up here with the message it belongs to, not
+        # down in the half that holds the text. That half is 306 px wide
+        # at its narrowest and the box beside it needs 229 of them under
+        # this theme, so the two together did not fit on a line and the
+        # half is too short to give them two. Up here there is the whole
+        # width of the pane.
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(8)
+        top.addWidget(self.header, 1)
+        top.addWidget(self.attachments_button, 0,
+                      Qt.AlignmentFlag.AlignTop)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 8, 10, 8)
-        layout.addWidget(self.header)
+        layout.addLayout(top)
         layout.addWidget(self.inert_row)
         layout.addWidget(self.folder_row)
         layout.addWidget(self.splitter, 1)
+
+        # Tall enough to hold what is in it.
+        #
+        # A splitter will squeeze a child down to nothing if nothing stops
+        # it, and on an 800x560 window with the preview under the table it
+        # did: the half holding the message was given 38 px, which is not
+        # enough for the row of controls above the text let alone the
+        # text. Everything in here then drew outside it. A preview that
+        # short is no use anyway - and it can still be shut entirely,
+        # because a splitter collapses a child rather than obeying the
+        # minimum when it is dragged to the end.
+        self.setMinimumHeight(self.MIN_TALL)
 
         self.set_folder_choices([])
         self.clear()
@@ -806,10 +890,11 @@ class PreviewPane(QWidget):
     def _arrange(self, width: int) -> None:
         """Side by side when there is room for both, stacked when not."""
         across = self.splitter.orientation() == Qt.Orientation.Horizontal
-        if across and width < self.ONE_COLUMN:
+        tall = self.height() >= self.MIN_STACK
+        if across and width < self.ONE_COLUMN and tall:
             self._stack(Qt.Orientation.Vertical, (0, self.GUTTER, 0, 0),
                         (0, 0, 0, 0))
-        elif not across and width > self.TWO_COLUMNS:
+        elif not across and (width > self.TWO_COLUMNS or not tall):
             self._stack(Qt.Orientation.Horizontal, (0, 0, self.GUTTER, 0),
                         (self.GUTTER, 0, 0, 0))
 
