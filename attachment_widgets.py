@@ -2946,6 +2946,9 @@ class Waveform(QWidget):
 
     #: Emitted with a position in milliseconds when somebody clicks it.
     seeked = Signal(int)
+    #: Whether there is a shape to draw. The pane puts up the plain seek
+    #: bar instead when there is not.
+    shapeChanged = Signal(bool)
 
     #: How tall the bar is, and how wide one column of it is with the gap
     #: that follows. Three pixels a column: any narrower and the gaps
@@ -2975,7 +2978,7 @@ class Waveform(QWidget):
     def set_shape(self, shape) -> None:
         """The outline of the track, or nothing to clear it."""
         self._shape = list(shape or ())
-        self.setVisible(bool(self._shape))
+        self.shapeChanged.emit(bool(self._shape))
         self.update()
 
     def set_span(self, milliseconds: int) -> None:

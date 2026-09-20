@@ -3992,6 +3992,20 @@ class Rider(Scene):
     #: Seconds of flashing, and of not being hit again, after a hit.
     SORE = 0.9
 
+    #: How long the whole picture shows a hit, and what it does to it.
+    #:
+    #: The screen wash is the part that carries it. A shake says
+    #: something happened to the camera; a frame that goes red and dark
+    #: says something happened to *you*, which is what a hit is. Six
+    #: tenths of a second, which is about a beat and a half - long enough
+    #: to read and short enough to be over before the next figure.
+    HURT_FOR = 0.6
+    #: How hard a hit washes the frame, throws the camera and drops the
+    #: light out of everything else.
+    HURT_WASH = 0.46
+    HURT_THROW = 3.4
+    HURT_DIM = 0.62
+
     SHAKE = 0.030
     SHAKE_FALL = 0.10
 
@@ -4077,6 +4091,9 @@ class Rider(Scene):
         self._heard = 0.0
         self._shake = 0.0
         self._sore = 0.0
+        #: 1 the moment something was hit, falling to nothing over
+        #: HURT_FOR. Everything the picture does about a hit reads this.
+        self._hurt = 0.0
         self._score = 0
         self._streak = 0
         self._best = 0
@@ -4563,6 +4580,7 @@ class Rider(Scene):
                           - step * 0.9)
         self._shake = min(1.0, self._shake + kit.get("Kick", 0.0) * 0.5)
         self._sore = max(0.0, self._sore - step)
+        self._hurt = max(0.0, self._hurt - step / self.HURT_FOR)
         return step
 
     def _surge(self) -> float:
@@ -4588,6 +4606,9 @@ class Rider(Scene):
                     self._sore = self.SORE
                     self._shake = min(1.0, self._shake + 0.8)
                     self._slow = self.SLOW
+                    # "Xxxx xxx xxxxxx xxxxxx xxxxx xx xx obstacle hit."
+                    # Not the block, not the ship: the picture.
+                    self._hurt = 1.0
                     self._burst(self._lane_at(lane))
             else:
                 self._score += 1
@@ -4696,9 +4717,14 @@ class Rider(Scene):
 
         # The whole view banks into the bend. One transform around the
         # horizon, so everything drawn after it leans together.
+        # And a hit throws it. A high-frequency roll on its own clock for
+        # as long as the hit lasts, on top of the lean: the blueprint's
+        # stun shake, which uncouples the camera from its own smoothing
+        # so that a failure is felt rather than noticed.
         painter.save()
         painter.translate(horizon)
-        painter.rotate(tilt)
+        painter.rotate(tilt + (math.sin(self._wobble * 2.3)
+                               * self._hurt * self.HURT_THROW))
         painter.translate(-horizon)
 
         self._glow(painter, rect, horizon, hue, surge, bass, beat, flash)
@@ -4714,7 +4740,47 @@ class Rider(Scene):
         self._bits(painter, horizon, focal, hue)
         self._ship(painter, rect, horizon, focal, hue, flash)
         painter.restore()
+        self._wash(painter, rect)
         self._card(painter, rect, hue)
+
+    def _wash(self, painter, rect) -> None:
+        """What a hit does to the whole picture.
+
+        "Xxxx xxx xxxxxx xxxxxx xxxxx xx xx obstacle hit." A shake says
+        something happened to the camera. A frame that goes red from its
+        edges in, with the light dropped out of everything under it, says
+        something happened to *you*.
+
+        Two fills a frame and only while it is fading, so it costs
+        nothing the rest of the time.
+        """
+        if self._hurt <= 0.0:
+            return
+        # Strongest at the moment of the hit and gone in HURT_FOR, with
+        # the curve front-loaded so it lands hard and lets go.
+        hurt = self._hurt * self._hurt
+        # The light out of the scene first, so the wash sits on a dimmed
+        # picture rather than on a bright one.
+        painter.fillRect(rect, QColor(4, 2, 6,
+                                      int(255 * hurt * self.HURT_DIM)))
+        # Then the red, from the edges in: a full flat fill reads as a
+        # colour change, and this reads as being hit.
+        middle = rect.center()
+        edge = QRadialGradient(middle, max(rect.width(), rect.height()) * 0.62)
+        # A deep red rather than a bright one. The wash goes over a
+        # picture that has already had its light taken out, and a bright
+        # red put it back: measured, the frame came out twice as light
+        # after a hit as before one, which reads as a flashbulb rather
+        # than as damage.
+        edge.setColorAt(0.0, QColor(150, 12, 16, 0))
+        edge.setColorAt(0.55, QColor(150, 12, 16,
+                                     int(255 * hurt * self.HURT_WASH * 0.35)))
+        edge.setColorAt(1.0, QColor(130, 8, 12,
+                                    int(255 * hurt * self.HURT_WASH)))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(edge)
+        painter.drawRect(rect)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
 
     def _rung(self, horizon, focal, at: float, out: float = 0.0):
         """The two ends of the road at ``at``, as a pair of points."""

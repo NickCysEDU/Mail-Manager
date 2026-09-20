@@ -576,7 +576,13 @@ class AudioPane(QWidget):
 
         controls = QHBoxLayout()
         controls.addWidget(self.play)
+        # The waveform *is* the seek bar once there is one: it says where
+        # you are and what is there, which a slider cannot. The slider
+        # stays for the rest of the time - a track nobody has analysed
+        # has no shape to draw, and a transport with nothing to drag is
+        # worse than a plain one.
         controls.addWidget(self.position, 1)
+        controls.addWidget(self.wave, 1)
         controls.addWidget(self.clock)
         controls.addSpacing(10)
         controls.addWidget(QLabel("Vol"))
@@ -593,7 +599,6 @@ class AudioPane(QWidget):
         # of pixels landed on the scene's last one - not enough to see,
         # but they should not be touching either.
         layout.addSpacing(8)
-        layout.addWidget(self.wave)
         layout.addLayout(controls)
         # Below the transport, outside the picture. Putting them inside the
         # visualiser frame meant they were hidden whenever it was, and they
@@ -606,6 +611,9 @@ class AudioPane(QWidget):
         self.play.clicked.connect(self._toggle)
         self.position.seeked.connect(self._seek)
         self.wave.seeked.connect(self._seek)
+        # One of the two is up at a time, and the waveform decides which.
+        self.wave.shapeChanged.connect(self._show_scrubber)
+        self._show_scrubber(False)
         self.volume.valueChanged.connect(self._set_volume)
 
     def _ensure_player(self) -> bool:
@@ -787,6 +795,12 @@ class AudioPane(QWidget):
     def _set_volume(self, value: int) -> None:
         if self._audio is not None:
             self._audio.setVolume(value / 100)
+
+    @Slot(bool)
+    def _show_scrubber(self, drawn: bool) -> None:
+        """Put up whichever of the two can do the job."""
+        self.position.setVisible(not drawn)
+        self.wave.setVisible(drawn)
 
     @Slot(int)
     def _moved(self, value: int) -> None:

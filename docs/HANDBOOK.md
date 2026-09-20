@@ -805,10 +805,13 @@ worst frame 36 ms against 205.
 
 ### The shape of the track
 
-Above the seek bar, in the window, is the whole track drawn as a waveform:
-a bar a column, mirrored about the middle, the part already played in the
-window's highlight over the part that is not. Click or drag anywhere on it
-to jump there.
+In the window, the whole track is drawn as a waveform where the seek bar
+would be: a bar a column, mirrored about the middle, the part already
+played in the window's highlight over the part that is not. Click or drag
+anywhere on it to jump there, and the clock beside it still says how far
+through you are. The plain slider comes back for a track nobody has
+analysed, because there is no shape to draw for one and a transport with
+nothing to drag is worse than a plain one.
 
 It comes from the same analysis the scenes use, so it appears when the
 picture does and there is no second reason to decode the file. The frames
@@ -880,6 +883,10 @@ further than half a beat, so a figure cannot move to a beat it did not
 come from. Run end to end on the detector's own output from a synthesised
 house track, the kick it heard sat up to 222 ms off the beat; the figures
 laid from it sit on it.
+
+Hitting something turns the whole picture, not the block and not the
+ship: the frame goes red from its edges in, the light drops out of
+everything under it and the view is thrown for about a beat and a half.
 
 A passage with no drums has no obstacles, which is what a build-up should
 feel like; the road speeds up instead. The ground runs from 6 to 23 units
@@ -972,7 +979,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,704 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,711 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1333,7 +1340,7 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 3,704 tests, about three minutes
+./dev test        # 3,711 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

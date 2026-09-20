@@ -9390,14 +9390,15 @@ class TestTheWaveformWidget:
                    QWidget.RenderFlag.DrawChildren)
         return image
 
-    def test_there_is_nothing_to_see_until_the_track_is_analysed(self, qapp):
+    def test_it_says_whether_it_has_anything_to_draw(self, qapp):
+        """The pane puts up the plain seek bar instead when it has not."""
         bar = self._made()
-        assert not bar.isVisible() or bar.isHidden(), (
-            "the bar is on screen with nothing in it")
+        said = []
+        bar.shapeChanged.connect(said.append)
         bar.set_shape([0.5] * 100)
-        assert not bar.isHidden(), "the bar stayed hidden with a shape in it"
         bar.clear()
-        assert bar.isHidden(), "the bar stayed up after the shape was cleared"
+        assert said == [True, False], (
+            f"the bar reported {said} as a shape arrived and was cleared")
 
     def test_the_part_already_played_is_drawn_apart_from_the_rest(self,
                                                                  qapp):
@@ -9467,31 +9468,56 @@ class TestTheWaveformWidget:
 class TestTheWaveformIsInTheWindowedPane:
     """Where it was asked for, and not where it was not."""
 
-    def test_it_sits_between_the_picture_and_the_transport(self, qapp,
-                                                           tmp_path):
+    def test_it_takes_the_seek_bar_s_place_in_the_transport(self, qapp,
+                                                            tmp_path):
+        """"Maybe xxxxxxx xxxx xxxx xxxx xxxx xxxxxxxx xxxxx xxxxxxx xxx
+        xxxx xxxxxx / xxxxx xxxx xxxxxxx." It sits where the slider sat,
+        between the play button and the clock."""
         from attachment_view import AudioPane
 
         pane = AudioPane()
         try:
+            row = None
             layout = pane.layout()
-            order = [layout.itemAt(i) for i in range(layout.count())]
-            places = {}
-            for index, item in enumerate(order):
-                if item.widget() is pane.wave:
-                    places["wave"] = index
-                elif item.widget() is pane.spectrum:
-                    places["picture"] = index
-                elif item.layout() is not None and any(
-                        item.layout().itemAt(j).widget() is pane.position
-                        for j in range(item.layout().count())):
-                    places["transport"] = index
-            assert set(places) == {"wave", "picture", "transport"}, (
-                f"only found {sorted(places)} in the pane")
-            assert places["picture"] < places["wave"] < places["transport"], (
-                f"the waveform is at {places['wave']} with the picture at "
-                f"{places['picture']} and the seek bar at "
-                f"{places['transport']}")
+            for index in range(layout.count()):
+                inner = layout.itemAt(index).layout()
+                if inner is None:
+                    continue
+                held = [inner.itemAt(j).widget()
+                        for j in range(inner.count())]
+                if pane.wave in held:
+                    row = held
+            assert row is not None, "the waveform is not in the transport"
+            assert pane.play in row and pane.clock in row, (
+                "the play button and the clock are not on that row")
+            assert row.index(pane.play) < row.index(pane.wave) \
+                < row.index(pane.clock), (
+                "the waveform is not between the play button and the clock")
+            assert pane.position in row, (
+                "the plain seek bar has to stay on the row for tracks that "
+                "have not been analysed")
         finally:
+            pane.deleteLater()
+
+    def test_only_one_scrubber_is_up_at_a_time(self, qapp):
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        pane.resize(800, 600)
+        pane.show()
+        try:
+            assert pane.position.isVisible() and not pane.wave.isVisible(), (
+                "a track with no shape yet should show the plain bar")
+            pane.wave.set_shape([0.5] * 200)
+            qapp.processEvents()
+            assert pane.wave.isVisible() and not pane.position.isVisible(), (
+                "the waveform did not take the bar's place")
+            pane.wave.clear()
+            qapp.processEvents()
+            assert pane.position.isVisible() and not pane.wave.isVisible(), (
+                "the bar did not come back when the shape went")
+        finally:
+            pane.close()
             pane.deleteLater()
 
     def test_it_starts_with_nothing_in_it(self, qapp):
@@ -10616,3 +10642,149 @@ class TestTheRiderCameraIsOnABoom:
         assert turns <= 2, (
             f"the follow distance changed direction {turns} times, so the "
             f"spring is ringing rather than settling")
+
+
+class TestTheWholeScreenFeelsAHit:
+    """"Xxxx xxx xxxxxx xxxxxx xxxxx xx xx obstacle hit."
+
+    A shake says something happened to the camera. A frame that goes red
+    from its edges in, with the light dropped out of everything under it
+    and the view thrown, says something happened to *you* - which is the
+    blueprint's stun shake, and which is what a hit is.
+    """
+
+    W, H = 640, 360
+    BEAT = 60.0 / 128.0
+
+    @classmethod
+    def _frame(cls, hurt=0.0, shake=0.0):
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        scene = visualizers.Rider()
+        scene._last = None
+        state = SpectrumState()
+        state.levels = [0.4] * 27
+        state.bass = state.mid = state.high = 0.4
+        state.synth = 0.3
+        state.tempo = 128.0
+        state.at = 4.0
+        state.beat_at = 0.25
+        state.moving = True
+        state.kit = {}
+        state.chart = {"Kick": tuple(i * cls.BEAT for i in range(200))}
+        image = QImage(cls.W, cls.H,
+                       QImage.Format.Format_ARGB32_Premultiplied)
+        painter = QPainter(image)
+        was = visualizers.time.monotonic
+        now = [900.0]
+        visualizers.time.monotonic = lambda: now[0]
+        try:
+            for step in range(40):
+                now[0] += 1 / 60.0
+                state.at = 4.0 + step / 60.0
+                state.beat_at = (state.at % cls.BEAT) / cls.BEAT
+                image.fill(QColor(0, 0, 0))
+                scene.paint(painter, QRectF(0, 0, cls.W, cls.H), state)
+            scene._hurt = hurt
+            scene._shake = shake
+            image.fill(QColor(0, 0, 0))
+            scene.paint(painter, QRectF(0, 0, cls.W, cls.H), state)
+        finally:
+            painter.end()
+            visualizers.time.monotonic = was
+        return image
+
+    @classmethod
+    def _redness(cls, image):
+        """How red the picture is against how green, over the whole of it."""
+        red = green = 0
+        for y in range(0, cls.H, 5):
+            for x in range(0, cls.W, 5):
+                colour = image.pixelColor(x, y)
+                red += colour.red()
+                green += colour.green()
+        return red / max(1, green)
+
+    @classmethod
+    def _light(cls, image):
+        total = 0
+        for y in range(0, cls.H, 5):
+            for x in range(0, cls.W, 5):
+                total += image.pixelColor(x, y).lightness()
+        return total
+
+    def test_a_hit_turns_the_whole_frame(self, qapp):
+        calm = self._frame(hurt=0.0)
+        struck = self._frame(hurt=1.0)
+        assert self._redness(struck) > self._redness(calm) * 1.3, (
+            f"the frame reads {self._redness(calm):.2f} red to green calm "
+            f"and {self._redness(struck):.2f} hit")
+
+    def test_it_reaches_the_corners_not_just_the_road(self, qapp):
+        """The road is a slab up the middle; a reaction that only touched
+        it would be a reaction of the road, not of the screen."""
+        calm = self._frame(hurt=0.0)
+        struck = self._frame(hurt=1.0)
+        for x, y in ((12, 12), (self.W - 12, 12), (12, self.H - 12),
+                     (self.W - 12, self.H - 12)):
+            was = calm.pixelColor(x, y)
+            now = struck.pixelColor(x, y)
+            assert now.red() > was.red() + 14, (
+                f"the corner at {x},{y} went from {was.red()} red to "
+                f"{now.red()}")
+
+    def test_the_light_drops_out_of_it(self, qapp):
+        calm = self._light(self._frame(hurt=0.0))
+        struck = self._light(self._frame(hurt=1.0))
+        assert struck < calm * 1.6, (
+            "a hit should darken the picture under the wash, not only add "
+            f"to it: {calm} before, {struck} after")
+
+    def test_it_is_over_within_a_beat_or_two(self, qapp):
+        import visualizers
+
+        scene = visualizers.Rider()
+        assert 0.3 < scene.HURT_FOR < 1.2, (
+            f"a hit shows for {scene.HURT_FOR}s, which is either too "
+            f"quick to read or long enough to cover the next figure")
+
+    def test_hitting_something_sets_it_off(self, qapp):
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._last = None
+        scene._lane = 1
+        scene._lane_here = scene._lane_at(1)
+        scene._heard = 5.0
+        scene._blocks = [[4.0, 1, "wall", False]]
+        scene._collide()
+        assert scene._hits == 1, "the block missed"
+        assert scene._hurt == pytest.approx(1.0), (
+            f"the screen was left at {scene._hurt:.2f} after a hit")
+
+    def test_and_wears_off_on_its_own(self, qapp):
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        scene = visualizers.Rider()
+        scene._last = None
+        scene._hurt = 1.0
+        state = SpectrumState()
+        state.levels = [0.4] * 27
+        state.kit = {}
+        was = visualizers.time.monotonic
+        now = [700.0]
+        visualizers.time.monotonic = lambda: now[0]
+        try:
+            for _ in range(120):
+                now[0] += 1 / 60.0
+                state.at = now[0] - 700.0
+                scene._advance(state)
+        finally:
+            visualizers.time.monotonic = was
+        assert scene._hurt == 0.0, (
+            f"the screen is still at {scene._hurt:.2f} two seconds later")
