@@ -104,6 +104,21 @@ def _labelled(text: str, control) -> QWidget:
     return holder
 
 
+def _relabel(holder: QWidget, text: str, tip: str) -> None:
+    """Change what a ``_labelled`` control is called, and its tooltip.
+
+    Two of these controls mean different things in Manual, and a slider
+    captioned "sens" that sets the shape of a flash is worse than no
+    caption at all.
+    """
+    row = holder.layout()
+    caption = row.itemAt(0).widget()
+    control = row.itemAt(1).widget()
+    caption.setText(text)
+    caption.setToolTip(tip)
+    control.setToolTip(tip)
+
+
 def _combo(options, tip: str) -> QComboBox:
     """A dropdown wide enough for its longest option, popup included.
 
@@ -1073,12 +1088,34 @@ class AudioPane(QWidget):
         self.spectrum.update()
         return True
 
+    #: What the two sliders are called, and what they do, in each mode.
+    #: Manual has nothing firing by itself, so "what counts as a hit" and
+    #: "how soon another may follow" have nothing to say; the two things
+    #: a hand strobe does have are how fast it repeats and how it comes
+    #: up and goes down.
+    SENSE_WORDS = (
+        "sens", "How big a jump counts as a hit, from fussy to eager.")
+    RATE_WORDS = (
+        "rate", "How soon after one flash the next may fire, from every "
+                "few bars to every beat it can find.")
+    HAND_SENSE_WORDS = (
+        "shape", "The shape of a flash you play by hand. Left is on and "
+                 "off with nothing in between; right fades up and back "
+                 "down.")
+    HAND_RATE_WORDS = (
+        "rate", "How fast the strobe repeats while the strobe key is "
+                "held, from about five a second to thirty.")
+
     def _show_by_hand(self, source: str) -> None:
         """Say which key flashes it, whenever the strobe waits for one."""
         from attachment_widgets import Spectrum as _Spec
 
         wanted = source == _Spec.BY_HAND
         self.by_hand.setVisible(wanted)
+        _relabel(self.sense_box,
+                 *(self.HAND_SENSE_WORDS if wanted else self.SENSE_WORDS))
+        _relabel(self.rate_box,
+                 *(self.HAND_RATE_WORDS if wanted else self.RATE_WORDS))
         for label in getattr(self, "_by_hand_echo", ()):
             try:
                 label.setVisible(wanted)

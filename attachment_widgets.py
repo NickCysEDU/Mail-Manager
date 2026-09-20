@@ -347,6 +347,19 @@ class Spectrum(QWidget):
         #: Whether the manual key is being held down.
         self._holding = False
         self._spamming = False
+        #: What the two sliders mean in Manual. See HAND_SLOWEST and
+        #: HAND_ON. Kept apart from the automatic pair rather than shared
+        #: with them, so switching modes does not carry one mode's
+        #: settings into the other's.
+        self._hand_rate = 0.5
+        self._hand_shape = 0.0
+        #: Where a flash from the hand is heading, which is what the
+        #: shape rises towards and falls away from.
+        self._hand_want = 0.0
+        #: When the rapid-fire key last fired, on the wall clock rather
+        #: than in frames: the frame rate moves with the scene and the
+        #: machine, and a strobe rate that moves with it is not a rate.
+        self._spam_at = None
         #: The beats found before playback started, one map per source.
         self._beats: dict = {}
         #: The kit on its own, for scenes that want to know which is which.
@@ -426,8 +439,9 @@ class Spectrum(QWidget):
             self._strobe_source = source
         self._strobe_rate = max(0.0, min(1.0, float(rate)))
         self._strobe_sense = max(0.0, min(1.0, float(sense)))
-        self.strobe_settings_changed.emit(
-            self._strobe_source, self._strobe_rate, self._strobe_sense)
+        # What the sliders should show, which is not this pair when the
+        # scene asked for Manual.
+        self.strobe_settings_changed.emit(*self.strobe_shown())
 
     def set_strobe(self, on: bool) -> None:
         self._state.strobe = bool(on)
@@ -489,9 +503,19 @@ class Spectrum(QWidget):
         return max(60, wanted)
 
     def set_strobe_rate(self, rate: float) -> None:
+        """How soon after a flash the next one may fire, 0 rare to 1 often.
+
+        In Manual it is how fast the rapid-fire key repeats instead.
+        Nothing fires by itself in Manual, so "how soon another may
+        follow" has nothing to follow: the slider was inert in the one
+        mode where the strobe is being played rather than watched.
+        """
         self._strobe_chosen = True
-        """How soon after a flash the next one may fire, 0 rare to 1 often."""
-        self._strobe_rate = max(0.0, min(1.0, float(rate)))
+        value = max(0.0, min(1.0, float(rate)))
+        if self._strobe_source == self.BY_HAND:
+            self._hand_rate = value
+        else:
+            self._strobe_rate = value
 
     #: What the strobe can be told to listen to. The four ranges, then
     #: the parts of the kit - which are not the same thing said twice: a
@@ -516,10 +540,40 @@ class Spectrum(QWidget):
     #: press yourself is the one thing on screen that should not be shy.
     HAND_HIT = 1.0
 
-    #: Frames between flashes while the rapid-fire key is held. Five is
-    #: twelve a second at sixty frames, which is about as fast as anybody
-    #: can hit a key and is the rate the strobe's own warning is about.
+    #: Frames between flashes while the rapid-fire key is held, outside
+    #: Manual. Five is twelve a second at sixty frames, which is about as
+    #: fast as anybody can hit a key and is the rate the strobe's own
+    #: warning is about.
     SPAM_EVERY = 5
+
+    #: How far the hit from an automatic flash falls each frame.
+    HIT_FALL = 0.16
+
+    #: In Manual the two sliders take the two things a hand strobe has:
+    #: how fast it repeats, and how it comes up and goes down.
+
+    #: Flashes a second at the two ends of the rate slider. The middle of
+    #: the slider is their geometric mean, so the setting it arrives at -
+    #: and the one it had before there was a slider - is the twelve a
+    #: second the rapid-fire key has always run at.
+    HAND_SLOWEST = 4.8
+    HAND_FASTEST = 30.0
+
+    #: How much brightness a flash from the hand gains and loses each
+    #: frame, at the two ends of the shape slider: left, there and gone
+    #: again in a single frame; right, a quarter of a second coming up
+    #: and about half a second going down.
+    HAND_ON = (1.0, 0.075)
+    HAND_OFF = (1.0, 0.030)
+
+    #: How early a repeat may fire and still count as on time.
+    #:
+    #: Half a frame at sixty. Frames do not land on the exact multiples
+    #: of a period, so a rate of thirty a second asked for every 33.3 ms
+    #: and got a frame at 33.2 - missed, waited another frame, and ran at
+    #: twenty. Snapping to the nearer frame is the only honest answer
+    #: when the frame is the smallest thing that can be lit.
+    SPAM_SLACK = 0.008
 
     def flash(self, strength: float = 1.0) -> None:
         """Fire the strobe now, whatever it is listening to.
@@ -528,8 +582,16 @@ class Spectrum(QWidget):
         next beat, because the point of the key is that the timing is the
         player's.
         """
-        self._state.hit = max(self._state.hit,
-                              max(0.0, min(1.0, float(strength))))
+        want = max(0.0, min(1.0, float(strength)))
+        if self._strobe_source == self.BY_HAND:
+            # Aimed at, and moved towards straight away rather than on
+            # the next frame: with the shape slider hard left the rise is
+            # a whole flash, so this still lands the moment it is pressed.
+            self._hand_want = max(self._hand_want, want)
+            self._state.hit = min(self._hand_want,
+                                  self._state.hit + self.hand_curve()[0])
+        else:
+            self._state.hit = max(self._state.hit, want)
         self._since_hit = 0
         # Back to full rate at once if the controls had slowed it down,
         # rather than at the next tick.
@@ -551,6 +613,7 @@ class Spectrum(QWidget):
     def spam_flash(self, on: bool) -> None:
         """Fire over and over for as long as the key is down."""
         self._spamming = bool(on)
+        self._spam_at = _time.monotonic() if on else None
         if on:
             self.flash(self.HAND_HIT)
 
@@ -596,15 +659,85 @@ class Spectrum(QWidget):
         return self._beats.get(self._strobe_source)
 
     def set_strobe_source(self, name: str) -> None:
-        """Which part of the sound sets the strobe off."""
+        """Which part of the sound sets the strobe off.
+
+        The two sliders mean different things in Manual, so changing mode
+        has to move them: they are told what to show here rather than
+        keeping a number that now means something else.
+        """
         self._strobe_chosen = True
         if name in self.STROBE_SOURCES:
             self._strobe_source = name
+            self.strobe_settings_changed.emit(*self.strobe_shown())
 
     def set_strobe_sense(self, sense: float) -> None:
+        """How big a jump counts as a hit, 0 fussy to 1 eager.
+
+        In Manual it is the shape of a flash instead: left is on and off
+        with nothing in between, right fades up and back down.
+        """
         self._strobe_chosen = True
-        """How big a jump in the bass counts as a hit, 0 fussy to 1 eager."""
-        self._strobe_sense = max(0.0, min(1.0, float(sense)))
+        value = max(0.0, min(1.0, float(sense)))
+        if self._strobe_source == self.BY_HAND:
+            self._hand_shape = value
+        else:
+            self._strobe_sense = value
+
+    def strobe_shown(self) -> tuple:
+        """(source, rate, sense) as the two sliders should show them.
+
+        The pair that applies to the mode the strobe is in, which is not
+        the same pair in Manual.
+        """
+        if self._strobe_source == self.BY_HAND:
+            return self._strobe_source, self._hand_rate, self._hand_shape
+        return self._strobe_source, self._strobe_rate, self._strobe_sense
+
+    def hand_every(self) -> float:
+        """Seconds between flashes while the rapid-fire key is held."""
+        span = self.HAND_FASTEST / self.HAND_SLOWEST
+        return 1.0 / (self.HAND_SLOWEST * span ** self._hand_rate)
+
+    def hand_curve(self) -> tuple:
+        """(rise, fall) a frame for a flash from the hand.
+
+        Geometric between the ends rather than linear, because halfway
+        along a linear run from 1.0 to 0.075 is 0.54, which is still
+        instant - the whole interesting half of the slider would have
+        been squeezed into its last inch.
+        """
+        shape = self._hand_shape
+        return (self.HAND_ON[0] * (self.HAND_ON[1] / self.HAND_ON[0]) ** shape,
+                self.HAND_OFF[0] * (self.HAND_OFF[1] / self.HAND_OFF[0])
+                ** shape)
+
+    def _shape_hand(self, state) -> None:
+        """Move the hand strobe towards where it is heading.
+
+        One place for the tap, the held key and the rapid fire, because
+        they are the same light with a different target: the tap aims at
+        full and lets go, the held key keeps aiming at full, and the
+        rapid fire re-aims every time it comes round.
+        """
+        rise, fall = self.hand_curve()
+        if self._holding:
+            self._hand_want = self.HAND_HIT
+        elif self._since_hit > 0 and state.hit >= self._hand_want - 1e-6:
+            # Arrived, and nobody is holding it there: start falling.
+            # Before the move rather than after it, or the light spends a
+            # frame sitting at the top - which at the instant end of the
+            # shape slider is the whole flash happening twice.
+            #
+            # Never on the frame it was fired, though: at that end of the
+            # slider a flash is there and gone in one frame, and letting
+            # go of it in the same frame it was struck means the light is
+            # never up at all. That is what the rapid-fire key did - it
+            # fired at the right rate and drew nothing.
+            self._hand_want = 0.0
+        if state.hit < self._hand_want:
+            state.hit = min(self._hand_want, state.hit + rise)
+        else:
+            state.hit = max(self._hand_want, state.hit - fall)
 
     def set_scope_mode(self, mode: str) -> None:
         """Sweep or X-Y, for whichever scene has a beam."""
@@ -1053,7 +1186,9 @@ class Spectrum(QWidget):
         if high - self._last_high > 0.09:
             self._spawn(min(4, int((high - self._last_high) * 22)))
         self._last_high = high
-        state.hit = max(0.0, state.hit - 0.16)
+        hand = self._strobe_source == self.BY_HAND
+        if not hand:
+            state.hit = max(0.0, state.hit - self.HIT_FALL)
         # Sensitivity decides what counts as a hit; rate decides how soon
         # another may follow. Both ranges are wide: at one end the strobe
         # waits for something unmistakable and fires at most twice a bar,
@@ -1063,17 +1198,29 @@ class Spectrum(QWidget):
                    "Synths": state.synth}.get(self._strobe_source, bass)
         self._since_hit += 1
         self._decay_kit(state)
-        if self._spamming:
+        if self._spamming and hand:
+            # At whatever rate the slider asks for, on the wall clock.
+            now = _time.monotonic()
+            if (self._spam_at is None
+                    or now - self._spam_at >= self.hand_every()
+                    - self.SPAM_SLACK):
+                self._spam_at = now
+                self.flash(self.HAND_HIT)
+        elif self._spamming:
             # Hit again and again, as fast as a person could manage it.
             if self._since_hit >= self.SPAM_EVERY:
                 self.flash(self.HAND_HIT)
-        elif self._holding:
+        elif self._holding and not hand:
             # Held, so it does not decay: the key is the light switch.
             state.hit = self.HAND_HIT
-        elif self._strobe_source == self.BY_HAND:
+        elif hand:
             pass      # nothing fires by itself; the hotkey is the whole act
         elif not self._fire_from_the_map(state):
             self._fire_from_the_frame(state, watched)
+        if hand:
+            # The hand strobe has a shape of its own, which is the one
+            # thing the sliders are for in this mode.
+            self._shape_hand(state)
         self._last_watched = watched
         self._last_bass = bass
 

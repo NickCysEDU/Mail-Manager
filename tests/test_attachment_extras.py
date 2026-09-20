@@ -7142,6 +7142,32 @@ class TestTheTwoStrobeKeys:
         pane.spectrum.set_strobe_source(Spectrum.BY_HAND)
         return pane
 
+    @staticmethod
+    def _seconds(pane, seconds, before=None, step=1 / 60.0):
+        """Tick for that long on a clock this test owns, keeping the light.
+
+        On the wall clock sixty tight ticks take about a millisecond, and
+        the rapid-fire key is paced in seconds now - so a loop of ticks
+        that never moves the clock measures a strobe that was never given
+        time to fire.
+        """
+        import attachment_widgets
+
+        was = attachment_widgets._time.monotonic
+        now = [20_000.0]
+        attachment_widgets._time.monotonic = lambda: now[0]
+        seen = []
+        try:
+            if before is not None:
+                before()
+            for _ in range(int(seconds / step)):
+                now[0] += step
+                pane.spectrum._tick()
+                seen.append(pane.spectrum._state.hit)
+        finally:
+            attachment_widgets._time.monotonic = was
+        return seen
+
     def test_the_steady_key_holds_the_light_up(self, qtbot):
         pane = self._pane(qtbot)
         pane.vj("flash", 1)
@@ -7155,32 +7181,20 @@ class TestTheTwoStrobeKeys:
 
     def test_the_rapid_key_fires_over_and_over(self, qtbot):
         """As if somebody were hitting the key as fast as they could."""
-        from attachment_widgets import Spectrum
-
         pane = self._pane(qtbot)
-        pane.vj("spam", 1)
-        fired, was = 0, 0.0
-        for _ in range(60):
-            pane.spectrum._tick()
-            now = pane.spectrum._state.hit
-            if now > was + 0.2:
-                fired += 1
-            was = now
+        lit = self._seconds(pane, 1.0, before=lambda: pane.vj("spam", 1))
         pane.vj("unspam", 1)
-        wanted = 60 // Spectrum.SPAM_EVERY
+        fired = sum(1 for a, b in zip([0.0] + lit, lit) if b > a + 0.2)
+        wanted = 1.0 / pane.spectrum.hand_every()
         assert fired >= wanted - 2, (
             f"{fired} flashes in a second of holding, and the rate asks "
-            f"for about {wanted}")
+            f"for about {wanted:.0f}")
 
     def test_the_rapid_key_is_not_a_held_light(self, qtbot):
         """The whole point of having two: this one has to go dark between
         flashes or it is the other one."""
         pane = self._pane(qtbot)
-        pane.vj("spam", 1)
-        seen = []
-        for _ in range(60):
-            pane.spectrum._tick()
-            seen.append(pane.spectrum._state.hit)
+        seen = self._seconds(pane, 1.0, before=lambda: pane.vj("spam", 1))
         pane.vj("unspam", 1)
         assert min(seen) < 0.5, (
             f"the light never fell below {min(seen):.2f}, so it is held "
@@ -7188,15 +7202,10 @@ class TestTheTwoStrobeKeys:
 
     def test_letting_go_of_the_rapid_key_stops_it(self, qtbot):
         pane = self._pane(qtbot)
-        pane.vj("spam", 1)
-        for _ in range(10):
-            pane.spectrum._tick()
-        pane.vj("unspam", 1)
-        for _ in range(40):
-            pane.spectrum._tick()
-        assert pane.spectrum._state.hit < 0.05, (
-            f"it kept firing after the key went up: "
-            f"{pane.spectrum._state.hit:.2f}")
+        self._seconds(pane, 0.2, before=lambda: pane.vj("spam", 1))
+        after = self._seconds(pane, 0.7, before=lambda: pane.vj("unspam", 1))
+        assert max(after) < 0.05, (
+            f"it kept firing after the key went up: {max(after):.2f}")
 
     def test_both_keys_work_in_a_window(self, qtbot):
         """"Manual strobe doesn't work in windowed mode." It did not: the
@@ -9401,3 +9410,224 @@ class TestTheWaveformIsInTheWindowedPane:
 
         assert not any(isinstance(child, Waveform)
                        for child in FullScreenSpectrum.__dict__.values())
+
+
+class TestThePlayedStrobeHasARateAndAShape:
+    """"Xx xxxxxx xxxx, X xxxx xxxxxx xxxx xxxxxx xx xxxxxxx xxx xxxx xxx
+    xxxxxx xxxxxxx xxx xxxx xxxxxx xxxxxxxx xxxxxx xxx xxxxx xxxx, xxxx
+    xxxx xxxxx xxxxxxx xxxxx xx xxx xxx xxx xxxxx xxxxxx xx xxx xxx."
+
+    Manual is the one mode where nothing fires by itself, which is what
+    made both sliders inert there: "what counts as a hit" has nothing to
+    count and "how soon another may follow" has nothing to follow. In
+    Manual they take the two things a hand strobe does have.
+    """
+
+    @staticmethod
+    def _made(source="Manual", rate=None, shape=None):
+        from array import array
+
+        from attachment_widgets import Spectrum
+
+        spectrum = Spectrum()
+        # A flat, quiet track: enough for the frame loop to run, not
+        # enough for anything to fire by itself.
+        spectrum.set_frames([array("f", [0.05] * 27)] * 400, 15)
+        spectrum.set_position(0)
+        spectrum.set_strobe_source(source)
+        if rate is not None:
+            spectrum.set_strobe_rate(rate)
+        if shape is not None:
+            spectrum.set_strobe_sense(shape)
+        return spectrum
+
+    @staticmethod
+    def _run(spectrum, frames, before=None, step=1 / 60.0):
+        """Tick the scene, on a clock this test owns, and keep the light.
+
+        ``before`` runs once the clock is pinned. Anything that notes the
+        time - pressing the rapid-fire key does - has to happen on the
+        same clock as the ticks that follow it, or the two are hours
+        apart and nothing ever comes round again.
+        """
+        import attachment_widgets
+
+        was = attachment_widgets._time.monotonic
+        now = [10_000.0]
+        attachment_widgets._time.monotonic = lambda: now[0]
+        seen = []
+        try:
+            if before is not None:
+                before()
+            for _ in range(frames):
+                now[0] += step
+                spectrum._tick()
+                seen.append(spectrum._state.hit)
+        finally:
+            attachment_widgets._time.monotonic = was
+        return seen
+
+    # -- the rate ---------------------------------------------------------
+    def test_manual_starts_at_the_rate_it_always_had(self, qapp):
+        """"Set these to ... current strobe setting by default." Twelve a
+        second is what the rapid-fire key has always run at."""
+        spectrum = self._made()
+        assert 1.0 / spectrum.hand_every() == pytest.approx(12.0, abs=0.1), (
+            f"Manual starts at {1.0 / spectrum.hand_every():.1f} flashes a "
+            f"second")
+
+    def test_the_rate_slider_moves_the_repeat_rate(self, qapp):
+        slow = self._made(rate=0.0)
+        fast = self._made(rate=1.0)
+        assert slow.hand_every() > fast.hand_every() * 4.0, (
+            f"the slider runs from {1.0 / slow.hand_every():.1f} to "
+            f"{1.0 / fast.hand_every():.1f} a second, which is not a range")
+        assert 1.0 / fast.hand_every() <= 30.0, (
+            "the fast end asks for more flashes than a frame can carry")
+
+    def test_the_rapid_fire_key_fires_at_the_rate_asked_for(self, qapp):
+        """Measured by counting flashes over a second of ticks, not by
+        reading the setting back."""
+        for rate, wanted in ((0.0, 4.8), (0.5, 12.0), (1.0, 30.0)):
+            spectrum = self._made(rate=rate, shape=0.0)
+            lit = self._run(spectrum, 120,      # two seconds at sixty
+                            before=lambda: spectrum.spam_flash(True))
+            fired = sum(1 for a, b in zip([0.0] + lit, lit) if b > a + 0.5)
+            assert abs(fired / 2.0 - wanted) <= max(1.5, wanted * 0.2), (
+                f"the slider at {rate} fired {fired / 2.0:.1f} times a "
+                f"second against {wanted:.1f}")
+
+    def test_the_rate_still_paces_the_automatic_strobe_elsewhere(self, qapp):
+        """Outside Manual the slider keeps the job it always had."""
+        spectrum = self._made(source="Bass")
+        spectrum.set_strobe_rate(0.9)
+        assert spectrum._strobe_rate == pytest.approx(0.9)
+        assert spectrum._hand_rate == pytest.approx(0.5), (
+            "moving the rate slider outside Manual changed the hand rate")
+
+    # -- the shape --------------------------------------------------------
+    def test_hard_left_is_a_flash_on_and_off(self, qapp):
+        spectrum = self._made(shape=0.0)
+        spectrum.flash(1.0)
+        assert spectrum._state.hit == pytest.approx(1.0), (
+            f"a tap only reached {spectrum._state.hit:.2f} on the frame it "
+            f"was pressed, which is a strobe with a delay in it")
+        lit = self._run(spectrum, 4)
+        assert lit[0] == pytest.approx(0.0, abs=0.01), (
+            f"the light was still at {lit[0]:.2f} the frame after the flash")
+
+    def test_hard_right_fades_up_and_back_down(self, qapp):
+        spectrum = self._made(shape=1.0)
+        spectrum.flash(1.0)
+        lit = self._run(spectrum, 90)
+        assert spectrum._state.hit < 0.2, (
+            f"the flash jumped straight to {spectrum._state.hit:.2f} rather "
+            f"than fading up")
+        up = lit.index(max(lit))
+        assert up >= 4, f"the light peaked {up} frames in, which is a flash"
+        assert max(lit) > 0.9, f"the fade only reached {max(lit):.2f}"
+        assert lit[-1] < 0.05, (
+            f"the light was still at {lit[-1]:.2f} a second and a half later")
+        # Down more slowly than up, the way a lamp cools.
+        down = len(lit) - 1 - next(i for i, v in enumerate(reversed(lit))
+                                   if v > 0.5)
+        assert down - up > up, (
+            f"the light took {up} frames up and {down - up} down")
+
+    def test_the_middle_of_the_slider_is_between_the_two(self, qapp):
+        spectrum = self._made(shape=0.5)
+        rise, fall = spectrum.hand_curve()
+        assert 0.1 < rise < 0.9, (
+            f"halfway along, a flash rises {rise:.2f} a frame, which is "
+            f"one of the ends rather than between them")
+        assert fall < rise, "the light comes down faster than it goes up"
+
+    def test_a_held_key_comes_up_and_stays_up(self, qapp):
+        spectrum = self._made(shape=1.0)
+        spectrum.hold_flash(True)
+        lit = self._run(spectrum, 60)
+        assert lit[-1] == pytest.approx(1.0, abs=0.01), (
+            f"the held light settled at {lit[-1]:.2f}")
+        assert lit[2] < 0.6, "a held light with a slow shape came up at once"
+        spectrum.hold_flash(False)
+        after = self._run(spectrum, 60)
+        assert after[-1] < 0.05, (
+            f"the light was still at {after[-1]:.2f} after the key came up")
+
+    def test_the_shape_still_sets_sensitivity_elsewhere(self, qapp):
+        spectrum = self._made(source="Bass")
+        spectrum.set_strobe_sense(0.8)
+        assert spectrum._strobe_sense == pytest.approx(0.8)
+        assert spectrum._hand_shape == pytest.approx(0.0), (
+            "moving the sens slider outside Manual changed the hand shape")
+
+    # -- the two modes keep their own -------------------------------------
+    def test_each_mode_keeps_its_own_pair_of_settings(self, qapp):
+        spectrum = self._made(source="Bass", rate=0.9, shape=0.8)
+        spectrum.set_strobe_source("Manual")
+        assert spectrum.strobe_shown() == ("Manual", 0.5, 0.0), (
+            f"Manual opened showing {spectrum.strobe_shown()}")
+        spectrum.set_strobe_rate(0.1)
+        spectrum.set_strobe_sense(1.0)
+        spectrum.set_strobe_source("Bass")
+        assert spectrum.strobe_shown() == ("Bass", 0.9, 0.8), (
+            f"the automatic settings came back as {spectrum.strobe_shown()}")
+        spectrum.set_strobe_source("Manual")
+        assert spectrum.strobe_shown() == ("Manual", 0.1, 1.0), (
+            f"the hand settings came back as {spectrum.strobe_shown()}")
+
+
+class TestTheStrobeSlidersSayWhatTheyDo:
+    """A slider captioned "sens" that sets the shape of a flash is worse
+    than no caption at all."""
+
+    @staticmethod
+    def _caption(holder):
+        return holder.layout().itemAt(0).widget().text()
+
+    def test_the_captions_follow_the_mode(self, qapp):
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        try:
+            assert self._caption(pane.sense_box) == "sens"
+            pane.strobe_source.setCurrentText("Manual")
+            assert self._caption(pane.sense_box) == "shape", (
+                "the sens slider is still called sens in Manual, where it "
+                "sets the shape of a flash")
+            pane.strobe_source.setCurrentText("Bass")
+            assert self._caption(pane.sense_box) == "sens"
+        finally:
+            pane.deleteLater()
+
+    def test_the_tooltip_follows_the_caption(self, qapp):
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        try:
+            pane.strobe_source.setCurrentText("Manual")
+            assert "fade" in pane.sense.toolTip().lower(), (
+                f"the shape slider says {pane.sense.toolTip()!r}")
+            assert "second" in pane.flash.toolTip().lower(), (
+                f"the rate slider says {pane.flash.toolTip()!r}")
+        finally:
+            pane.deleteLater()
+
+    def test_the_sliders_move_to_the_settings_of_the_mode(self, qapp):
+        """Otherwise they show one mode's numbers while another is on."""
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        try:
+            pane.sense.setValue(80)
+            pane.flash.setValue(90)
+            pane.strobe_source.setCurrentText("Manual")
+            assert (pane.sense.value(), pane.flash.value()) == (0, 50), (
+                f"Manual opened with the sliders at "
+                f"{(pane.sense.value(), pane.flash.value())} rather than at "
+                f"a flash on and off, twelve a second")
+            pane.strobe_source.setCurrentText("Bass")
+            assert (pane.sense.value(), pane.flash.value()) == (80, 90), (
+                "the automatic settings did not come back")
+        finally:
+            pane.deleteLater()

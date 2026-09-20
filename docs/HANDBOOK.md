@@ -807,6 +807,21 @@ because keys nobody can find are not keys.
 flashes over what the track is already doing, and it switches the strobe
 on if it was off. **F** is full screen.
 
+In **Manual**, the two sliders beside the strobe change what they mean.
+Nothing fires by itself there, so "what counts as a hit" has nothing to
+count and "how soon another may follow" has nothing to follow - the two
+things a hand strobe does have are how fast it repeats and how it comes
+up and goes down, and that is what they set. **rate** runs from about
+five flashes a second to thirty, and its middle is the twelve a second
+**H** has always run at. **shape** runs from a flash on and off with
+nothing in between, on the left, to a fade up and back down on the right.
+Manual opens at a flash on and off, twelve a second.
+
+Each mode keeps its own pair. Switching to Manual and back does not carry
+a hand setting into the automatic strobe or the other way round, and the
+captions follow the mode so a slider is never called one thing while it
+does another.
+
 ---
 
 ## Building the `.app`
@@ -837,7 +852,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,574 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,587 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1198,7 +1213,7 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 3,574 tests, about three minutes
+./dev test        # 3,587 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```
