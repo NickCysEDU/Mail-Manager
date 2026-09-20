@@ -156,7 +156,7 @@ class SpectrumState:
                  "dials", "dial_labels", "dial_colour", "background",
                  "trace", "vector", "calibration", "history",
                  "trace_history", "vector_history", "kit", "tempo",
-                 "beat_at", "at", "chart")
+                 "beat_at", "at", "chart", "moving")
 
     def __init__(self) -> None:
         self.levels: List[float] = []
@@ -193,6 +193,13 @@ class SpectrumState:
         #: cannot work from the kit levels, which only say what is
         #: happening now.
         self.chart: dict = {}
+        #: Whether the track is actually going. A paused player reports
+        #: the same position every frame, and a scene that travels needs
+        #: to know the difference: without it the rave's corridor crept
+        #: and jittered under a stopped song, because the push behind it
+        #: went on easing towards the last bass it saw and the room's
+        #: position is worked out from that push.
+        self.moving = True
         #: The track's tempo in beats a minute, or 0 where none was
         #: found, and how far through the current beat the playhead is,
         #: from 0 at the beat to just under 1 at the next.
@@ -345,6 +352,7 @@ class Spectrum(QWidget):
         #: The kit on its own, for scenes that want to know which is which.
         self._elements: dict = {}
         self._chart_from = None
+        self._moved_at = None
         #: How far through each element's list the playhead has got.
         self._kit_at: dict = {}
         self._kit_seen = -1.0
@@ -990,7 +998,12 @@ class Spectrum(QWidget):
                 self._position = max(0, int(self._source()))
             except Exception:      # noqa: BLE001 - a dead player is not fatal
                 pass
-        if self._fresh < 1.0:
+        if self._fresh < 1.0 and self._level and self._working is None:
+            # Only once there is a scene to fade in. While a track is
+            # being analysed the pane shows a progress ring instead, and
+            # the fade used to run out behind it - so the scene arrived at
+            # full strength and the fade was spent on a screen it was not
+            # for.
             self._fresh = min(1.0, self._fresh + self.FRESH_STEP)
         self._drift += 0.035
         # Ease between the track and the idle drift rather than swapping
@@ -1181,6 +1194,11 @@ class Spectrum(QWidget):
         then to nothing, which scenes read as "free running".
         """
         state.at = self._heard()
+        # Position, not our own clock: the smoothed one keeps creeping for
+        # a moment after a pause by design, and this has to be the truth.
+        state.moving = (self._moved_at is None
+                        or abs(self._position - self._moved_at) > 0)
+        self._moved_at = self._position
         if self._chart_from is not self._elements:
             # Built once per analysis. The maps arrive a few seconds after
             # the rest, and rebuilding this every frame would walk every
@@ -2632,8 +2650,22 @@ class PostProcess:
         """
         small = QSize(max(self.BLOOM_MIN, int(rect.width() / self.BLOOM_DIVISOR)),
                       max(self.BLOOM_MIN, int(rect.height() / self.BLOOM_DIVISOR)))
-        return frame.scaled(small, Qt.AspectRatioMode.IgnoreAspectRatio,
-                            Qt.TransformationMode.SmoothTransformation)
+        shrunk = frame.scaled(small, Qt.AspectRatioMode.IgnoreAspectRatio,
+                              Qt.TransformationMode.SmoothTransformation)
+        # Plain pixels from here on.
+        #
+        # scaled() keeps the frame's device pixel ratio, so on a 2x
+        # display the halo claimed to be half the size it is. Everything
+        # downstream then drew it at that claimed size: composing it into
+        # a pixmap of the same real size put the picture in the top-left
+        # quarter and left the other three empty, and stretching *that*
+        # over the frame put the whole polish pass in the top-left corner.
+        #
+        # It only showed in a window, because full screen shrinks the
+        # buffer to logical size and the ratio comes out at 1 - which is
+        # why it was "present in all visualizers in windowed mode".
+        shrunk.setDevicePixelRatio(1.0)
+        return shrunk
 
     #: How much of the halo each offset copy adds, for the fringing.
     FRINGE = 0.16
