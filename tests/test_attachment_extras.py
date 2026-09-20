@@ -7595,7 +7595,7 @@ class TestTheMusicRiderIsAGame:
             f"{scene._heard:.2f}s, so it is already late")
         assert scene._laid >= scene.READ, (
             f"only {scene._laid:.2f}s of chart was laid, and the road is "
-            f"{scene.LOOK:.2f}s long")
+            f"{scene.LOOK_BEATS:.0f} beats long")
 
     def test_a_passage_with_no_hits_has_no_obstacles(self):
         """"Silence and xxxxx-xxx xxxxxx xxxx xx xxxxxxxxx." """
@@ -7888,6 +7888,10 @@ class TestTheRiderIsPlayable:
         scene = visualizers.Rider()
         assert scene.GONE > 0.0
         scene._heard = 10.0
+        # Where the road has got to at that moment. Everything is
+        # measured against it now, so a test that moves the playhead has
+        # to move the road with it.
+        scene._at = scene._world(scene._heard)
         # A block due five seconds ago is a long way behind the rider.
         assert scene._where(5.0) < scene.GONE
 
@@ -7915,23 +7919,32 @@ class TestTheRiderIsPlayable:
             f"the road rises and falls {max(up) - min(up):.1f}")
 
     def test_the_speed_follows_the_bass(self):
-        """"Xxxx xxx xxxxxx xxxxx xxxxxx xxxxxx xxxx xxxx xx xxxx." """
-        import visualizers
-        from attachment_widgets import SpectrumState
+        """"Xxxx xxx xxxxxx xxxxx xxxxxx xxxxxx xxxx xxxx xx xxxx."
 
-        seen = []
+        Within the beat, not across it. The road covers exactly one
+        beat's worth of ground every beat - that is what puts a block
+        under the rider on its beat - so the bass cannot change how far
+        it goes. What it changes is *when* inside the beat it goes there:
+        at full bass the road lunges onto the beat and coasts before the
+        next one.
+        """
+        import statistics
+
+        seen = {}
         for bass in (0.0, 1.0):
-            scene = visualizers.Rider()
-            scene._last = None
-            state = SpectrumState()
-            state.levels = [0.4] * 27
-            state.bass = bass
-            state.kit = {}
-            scene._advance(state)
-            seen.append(scene._speed)
-        assert seen[1] > seen[0] * 1.4, (
-            f"the road runs at {seen[0]:.1f} with no bass and {seen[1]:.1f} "
-            f"with all of it")
+            rows = TestTheRiderIsOnTheBeat.ride(bass=bass)
+            speeds = [row["speed"] for row in rows[60:]]
+            seen[bass] = (statistics.mean(speeds), max(speeds))
+        flat, pushed = seen[0.0], seen[1.0]
+        assert pushed[0] == pytest.approx(flat[0], rel=0.08), (
+            f"the road covered {pushed[0]:.1f} units a second under a full "
+            f"bass and {flat[0]:.1f} without one; the distance a beat "
+            f"covers is what keeps the blocks on the beat and it may not "
+            f"move")
+        assert pushed[1] > flat[1] * 2.0, (
+            f"the fastest the road ran was {pushed[1]:.1f} units a second "
+            f"under a full bass against {flat[1]:.1f} without one, so the "
+            f"bass is not being felt")
 
     def test_an_empty_chart_does_not_throw_the_road_away(self):
         """A track with no chart yet handed over a new empty table every
@@ -8158,6 +8171,49 @@ class TestTheRiderIsOnTheBeat:
     }
 
     @classmethod
+    def ride(cls, bass=0.6, seconds=4.0, tempo=128.0, chart=None,
+             stop_at=None, fps=60):
+        """Run the scene on a clock this test owns, frame by frame.
+
+        Gives back a row per frame: where the road has got to, how fast
+        it was going, and how far through the beat the track was. Every
+        test of how the world moves reads these rather than calling
+        ``_advance`` once and looking at a number, because the road's
+        speed is a thing it does *within* a beat.
+        """
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        scene = visualizers.Rider()
+        scene._last = None
+        state = SpectrumState()
+        state.levels = [0.4] * 27
+        state.tempo = tempo
+        state.chart = chart or {}
+        state.kit = {}
+        beat = 60.0 / tempo if tempo else 0.5
+        rows = []
+        was = visualizers.time.monotonic
+        now = [1000.0]
+        visualizers.time.monotonic = lambda: now[0]
+        try:
+            for frame in range(int(seconds * fps)):
+                now[0] += 1.0 / fps
+                at = frame / fps
+                playing = stop_at is None or at < stop_at
+                state.at = at if playing else stop_at
+                state.beat_at = (state.at % beat) / beat
+                state.bass = bass
+                state.mid = state.high = 0.4
+                scene._advance(state)
+                rows.append({"at": state.at, "road": scene._at,
+                             "speed": scene._speed,
+                             "through": state.beat_at, "scene": scene})
+        finally:
+            visualizers.time.monotonic = was
+        return rows
+
+    @classmethod
     def _figures(cls, seconds=30.0):
         """(times, shapes) of the figures laid over a house track."""
         import visualizers
@@ -8179,14 +8235,58 @@ class TestTheRiderIsOnTheBeat:
         return figures, [shapes[round(t, 4)] for t in figures], scene
 
     def test_a_block_is_level_with_the_rider_on_its_beat(self):
+        """Exactly on it. The road's position is a function of the beat
+        and a block's place is the same function of its own beat, so the
+        two meet at the beat rather than near it."""
         import visualizers
 
         scene = visualizers.Rider()
-        for due in (4.0, 7.5, 11.25):
+        scene._beat = self.BEAT
+        scene._origin = 0.0
+        scene._grid = 0.0
+        for beat in (4, 9, 33):
+            due = beat * self.BEAT
             scene._heard = due
-            assert abs(scene._where(due) - scene.RIDER_AT) < 1e-6, (
-                f"a block due at {due}s is at {scene._where(due):.2f} when "
-                f"the rider is at {scene.RIDER_AT}")
+            scene._at = scene._world(due)
+            assert abs(scene._where(due) - scene.RIDER_AT) < 1e-9, (
+                f"a block due on beat {beat} is at "
+                f"{scene._where(due):.6f} when the rider is at "
+                f"{scene.RIDER_AT}")
+
+    def test_the_road_and_the_blocks_move_at_one_speed(self):
+        """"Xxx xxxxxxxxxxxx xxxx xxxxxx xxxx xxx obstacles xx xxx xxxx.
+        Xxx xxxx xxxxxxx xxxxx xxxxxx xxxx xxx obstacles."
+
+        They did: the ground ran at 6 to 23 units a second with the bass
+        while a block's distance was worked out from its time and came to
+        a flat 6.5 whatever the track was doing. There is one clock now,
+        so this compares the two by measuring them.
+        """
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._beat = self.BEAT
+        scene._origin = 0.0
+        scene._grid = 0.0
+        scene._lunge = 1.0
+        due = 12 * self.BEAT
+        seen = []
+        for step in range(40):
+            scene._heard = 6.0 * self.BEAT + step * 0.01
+            was_road = scene._at
+            scene._at = scene._world(scene._heard)
+            seen.append((scene._at - was_road, was_road and
+                         scene._where(due)))
+        # How far the road moved between two frames, against how far the
+        # block moved towards the rider over the same two frames.
+        blocks = [abs(b - a) for a, b in zip(
+            [row[1] for row in seen[1:]], [row[1] for row in seen[2:]])]
+        ground = [row[0] for row in seen[2:]]
+        assert blocks and ground
+        for moved, rolled in zip(blocks, ground):
+            assert moved == pytest.approx(rolled, rel=1e-6), (
+                f"the block moved {moved:.4f} units while the road moved "
+                f"{rolled:.4f}")
 
     def test_every_figure_lands_on_a_beat(self):
         import statistics
@@ -8260,23 +8360,17 @@ class TestTheRiderIsOnTheBeat:
 
     def test_the_speed_range_is_wide(self):
         """"Xxxxxx xxxxx xx x xxx xxxxxxxxxx xxxxxxx xxx xxx xxxxx
-        xxxxx." """
-        import visualizers
-        from attachment_widgets import SpectrumState
+        xxxxx." Within the beat: see the note on the lunge."""
+        import statistics
 
-        seen = []
-        for bass in (0.0, 1.0):
-            scene = visualizers.Rider()
-            scene._last = None
-            state = SpectrumState()
-            state.levels = [0.4] * 27
-            state.bass = bass
-            state.kit = {}
-            scene._advance(state)
-            seen.append(scene._speed)
-        assert seen[1] > seen[0] * 3.0, (
-            f"the road runs at {seen[0]:.1f} with no bass and {seen[1]:.1f} "
-            f"with all of it, which is only {seen[1] / seen[0]:.1f} times")
+        rows = self.ride(bass=1.0)[60:]
+        speeds = [row["speed"] for row in rows]
+        assert max(speeds) > statistics.mean(speeds) * 2.0, (
+            f"the road ran {min(speeds):.1f} to {max(speeds):.1f} units a "
+            f"second around a mean of {statistics.mean(speeds):.1f}, which "
+            f"is not a lunge")
+        assert min(speeds) < statistics.mean(speeds) * 0.25, (
+            f"it never coasts: the slowest it ran was {min(speeds):.1f}")
 
     def test_a_hit_slows_the_road_and_throws_pieces_off(self):
         """"Xxx xxx xxxxxxx xxx xxxxxxxx xxxx an obstacle is hit." """
@@ -8725,7 +8819,11 @@ class TestTheRoadIsAlwaysARoad:
                 horizon, focal, tilt = self._camera(scene, width, height)
                 edge = scene.LANE_WIDE * scene.LANES / 2.0
                 for across in (-edge, 0.0, edge):
-                    point = scene._eye(horizon, focal, across, 0.0, scene.NEAR)
+                    # Where the road actually starts this frame, which
+                    # is a fixed distance in front of the eye and moves
+                    # with the spring the eye is on.
+                    point = scene._eye(horizon, focal, across, 0.0,
+                                       scene._near)
                     dx = point.x() - horizon.x()
                     dy = point.y() - horizon.y()
                     # Where the bank puts it, which lifts one corner.
@@ -10121,3 +10219,400 @@ class TestTheRaveRoomIsShapedLikeTheBar:
         assert scene._on_beat(4) == {}, (
             "the room read the chart with no tempo to place it against")
         assert self._trusses(scene, 20.0), "and then drew nothing"
+
+
+class TestTheRiderRunsOnOneClock:
+    """"Xxx xxxxxxxxxxxx xxxx xxxxxx xxxx xxx obstacles xx xxx xxxx. Xxx
+    xxxx xxxxxxx xxxxx xxxxxx xxxx xxx obstacles. This does not feel
+    right."
+
+    There were two clocks. The ground, the lane dashes and the gates all
+    moved by ``_at``, which advanced at 6 to 23 road units a second with
+    the bass; a block's distance was worked out from its *time* against a
+    fixed look-ahead and came to a flat 6.5 whatever the track was doing.
+    So the road slid under the blocks and the gates overtook them.
+
+    One clock now: the road's position is a function of the beat, and a
+    block laid on beat n sits at n beats' worth of road. Everything moves
+    together because there is only one thing moving.
+    """
+
+    BEAT = 60.0 / 128.0
+
+    @staticmethod
+    def _ride(**kwargs):
+        return TestTheRiderIsOnTheBeat.ride(**kwargs)
+
+    def test_the_gates_keep_pace_with_the_blocks(self, qapp):
+        """Both are placed against the road's position, so this measures
+        the thing that used to differ: how far each moves in a frame."""
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._beat = self.BEAT
+        scene._origin = scene._grid = 0.0
+        scene._lunge = 1.4
+        due = 10 * self.BEAT
+        gate = 3 * scene.PILLAR_EVERY        # a gate's place on the road
+        block_was = gate_was = None
+        for step in range(30):
+            scene._heard = 4.0 * self.BEAT + step * 0.012
+            scene._at = scene._world(scene._heard)
+            block = scene._where(due)
+            # A gate sits at a fixed place on the road, exactly as
+            # ``_pillars`` draws it.
+            here = gate - scene._at
+            if block_was is not None:
+                assert (block_was - block) == pytest.approx(
+                    gate_was - here, rel=1e-6), (
+                    f"the block closed {block_was - block:.4f} units while "
+                    f"the gate closed {gate_was - here:.4f}")
+            block_was, gate_was = block, here
+
+    def test_the_road_runs_faster_than_it_used_to(self, qapp):
+        """"Increase obstacle speed." The blocks used to cross the road
+        at a flat 6.5 units a second; this is what they cross it at
+        now."""
+        import statistics
+
+        rows = self._ride(bass=0.5)[60:]
+        mean = statistics.mean(row["speed"] for row in rows)
+        assert mean > 6.5 * 1.5, (
+            f"the road runs at {mean:.1f} units a second against the 6.5 "
+            f"the blocks managed before")
+
+    def test_the_look_ahead_is_a_musical_length(self, qapp):
+        """Three beats, not 2.6 seconds: a length of time is a different
+        musical distance at every tempo."""
+        import visualizers
+
+        scene = visualizers.Rider()
+        assert scene.PER_BEAT == pytest.approx(
+            (scene.FAR - scene.RIDER_AT) / scene.LOOK_BEATS), (
+            "the road is not LOOK_BEATS beats long")
+        for tempo in (90.0, 128.0, 174.0):
+            beat = 60.0 / tempo
+            scene._beat = beat
+            scene._origin = scene._grid = 0.0
+            scene._lunge = 1.0
+            scene._heard = 0.0
+            scene._at = scene._world(0.0)
+            # The block that is just appearing at the far end.
+            due = scene.LOOK_BEATS * beat
+            assert scene._where(due) == pytest.approx(scene.FAR, abs=1e-6), (
+                f"at {tempo:.0f} bpm the block three beats out is at "
+                f"{scene._where(due):.2f} and the road ends at {scene.FAR}")
+
+    def test_nothing_xxxxx_xxxxx_xxx_xxxxx_xx_xxxxxxx(self, qapp):
+        """"Xxxxx xxxxx xxxx xxxxxxxx xxxx xxxxxx: xxxx xxxxxxxxx xxxxxx
+        xxx obstacles xx xxxxxx xxx xxxxxx xxx xxxxxx xxxx xx xxxxx
+        xxxxxxxx xxxxxxxx xxx xxxx xx xxxxxx xxx xxxxxx xx x xxxx."
+
+        The music clock used to creep forward on its own and get yanked
+        back whenever it drifted a third of a second from the playhead,
+        over and over.
+        """
+        rows = self._ride(bass=1.0, seconds=6.0, stop_at=2.0)
+        playing = rows[119]["road"] - rows[59]["road"]
+        # From well after the stop, so the ease-out has finished.
+        stopped = rows[-1]["road"] - rows[int(2.5 * 60)]["road"]
+        assert playing > 5.0, (
+            f"the road only travelled {playing:.1f} units in a second of "
+            f"playing, so this cannot tell a pause from anything else")
+        assert stopped == pytest.approx(0.0, abs=0.01), (
+            f"the road travelled {stopped:.3f} units over three and a half "
+            f"seconds of a stopped track")
+
+    def test_the_music_clock_does_not_creep_and_snap(self, qapp):
+        """The loop itself: the playhead stands still and the scene's own
+        clock walks away from it and is pulled back."""
+        rows = self._ride(bass=1.0, seconds=6.0, stop_at=2.0)
+        scene = rows[-1]["scene"]
+        assert scene._heard == pytest.approx(2.0, abs=0.05), (
+            f"the playhead is at 2.0s and the scene thinks it is at "
+            f"{scene._heard:.2f}")
+
+    def test_a_seek_moves_the_road_with_it(self, qapp):
+        """The one time the road may go backwards."""
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        scene = visualizers.Rider()
+        scene._last = None
+        state = SpectrumState()
+        state.levels = [0.4] * 27
+        state.tempo = 128.0
+        state.kit = {}
+        state.chart = {}
+        state.bass = 0.4
+        for at in (40.0, 40.1, 40.2):
+            state.at = at
+            state.beat_at = (at % self.BEAT) / self.BEAT
+            scene._advance(state)
+        # The road is measured from an origin, not from the start of the
+        # file, so what a seek has to hold is the *relationship*: the
+        # moment the playhead is at is the moment under the rider. Held
+        # by a monotone road that only ever goes forwards, a backward
+        # seek would freeze it until the track caught up - eighteen
+        # hours at this tempo.
+        # Onto a beat, so the lunge is at neither end of its curve and
+        # the answer is exact rather than "within a beat's worth".
+        state.at = 9 * self.BEAT
+        state.beat_at = 0.0
+        scene._advance(state)
+        assert scene._where(scene._heard) == pytest.approx(
+            scene.RIDER_AT, abs=1e-6), (
+            f"after seeking from 40s to {state.at:.1f}s the moment under "
+            f"the rider is at {scene._where(scene._heard):.2f} rather than "
+            f"{scene.RIDER_AT}")
+        # And it is not frozen there: a monotone road would have to wait
+        # for the track to catch up, which at this tempo is eighteen
+        # hours.
+        was = scene._at
+        for step in range(1, 6):
+            state.at = 9 * self.BEAT + step * 0.01
+            state.beat_at = (state.at % self.BEAT) / self.BEAT
+            scene._advance(state)
+        assert scene._at > was, (
+            "the road did not move again after the seek")
+
+
+class TestThePaneClockStopsWithTheTrack:
+    """The creep-and-snap loop, at its source.
+
+    The pane runs its own clock because a media player reports its
+    position a few times a second and anything driven straight off that
+    moves in steps. That clock used to run forward whatever the player
+    was doing. Paused, it is a clock walking away from a playhead that is
+    standing still, held back only by the pull towards it - and the gap
+    settles where the step and the pull balance, which at sixty frames is
+    0.278 s against a SEEK_GAP of 0.30. It sat on the edge of the snap,
+    and any frame slower than a sixtieth tipped it over.
+    """
+
+    @staticmethod
+    def _spectrum(playing: bool):
+        from array import array
+
+        from attachment_widgets import Spectrum
+
+        spectrum = Spectrum()
+        spectrum.set_frames([array("f", [0.3] * 27)] * 600, 15)
+        spectrum.set_position(20_000)
+        spectrum.set_playing(playing)
+        return spectrum
+
+    @classmethod
+    def _clock(cls, playing, frames=240, step=1 / 60.0, reports_every=0):
+        """What the pane's clock says, frame by frame, at a fixed rate.
+
+        ``reports_every`` is how often the player hands over a new
+        position, in frames - a real one manages a few a second, which is
+        the whole reason the pane runs a clock of its own. Zero means the
+        position never changes, which is what a stopped track looks like.
+        """
+        import attachment_widgets
+
+        spectrum = cls._spectrum(playing)
+        was = attachment_widgets._time.monotonic
+        now = [5_000.0]
+        attachment_widgets._time.monotonic = lambda: now[0]
+        seen = []
+        try:
+            for frame in range(frames):
+                now[0] += step
+                if reports_every and frame % reports_every == 0:
+                    spectrum.set_position(int(20_000 + frame * step * 1000))
+                seen.append(spectrum._heard())
+        finally:
+            attachment_widgets._time.monotonic = was
+        return seen
+
+    def test_a_stopped_track_does_not_move_the_clock(self, qapp):
+        seen = self._clock(playing=False)
+        assert max(seen) - min(seen) < 0.01, (
+            f"the clock wandered {max(seen) - min(seen):.3f} s over four "
+            f"seconds of a stopped track")
+        assert seen[-1] == pytest.approx(20.0, abs=0.01), (
+            f"and settled at {seen[-1]:.3f} rather than on the playhead")
+
+    def test_it_never_snaps_backwards_while_stopped(self, qapp):
+        """The loop itself: forward a little, then back to the playhead,
+        over and over."""
+        seen = self._clock(playing=False)
+        backwards = [b - a for a, b in zip(seen, seen[1:]) if b < a - 1e-6]
+        assert not backwards, (
+            f"the clock jumped backwards {len(backwards)} times, the worst "
+            f"by {min(backwards):.3f} s")
+
+    def test_a_slow_frame_does_not_tip_it_over_either(self, qapp):
+        """Where it was worst. At thirty frames a second the balance sat
+        at 0.55 s, well past the 0.30 that counts as a seek."""
+        seen = self._clock(playing=False, frames=120, step=1 / 30.0)
+        assert max(seen) - min(seen) < 0.01, (
+            f"at thirty frames the clock wandered "
+            f"{max(seen) - min(seen):.3f} s with the track stopped")
+
+    def test_a_playing_track_still_gets_a_smooth_clock(self, qapp):
+        """Which is the whole reason the clock exists: the player reports
+        a few times a second and a picture driven off that steps."""
+        # The player hands over a position six times a second, which is
+        # about what one manages.
+        seen = self._clock(playing=True, reports_every=10)
+        assert seen[-1] > seen[0] + 3.5, (
+            f"the clock only advanced {seen[-1] - seen[0]:.2f} s over four "
+            f"seconds of playing")
+        # Never stalled between reports and never jumped on one: the
+        # correction is gentle, so every frame is within half and double
+        # a frame of real time rather than nothing-nothing-nothing-jump.
+        moves = [b - a for a, b in zip(seen, seen[1:])]
+        frame = 1 / 60.0
+        assert min(moves) > frame * 0.4, (
+            f"the clock stalled between reports: {min(moves) * 1000:.1f} ms "
+            f"in a frame of {frame * 1000:.1f}")
+        assert max(moves) < frame * 1.8, (
+            f"the clock jumped {max(moves) * 1000:.1f} ms in one frame, so "
+            f"it is stepping with the player's reports")
+
+
+class TestTheRiderCameraIsOnABoom:
+    """"Improve the camera a bit more: it's hard to see obstacle patterns
+    in some angles."
+
+    Four things were wrong with the rig, and the Audiosurf blueprint
+    names all four: the camera sat at world zero instead of on the track
+    spline, the road rolled on a phase of its own instead of banking into
+    its turn, the field of view did not move with the music, and the eye
+    was welded to the ship instead of trailing it on a spring.
+    """
+
+    W, H = 900, 500
+    BEAT = 60.0 / 128.0
+
+    @staticmethod
+    def _posed(phase=1.0, loud=0.0):
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._last = None
+        scene._loudness = loud
+        scene._bend = scene._climb = phase
+        scene._under = scene._road(scene.RIDER_AT)[1]
+        scene._side = scene._road(scene.RIDER_AT)[0]
+        return scene
+
+    @classmethod
+    def _settled(cls, scene, times=400):
+        from PySide6.QtCore import QRectF
+
+        for _ in range(times):
+            out = scene._camera(QRectF(0, 0, cls.W, cls.H), 0.0, 0.0)
+        return out
+
+    # -- the road banks into its turn --------------------------------------
+    def test_the_road_banks_into_its_own_turn(self, qapp):
+        """It used to roll on a third sine on a third phase, which tumbles
+        the world independently of where the road goes - so at some
+        phases it leaned one way while turning the other."""
+        import visualizers
+
+        scene = self._posed()
+        turns, rolls = [], []
+        for step in range(120):
+            at = scene.RIDER_AT + step * 0.15
+            here = scene._road(at)[0]
+            there = scene._road(at + 0.05)[0]
+            turns.append(there - here)
+            rolls.append(scene._road(at)[2])
+        # Every one of them, not on average: a bank that agreed with the
+        # turn most of the time would still tumble at the phases where it
+        # did not.
+        for turn, roll in zip(turns, rolls):
+            if abs(turn) > 1e-4:
+                assert turn * roll < 0.0 or abs(roll) < 1e-6, (
+                    f"the road turns by {turn:+.4f} and rolls {roll:+.4f}, "
+                    f"which is a lean away from the turn")
+
+    def test_the_road_runs_straight_behind_the_rider(self, qapp):
+        """The road is drawn from behind the rider so its near edge stays
+        off the bottom of the frame, and at that distance the projection
+        multiplies whatever is there by two hundred."""
+        scene = self._posed()
+        here = scene._road(scene.RIDER_AT)[0]
+        for at in (scene.NEAR, -1.0, 0.0, scene.RIDER_AT - 0.01):
+            assert scene._road(at)[0] == pytest.approx(here), (
+                f"the road at {at} is {scene._road(at)[0]:.3f} across and "
+                f"under the rider it is {here:.3f}")
+
+    # -- the eye rides the spline ------------------------------------------
+    def test_the_eye_sits_on_the_road_not_beside_it(self, qapp):
+        """"Hard-centred to the track spline." The eye used to sit at
+        world zero while the road wandered left and right past it, so a
+        bend dragged the whole road across the frame instead of curving
+        away ahead."""
+        for phase in (0.0, 0.8, 1.9, 3.4, 5.0):
+            scene = self._posed(phase=phase, loud=0.8)
+            horizon, focal, _tilt = self._settled(scene)
+            here = scene._eye(horizon, focal, 0.0, 0.0, scene.RIDER_AT)
+            assert here.x() == pytest.approx(horizon.x(), abs=1e-6), (
+                f"at phase {phase} the road under the rider is "
+                f"{here.x() - horizon.x():+.0f}px off the eye's own line")
+
+    def test_the_near_edge_keeps_its_distance_from_the_eye(self, qapp):
+        """The eye is on a spring; measured from the rider, the road's
+        near edge came into frame whenever it slid back."""
+        import visualizers
+
+        for loud in (0.0, 0.5, 1.0):
+            scene = self._posed(loud=loud)
+            self._settled(scene)
+            assert scene._near + scene._chase == pytest.approx(
+                visualizers.Rider.NEAR_EYE), (
+                f"at loudness {loud} the road starts "
+                f"{scene._near + scene._chase:.2f} in front of an eye that "
+                f"wants it at {visualizers.Rider.NEAR_EYE}")
+
+    # -- the rig follows the music -----------------------------------------
+    def test_the_view_opens_up_in_a_loud_passage(self, qapp):
+        """Audiosurf drives the field of view from the vehicle's speed,
+        and its speed is the song's amplitude."""
+        quiet = self._posed(loud=0.0)
+        loud = self._posed(loud=1.0)
+        _h, narrow, _t = self._settled(quiet)
+        _h, wide, _t = self._settled(loud)
+        assert wide < narrow * 0.85, (
+            f"the focal length is {narrow:.0f} in a quiet passage and "
+            f"{wide:.0f} in a loud one, which is not an opening")
+
+    def test_the_eye_is_dragged_back_by_a_loud_passage(self, qapp):
+        """"Xxx xxxxxx xxxxxxxxxxxxx xxxx xxxxxx xxx x xxxxxxxx xx x
+        xxxxxx, xxxxxxxxxx xxx follow distance." """
+        import visualizers
+
+        quiet = self._posed(loud=0.0)
+        loud = self._posed(loud=1.0)
+        self._settled(quiet)
+        self._settled(loud)
+        assert loud._chase > quiet._chase * 1.2, (
+            f"the eye sits {quiet._chase:.2f} behind in a quiet passage "
+            f"and {loud._chase:.2f} in a loud one")
+        assert quiet._chase == pytest.approx(
+            visualizers.Rider.EYE_BACK, abs=0.05), (
+            f"with nothing pushing it the eye rests at {quiet._chase:.2f} "
+            f"rather than at {visualizers.Rider.EYE_BACK}")
+
+    def test_the_spring_settles_rather_than_bouncing(self, qapp):
+        """A lag of a fraction of a second, not a bounce."""
+        from PySide6.QtCore import QRectF
+
+        scene = self._posed(loud=1.0)
+        box = QRectF(0, 0, self.W, self.H)
+        seen = []
+        for _ in range(600):
+            scene._camera(box, 0.0, 0.0)
+            seen.append(scene._chase)
+        turns = sum(1 for a, b, c in zip(seen, seen[1:], seen[2:])
+                    if (b - a) * (c - b) < 0)
+        assert turns <= 2, (
+            f"the follow distance changed direction {turns} times, so the "
+            f"spring is ringing rather than settling")

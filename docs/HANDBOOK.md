@@ -846,6 +846,23 @@ that bends and climbs with the track, and obstacles laid out on the drums:
 a kick closes two lanes and leaves one open, a snare drops a single block,
 a run of hats steps across the three. The arrow keys change lane.
 
+**One clock.** The road's position is a function of the beat: a beat is
+one `PER_BEAT` of road, a block laid on beat *n* sits at *n* of them, and
+the road reaches it exactly on beat *n*. That is what puts the dodge on
+the beat rather than near it, and it is also what stopped the road sliding
+under the obstacles - the ground and the gates used to run at 6 to 23 road
+units a second with the bass while a block's distance was worked out from
+its time and came to a flat 6.5 whatever the track was doing.
+
+The look-ahead is three beats rather than a number of seconds, because a
+length of time is a different musical distance at every tempo. At 128 bpm
+that is 12 units a second against the 6.5 the blocks used to manage.
+
+The bass cannot change how far a beat travels - that is what holds the
+timing - so it changes *when* inside the beat it travels: at a full bass
+the road covers two and a half times the average in the first frames of a
+beat and coasts into the next. Same arrival, much more push.
+
 The chart comes from the same element detection the strobe uses, read
 *ahead* of the playhead: an obstacle leaves the horizon about two and a
 half seconds before its beat and is level with you exactly on it. Hits are
@@ -869,6 +886,18 @@ feel like; the road speeds up instead. The ground runs from 6 to 23 units
 a second with the bass. Hitting something halves the speed for about a
 second and throws pieces off it. The ground stops when the track is
 paused.
+
+**The camera** follows the Audiosurf rig. It is hard-centred on the track
+spline rather than sitting at world zero, so a bend curves away ahead of
+you instead of dragging the whole road across the frame; the road runs
+straight behind the rider, because the part nobody can use was being
+magnified two hundred times and swung off a corner. It banks into the
+turn, and so does the road - the roll is the rate the road is turning at
+rather than a third sine on a third phase, which used to lean one way
+while turning the other and made the lane a block was in a guess. The
+field of view opens in a loud passage and the eye trails back on a spring,
+which is the lag a camera on a boom has and one welded to the ship does
+not.
 
 The camera rides the road rather than hovering over it: heights are
 measured from the road under you, so a passage that lifts the whole road
@@ -943,7 +972,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,686 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,704 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1304,7 +1333,7 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 3,686 tests, about three minutes
+./dev test        # 3,704 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

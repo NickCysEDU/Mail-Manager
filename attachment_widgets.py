@@ -1407,8 +1407,25 @@ class Spectrum(QWidget):
         if self._heard_now is None or abs(said - self._heard_now) > self.SEEK_GAP:
             self._heard_now = said
             return said
-        # Our own clock, pulled gently towards the truth.
-        self._heard_now += step
+        # Our own clock, pulled gently towards the truth - and only while
+        # there is a truth to move towards.
+        #
+        # It used to run forward whatever the player was doing. Paused,
+        # that is a clock walking away from a playhead that is standing
+        # still, held back only by the pull: the gap settles where the
+        # step and the pull balance, which at sixty frames is 0.278 s
+        # against a SEEK_GAP of 0.30. So it sat on the edge of the snap,
+        # and any frame slower than a sixtieth tipped it over - the clock
+        # jumped back to the playhead and set off again. At thirty frames
+        # the balance is 0.55 s and it snapped every time.
+        #
+        # Every scene reads this, so every scene inherited it. The one
+        # that showed it was the rider, where it is not a texture sliding
+        # but the obstacles: "road continues moving and obstacles xx
+        # xxxxxx xxx xxxxxx xxx xxxxxx xxxx xx xxxxx xxxxxxxx xxxxxxxx
+        # xxx xxxx xx xxxxxx xxx xxxxxx xx x xxxx".
+        if self._wanted and not self._idling:
+            self._heard_now += step
         self._heard_now += (said - self._heard_now) * self.PULL
         return self._heard_now
 

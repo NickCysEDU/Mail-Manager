@@ -2628,6 +2628,7 @@ class Rave(Scene):
 
     def __init__(self) -> None:
         self._z = 0.0
+        self._spin = 0.0
         #: What the trusses are built from: see TRUSS_NEAR. Filled once a
         #: frame by ``_advance`` and read by ``_trusses``.
         self._chart: dict = _NO_CHART
@@ -2639,7 +2640,6 @@ class Rave(Scene):
         self._rings: list = []
         #: How far through its sweep the laser rig is.
         self._fan = 0.0
-        self._spin = 0.0
         self._haze_key = None
         self._haze_image = None
         #: The kit, smoothed: the kick pushing the room, the snare washing
@@ -3828,10 +3828,27 @@ class Rider(Scene):
     #: and the road under the near edge is not the road under the rider.
     #: Swept over every phase of the hill, the bend and the roll, at five
     #: frame sizes and both ends of the bank: from level with the rider
-    #: the near edge climbs up to 489 px into the picture, and from 1.6
-    #: behind it stays 100 px or more below the bottom of every one of
-    #: them.
-    NEAR, FAR = -1.6, 20.0
+    #: the near edge climbs up to 489 px into the picture.
+    #:
+    #: 2.4 rather than the 1.6 that was enough before. The road banks
+    #: into its own turn now - see ``_road`` - so the roll is largest
+    #: where the turn is, which is not where the old free-running roll
+    #: put it: at 1.6 the near edge came 158 px into a 1512x982 frame.
+    #: Swept again at the same five sizes, 2.4 keeps it 108 px or more
+    #: below the bottom of every one of them, and it is the best of them
+    #: - further back than that and the corner starts coming round again.
+    NEAR, FAR = -2.4, 20.0
+    #: How far in front of the eye the road starts, and the z nearer
+    #: than which nothing is projected at all.
+    #:
+    #: 0.22 rather than a third. The road banks into its own turn, which
+    #: tips its near edge: one corner goes a long way down and the other
+    #: not nearly as far, and the camera's own lean then swings the high
+    #: one back up. At a third of a unit that corner came 50 px into a
+    #: 640x360 frame. Starting the road nearer to the eye pushes both
+    #: corners further down in proportion, which is the only lever here
+    #: that does not cost the bank.
+    NEAR_EYE = 0.22
     #: Cross-pieces down the road. The road is filled between them, so
     #: this is also how smooth its bends look.
     RUNGS = 44
@@ -3854,8 +3871,9 @@ class Rider(Scene):
     #: Seconds from the horizon to the rider. This is the reaction time the
     #: game gives you and it is the number that decides whether it can be
     #: played at all.
-    LOOK = 2.6
-    #: How far ahead the chart is read, which has to be more than LOOK.
+    #: How far ahead the chart is read, in seconds. It has to cover
+    #: LOOK_BEATS of them at the slowest tempo anybody plays: three beats
+    #: at 60 bpm is three seconds.
     READ = 5.0
     #: The least time between one figure and the next, in seconds and in
     #: beats, whichever is longer.
@@ -3894,16 +3912,47 @@ class Rider(Scene):
     #: between figures.
     RUN_GAP = 0.16
 
-    #: Road units a second: at rest, and what a full bass adds.
+    # -- one clock --------------------------------------------------------
+    #: How far the road travels in a beat, and how many beats of it lie
+    #: between the horizon and the rider.
     #:
-    #: Four times the range it had, 6 to 23 rather than 9 to 16, because
-    #: "xxxxxx xxxxx xx x xxx xxxxxxxxxx xxxxxxx xxx xxx xxxxx xxxxx". The
-    #: ground is the only thing this moves: the blocks are placed by time
-    #: so that they stay on the beat whatever the road is doing, which is
-    #: what lets the speed be this dramatic without making the game
-    #: unfair.
-    RUN = 6.0
-    RUN_BASS = 17.0
+    #: The whole world runs off this. It used to run off two clocks: the
+    #: ground and the pillars moved at ``RUN + bass * RUN_BASS`` road
+    #: units a second, which is 6 to 23, while a block's distance was
+    #: worked out from its *time* and came to a flat 6.5 whatever the
+    #: track was doing. So the road slid under the blocks and the
+    #: streetlights overtook them - "xxx xxxxxxxxxxxx xxxx xxxxxx xxxx xxx
+    #: obstacles xx xxx xxxx, xxx xxxx xxxxxxx xxxxx xxxxxx xxxx xxx
+    #: obstacles, this does not feel right".
+    #:
+    #: One clock instead: the road's position is a function of the beat,
+    #: so a block laid on beat n sits at n * PER_BEAT and is level with
+    #: the rider exactly when the road reaches it. Everything moves
+    #: together because there is only one thing moving.
+    #:
+    #: Three beats of look-ahead rather than the 2.6 seconds it was. In
+    #: beats, because a length of time is a different musical distance at
+    #: every tempo; and three because that is a bar's worth of warning at
+    #: four to the floor and it puts the road at 12 units a second at 128
+    #: bpm against the 6.5 the blocks used to manage.
+    LOOK_BEATS = 3.0
+    PER_BEAT = (FAR - RIDER_AT) / LOOK_BEATS
+
+    #: Road units a second when no tempo has been found. About what
+    #: PER_BEAT comes to at an ordinary tempo, so a track the analysis
+    #: could not lock to still moves at the speed of one it could.
+    FREE_RUN = 11.0
+
+    #: How much a full bass front-loads the travel within a beat.
+    #:
+    #: The speed, now that the timing is not negotiable. At 0 the road
+    #: moves evenly through the beat; at 1.6 the first frame of a beat
+    #: travels 2.6 times as far as the mean and the last barely moves,
+    #: which is a lunge onto the beat and a coast before the next one.
+    #: Same arrival time, much more push - and the block arrives exactly
+    #: on the beat either way, because the curve is the identity at both
+    #: ends of it.
+    LUNGE = 1.6
 
     #: How hard the road bends, climbs and rolls.
     #:
@@ -3913,7 +3962,26 @@ class Rider(Scene):
     #: quiet passage is nearly straight.
     BEND = 2.6
     CLIMB = 1.9
-    TWIST = 0.55
+    #: How tightly the road turns, in radians of phase per road unit.
+    #: Pulled out of the sine because the roll is its derivative.
+    BEND_EVERY = 0.17
+    #: How much of the bend, the climb and the bank a quiet passage gets,
+    #: and how much a loud one adds.
+    #:
+    #: It used to run 0.35 to 1.00, which at a drop put the road 19 per
+    #: cent of the frame's width off its own line and rolled it fifteen
+    #: degrees - and the camera opens its field of view at a drop too, so
+    #: the two compounded and the pattern ahead became a diagonal band.
+    #: 0.45 to 0.80 keeps the wander at 15 per cent and the roll at
+    #: twelve degrees, and the energy is carried by the rig instead.
+    PUSH_REST = 0.45
+    PUSH_GAIN = 0.35
+    #: How hard the road banks into its own turn.
+    #:
+    #: 1.2 puts the roll where the old free-running one was at its
+    #: strongest - about sixteen degrees - but now it is the turn that
+    #: puts it there. See ``_road``.
+    BANK = 1.2
 
     #: How far past the rider a block is still drawn. It has to go
     #: somewhere rather than stop dead on the rider's nose.
@@ -3932,6 +4000,29 @@ class Rider(Scene):
     AIM = 7.0
     AIM_PULL = 0.11
     AIM_EASE = 0.06
+
+    # -- the rig ----------------------------------------------------------
+    #: The focal length as a share of the frame, at a crawl and at a
+    #: sprint. Shorter is wider: 0.86 is about sixty degrees across the
+    #: frame and 0.56 about ninety, which is the range a camera behind
+    #: something moving is worth having.
+    #: Shorter is wider. 0.86 is about sixty degrees across the frame and
+    #: 0.62 about eighty - the range a camera behind something moving is
+    #: worth having, stopped where it is because a wider one shrinks what
+    #: it is showing: at 0.56 two lanes are 30 px apart where you have to
+    #: choose between them, and at 0.62 they are 34.
+    FOCAL_SLOW = 0.86
+    FOCAL_FAST = 0.62
+
+    #: How much further back the eye is dragged at a sprint, and the
+    #: spring that drags it. Critically damped enough not to wobble: the
+    #: point is a lag of a fraction of a second, not a bounce.
+    CHASE = 0.55
+    CHASE_SPRING = 0.020
+    CHASE_DAMP = 0.86
+    #: How fast the rig notices a passage has got louder. Slow: this is
+    #: the shape of the song, not the shape of the bar.
+    RUSH_EASE = 0.02
 
     #: How far the view banks into a bend, in degrees for a full turn.
     #:
@@ -3956,6 +4047,11 @@ class Rider(Scene):
     #: case: the follow asks for 0.071 of the frame at its steepest.
     PITCH = 0.05
     PITCH_MOST = 0.085
+
+    #: Where the horizon sits, as a share of the frame above its middle.
+    #: A pure translation of the picture - it changes where the road sits
+    #: in the frame and nothing about how much of it you can see.
+    HORIZON_UP = 0.10
 
     #: The shake, which was too much of the picture. A kick moved the
     #: whole frame by three per cent of its width; at 1.1 per cent it is
@@ -3992,11 +4088,16 @@ class Rider(Scene):
         #: off until there is room for it.
         self._placed = -99.0
         self._loudness = 0.0
-        self._speed = self.RUN
+        self._speed = self.FREE_RUN
+        #: How hard the road is lunging into the beat. See LUNGE.
+        self._lunge = 1.0
         #: Seconds in a beat, or 0 when nothing has found a tempo.
         self._beat = 0.0
         #: A moment that is known to be on the beat, for snapping to.
         self._grid = None
+        #: The moment beat zero started, for measuring distance from. See
+        #: ``_advance`` for why it is not the same thing as ``_grid``.
+        self._origin = None
         #: How far through the current beat the track is, 0 to 1.
         self._pulse = 0.0
         #: Set while an obstacle has just been hit: it slows the road and
@@ -4012,15 +4113,27 @@ class Rider(Scene):
         self._aimed = 0.0
         self._pitched = 0.0
         self._banked = 0.0
+        #: How hard the road is running against its resting speed, eased.
+        self._rushing = 0.0
+        #: Where the eye is behind the rider, and the spring dragging it.
+        #: Starts where it rests, so the first frame is drawn from a
+        #: camera rather than from inside the rider's nose.
+        self._chase = self.EYE_BACK
+        self._chase_to = 0.0
         #: The shake's own clock, so it is not tied to anything else.
         self._wobble = 0.0
         self._bend = 0.0
         self._climb = 0.0
-        self._spin = 0.0
         #: How high the road is under the rider. The eye rides on it
         #: rather than hovering at a fixed height in the world - see
         #: ``_eye``.
         self._under = 0.0
+        #: And how far across it is, so the eye rides the road sideways
+        #: as well as up. See ``_advance``.
+        self._side = 0.0
+        #: Where the road starts, a fixed distance in front of the eye.
+        #: Kept until the camera has been worked out for the frame.
+        self._near = self.NEAR
         self._quick = 0.0
         self._quiet = None
         self._peak = 0.0
@@ -4190,11 +4303,43 @@ class Rider(Scene):
 
         One function, called for every rung, every block and the rider, so
         that everything on the road agrees about where the road is.
+
+        The roll is the rate the road is turning at, not a wobble of its
+        own. It used to be a third sine on a third phase, which tumbles
+        the world independently of where the road goes - so at some
+        phases the road leaned one way while turning the other, and which
+        lane a block was in became a guess. A track banks into its own
+        turn, which is both what makes it readable and what makes it a
+        track: "it's hard to see obstacle patterns in some angles".
         """
-        push = 0.35 + self._loudness * 0.65
-        return (math.sin(at * 0.17 + self._bend) * self.BEND * push,
+        push = self.PUSH_REST + self._loudness * self.PUSH_GAIN
+        # Behind the rider the road runs straight.
+        #
+        # It is drawn from 2.4 behind them so that its near edge stays
+        # off the bottom of the frame, and at that distance the eye is a
+        # unit and a half away: the projection multiplies whatever is
+        # there by two hundred. A bend carried on back there swung the
+        # part of the road nobody can use across the whole frame and took
+        # its near edge off a corner, which is a road that reads as a
+        # diagonal slab. The curve belongs ahead of you.
+        line = max(at, self.RIDER_AT)
+        turn = math.cos(line * self.BEND_EVERY + self._bend) * self.BEND_EVERY
+        return (math.sin(line * self.BEND_EVERY + self._bend)
+                * self.BEND * push,
                 math.sin(at * 0.11 + self._climb) * self.CLIMB * push,
-                math.sin(at * 0.07 + self._spin) * self.TWIST * push)
+                -turn * self.BEND * push * self.BANK)
+
+    def _cruise(self) -> float:
+        """The speed the road runs at with nothing pushing it.
+
+        One beat's worth of road a beat, which is what the road covers
+        when the lunge is flat. Everything about the rig is measured
+        against it rather than against a number, so it stays right at
+        every tempo.
+        """
+        if self._beat > 0.0:
+            return self.PER_BEAT / self._beat
+        return self.FREE_RUN
 
     def _camera(self, rect, surge: float, bass: float) -> tuple:
         """Where the eye is: the vanishing point, the focal length and
@@ -4209,7 +4354,44 @@ class Rider(Scene):
         once a frame and no more.
         """
         span = min(rect.width(), rect.height())
-        focal = span * (0.78 - surge * 0.10 - bass * 0.06)
+        # How hard the passage is pushing, which is what the rig follows.
+        #
+        # Audiosurf drives the field of view from the vehicle's linear
+        # speed, and its linear speed *is* the song's amplitude - loud
+        # passages are downhills. Here the average speed is not free to
+        # move: a beat covers exactly one beat's worth of road, which is
+        # what puts a block under the rider on its beat. So the rig reads
+        # the amplitude directly, which is the same quantity by a shorter
+        # route, and the speed carries it inside the beat as the lunge.
+        #
+        # Eased, because a field of view that jumped about would be a
+        # strobe rather than a camera.
+        self._rushing += (self._loudness - self._rushing) * self.RUSH_EASE
+        wide = max(0.0, min(1.0, self._rushing))
+        # Never wider than FOCAL_FAST. The strobe and the bass open it a
+        # little further on top of the passage's own push, and without a
+        # floor the three together took it to 0.46 of the frame - past
+        # ninety degrees, where the edges of the road bow.
+        focal = span * max(self.FOCAL_FAST,
+                           self.FOCAL_SLOW
+                           + (self.FOCAL_FAST - self.FOCAL_SLOW) * wide
+                           - surge * 0.06 - bass * 0.04)
+        # And the eye is dragged back by it. A spring rather than a
+        # follow, so a drop pulls the rider away down the road for a
+        # moment before the camera catches up, and a climb lets it close
+        # in - which is the lag a camera on a boom would have and a
+        # camera welded to the ship would not.
+        pull = (self.EYE_BACK * (1.0 + wide * self.CHASE) - self._chase)
+        self._chase_to += pull * self.CHASE_SPRING
+        self._chase_to *= self.CHASE_DAMP
+        self._chase += self._chase_to
+        # Where the road starts, which is a fixed distance in front of
+        # the *eye* rather than a fixed distance behind the rider. The
+        # eye is on a spring now and slides back at a drop; measured from
+        # the rider, that brought the road's near edge 156 px into a
+        # 640x360 frame, which is the hard edge straight across the
+        # picture that NEAR exists to prevent.
+        self._near = self.NEAR_EYE - self._chase
         centre = rect.center()
         # The camera looks down the road rather than straight ahead while
         # the road swings away from it.
@@ -4221,15 +4403,17 @@ class Rider(Scene):
         # turns the swing into a lean, which is what being on a road
         # feels like. Eased, so the aim itself does not snap.
         across_ahead, up_ahead, _roll = self._road(self.RIDER_AT + self.AIM)
-        self._aimed += (across_ahead - self._aimed) * self.AIM_EASE
+        # Measured from the road under the rider, which is where the eye
+        # now sits: what is left is the lead, the bit of the bend that is
+        # still ahead of you.
+        self._aimed += (across_ahead - self._side - self._aimed) * self.AIM_EASE
         # The rise *ahead of the rider*, which is the hill. Measured from
         # the road under them, the same way everything else is.
         self._pitched += ((up_ahead - self._under - self._pitched)
                           * self.AIM_EASE)
-        # How hard the road is turning: where it is ahead against where it
-        # is under you. That is what the view banks into.
-        bend = self._aimed - self._road(self.RIDER_AT)[0]
-        self._banked += (bend - self._banked) * self.AIM_EASE
+        # How hard the road is turning, which is what the view banks
+        # into. The aim is already measured from under the rider.
+        self._banked += (self._aimed - self._banked) * self.AIM_EASE
         # The shake is a decaying wobble on its own fast clock rather than
         # a sine of the spin, which never stopped moving.
         self._wobble += 1.0
@@ -4244,7 +4428,7 @@ class Rider(Scene):
         horizon = QPointF(
             centre.x() - self._aimed * focal * self.AIM_PULL
             + math.sin(self._wobble * 1.9) * shake,
-            centre.y() - rect.height() * (0.10 + lift)
+            centre.y() - rect.height() * (self.HORIZON_UP + lift)
             + math.sin(self._wobble * 2.7) * shake)
         # Negative on a right-hand bend, which is the way round it has to
         # be: leaning right tips the camera's up-vector right, so the
@@ -4271,9 +4455,9 @@ class Rider(Scene):
         road ahead: the same sweep now spans 62 to 168 px, right way up
         throughout.
         """
-        z = max(0.35, at + self.EYE_BACK)
+        z = max(self.NEAR_EYE, at + self._chase)
         across, lift, roll = self._road(at)
-        x = across + lane_x
+        x = across + lane_x - self._side
         y = up + lift - self._under
         turn = roll * 0.5
         sx = x * math.cos(turn) - y * math.sin(turn)
@@ -4306,31 +4490,75 @@ class Rider(Scene):
         self._was_at = said
         self._rolling += ((1.0 if moving or said <= 0.0 else 0.0)
                           - self._rolling) * 0.25
-        if said > 0.0 and abs(said - self._heard) > 0.35:
-            self._heard = said
-        elif said > 0.0:
-            self._heard += step * self._rolling + (said - self._heard) * 0.06
-        else:
+        # The music's own clock. Smoothed between the player's reports,
+        # because they arrive a few a second and the road runs at sixty -
+        # but never moved on its own while the track is stopped. It used
+        # to creep forward by ``step`` whatever was happening and get
+        # yanked back whenever it drifted a third of a second from the
+        # playhead, which is a road that crawls forward and snaps back
+        # over and over: "road continues moving and obstacles xx xxxxxx
+        # xxx xxxxxx xxx xxxxxx xxxx xx xxxxx xxxxxxxx xxxxxxxx xxx xxxx
+        # xx xxxxxx xxx xxxxxx xx x xxxx".
+        jumped = False
+        if said <= 0.0:
             self._heard += step
+        elif abs(said - self._heard) > 0.35:
+            self._heard = said       # a seek, or the first frame
+            jumped = True
+        elif moving:
+            self._heard += step * self._rolling + (said - self._heard) * 0.06
 
         self._beat = 60.0 / state.tempo if getattr(state, "tempo", 0) else 0.0
         self._pulse = getattr(state, "beat_at", 0.0) or 0.0
         if self._beat > 0.0 and said > 0.0:
             # One known beat, so that a figure can be put exactly on the
             # grid rather than wherever the detector heard a drum. See
-            # ``_snap``.
+            # ``_snap``. Re-derived every frame, which keeps it exactly
+            # on the phase the analysis reports.
             self._grid = said + (1.0 - self._pulse) * self._beat
+            # And a *fixed* one to measure distance from, which is not
+            # the same thing at all: the snapping reference walks forward
+            # with the playhead, and a distance measured from something
+            # that walks with you is always the same distance. Set once,
+            # and thereafter only nudged to keep its phase - a correction
+            # of a fraction of a beat, never a whole one, so the beat a
+            # moment falls on cannot change under it.
+            start = said - self._pulse * self._beat
+            if self._origin is None or jumped:
+                self._origin = start
+            else:
+                off = (start - self._origin) / self._beat
+                self._origin += (off - round(off)) * self._beat * 0.1
         self._slow = min(1.0, self._slow + self.SLOW_BACK)
-        self._speed = ((self.RUN + bass * self.RUN_BASS)
-                       * self._slow * self._rolling)
-        self._at += step * self._speed
+        # The lunge is frozen while the track is stopped. It is chosen by
+        # the bass, and the bass goes on easing after a pause: recomputing
+        # the curve then moves the road even though the beat has not.
+        if self._rolling > 0.02:
+            self._lunge = 1.0 + bass * self._slow * self.LUNGE
+        was = self._at
+        rolled = self._world(self._heard)
+        # Never backwards. The curve is chosen by the push, so a push that
+        # moves within a beat moves the whole mapping and the road can be
+        # asked to stand where it stood two frames ago. Beats only go
+        # forwards, so neither does the road - except across a seek, which
+        # is the one time it may.
+        self._at = rolled if jumped else max(self._at, rolled)
+        self._speed = (self._at - was) / step if step > 1e-6 else 0.0
         self._drift_sparks(step)
         self._bend += step * (0.30 + self._loudness * 0.85)
         self._climb += step * (0.19 + self._loudness * 0.55)
-        self._spin += step * (0.14 + self._loudness * 0.7)
         # Once a frame, after the road has moved: everything drawn this
-        # frame measures its height from here.
+        # frame measures its height and its line from here.
+        #
+        # Sideways as well as up. The eye used to sit at world zero while
+        # the road wandered left and right past it, so a bend did not
+        # curve away ahead of you - it dragged the whole road across the
+        # frame and took the near end off one corner. Audiosurf pins the
+        # camera to the spline, x = 0, and the bend is then what it
+        # should be: the road ahead curving, with the part under you
+        # straight.
         self._under = self._road(self.RIDER_AT)[1]
+        self._side = self._road(self.RIDER_AT)[0]
         self._shake = max(0.0, self._shake - self._shake * self.SHAKE_FALL
                           - step * 0.9)
         self._shake = min(1.0, self._shake + kit.get("Kick", 0.0) * 0.5)
@@ -4396,19 +4624,46 @@ class Rider(Scene):
     def _lane_at(self, lane: int) -> float:
         return (lane - (self.LANES - 1) / 2.0) * self.LANE_WIDE
 
+    def _world(self, when: float) -> float:
+        """Where the road is at a moment of the track, in road units.
+
+        The one clock. A beat is PER_BEAT units long, so a block laid on
+        beat n sits at n * PER_BEAT and the road reaches it exactly on
+        beat n - which is what makes the dodge land on the beat rather
+        than near it.
+
+        Inside a beat the travel is front-loaded by the bass. That is the
+        whole of the speed control now, and it costs nothing in timing:
+        ``1 - (1 - t) ** k`` is zero at zero and one at one, so however
+        hard it lunges, a beat still covers exactly one beat's worth of
+        road and arrives exactly on time.
+        """
+        if self._beat <= 0.0 or self._origin is None:
+            return when * self.FREE_RUN
+        beats = (when - self._origin) / self._beat
+        whole = math.floor(beats)
+        through = beats - whole
+        return (whole + 1.0 - (1.0 - through) ** self._lunge) * self.PER_BEAT
+
     def _where(self, when: float) -> float:
         """How far down the road a hit due at ``when`` is now.
 
-        Measured to the *rider*, not to the end of the road. This used to
-        map ``when`` onto the far end and let blocks run on to zero, which
-        put them level with the rider at RIDER_AT - a whole 0.39 s before
-        their beat at these settings. They arrived early, every one of
-        them, by the same amount, which is why "the obstacles xx xxx xxxx
-        xx xxxx xx xxx".
+        The difference between where the road has got to and where that
+        moment of the track sits on it. Zero difference is the rider, so
+        a block is level with them exactly on its beat.
         """
-        return (self.RIDER_AT
-                + ((when - self._heard) / self.LOOK)
-                * (self.FAR - self.RIDER_AT))
+        return self.RIDER_AT + self._flat(when) - self._at
+
+    def _flat(self, when: float) -> float:
+        """Where a moment sits on the road, with no lunge in it.
+
+        A block's place is fixed when it is laid; only the road moves.
+        Putting the lunge in here as well would shuffle every block on the
+        road every time the bass changed.
+        """
+        if self._beat <= 0.0 or self._origin is None:
+            return when * self.FREE_RUN
+        return (when - self._origin) / self._beat * self.PER_BEAT
 
     # -- drawing ----------------------------------------------------------
     def paint(self, painter, rect, state) -> None:
@@ -4475,13 +4730,13 @@ class Rider(Scene):
         rungs, filled once: a road drawn as lines is a ladder floating in
         the dark, and blocks standing on nothing read as floating too.
         """
-        reach = self.FAR - self.NEAR
+        reach = self.FAR - self._near
         offset = self._at % 1.0
         deck = QPainterPath()
         last = None
         near_y = far_y = None
         for step in range(self.RUNGS + 1):
-            at = self.NEAR + (step + offset) * reach / self.RUNGS
+            at = self._near + (step + offset) * reach / self.RUNGS
             here = self._rung(horizon, focal, at)
             if last is not None:
                 deck.moveTo(last[0])
@@ -4529,10 +4784,10 @@ class Rider(Scene):
         """
         kick = kit.get("Kick", 0.0)
         marks = QPainterPath()
-        first = math.ceil((self.NEAR + self._at) / self.MARK_EVERY)
+        first = math.ceil((self._near + self._at) / self.MARK_EVERY)
         for index in range(first, first + int(self.FAR / self.MARK_EVERY) + 2):
             at = index * self.MARK_EVERY - self._at
-            if not self.NEAR <= at <= self.FAR:
+            if not self._near <= at <= self.FAR:
                 continue
             for lane in range(self.LANES):
                 across = self._lane_at(lane)
@@ -4553,7 +4808,7 @@ class Rider(Scene):
         the hats, so the two sides of the road are doing different things
         and the difference is the music.
         """
-        reach = self.FAR - self.NEAR
+        reach = self.FAR - self._near
         offset = self._at % 1.0
         snare = kit.get("Snare", 0.0)
         hats = kit.get("Hats", 0.0)
@@ -4562,7 +4817,7 @@ class Rider(Scene):
             edge = self.LANE_WIDE * self.LANES / 2.0
             first = None
             for step in range(self.RUNGS + 1):
-                at = self.NEAR + (step + offset) * reach / self.RUNGS
+                at = self._near + (step + offset) * reach / self.RUNGS
                 point = self._eye(horizon, focal, side * edge,
                                   -0.10 - lit * 0.45, at)
                 if first is None:
@@ -4606,8 +4861,8 @@ class Rider(Scene):
                     continue
                 # Out of the fog with the road, rather than appearing
                 # whole at the far end of it.
-                near = max(0.0, min(1.0, 1.0 - (at - self.NEAR)
-                                    / max(1e-6, self.FAR - self.NEAR)))
+                near = max(0.0, min(1.0, 1.0 - (at - self._near)
+                                    / max(1e-6, self.FAR - self._near)))
                 seen = min(1.0, near / max(1e-6, self.FOG))
                 across = self._lane_at(lane)
                 foot_l = self._eye(horizon, focal, across - edge, 0.0, at)
@@ -4684,7 +4939,7 @@ class Rider(Scene):
         Drawn brighter than the chevrons and dashed down the road, so they
         read as lane markings rather than as more decoration.
         """
-        reach = self.FAR - self.NEAR
+        reach = self.FAR - self._near
         offset = self._at % 2.0
         lines = QPainterPath()
         for lane in range(1, self.LANES):
@@ -4692,8 +4947,8 @@ class Rider(Scene):
                       + lane * self.LANE_WIDE)
             step = 0
             while step < self.RUNGS:
-                at = self.NEAR + (step + offset) * reach / self.RUNGS
-                on = self.NEAR + (step + 1.4 + offset) * reach / self.RUNGS
+                at = self._near + (step + offset) * reach / self.RUNGS
+                on = self._near + (step + 1.4 + offset) * reach / self.RUNGS
                 if at > self.FAR:
                     break
                 lines.moveTo(self._eye(horizon, focal, across, 0.0, at))
@@ -4719,10 +4974,10 @@ class Rider(Scene):
         edge = self.LANE_WIDE * self.LANES / 2.0 + 0.45
         tall = self.PILLAR_TALL * (1.0 + kit.get("Kick", 0.0) * 0.35)
         posts = QPainterPath()
-        first = math.ceil((self.NEAR + self._at) / self.PILLAR_EVERY)
+        first = math.ceil((self._near + self._at) / self.PILLAR_EVERY)
         for index in range(first, first + int(self.FAR / self.PILLAR_EVERY) + 2):
             at = index * self.PILLAR_EVERY - self._at
-            if not self.NEAR + 0.3 <= at <= self.FAR:
+            if not self._near + 0.3 <= at <= self.FAR:
                 continue
             for side in (-1.0, 1.0):
                 foot = self._eye(horizon, focal, side * edge, 0.0, at)
@@ -4744,7 +4999,7 @@ class Rider(Scene):
             return
         shards = QPainterPath()
         for across, up, at, _dx, _dy, _dz, life in self._sparks:
-            if at <= self.NEAR + 0.05:
+            if at <= self._near + 0.05:
                 continue
             here = self._eye(horizon, focal, across, up, at)
             back = self._eye(horizon, focal, across, up + 0.10 * life,
