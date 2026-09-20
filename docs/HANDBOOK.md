@@ -747,20 +747,48 @@ the heaviest drum within about half a beat so that figures land on beats
 rather than between them. A pool of shapes decides what each one looks
 like, so four to the floor is not two bars of the same wall.
 
+Picking the right drum is not the same as landing on the beat. A detector
+reports where a transient rose, which is a few tens of milliseconds either
+side of the grid and not the same amount twice, so every figure is finally
+snapped to the nearest beat of the tempo the analysis found - never
+further than half a beat, so a figure cannot move to a beat it did not
+come from. Run end to end on the detector's own output from a synthesised
+house track, the kick it heard sat up to 222 ms off the beat; the figures
+laid from it sit on it.
+
 A passage with no drums has no obstacles, which is what a build-up should
 feel like; the road speeds up instead. The ground runs from 6 to 23 units
 a second with the bass. Hitting something halves the speed for about a
 second and throws pieces off it. The ground stops when the track is
-paused, and the camera aims at where the road is a little way ahead, so a
-bend reads as a lean rather than as the picture swinging about.
+paused.
+
+The camera rides the road rather than hovering over it: heights are
+measured from the road under you, so a passage that lifts the whole road
+cannot bring it up to eye level. That was a real fault rather than a
+nicety. Swept over every phase of the hill, the road from just ahead to
+the horizon used to span anything from 265 px down to *minus* 35 -
+negative meaning the far end drew below the near one and the road folded
+over on itself. Measured from the road under the rider it spans 62 to 168
+px, right way up throughout.
+
+The camera aims at where the road is a little way ahead, banks into a
+bend, and drops to meet a climb, which holds the road ahead within about
+10 px of one row through every phase of the hill against 79 px with the
+camera held still. The shake is a knock rather than a drop: a kick moves
+the frame about 4 px in a 640-wide window, against 11 px before.
+
+The road is decorated to be read at speed: dashed lines between the lanes
+so the lane you are in is not a guess, gates down either side that stand
+on the kick and light on the snare, a lamp at the end of the road, and a
+reflection of each block in the road under it.
 
 The playing keys deliberately do not bring the control bar back: they
 exist so the scene can be played without the furniture. **?** is there
 because keys nobody can find are not keys.
 
-**F** works whatever the strobe is set to listen to, so you can punch in
+**G** works whatever the strobe is set to listen to, so you can punch in
 flashes over what the track is already doing, and it switches the strobe
-on if it was off.
+on if it was off. **F** is full screen.
 
 ---
 
@@ -792,7 +820,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,539 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,559 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1153,7 +1181,7 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 3,539 tests, about three minutes
+./dev test        # 3,559 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

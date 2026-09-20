@@ -3569,10 +3569,18 @@ class Rider(Scene):
     #: The near and far ends of the road. FAR was 34, which converges to
     #: a sliver: two thirds of the road was a few pixels tall and the
     #: whole thing read as a cone rather than as a road.
-    #: Zero, so the road runs off the bottom of the frame rather than
-    #: stopping short of it with a hard edge across the picture. The eye
-    #: is EYE_BACK behind this, so there is still depth in front of it.
-    NEAR, FAR = 0.0, 20.0
+    #: NEAR is behind the rider, not level with them, so that the road
+    #: runs off the bottom of the frame rather than stopping short of it
+    #: with a hard edge across the picture.
+    #:
+    #: It has to be behind, because the eye rides the road (see ``_eye``)
+    #: and the road under the near edge is not the road under the rider.
+    #: Swept over every phase of the hill, the bend and the roll, at five
+    #: frame sizes and both ends of the bank: from level with the rider
+    #: the near edge climbs up to 489 px into the picture, and from 1.6
+    #: behind it stays 100 px or more below the bottom of every one of
+    #: them.
+    NEAR, FAR = -1.6, 20.0
     #: Cross-pieces down the road. The road is filled between them, so
     #: this is also how smooth its bends look.
     RUNGS = 44
@@ -3674,6 +3682,35 @@ class Rider(Scene):
     AIM_PULL = 0.11
     AIM_EASE = 0.06
 
+    #: How far the view banks into a bend, in degrees for a full turn.
+    #:
+    #: The camera leans the way a rider leans. Without it a bend is the
+    #: picture sliding sideways; with it the horizon rolls and the road
+    #: stays under you, which is the difference between watching a road
+    #: and being on one.
+    TILT = 5.0
+    #: How hard the camera follows the road up a hill, and how much of the
+    #: frame it is allowed to give up doing it.
+    #:
+    #: The rise it follows is the road ahead measured *from the road under
+    #: the rider* - see ``_eye`` - so this is a camera looking up a hill
+    #: rather than one reacting to where the whole road happens to sit.
+    #:
+    #: At a twentieth, the middle of the road ahead holds within 10 px of
+    #: one row through every phase of the hill, against 79 px with the
+    #: camera held still. Both of those are hills you can see: what moves
+    #: is the frame, not the road. Harder than this and it overshoots -
+    #: 30 px of swing at 0.08 - because it is then correcting more than
+    #: the hill put there. PITCH_MOST is a rail rather than the usual
+    #: case: the follow asks for 0.071 of the frame at its steepest.
+    PITCH = 0.05
+    PITCH_MOST = 0.085
+
+    #: The shake, which was too much of the picture. A kick moved the
+    #: whole frame by three per cent of its width; at 1.1 per cent it is
+    #: a knock rather than a camera being dropped.
+    SHAKE_LESS = 0.38
+
     #: What a hit does to the road: how far the speed drops, and how fast
     #: it comes back. Half speed, back over about a second, which is long
     #: enough to be a punishment and short enough not to be a sulk.
@@ -3707,6 +3744,8 @@ class Rider(Scene):
         self._speed = self.RUN
         #: Seconds in a beat, or 0 when nothing has found a tempo.
         self._beat = 0.0
+        #: A moment that is known to be on the beat, for snapping to.
+        self._grid = None
         #: How far through the current beat the track is, 0 to 1.
         self._pulse = 0.0
         #: Set while an obstacle has just been hit: it slows the road and
@@ -3717,13 +3756,20 @@ class Rider(Scene):
         #: told from a playing one.
         self._was_at = None
         self._rolling = 1.0
-        #: Where the camera is looking, across the road.
+        #: Where the camera is looking, across the road and up it, and
+        #: how hard it is banked into the bend.
         self._aimed = 0.0
+        self._pitched = 0.0
+        self._banked = 0.0
         #: The shake's own clock, so it is not tied to anything else.
         self._wobble = 0.0
         self._bend = 0.0
         self._climb = 0.0
         self._spin = 0.0
+        #: How high the road is under the rider. The eye rides on it
+        #: rather than hovering at a fixed height in the world - see
+        #: ``_eye``.
+        self._under = 0.0
         self._quick = 0.0
         self._quiet = None
         self._peak = 0.0
@@ -3811,6 +3857,7 @@ class Rider(Scene):
                         due[best][1], self._off_beat(due[best][0])):
                     best = other
             when, _order, shape = due[best]
+            when = self._snap(when)
             self._placed = when
             self._shape(self._varied(shape, when), when)
             index = best + 1
@@ -3834,15 +3881,39 @@ class Rider(Scene):
         slot = int(round(when / self._beat / max(1e-6, self.GAP_BEATS)))
         return self.POOL[slot % len(self.POOL)]
 
+    def _snap(self, when: float) -> float:
+        """The nearest beat to ``when``, or ``when`` if there is no grid.
+
+        The detector says where it heard a drum, and on real music that is
+        a few tens of milliseconds either side of the beat and not the
+        same amount each time. Choosing the heaviest drum in a slot puts
+        figures on the *right* drums; it cannot put them on the grid,
+        because the drums themselves are not exactly on it. Snapping does.
+
+        Only as far as half a beat, so a figure never moves to a beat that
+        is not the one it came from.
+        """
+        if self._beat <= 0.0 or self._grid is None:
+            return when
+        steps = (when - self._grid) / self._beat
+        return self._grid + round(steps) * self._beat
+
     def _off_beat(self, when: float) -> float:
         """How far a moment is from the nearest beat, in seconds.
+
+        Measured from ``_grid`` rather than from zero. Counting beats from
+        the start of the file assumes the first beat is at 0:00, which is
+        true of a written test track and of nothing anybody has recorded:
+        a track whose beats sit on the half would have had every candidate
+        scored as maximally off, and the tiebreak this feeds would have
+        picked by drum weight alone.
 
         Nothing when no tempo has been found, so that the chart falls back
         to taking the heaviest drum and nothing else.
         """
         if self._beat <= 0.0:
             return 0.0
-        beats = when / self._beat
+        beats = (when - (self._grid or 0.0)) / self._beat
         return abs(beats - round(beats)) * self._beat
 
     def _shape(self, pattern: str, when: float) -> None:
@@ -3874,12 +3945,85 @@ class Rider(Scene):
                 math.sin(at * 0.11 + self._climb) * self.CLIMB * push,
                 math.sin(at * 0.07 + self._spin) * self.TWIST * push)
 
+    def _camera(self, rect, surge: float, bass: float) -> tuple:
+        """Where the eye is: the vanishing point, the focal length and
+        the bank, as one call a frame.
+
+        One place rather than a block inside ``paint``, so that a test
+        can ask the scene where it is looking instead of working it out
+        again from the constants and being wrong differently.
+
+        Moves the camera as well as reporting it - the aim, the hill and
+        the bank are all eased towards where the road is - so it is called
+        once a frame and no more.
+        """
+        span = min(rect.width(), rect.height())
+        focal = span * (0.78 - surge * 0.10 - bass * 0.06)
+        centre = rect.center()
+        # The camera looks down the road rather than straight ahead while
+        # the road swings away from it.
+        #
+        # The road bends hard now, and a camera pinned to the middle of
+        # the frame meant the whole picture swung across it: "xxxxxx xx
+        # xxx xxxx xxx xxxxx". Aiming at where the road is a little way
+        # ahead holds the track roughly in the middle of the frame and
+        # turns the swing into a lean, which is what being on a road
+        # feels like. Eased, so the aim itself does not snap.
+        across_ahead, up_ahead, _roll = self._road(self.RIDER_AT + self.AIM)
+        self._aimed += (across_ahead - self._aimed) * self.AIM_EASE
+        # The rise *ahead of the rider*, which is the hill. Measured from
+        # the road under them, the same way everything else is.
+        self._pitched += ((up_ahead - self._under - self._pitched)
+                          * self.AIM_EASE)
+        # How hard the road is turning: where it is ahead against where it
+        # is under you. That is what the view banks into.
+        bend = self._aimed - self._road(self.RIDER_AT)[0]
+        self._banked += (bend - self._banked) * self.AIM_EASE
+        # The shake is a decaying wobble on its own fast clock rather than
+        # a sine of the spin, which never stopped moving.
+        self._wobble += 1.0
+        shake = self._shake * self.SHAKE * self.SHAKE_LESS * span
+        # Up the hill with the road, within reason. A climb puts the road
+        # ahead higher in the frame, so the view drops to meet it - which
+        # is a positive lift on a negative rise, and the reason the sign
+        # is worth a line: the other way round the camera runs away from
+        # the hill and doubles its swing across the frame.
+        lift = max(-self.PITCH_MOST, min(self.PITCH_MOST,
+                                         self._pitched * self.PITCH))
+        horizon = QPointF(
+            centre.x() - self._aimed * focal * self.AIM_PULL
+            + math.sin(self._wobble * 1.9) * shake,
+            centre.y() - rect.height() * (0.10 + lift)
+            + math.sin(self._wobble * 2.7) * shake)
+        # Negative on a right-hand bend, which is the way round it has to
+        # be: leaning right tips the camera's up-vector right, so the
+        # world turns the other way and the right-hand end of the horizon
+        # comes *up*. Qt's positive rotation takes it down.
+        tilt = max(-self.TILT, min(self.TILT, -self._banked * self.TILT))
+        return horizon, focal, tilt
+
     def _eye(self, horizon, focal, lane_x: float, up: float, at: float):
-        """A point on the road, on the glass."""
+        """A point on the road, on the glass.
+
+        Heights are measured from the road under the rider, not from the
+        world, which is the difference between a road and a glitch. The
+        eye sits ``EYE_UP`` above the world floor; a passage that lifted
+        the whole road by nearly that much brought it up to eye level,
+        where everything from here to the horizon lands within a few
+        pixels of the same row. Measured across every phase of the hill
+        the road ahead spanned anywhere from 265 px down to *minus* 35 -
+        negative, meaning the far end drew below the near end and the
+        road folded over on itself.
+
+        Subtracting the road under the rider pins the near end where it
+        belongs and leaves the hills as what they are, the shape of the
+        road ahead: the same sweep now spans 62 to 168 px, right way up
+        throughout.
+        """
         z = max(0.35, at + self.EYE_BACK)
         across, lift, roll = self._road(at)
         x = across + lane_x
-        y = up + lift
+        y = up + lift - self._under
         turn = roll * 0.5
         sx = x * math.cos(turn) - y * math.sin(turn)
         sy = x * math.sin(turn) + y * math.cos(turn)
@@ -3920,6 +4064,11 @@ class Rider(Scene):
 
         self._beat = 60.0 / state.tempo if getattr(state, "tempo", 0) else 0.0
         self._pulse = getattr(state, "beat_at", 0.0) or 0.0
+        if self._beat > 0.0 and said > 0.0:
+            # One known beat, so that a figure can be put exactly on the
+            # grid rather than wherever the detector heard a drum. See
+            # ``_snap``.
+            self._grid = said + (1.0 - self._pulse) * self._beat
         self._slow = min(1.0, self._slow + self.SLOW_BACK)
         self._speed = ((self.RUN + bass * self.RUN_BASS)
                        * self._slow * self._rolling)
@@ -3928,6 +4077,9 @@ class Rider(Scene):
         self._bend += step * (0.30 + self._loudness * 0.85)
         self._climb += step * (0.19 + self._loudness * 0.55)
         self._spin += step * (0.14 + self._loudness * 0.7)
+        # Once a frame, after the road has moved: everything drawn this
+        # frame measures its height from here.
+        self._under = self._road(self.RIDER_AT)[1]
         self._shake = max(0.0, self._shake - self._shake * self.SHAKE_FALL
                           - step * 0.9)
         self._shake = min(1.0, self._shake + kit.get("Kick", 0.0) * 0.5)
@@ -4031,42 +4183,31 @@ class Rider(Scene):
                            strength=0.16 + surge * 0.20 + flash * 0.14,
                            flash=flash)
 
-        span = min(rect.width(), rect.height())
-        focal = span * (0.78 - surge * 0.10 - bass * 0.06)
-        centre = rect.center()
-        # The camera looks down the road rather than straight ahead while
-        # the road swings away from it.
-        #
-        # The road bends hard now, and a camera pinned to the middle of
-        # the frame meant the whole picture swung across it: "xxxxxx xx
-        # xxx xxxx xxx xxxxx". Aiming at where the road is a little way
-        # ahead holds the track roughly in the middle of the frame and
-        # turns the swing into a lean, which is what being on a road
-        # feels like. Eased, so the aim itself does not snap.
-        ahead = self._road(self.RIDER_AT + self.AIM)[0]
-        self._aimed += (ahead - self._aimed) * self.AIM_EASE
-        # The shake is a decaying wobble on its own fast clock rather than
-        # a sine of the spin, which never stopped moving.
-        self._wobble += 1.0
-        shake = self._shake * self.SHAKE * span
-        horizon = QPointF(
-            centre.x() - self._aimed * focal * self.AIM_PULL
-            + math.sin(self._wobble * 1.9) * shake,
-            centre.y() - rect.height() * 0.10
-            + math.sin(self._wobble * 2.7) * shake)
+        horizon, focal, tilt = self._camera(rect, surge, bass)
         hue = (0.58 + state.synth * 0.25 + surge * 0.12) % 1.0
         # How close the track is to a beat, 1 on it and falling away.
         beat = (1.0 - self._pulse) ** 3 if self._beat > 0.0 else 0.0
 
+        # The whole view banks into the bend. One transform around the
+        # horizon, so everything drawn after it leans together.
+        painter.save()
+        painter.translate(horizon)
+        painter.rotate(tilt)
+        painter.translate(-horizon)
+
+        self._glow(painter, rect, horizon, hue, surge, bass, beat, flash)
         self._surface(painter, rect, horizon, focal, hue, surge,
                       flash + beat * 0.35)
+        self._lanes(painter, horizon, focal, hue, beat, flash)
         self._markings(painter, horizon, focal, hue, kit,
                        flash + beat * 0.45)
+        self._pillars(painter, horizon, focal, hue, kit, beat, flash)
         self._edges(painter, rect, horizon, focal, hue, kit,
                     flash + beat * 0.30)
         self._walls(painter, rect, horizon, focal, hue, flash)
         self._bits(painter, horizon, focal, hue)
         self._ship(painter, rect, horizon, focal, hue, flash)
+        painter.restore()
         self._card(painter, rect, hue)
 
     def _rung(self, horizon, focal, at: float, out: float = 0.0):
@@ -4185,6 +4326,8 @@ class Rider(Scene):
 
     #: The colour of each kind of block, as a turn from the road's hue.
     BLOCK_HUE = {"wall": 0.42, "block": 0.30, "run": 0.16}
+    #: How far a block's reflection reaches into the road.
+    MIRROR = 0.55
 
     def _walls(self, painter, rect, horizon, focal, hue, flash) -> None:
         """The blocks, filled, with a lit edge.
@@ -4227,6 +4370,22 @@ class Rider(Scene):
                 faces.closeSubpath()
                 rims.moveTo(top_l)
                 rims.lineTo(top_r)
+                # The block in the road under it. Squashed and dim, the
+                # way a wet floor holds a light: one more quad a block,
+                # and it is most of what makes them stand on the road
+                # rather than hover over it.
+                pool = QPainterPath()
+                pool.moveTo(foot_l)
+                pool.lineTo(foot_r)
+                pool.lineTo(self._eye(horizon, focal, across + edge,
+                                      tall * self.MIRROR, at))
+                pool.lineTo(self._eye(horizon, focal, across - edge,
+                                      tall * self.MIRROR, at))
+                pool.closeSubpath()
+                painter.fillPath(pool, QColor.fromHsvF(
+                    (hue + self.BLOCK_HUE[kind]) % 1.0,
+                    max(0.0, 0.90 - flash * 0.4), 0.55 + flash * 0.35,
+                    0.30 * seen))
                 # One path per block rather than one for the lot, because
                 # each is a different distance into the fog.
                 shade = (hue + self.BLOCK_HUE[kind]) % 1.0
@@ -4238,6 +4397,95 @@ class Rider(Scene):
                     min(1.0, (0.85 + flash * 0.15) * seen)))
                 faces = QPainterPath()
                 rims = QPainterPath()
+
+    #: The horizon lamp: how far it reaches as a share of the frame, and
+    #: how much the bass opens it.
+    GLOW_REACH = 0.55
+    GLOW_BASS = 0.30
+
+    def _glow(self, painter, rect, horizon, hue, surge, bass, beat,
+              flash) -> None:
+        """A lamp at the end of the road, behind everything.
+
+        The road runs into something rather than into nothing, and it is
+        the cheapest depth in the scene: one gradient a frame.
+        """
+        reach = max(1.0, rect.height() * (self.GLOW_REACH
+                                          + bass * self.GLOW_BASS))
+        lamp = QRadialGradient(horizon, reach)
+        lamp.setColorAt(0.0, QColor.fromHsvF(
+            (hue + 0.08) % 1.0, max(0.0, 0.70 - flash * 0.4), 1.0,
+            min(1.0, 0.30 + surge * 0.30 + beat * 0.18 + flash * 0.25)))
+        lamp.setColorAt(0.45, QColor.fromHsvF(
+            (hue + 0.02) % 1.0, 0.85, 0.8,
+            min(1.0, 0.12 + surge * 0.16 + beat * 0.10)))
+        lamp.setColorAt(1.0, QColor(0, 0, 0, 0))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(lamp)
+        painter.drawRect(rect)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+    def _lanes(self, painter, horizon, focal, hue, beat, flash) -> None:
+        """The lines between the lanes.
+
+        Without them the road is one slab and which lane you are in is a
+        guess: "xxx xxxxxxx xxxxx xxxxxxx xxx xxxxx xx xxxxx xxxxx".
+        Drawn brighter than the chevrons and dashed down the road, so they
+        read as lane markings rather than as more decoration.
+        """
+        reach = self.FAR - self.NEAR
+        offset = self._at % 2.0
+        lines = QPainterPath()
+        for lane in range(1, self.LANES):
+            across = (-self.LANE_WIDE * self.LANES / 2.0
+                      + lane * self.LANE_WIDE)
+            step = 0
+            while step < self.RUNGS:
+                at = self.NEAR + (step + offset) * reach / self.RUNGS
+                on = self.NEAR + (step + 1.4 + offset) * reach / self.RUNGS
+                if at > self.FAR:
+                    break
+                lines.moveTo(self._eye(horizon, focal, across, 0.0, at))
+                lines.lineTo(self._eye(horizon, focal, across, 0.0,
+                                       min(self.FAR, on)))
+                step += 3
+        self._beam(painter, lines, QColor.fromHsvF(
+            (hue + 0.06) % 1.0, max(0.0, 0.30 - flash * 0.25), 1.0,
+            min(1.0, 0.55 + beat * 0.30 + flash * 0.25)))
+
+    #: How far apart the pillars are down the road, and how tall.
+    PILLAR_EVERY = 5.0
+    PILLAR_TALL = 1.45
+
+    def _pillars(self, painter, horizon, focal, hue, kit, beat,
+                 flash) -> None:
+        """Gates down either side, passing at the road's own speed.
+
+        What gives the road somewhere to be. They stand on the kick and
+        light on the snare, so the two sides of the frame are doing
+        something the music is doing.
+        """
+        edge = self.LANE_WIDE * self.LANES / 2.0 + 0.45
+        tall = self.PILLAR_TALL * (1.0 + kit.get("Kick", 0.0) * 0.35)
+        posts = QPainterPath()
+        first = math.ceil((self.NEAR + self._at) / self.PILLAR_EVERY)
+        for index in range(first, first + int(self.FAR / self.PILLAR_EVERY) + 2):
+            at = index * self.PILLAR_EVERY - self._at
+            if not self.NEAR + 0.3 <= at <= self.FAR:
+                continue
+            for side in (-1.0, 1.0):
+                foot = self._eye(horizon, focal, side * edge, 0.0, at)
+                head = self._eye(horizon, focal, side * edge, -tall, at)
+                posts.moveTo(foot)
+                posts.lineTo(head)
+                # A short arm turning in over the road, so a pillar reads
+                # as a gate rather than as a stick.
+                posts.lineTo(self._eye(horizon, focal,
+                                       side * (edge - 0.55), -tall, at))
+        self._beam(painter, posts, QColor.fromHsvF(
+            (hue + 0.30) % 1.0, max(0.0, 0.75 - flash * 0.4), 1.0,
+            min(1.0, 0.35 + kit.get("Snare", 0.0) * 0.45 + beat * 0.20
+                + flash * 0.3)))
 
     def _bits(self, painter, horizon, focal, hue) -> None:
         """The pieces thrown off a block that was hit."""

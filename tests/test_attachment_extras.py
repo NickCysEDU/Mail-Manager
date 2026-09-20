@@ -8428,3 +8428,711 @@ class TestThePolishPassCoversTheWholeFrame:
             f"the halo claims a ratio of {halo.devicePixelRatio()}, so it "
             f"claims to be {halo.width() / halo.devicePixelRatio():.0f} "
             f"wide when it is {halo.width()}")
+
+
+class TestTheRiderSnapsToTheGrid:
+    """"Xxxxx xxxxx xxxxx xxxx xxx xxxx xxxxxxxx xxx obstacles xxxx
+    xxxxxx xxx xxx xxxxxxx xx xxx xxxxx."
+
+    Choosing the heaviest drum in a slot puts figures on the *right*
+    drums. It cannot put them on the beat, because the drums themselves
+    are not on it: a detector reports where the transient rose, which on
+    real music is a few tens of milliseconds either side of the grid and
+    not the same amount twice. Every test below the first feeds a chart
+    that is off the beat on purpose, because a chart written exactly on
+    it cannot tell snapping from no snapping.
+    """
+
+    BPM = 128.0
+    BEAT = 60.0 / 128.0
+
+    @staticmethod
+    def _state(chart, tempo=0.0):
+        from attachment_widgets import SpectrumState
+
+        state = SpectrumState()
+        state.levels = [0.4] * 27
+        state.chart = chart
+        state.tempo = tempo
+        return state
+
+    @classmethod
+    def _jittered(cls, spread=0.04, seconds=40.0):
+        """A house chart with every hit nudged off the beat.
+
+        Deterministic: the same nudges on every machine and every run,
+        because a flaky rhythm test is worse than none.
+        """
+        import random
+
+        dice = random.Random(20260920)
+        hits = {}
+        for name, step, first in (("Kick", 1.0, 0.0), ("Snare", 2.0, 1.0),
+                                  ("Hats", 0.5, 0.0)):
+            when = []
+            beat = first
+            while beat * cls.BEAT < seconds:
+                when.append(beat * cls.BEAT
+                            + dice.uniform(-spread, spread))
+                beat += step
+            hits[name] = tuple(when)
+        return hits
+
+    @classmethod
+    def _figures(cls, chart, grid=0.0, seconds=30.0):
+        """Where the chart put its figures, one time per figure."""
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._beat = cls.BEAT
+        scene._grid = grid
+        state = cls._state(chart)
+        scene._heard = 0.0
+        while scene._heard < seconds:
+            scene._heard += 0.5
+            scene._lay(state)
+        times = sorted({block[0] for block in scene._blocks})
+        return [t for i, t in enumerate(times)
+                if i == 0 or t - times[i - 1] > scene.RUN_GAP + 0.01]
+
+    @classmethod
+    def _off(cls, figures, beat=None, grid=0.0):
+        """How far each figure sits from the grid, in milliseconds."""
+        beat = beat or cls.BEAT
+        return [abs((t - grid) / beat - round((t - grid) / beat)) * beat * 1000
+                for t in figures]
+
+    def test_the_grid_is_the_next_beat_the_track_reports(self):
+        """Where the grid comes from: the playhead and the beat phase,
+        which is what every other scene lights on."""
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._last = None
+        state = self._state({}, tempo=self.BPM)
+        state.at = 10.0
+        state.beat_at = 0.25       # a quarter of the way through a beat
+        scene._advance(state)
+        assert scene._grid == pytest.approx(10.0 + 0.75 * self.BEAT), (
+            f"the grid is at {scene._grid:.4f}s when the beat after 10.0s "
+            f"is at {10.0 + 0.75 * self.BEAT:.4f}")
+        assert scene._beat == pytest.approx(self.BEAT)
+
+    def test_a_figure_lands_on_the_grid_when_the_drums_do_not(self):
+        """The whole point. Without snapping the figures inherit the
+        detector's scatter; with it they are on the beat."""
+        import statistics
+
+        chart = self._jittered()
+        figures = self._figures(chart)
+        assert len(figures) > 20, f"only {len(figures)} figures"
+        off = self._off(figures)
+        assert statistics.median(off) < 1.0, (
+            f"the median figure sits {statistics.median(off):.0f} ms from "
+            f"the grid on a chart scattered by up to 40 ms")
+        assert max(off) < 1.0, (
+            f"one figure is {max(off):.0f} ms off the grid")
+
+    def test_it_snaps_to_a_grid_that_does_not_start_at_zero(self):
+        """Nothing anybody recorded has its first beat at 0:00."""
+        import statistics
+
+        grid = 0.137
+        chart = {name: tuple(t + grid for t in when)
+                 for name, when in self._jittered().items()}
+        figures = self._figures(chart, grid=grid)
+        assert len(figures) > 20, f"only {len(figures)} figures"
+        assert statistics.median(self._off(figures, grid=grid)) < 1.0, (
+            "the figures are not on a grid that starts at 0.137s")
+
+    def test_a_figure_never_moves_to_a_beat_it_did_not_come_from(self):
+        """Snapping is a correction, not a re-write: half a beat is the
+        furthest anything may travel."""
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._beat = self.BEAT
+        scene._grid = 0.137
+        for step in range(400):
+            when = 3.0 + step * 0.01
+            moved = abs(scene._snap(when) - when)
+            assert moved <= self.BEAT / 2.0 + 1e-9, (
+                f"{when:.2f}s was moved {moved * 1000:.0f} ms, which is "
+                f"more than the {self.BEAT * 500:.0f} ms half-beat")
+
+    def test_a_track_with_no_tempo_is_left_where_the_drums_are(self):
+        """No grid to snap to is not an excuse to lay nothing."""
+        import visualizers
+
+        chart = self._jittered()
+        scene = visualizers.Rider()
+        scene._beat = 0.0
+        scene._grid = None
+        state = self._state(chart)
+        scene._heard = 0.0
+        while scene._heard < 20.0:
+            scene._heard += 0.5
+            scene._lay(state)
+        assert scene._blocks, "a track with no tempo got no chart at all"
+        assert scene._snap(4.321) == 4.321
+
+    def test_the_figures_of_a_real_detection_pass_are_on_the_beat(self):
+        """End to end, on audio rather than on a written chart.
+
+        The hits here are whatever the element detector reports off a
+        synthesised house track - its real scatter, not a number chosen
+        by this test - fed in exactly as ``_clock`` feeds them.
+        """
+        import statistics
+
+        import attachment_audio
+        import beatmap
+        import drumkit
+        import visualizers
+
+        pcm, truth = drumkit.styled("house", seconds=24.0)
+        beat = 60.0 / drumkit.STYLES["house"]["bpm"]
+        frames = attachment_audio.onset_frames(pcm, drumkit.RATE, 2)
+        found = beatmap.elements(frames, attachment_audio.ONSET_RATE)
+        chart = {name: tuple(hit.at for hit in found[name].beats)
+                 for name in found if found[name].beats}
+        assert chart.get("Kick"), "the detector found no kick to chart"
+
+        # What the detector itself is off by, which is what snapping has
+        # to absorb. Not asserted on: it is the input, not the result.
+        heard = self._off(list(chart["Kick"]), beat=beat)
+
+        scene = visualizers.Rider()
+        scene._beat = beat
+        scene._grid = truth["Kick"][0]
+        state = self._state(chart)
+        scene._heard = 0.0
+        while scene._heard < 20.0:
+            scene._heard += 0.5
+            scene._lay(state)
+        times = sorted({block[0] for block in scene._blocks})
+        figures = [t for i, t in enumerate(times)
+                   if i == 0 or t - times[i - 1] > scene.RUN_GAP + 0.01]
+        assert len(figures) > 10, f"only {len(figures)} figures"
+        off = self._off(figures, beat=beat, grid=truth["Kick"][0])
+        assert statistics.median(off) < 2.0, (
+            f"the detector heard the kick a median {statistics.median(heard):.0f} "
+            f"ms off the beat and the chart laid its figures "
+            f"{statistics.median(off):.0f} ms off it")
+
+    def test_how_far_off_the_beat_a_hit_is_counts_from_the_grid(self):
+        """The tiebreak that picks between two drums of the same weight.
+
+        Counting beats from the start of the file assumes the first beat
+        is at 0:00. On a grid that starts anywhere else, a hit exactly on
+        a beat scores as badly off and a hit on the eighth scores as near
+        perfect, so the tiebreak picks the wrong one of the pair.
+        """
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._beat = self.BEAT
+        scene._grid = 0.137
+        for beat in range(1, 9):
+            on = 0.137 + beat * self.BEAT
+            assert scene._off_beat(on) < 1e-9, (
+                f"a hit exactly on beat {beat} is called "
+                f"{scene._off_beat(on) * 1000:.0f} ms off it")
+            between = on + self.BEAT / 2.0
+            assert scene._off_beat(between) == pytest.approx(
+                self.BEAT / 2.0), (
+                f"a hit on the eighth after beat {beat} is called "
+                f"{scene._off_beat(between) * 1000:.0f} ms off the beat")
+
+
+class TestTheRoadIsAlwaysARoad:
+    """"Xxxxxx xxxxx xxxxx xxx xx xxxxxxxx."
+
+    It had one, and it was in the projection. The eye sat a fixed height
+    above the world floor while the whole road rose and fell under it, so
+    a passage that lifted the road by nearly that much brought it up to
+    eye level - where the road from here to the horizon lands within a
+    few pixels of one row, and past that point the far end draws *below*
+    the near end and the road folds over on itself.
+
+    Everything here sweeps every phase of the hill, the bend and the roll
+    rather than checking one frame, because the fault only appeared at
+    some of them and a scene with a pose it cannot hold is not fixed.
+    """
+
+    SIZES = ((640, 360), (900, 500), (1512, 982), (1920, 1080), (3024, 1964))
+
+    @staticmethod
+    def _posed(phase, loud=1.0):
+        """The scene held at one phase of the road, ready to be measured."""
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._last = None
+        scene._loudness = loud
+        scene._bend = scene._climb = scene._spin = phase
+        scene._under = scene._road(scene.RIDER_AT)[1]
+        return scene
+
+    @classmethod
+    def _camera(cls, scene, width, height):
+        from PySide6.QtCore import QRectF
+
+        # Eased towards the road, so it is settled before it is read.
+        for _ in range(200):
+            horizon, focal, tilt = scene._camera(
+                QRectF(0, 0, width, height), 0.0, 0.0)
+        return horizon, focal, tilt
+
+    @classmethod
+    def _down_the_road(cls, scene, width, height, wheres):
+        horizon, focal, _tilt = cls._camera(scene, width, height)
+        return [scene._eye(horizon, focal, 0.0, 0.0, at).y() for at in wheres]
+
+    def test_the_road_never_folds_over_on_itself(self, qapp):
+        width, height = 900, 500
+        tightest, worst_at = 1e9, 0.0
+        for step in range(0, 628, 4):
+            scene = self._posed(step / 100.0)
+            near, far = self._down_the_road(scene, width, height, (5.0, 20.0))
+            if near - far < tightest:
+                tightest, worst_at = near - far, step / 100.0
+        assert tightest > 20.0, (
+            f"at phase {worst_at:.2f} the road runs from {tightest:.0f}px, "
+            f"so the far end is drawn {-tightest:.0f}px below the near one "
+            f"and the road is folded over")
+
+    def test_the_near_edge_runs_off_the_bottom_of_every_frame(self, qapp):
+        """Otherwise the road stops in the picture with a hard edge
+        straight across it."""
+        import math
+
+        for width, height in self.SIZES:
+            highest, worst_at = -1e9, 0.0
+            for step in range(0, 628, 7):
+                scene = self._posed(step / 100.0)
+                horizon, focal, tilt = self._camera(scene, width, height)
+                edge = scene.LANE_WIDE * scene.LANES / 2.0
+                for across in (-edge, 0.0, edge):
+                    point = scene._eye(horizon, focal, across, 0.0, scene.NEAR)
+                    dx = point.x() - horizon.x()
+                    dy = point.y() - horizon.y()
+                    # Where the bank puts it, which lifts one corner.
+                    for turn in (-scene.TILT, scene.TILT, tilt):
+                        angle = math.radians(turn)
+                        y = (horizon.y() + dx * math.sin(angle)
+                             + dy * math.cos(angle))
+                        if height - y > highest:
+                            highest, worst_at = height - y, step / 100.0
+            assert highest < 0.0, (
+                f"at {width}x{height}, phase {worst_at:.2f}, the near edge "
+                f"of the road is {highest:.0f}px inside the frame")
+
+    def test_the_camera_follows_the_hill(self, qapp):
+        """"Xxx xxxxxxx xxxxx xxxxx xx xxxxxxxxx xx xxx xxxx xxxxx xx
+        xxxxx." The road ahead has to stay in one part of the frame."""
+        import statistics
+
+        import visualizers
+
+        width, height = 900, 500
+        ahead = (5.0, 8.0, 12.0, 16.0)
+        seen = {}
+        for pitch in (0.0, visualizers.Rider.PITCH):
+            was = visualizers.Rider.PITCH
+            visualizers.Rider.PITCH = pitch
+            try:
+                mids = []
+                for step in range(0, 628, 4):
+                    scene = self._posed(step / 100.0)
+                    mids.append(statistics.mean(
+                        self._down_the_road(scene, width, height, ahead)))
+            finally:
+                visualizers.Rider.PITCH = was
+            seen[pitch] = max(mids) - min(mids)
+        held, loose = seen[visualizers.Rider.PITCH], seen[0.0]
+        assert held < loose * 0.5, (
+            f"the road ahead wanders {held:.0f}px of a {height}px frame "
+            f"with the camera following the hill and {loose:.0f}px with it "
+            f"held still, which is no better")
+
+    def test_the_camera_does_not_give_the_frame_away_to_a_hill(self, qapp):
+        """The follow is clamped, so a wilder road cannot put the road in
+        the sky."""
+        import visualizers
+
+        width, height = 900, 500
+        middle = height / 2.0 - height * 0.10
+        for climb in (visualizers.Rider.CLIMB, visualizers.Rider.CLIMB * 8):
+            was = visualizers.Rider.CLIMB
+            visualizers.Rider.CLIMB = climb
+            try:
+                for step in range(0, 628, 7):
+                    scene = self._posed(step / 100.0)
+                    horizon, _focal, _tilt = self._camera(
+                        scene, width, height)
+                    moved = abs(horizon.y() - middle)
+                    assert moved <= height * visualizers.Rider.PITCH_MOST + 1, (
+                        f"a road climbing {climb:.1f} moved the horizon "
+                        f"{moved:.0f}px, which is "
+                        f"{moved / height:.3f} of the frame")
+            finally:
+                visualizers.Rider.CLIMB = was
+
+
+class TestTheViewLeansIntoTheBend:
+    """"Xxxx xxxxxx xxxx xxxx xxxxx xxx xx xxxxx xxx, xxxx xx xxxxxxxxx."
+
+    Leaning right tips the camera's up-vector to the right, so the world
+    turns the other way and the right-hand end of the horizon comes up.
+    Qt's positive rotation takes it down, so the sign here is the whole
+    test: the wrong one leans out of every turn.
+    """
+
+    class Bendy:
+        """A road that only ever bends right, so the sign is readable."""
+
+        @staticmethod
+        def make():
+            import visualizers
+
+            class Road(visualizers.Rider):
+                def _road(self, at):
+                    return (0.016 * at * at, 0.0, 0.0)
+
+            scene = Road()
+            scene._last = None
+            return scene
+
+    class Watched:
+        """A painter that notes every rotation it is asked for."""
+
+        def __init__(self, painter):
+            self._painter = painter
+            self.turns = []
+
+        def __getattr__(self, name):
+            if name != "rotate":
+                return getattr(self._painter, name)
+
+            def rotate(angle):
+                self.turns.append(angle)
+                return self._painter.rotate(angle)
+
+            return rotate
+
+    @classmethod
+    def _played(cls, scene, frames=150, size=(640, 360)):
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        from attachment_widgets import SpectrumState
+
+        state = SpectrumState()
+        state.levels = [0.4] * 27
+        state.bass = state.mid = state.high = 0.5
+        state.synth = 0.3
+        state.kit = {}
+        state.at = 1.0
+        state.chart = {}
+        image = QImage(size[0], size[1],
+                       QImage.Format.Format_ARGB32_Premultiplied)
+        painter = QPainter(image)
+        eye = cls.Watched(painter)
+        try:
+            for _ in range(frames):
+                image.fill(QColor(0, 0, 0))
+                scene.paint(eye, QRectF(0, 0, size[0], size[1]), state)
+        finally:
+            painter.end()
+        return eye.turns, image
+
+    def test_the_view_leans_into_a_right_hand_bend(self, qapp):
+        scene = self.Bendy.make()
+        turns, _image = self._played(scene)
+        assert turns, "the view never rolled at all"
+        assert scene._banked > 0.5, (
+            f"the road was meant to bend right and the camera reads "
+            f"{scene._banked:.2f}")
+        assert turns[-1] < -1.0, (
+            f"a right-hand bend rolled the view by {turns[-1]:.1f} degrees; "
+            f"leaning into it is a negative angle in Qt, which takes the "
+            f"right-hand end of the horizon up")
+
+    def test_the_lean_is_bounded(self, qapp):
+        """A hard enough bend must not put the frame on its side."""
+        import visualizers
+
+        scene = self.Bendy.make()
+        turns, _image = self._played(scene)
+        assert max(abs(t) for t in turns) <= visualizers.Rider.TILT + 1e-6, (
+            f"the view rolled {max(abs(t) for t in turns):.1f} degrees "
+            f"against a limit of {visualizers.Rider.TILT}")
+
+    def test_a_straight_road_does_not_roll(self, qapp):
+        import visualizers
+
+        class Straight(visualizers.Rider):
+            def _road(self, at):
+                return (0.0, 0.0, 0.0)
+
+        scene = Straight()
+        scene._last = None
+        turns, _image = self._played(scene)
+        assert max(abs(t) for t in turns) < 0.01, (
+            f"a road with no bend in it rolled the view "
+            f"{max(abs(t) for t in turns):.2f} degrees")
+
+
+class TestTheShakeIsAKnockNotADrop:
+    """"Decrease screenshake."
+
+    A kick moved the whole frame by three per cent of its width, which on
+    a track with a kick on every beat is a camera being dropped four
+    times a bar.
+    """
+
+    W, H = 640, 360
+
+    @classmethod
+    def _shaken(cls, shake):
+        """How far the shake alone moves the picture, at its widest.
+
+        Against a settled camera rather than against the middle of the
+        frame: the aim and the hill move the horizon too, and measuring
+        from the centre measures all three.
+        """
+        import visualizers
+        from PySide6.QtCore import QRectF
+
+        scene = visualizers.Rider()
+        scene._last = None
+        scene._loudness = 1.0
+        scene._bend = scene._climb = scene._spin = 1.0
+        scene._under = scene._road(scene.RIDER_AT)[1]
+        box = QRectF(0, 0, cls.W, cls.H)
+        for _ in range(400):
+            settled, _f, _t = scene._camera(box, 0.0, 0.0)
+        scene._shake = shake
+        # The wobble runs on its own clock, one step per frame, so this
+        # walks every phase of it rather than picking one.
+        most = 0.0
+        for _ in range(400):
+            horizon, _f, _t = scene._camera(box, 0.0, 0.0)
+            most = max(most,
+                       abs(horizon.x() - settled.x()),
+                       abs(horizon.y() - settled.y()))
+        return most, settled
+
+    def test_a_kick_knocks_the_frame_rather_than_dropping_it(self, qapp):
+        most, _where = self._shaken(1.0)
+        # A real floor, not "more than nothing": the camera is still
+        # easing towards the road while this runs, so a scene with the
+        # shake cut out entirely still moves a few thousandths of a pixel.
+        assert most > self.W * 0.003, (
+            f"a full shake moves the frame {most:.2f}px, which is nothing")
+        assert most < self.W * 0.015, (
+            f"a full shake moves the frame {most:.1f}px of {self.W}, which "
+            f"is {most / self.W * 100:.1f} per cent of its width")
+
+    def test_nothing_moves_when_nothing_has_been_hit(self, qapp):
+        most, _where = self._shaken(0.0)
+        assert most < 0.01, (
+            f"the frame moves {most:.2f}px with no shake asked for")
+
+
+class TestTheRiderIsDecorated:
+    """"Xxxxxxxx xxx xxxx xxx xx xxxxx xxxxx. Xxxxxxxxx xxxxxx xx xxxxxx.
+    Xxxxxxxxx xxxxxx xx xxxxxx."
+
+    Each of these renders the same frame twice, once with a piece of the
+    decoration drawn and once with it stubbed out, and asks where the
+    difference landed. A count of lit pixels would pass on decoration
+    scattered anywhere at all; these check the lane lines are between the
+    lanes, the gates are off the road, and a block's reflection is under
+    the block.
+    """
+
+    W, H = 900, 500
+
+    @staticmethod
+    def _flat(drop=(), **over):
+        """A rider on a straight, level road, with pieces optionally cut.
+
+        Straight and level so that the bank, the hill and the aim are all
+        zero and the two frames differ by exactly the piece under test.
+        """
+        import visualizers
+
+        class Flat(visualizers.Rider):
+            def _road(self, at):
+                return (0.0, 0.0, 0.0)
+
+        for name in drop:
+            setattr(Flat, name, lambda *a, **k: None)
+        for name, value in over.items():
+            setattr(Flat, name, value)
+        scene = Flat()
+        scene._last = None
+        return scene
+
+    @classmethod
+    def _frame(cls, scene, blocks=()):
+        """One frame, on a clock this test owns."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        state = SpectrumState()
+        state.levels = [0.4] * 27
+        state.bass = state.mid = state.high = 0.4
+        state.synth = 0.3
+        state.kit = {}
+        state.at = 1.0
+        # A chart the scene already believes it has read, so that laying
+        # it does not throw away the blocks this test placed by hand.
+        state.chart = {"Kick": ()}
+        scene._chart_from = state.chart
+        scene._laid = scene._heard + scene.READ + 1.0
+        image = QImage(cls.W, cls.H,
+                       QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0))
+        painter = QPainter(image)
+        was = visualizers.time.monotonic
+        visualizers.time.monotonic = lambda: 1000.0
+        try:
+            scene._blocks = [list(b) for b in blocks]
+            scene.paint(painter, QRectF(0, 0, cls.W, cls.H), state)
+        finally:
+            painter.end()
+            visualizers.time.monotonic = was
+        return image
+
+    @staticmethod
+    def _changed(one, two, floor=10):
+        """(x, y) of every pixel the two frames disagree about."""
+        out = []
+        for y in range(one.height()):
+            for x in range(one.width()):
+                a, b = one.pixelColor(x, y), two.pixelColor(x, y)
+                if (abs(a.red() - b.red()) + abs(a.green() - b.green())
+                        + abs(a.blue() - b.blue())) > floor:
+                    out.append((x, y))
+        return out
+
+    @classmethod
+    def _place(cls, scene, across, at):
+        """Where a point on the road lands on the glass."""
+        from PySide6.QtCore import QRectF
+
+        horizon, focal, _tilt = scene._camera(
+            QRectF(0, 0, cls.W, cls.H), 0.0, 0.4)
+        return scene._eye(horizon, focal, across, 0.0, at)
+
+    def test_the_lanes_are_marked_between_the_lanes(self, qapp):
+        """"Xxx xxxxxxx xxxxx xxxxxxx xxx xxxxx xx xxxxx xxxxx." Without
+        them the road is one slab and which lane you are in is a guess."""
+        import visualizers
+
+        with_lines = self._frame(self._flat())
+        without = self._frame(self._flat(drop=("_lanes",)))
+        changed = self._changed(with_lines, without)
+        assert len(changed) > 150, (
+            f"the lane lines put {len(changed)} pixels on the road")
+
+        # Where the boundaries between the lanes actually are, measured
+        # off the scene rather than guessed.
+        gauge = self._flat()
+        self._frame(gauge)
+        wide = visualizers.Rider.LANE_WIDE
+        rows = {}
+        for x, y in changed:
+            rows.setdefault(y, []).append(x)
+        # Down at the near end the two lines are far apart and easy to
+        # place: every changed pixel there has to be on one of them.
+        for y in sorted(rows)[-12:]:
+            at = None
+            for step in range(1, 400):
+                guess = visualizers.Rider.NEAR + step * 0.05
+                if self._place(gauge, 0.0, guess).y() <= y:
+                    at = guess
+                    break
+            assert at is not None, f"no road at row {y}"
+            want = [self._place(gauge, side * wide / 2.0, at).x()
+                    for side in (-1.0, 1.0)]
+            for x in rows[y]:
+                assert min(abs(x - w) for w in want) < 14, (
+                    f"row {y} has a lane mark at x={x} when the lanes "
+                    f"divide at {want[0]:.0f} and {want[1]:.0f}")
+
+    def test_the_gates_stand_beside_the_road_not_on_it(self, qapp):
+        """Side gates: what gives the road somewhere to be."""
+        with_posts = self._frame(self._flat())
+        without = self._frame(self._flat(drop=("_pillars",)))
+        changed = self._changed(with_posts, without)
+        assert len(changed) > 200, (
+            f"the gates put {len(changed)} pixels in the frame")
+
+        gauge = self._flat()
+        self._frame(gauge)
+        rows = {}
+        for x, y in changed:
+            rows.setdefault(y, []).append(x)
+        edge = gauge.LANE_WIDE * gauge.LANES / 2.0
+        on_the_road = 0
+        for y, xs in rows.items():
+            at = None
+            for step in range(1, 500):
+                guess = gauge.NEAR + step * 0.05
+                if self._place(gauge, 0.0, guess).y() <= y:
+                    at = guess
+                    break
+            if at is None:
+                continue
+            left = self._place(gauge, -edge, at).x()
+            right = self._place(gauge, edge, at).x()
+            on_the_road += sum(1 for x in xs if left < x < right)
+        assert on_the_road < len(changed) * 0.05, (
+            f"{on_the_road} of {len(changed)} gate pixels are drawn on the "
+            f"road rather than beside it")
+
+    def test_a_block_is_mirrored_in_the_road_under_it(self, qapp):
+        """What makes the blocks stand on the road rather than hover
+        over it."""
+        import visualizers
+
+        # Two seconds out, which the playhead at 1.0s puts two thirds of
+        # the way down the road.
+        block = (2.0, 1, "wall", False)
+        with_pool = self._frame(self._flat(), blocks=(block,))
+        without = self._frame(self._flat(MIRROR=0.0), blocks=(block,))
+        changed = self._changed(with_pool, without)
+        assert len(changed) > 150, (
+            f"a block's reflection is {len(changed)} pixels")
+
+        gauge = self._flat()
+        self._frame(gauge, blocks=(block,))
+        foot = self._place(gauge, 0.0, gauge._where(2.0)).y()
+        above = [p for p in changed if p[1] < foot - 2]
+        assert not above, (
+            f"{len(above)} of the reflection's pixels are drawn above the "
+            f"foot of the block at row {foot:.0f}, so it is not in the road")
+
+    def test_the_end_of_the_road_is_lit(self, qapp):
+        """The road runs into something rather than into nothing."""
+        with_lamp = self._frame(self._flat())
+        without = self._frame(self._flat(drop=("_glow",)))
+        gauge = self._flat()
+        self._frame(gauge)
+        spot = self._place(gauge, 0.0, gauge.FAR)
+        here = with_lamp.pixelColor(int(spot.x()), int(spot.y()) - 30)
+        dark = without.pixelColor(int(spot.x()), int(spot.y()) - 30)
+        assert here.lightnessF() > dark.lightnessF() + 0.05, (
+            f"the horizon is {here.lightnessF():.3f} lit against "
+            f"{dark.lightnessF():.3f} with the lamp taken out")
+        edge = with_lamp.pixelColor(20, self.H - 20)
+        assert edge.lightnessF() < here.lightnessF(), (
+            "the lamp is lighting the corner as much as the horizon, so it "
+            "is a wash rather than a lamp")
