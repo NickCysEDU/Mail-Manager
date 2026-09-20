@@ -740,12 +740,19 @@ a run of hats steps across the three. The arrow keys change lane.
 
 The chart comes from the same element detection the strobe uses, read
 *ahead* of the playhead: an obstacle leaves the horizon about two and a
-half seconds before the beat it belongs to, so it arrives on it. Hits are
+half seconds before its beat and is level with you exactly on it. Hits are
 candidates rather than obstacles - at 128 bpm the kicks and hats alone are
-six a second - and the road takes from them no faster than one figure
-every 0.62 seconds. A passage with no drums in it has no obstacles, which
-is what a build-up should feel like. The lane a hit opens is worked out
-from its time, so a track lays out the same way every time you play it.
+six a second - and the road takes one figure every two beats, preferring
+the heaviest drum within about half a beat so that figures land on beats
+rather than between them. A pool of shapes decides what each one looks
+like, so four to the floor is not two bars of the same wall.
+
+A passage with no drums has no obstacles, which is what a build-up should
+feel like; the road speeds up instead. The ground runs from 6 to 23 units
+a second with the bass. Hitting something halves the speed for about a
+second and throws pieces off it. The ground stops when the track is
+paused, and the camera aims at where the road is a little way ahead, so a
+bend reads as a lean rather than as the picture swinging about.
 
 The playing keys deliberately do not bring the control bar back: they
 exist so the scene can be played without the furniture. **?** is there
@@ -785,7 +792,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,520 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,534 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1146,7 +1153,7 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 3,520 tests, about three minutes
+./dev test        # 3,534 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```
