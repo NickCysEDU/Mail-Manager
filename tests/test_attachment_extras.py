@@ -7986,3 +7986,314 @@ class TestBothStrobeKeysAreNamed:
         listed = [key for key, _what in _KeysCard.KEYS if key]
         assert AudioPane.BY_HAND_KEY in listed
         assert AudioPane.SPAM_KEY in listed
+
+
+class TestNothingShowsThroughFromTheLastFrame:
+    """"There's a box in the top left that looks like a blurry mirror of
+    the visualizer. This is present in all visualizers in windowed mode."
+
+    The pane sets neither WA_OpaquePaintEvent nor autoFillBackground, so
+    Qt does not clear it between paints: whatever the backing store held
+    is still there when the next one begins. Three paths do not cover the
+    whole widget - the early return while the strip is closed, the reveal,
+    and the fade a newly chosen scene comes up through - and all three
+    then leave or blend over the frame before them.
+    """
+
+    @staticmethod
+    def _painted(setup=None):
+        """One paint of the pane over a frame full of an obvious colour."""
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import Spectrum
+
+        pane = Spectrum()
+        pane.set_unbounded(True)
+        pane.resize(400, 240)
+        pane.set_scene(visualizers.by_name("Rave"))
+        if setup is not None:
+            setup(pane)
+        image = QImage(400, 240, QImage.Format.Format_ARGB32_Premultiplied)
+        # The frame before: a colour nothing in any scene would draw.
+        image.fill(QColor(0, 255, 0))
+        painter = QPainter(image)
+        try:
+            pane._paint(painter)
+        finally:
+            painter.end()
+        pane.deleteLater()
+        return image
+
+    @staticmethod
+    def _green(image):
+        """How much of the last frame is still showing."""
+        left = 0
+        for y in range(0, image.height(), 3):
+            for x in range(0, image.width(), 3):
+                colour = image.pixelColor(x, y)
+                if colour.green() > 140 and colour.red() < 90:
+                    left += 1
+        return left
+
+    def test_a_closed_strip_leaves_nothing_behind(self, qapp):
+        """The early return: it painted nothing at all."""
+        def shut(pane):
+            pane._reveal = 0.0
+
+        assert self._green(self._painted(shut)) == 0, (
+            "the frame before is still on screen with the strip closed")
+
+    def test_a_scene_fading_up_does_not_blend_with_the_last_frame(self, qapp):
+        """The fade: it is meant to come up out of the background, not out
+        of whatever was there before."""
+        def half(pane):
+            pane._reveal = 1.0
+            pane._fresh = 0.35
+
+        assert self._green(self._painted(half)) == 0, (
+            "the last frame is showing through a scene that is fading up")
+
+    def test_a_revealing_strip_does_not_either(self, qapp):
+        def opening(pane):
+            pane._reveal = 0.4
+            pane._fresh = 1.0
+
+        assert self._green(self._painted(opening)) == 0, (
+            "the last frame is showing through a strip that is opening")
+
+    def test_an_ordinary_frame_still_covers_everything(self, qapp):
+        def open_wide(pane):
+            pane._reveal = 1.0
+            pane._fresh = 1.0
+
+        assert self._green(self._painted(open_wide)) == 0
+
+
+class TestTheRiderIsOnTheBeat:
+    """"Right now the obstacles do not feel on beat at all."
+
+    They were early, every one of them, by the same amount. A block's
+    distance down the road was worked out so that it reached the *end* of
+    the road at its beat, and the rider sits three units short of that -
+    0.39 s early at these settings.
+    """
+
+    BPM = 128.0
+    BEAT = 60.0 / 128.0
+    CHART = {
+        "Kick": tuple(i * (60.0 / 128.0) for i in range(600)),
+        "Snare": tuple((60.0 / 128.0) * (1 + 2 * i) for i in range(300)),
+        "Hats": tuple(i * (60.0 / 128.0) / 2 for i in range(1200)),
+    }
+
+    @classmethod
+    def _figures(cls, seconds=30.0):
+        """(times, shapes) of the figures laid over a house track."""
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        scene = visualizers.Rider()
+        scene._beat = cls.BEAT
+        state = SpectrumState()
+        state.levels = [0.4] * 27
+        state.chart = cls.CHART
+        scene._heard = 0.0
+        while scene._heard < seconds:
+            scene._heard += 0.5
+            scene._lay(state)
+        times = sorted({block[0] for block in scene._blocks})
+        shapes = {round(block[0], 4): block[2] for block in scene._blocks}
+        figures = [t for i, t in enumerate(times)
+                   if i == 0 or t - times[i - 1] > scene.RUN_GAP + 0.01]
+        return figures, [shapes[round(t, 4)] for t in figures], scene
+
+    def test_a_block_is_level_with_the_rider_on_its_beat(self):
+        import visualizers
+
+        scene = visualizers.Rider()
+        for due in (4.0, 7.5, 11.25):
+            scene._heard = due
+            assert abs(scene._where(due) - scene.RIDER_AT) < 1e-6, (
+                f"a block due at {due}s is at {scene._where(due):.2f} when "
+                f"the rider is at {scene.RIDER_AT}")
+
+    def test_every_figure_lands_on_a_beat(self):
+        import statistics
+
+        figures, _shapes, _scene = self._figures()
+        assert len(figures) > 20, f"only {len(figures)} figures"
+        off = [abs(t / self.BEAT - round(t / self.BEAT)) * self.BEAT * 1000
+               for t in figures]
+        assert statistics.median(off) < 30, (
+            f"the median figure sits {statistics.median(off):.0f} ms from a "
+            f"beat; half a beat here is {self.BEAT * 500:.0f} ms")
+
+    def test_the_figures_are_two_beats_apart(self):
+        figures, _shapes, scene = self._figures()
+        gaps = [b - a for a, b in zip(figures, figures[1:])]
+        wanted = self.BEAT * scene.GAP_BEATS
+        assert min(gaps) >= wanted - scene.SLACK - 0.01, (
+            f"two figures {min(gaps):.2f}s apart against {wanted:.2f}")
+
+    def test_four_to_the_floor_is_not_the_same_wall_over_and_over(self):
+        """The kick wins every slot on this music, so without a pool of
+        shapes every figure was a wall."""
+        import collections
+
+        _figures, shapes, _scene = self._figures()
+        mix = collections.Counter(shapes)
+        assert len(mix) >= 3, f"only {dict(mix)} over thirty seconds"
+        assert max(mix.values()) < len(shapes) * 0.8, (
+            f"{dict(mix)}: one shape is nearly all of them")
+
+    def test_the_ground_stops_when_the_track_is_paused(self):
+        """"Ground effect should stop when paused."
+
+        On a clock this file controls. The road moves by however long the
+        last frame took, and two hundred tight loop iterations take about
+        a millisecond of real time - so left on the wall clock the ground
+        hardly moves whether it is paused or not, and the test passes
+        against the very code it was written to reject.
+        """
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        clock = [1000.0]
+        was = visualizers.time.monotonic
+        visualizers.time.monotonic = lambda: clock[0]
+        try:
+            scene = visualizers.Rider()
+            scene._last = None
+            state = SpectrumState()
+            state.levels = [0.4] * 27
+            state.bass = 0.7
+            state.kit = {}
+            for frame in range(120):
+                clock[0] += 1 / 60.0
+                state.at = frame / 60.0
+                scene._advance(state)
+            moving = scene._at
+            for _ in range(120):
+                clock[0] += 1 / 60.0
+                state.at = 2.0      # the player has stopped reporting
+                scene._advance(state)
+            stopped = scene._at - moving
+        finally:
+            visualizers.time.monotonic = was
+        assert moving > 10.0, (
+            f"the ground only travelled {moving:.1f} units while playing, "
+            f"so this cannot tell a pause from anything else")
+        assert stopped < moving * 0.10, (
+            f"the ground travelled {stopped:.1f} units over two seconds of "
+            f"a paused track, against {moving:.1f} while it was playing")
+
+    def test_the_speed_range_is_wide(self):
+        """"Ensure there is a big difference between max and least
+        speed." """
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        seen = []
+        for bass in (0.0, 1.0):
+            scene = visualizers.Rider()
+            scene._last = None
+            state = SpectrumState()
+            state.levels = [0.4] * 27
+            state.bass = bass
+            state.kit = {}
+            scene._advance(state)
+            seen.append(scene._speed)
+        assert seen[1] > seen[0] * 3.0, (
+            f"the road runs at {seen[0]:.1f} with no bass and {seen[1]:.1f} "
+            f"with all of it, which is only {seen[1] / seen[0]:.1f} times")
+
+    def test_a_hit_slows_the_road_and_throws_pieces_off(self):
+        """"Add hit effects and slowdown when an obstacle is hit." """
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._last = None
+        scene._lane = 1
+        scene._lane_here = scene._lane_at(1)
+        scene._heard = 5.0
+        scene._blocks = [[4.0, 1, "wall", False]]
+        scene._collide()
+        assert scene._hits == 1, "the block missed"
+        # A literal, not the constant this is about: written as
+        # `<= scene.SLOW` it passes when SLOW is 1.0, which is the change
+        # it exists to reject.
+        assert scene._slow < 0.8, (
+            f"the road is still at {scene._slow:.2f} of speed after a hit")
+        assert len(scene._sparks) >= 8, (
+            f"a hit threw {len(scene._sparks)} pieces off")
+
+    def test_the_slowdown_wears_off(self):
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        scene = visualizers.Rider()
+        scene._last = None
+        scene._slow = scene.SLOW
+        state = SpectrumState()
+        state.levels = [0.4] * 27
+        state.kit = {}
+        for frame in range(120):
+            state.at = frame / 60.0
+            scene._advance(state)
+        assert scene._slow > 0.95, (
+            f"the road is still at {scene._slow:.2f} two seconds later")
+
+    def test_the_camera_follows_the_road(self):
+        """"Camera is all over the place." It stayed pointed straight
+        ahead while the road swung away from it."""
+        import visualizers
+
+        assert visualizers.Rider.AIM > 0.0
+        assert visualizers.Rider.AIM_PULL > 0.0
+
+    def test_the_chart_keeps_its_density_at_every_tempo(self):
+        """The gap is a length of time and the beats are a grid, and the
+        two do not divide. At 90 bpm two beats is 1.333 s against the
+        0.80 the gap asks for, so the kick that lands exactly on the gap
+        is short of it by a hair - and rejecting it costs the whole slot,
+        because the next candidate is a beat later.
+        """
+        import statistics
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        for bpm in (90.0, 140.0):
+            beat = 60.0 / bpm
+            chart = {
+                "Kick": tuple(i * beat for i in range(900)),
+                "Snare": tuple(beat * (1 + 2 * i) for i in range(450)),
+                "Hats": tuple(i * beat / 2 for i in range(1800)),
+            }
+            scene = visualizers.Rider()
+            scene._beat = beat
+            state = SpectrumState()
+            state.levels = [0.4] * 27
+            state.chart = chart
+            scene._heard = 0.0
+            while scene._heard < 30.0:
+                scene._heard += 0.5
+                scene._lay(state)
+            times = sorted({block[0] for block in scene._blocks})
+            figures = [t for i, t in enumerate(times)
+                       if i == 0 or t - times[i - 1] > scene.RUN_GAP + 0.01]
+            # Two beats apart over thirty seconds is 30 / (2 * beat)
+            # figures. A seventh of slack, which is enough for the ends of
+            # the run and not enough to hide a whole slot being dropped:
+            # at 90 bpm that is 26 figures against 18.
+            wanted = 30.0 / (scene.GAP_BEATS * beat) * 0.85
+            assert len(figures) >= wanted, (
+                f"at {bpm:.0f} bpm the chart laid {len(figures)} figures "
+                f"over thirty seconds, against about "
+                f"{30.0 / (scene.GAP_BEATS * beat):.0f}")
+            off = [abs(t / beat - round(t / beat)) * beat * 1000
+                   for t in figures]
+            assert statistics.median(off) < 30, (
+                f"at {bpm:.0f} bpm the median figure sits "
+                f"{statistics.median(off):.0f} ms from a beat")

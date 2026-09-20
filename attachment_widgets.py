@@ -523,6 +523,9 @@ class Spectrum(QWidget):
         self._state.hit = max(self._state.hit,
                               max(0.0, min(1.0, float(strength))))
         self._since_hit = 0
+        # Back to full rate at once if the controls had slowed it down,
+        # rather than at the next tick.
+        self._pace()
         self.update()
 
     def hold_flash(self, on: bool) -> None:
@@ -970,7 +973,12 @@ class Spectrum(QWidget):
         wanted = self._sharpness.interval_ms(
             self.devicePixelRatioF(), self.FRAME_MS,
             extra=self._effects.cost_ms())
-        if self._giving_way:
+        if self._giving_way and not (self._holding or self._spamming):
+            # Not while somebody is playing the strobe by hand. The bar
+            # coming up halves the frame rate, and the bar comes up on any
+            # mouse movement, so reaching for the controls and then hitting
+            # the strobe key meant the light arrived a frame and a half
+            # later: "manual strobe is also delayed in full screen mode".
             wanted = int(wanted * self.GIVE_WAY)
         if self._timer.interval() != wanted:
             self._timer.setInterval(wanted)
@@ -1444,10 +1452,19 @@ class Spectrum(QWidget):
     def _paint(self, painter) -> None:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         rect = QRectF(self.rect())
+        # Every pixel, every frame, before anything else.
+        #
+        # This widget sets neither WA_OpaquePaintEvent nor
+        # autoFillBackground, so Qt does not clear it: whatever the
+        # backing store held is still there when a paint begins. That was
+        # fine while every path covered the whole widget and is not fine
+        # on the three that do not - the early return while the strip is
+        # closed, the reveal, and the fade a newly chosen scene comes up
+        # through. All three then blend over, or leave, the frame before
+        # them, which is a ghost of the picture: "it looks like a blurry
+        # mirror of the visualizer".
+        painter.fillRect(rect, self._state.background)
         if self._reserve:
-            # The strip is part of the picture, not a gap in it, so it takes
-            # the scene's own background - including a picked one.
-            painter.fillRect(rect, self._state.background)
             # Kept clear for the floating control bar. Reserving the strip
             # permanently rather than while the bar shows means the scene
             # never has a button sitting on top of it, and never resizes
@@ -1463,7 +1480,6 @@ class Spectrum(QWidget):
         # the box and filling the sides is what a video player does.
         scene_box = self._scene_box(rect)
         if scene_box != rect:
-            painter.fillRect(rect, self._state.background)
             rect = scene_box
         if self._reveal < 0.999:
             painter.setOpacity(self._reveal)

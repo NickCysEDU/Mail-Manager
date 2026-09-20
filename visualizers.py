@@ -3526,30 +3526,53 @@ class Rider(Scene):
     LOOK = 2.6
     #: How far ahead the chart is read, which has to be more than LOOK.
     READ = 5.0
-    #: The least time between one figure and the next.
+    #: The least time between one figure and the next, in seconds and in
+    #: beats, whichever is longer.
     #:
-    #: Every kick and hat in a 128 bpm house track is six hits a second,
-    #: which is a wall of blocks rather than a game. At 0.62 the fastest
-    #: the road can throw something at you is once every two beats at that
-    #: tempo, which is a chart somebody can read.
+    #: In beats as well as seconds, because a gap in seconds is a
+    #: different musical distance at every tempo, and a figure that lands
+    #: between beats is a figure that feels wrong however far apart they
+    #: are. Two beats is one every 0.94 s at 128 bpm and one every 0.69 at
+    #: 175, which is drum and bass keeping its feet.
+    GAP = 0.80
+    GAP_BEATS = 2.0
+    #: How far a heavier drum may be from the first candidate and still
+    #: take its place, in beats and in seconds when there is no tempo.
     #:
-    #: This applies to every figure, a run of hats included. Letting runs
-    #: through on a shorter gap was tried and is what "they are hitting way
-    #: too fast and it's unplayable" still looked like: 63 obstacles in the
-    #: first five seconds, 0.07 apart.
-    GAP = 0.62
+    #: Six tenths of a beat, because that is what it takes to reach the
+    #: kick on the next beat from a hat on the half. At a sixth of a
+    #: second it could not: the first figure of the track landed on a hat
+    #: at the half-beat, the gap put the next one a hat later, and the
+    #: whole chart ran along the off-beat. Measured, the median figure sat
+    #: 234 ms from a beat, which is exactly half of one.
+    PREFER_BEATS = 0.6
+    PREFER = 0.17
+    #: How much short of the gap still counts as far enough.
+    #:
+    #: The gap is a length of time and the beats are a grid, and the two
+    #: do not divide: at 90 bpm two beats is 1.333 s while GAP asks for
+    #: 0.80, so the gap used is 1.333 and the kick that lands exactly
+    #: there is short of it by a floating-point hair. Rejecting it costs
+    #: the whole slot, because the next candidate is a beat later and the
+    #: one after that. Measured over thirty seconds, 26 figures with this
+    #: and 18 without at 90 bpm, 40 against 33 at 140.
+    #:
+    #: It is not what keeps the chart on the beat. That is PREFER_BEATS.
+    SLACK = 0.03
     #: How far apart the three blocks of one run are. Inside a figure, not
     #: between figures.
     RUN_GAP = 0.16
 
     #: Road units a second: at rest, and what a full bass adds.
     #:
-    #: "Make the ground speed effect change with bass as well." The road
-    #: moves under you at RUN plus the bass, and the *look* of the speed -
-    #: the field of view and the blur of the ground pattern - moves with
-    #: it, so a heavy passage reads as fast rather than merely being fast.
-    RUN = 9.0
-    RUN_BASS = 7.0
+    #: Four times the range it had, 6 to 23 rather than 9 to 16, because
+    #: "ensure there is a big difference between max and least speed". The
+    #: ground is the only thing this moves: the blocks are placed by time
+    #: so that they stay on the beat whatever the road is doing, which is
+    #: what lets the speed be this dramatic without making the game
+    #: unfair.
+    RUN = 6.0
+    RUN_BASS = 17.0
 
     #: How hard the road bends, climbs and rolls.
     #:
@@ -3573,6 +3596,23 @@ class Rider(Scene):
     SHAKE = 0.030
     SHAKE_FALL = 0.10
 
+    #: How far down the road the camera aims, how hard it turns towards
+    #: it, and how quickly the aim itself moves.
+    AIM = 7.0
+    AIM_PULL = 0.11
+    AIM_EASE = 0.06
+
+    #: What a hit does to the road: how far the speed drops, and how fast
+    #: it comes back. Half speed, back over about a second, which is long
+    #: enough to be a punishment and short enough not to be a sulk.
+    SLOW = 0.45
+    SLOW_BACK = 0.030
+    #: How many pieces a hit throws off, how fast they go and how long
+    #: they last.
+    SPARKS = 14
+    SPARK_GO = 7.0
+    SPARK_FADE = 1.9
+
     def __init__(self) -> None:
         self._lane = 1
         self._lane_here = 0.0
@@ -3593,6 +3633,22 @@ class Rider(Scene):
         self._placed = -99.0
         self._loudness = 0.0
         self._speed = self.RUN
+        #: Seconds in a beat, or 0 when nothing has found a tempo.
+        self._beat = 0.0
+        #: How far through the current beat the track is, 0 to 1.
+        self._pulse = 0.0
+        #: Set while an obstacle has just been hit: it slows the road and
+        #: throws pieces off. See SLOW and _sparks.
+        self._slow = 1.0
+        self._sparks: list = []
+        #: The playhead as it was last frame, so a paused track can be
+        #: told from a playing one.
+        self._was_at = None
+        self._rolling = 1.0
+        #: Where the camera is looking, across the road.
+        self._aimed = 0.0
+        #: The shake's own clock, so it is not tied to anything else.
+        self._wobble = 0.0
         self._bend = 0.0
         self._climb = 0.0
         self._spin = 0.0
@@ -3617,6 +3673,19 @@ class Rider(Scene):
     #: A kick beats a snare beats a run of hats, so the heaviest thing in
     #: a slot is what you see.
     PATTERNS = (("Kick", "wall"), ("Snare", "block"), ("Hats", "run"))
+
+    #: Two bars of shapes, so a track with a kick on every beat is not two
+    #: bars of identical walls.
+    #:
+    #: Preferring the heaviest drum in a slot puts every figure on a beat,
+    #: which is what makes it feel like music - and on four-to-floor it
+    #: also means the kick wins every slot and every figure is a wall.
+    #: The drum decides when a figure lands, which is what keeps the chart
+    #: on the beat; the pool decides what it looks like. Indexed by the
+    #: slot, so it repeats every eight figures and a track lays out the
+    #: same way every time it is played.
+    POOL = ("wall", "block", "wall", "run",
+            "wall", "block", "wall", "wall")
 
     def _lay(self, state) -> None:
         """Put the next stretch of chart on the road.
@@ -3646,12 +3715,63 @@ class Rider(Scene):
                 if low < when <= ahead:
                     due.append((when, order, shape))
         due.sort()
-        for when, _order, shape in due:
-            if when - self._placed < self.GAP:
+        gap = self.GAP
+        if self._beat > 0.0:
+            gap = max(gap, self._beat * self.GAP_BEATS)
+        index = 0
+        while index < len(due):
+            when, _order, shape = due[index]
+            if when - self._placed < gap - self.SLACK:
+                index += 1
                 continue
+            # The heaviest drum within a moment of it, not whichever came
+            # first. A hat lands on the eighth and a kick on the beat, and
+            # taking the first candidate meant half the figures sat on an
+            # off-beat: measured on a 128 bpm track, the median figure was
+            # 234 ms from a beat, which is exactly half of one.
+            reach = (self._beat * self.PREFER_BEATS if self._beat > 0.0
+                     else self.PREFER)
+            best = index
+            for other in range(index + 1, len(due)):
+                if due[other][0] - when > reach:
+                    break
+                if (due[other][1], self._off_beat(due[other][0])) < (
+                        due[best][1], self._off_beat(due[best][0])):
+                    best = other
+            when, _order, shape = due[best]
             self._placed = when
-            self._shape(shape, when)
+            self._shape(self._varied(shape, when), when)
+            index = best + 1
         self._blocks = self._blocks[-200:]
+
+    def _varied(self, shape: str, when: float) -> str:
+        """What shape this slot takes.
+
+        The drum decides *when* a figure lands, which is what keeps the
+        chart on the beat. The pool decides what it looks like, which is
+        what stops four-to-floor being two bars of identical walls: the
+        kick wins every slot on that music, so every figure was a wall.
+
+        Indexed by the slot rather than by the beat. Slots are GAP_BEATS
+        apart, so indexing by the beat only ever reached the even entries
+        of the pool - and with the walls at even positions, that was the
+        same wall again.
+        """
+        if self._beat <= 0.0:
+            return shape
+        slot = int(round(when / self._beat / max(1e-6, self.GAP_BEATS)))
+        return self.POOL[slot % len(self.POOL)]
+
+    def _off_beat(self, when: float) -> float:
+        """How far a moment is from the nearest beat, in seconds.
+
+        Nothing when no tempo has been found, so that the chart falls back
+        to taking the heaviest drum and nothing else.
+        """
+        if self._beat <= 0.0:
+            return 0.0
+        beats = when / self._beat
+        return abs(beats - round(beats)) * self._beat
 
     def _shape(self, pattern: str, when: float) -> None:
         """One hit, as one or more blocks in lanes."""
@@ -3712,15 +3832,27 @@ class Rider(Scene):
         self._loudness = self._surge()
 
         said = getattr(state, "at", 0.0) or 0.0
+        # Whether the track is actually playing. A paused player reports
+        # the same position every frame, and the road went on rolling
+        # under a stopped song: "ground effect should stop when paused".
+        moving = self._was_at is None or abs(said - self._was_at) > 1e-4
+        self._was_at = said
+        self._rolling += ((1.0 if moving or said <= 0.0 else 0.0)
+                          - self._rolling) * 0.25
         if said > 0.0 and abs(said - self._heard) > 0.35:
             self._heard = said
         elif said > 0.0:
-            self._heard += step + (said - self._heard) * 0.06
+            self._heard += step * self._rolling + (said - self._heard) * 0.06
         else:
             self._heard += step
 
-        self._speed = self.RUN + bass * self.RUN_BASS
+        self._beat = 60.0 / state.tempo if getattr(state, "tempo", 0) else 0.0
+        self._pulse = getattr(state, "beat_at", 0.0) or 0.0
+        self._slow = min(1.0, self._slow + self.SLOW_BACK)
+        self._speed = ((self.RUN + bass * self.RUN_BASS)
+                       * self._slow * self._rolling)
         self._at += step * self._speed
+        self._drift_sparks(step)
         self._bend += step * (0.30 + self._loudness * 0.85)
         self._climb += step * (0.19 + self._loudness * 0.55)
         self._spin += step * (0.14 + self._loudness * 0.7)
@@ -3752,17 +3884,56 @@ class Rider(Scene):
                     self._streak = 0
                     self._sore = self.SORE
                     self._shake = min(1.0, self._shake + 0.8)
+                    self._slow = self.SLOW
+                    self._burst(self._lane_at(lane))
             else:
                 self._score += 1
                 self._streak += 1
                 self._best = max(self._best, self._streak)
 
+    def _burst(self, across: float) -> None:
+        """Throw pieces off the block that was just hit."""
+        for index in range(self.SPARKS):
+            angle = (index / self.SPARKS) * math.tau + self._at
+            self._sparks.append([
+                across, 0.0, self.RIDER_AT,
+                math.cos(angle) * self.SPARK_GO * 0.22,
+                -abs(math.sin(angle)) * self.SPARK_GO * 0.16,
+                math.sin(angle * 1.7) * self.SPARK_GO * 0.12,
+                1.0])
+
+    def _drift_sparks(self, step: float) -> None:
+        """Move the pieces on and drop the ones that have gone out."""
+        if not self._sparks:
+            return
+        alive = []
+        for spark in self._sparks:
+            spark[6] -= step * self.SPARK_FADE
+            if spark[6] <= 0.0:
+                continue
+            spark[0] += spark[3] * step
+            spark[1] += spark[4] * step
+            spark[2] += spark[5] * step - step * self._speed * 0.12
+            spark[4] += step * 2.4      # they come back down
+            alive.append(spark)
+        self._sparks = alive[-80:]
+
     def _lane_at(self, lane: int) -> float:
         return (lane - (self.LANES - 1) / 2.0) * self.LANE_WIDE
 
     def _where(self, when: float) -> float:
-        """How far down the road a hit due at ``when`` is now."""
-        return ((when - self._heard) / self.LOOK) * (self.FAR - self.NEAR)
+        """How far down the road a hit due at ``when`` is now.
+
+        Measured to the *rider*, not to the end of the road. This used to
+        map ``when`` onto the far end and let blocks run on to zero, which
+        put them level with the rider at RIDER_AT - a whole 0.39 s before
+        their beat at these settings. They arrived early, every one of
+        them, by the same amount, which is why "the obstacles do not feel
+        on beat at all".
+        """
+        return (self.RIDER_AT
+                + ((when - self._heard) / self.LOOK)
+                * (self.FAR - self.RIDER_AT))
 
     # -- drawing ----------------------------------------------------------
     def paint(self, painter, rect, state) -> None:
@@ -3790,18 +3961,39 @@ class Rider(Scene):
 
         span = min(rect.width(), rect.height())
         focal = span * (0.78 - surge * 0.10 - bass * 0.06)
-        shake = self._shake * self.SHAKE * span
         centre = rect.center()
+        # The camera looks down the road rather than straight ahead while
+        # the road swings away from it.
+        #
+        # The road bends hard now, and a camera pinned to the middle of
+        # the frame meant the whole picture swung across it: "camera is
+        # all over the place". Aiming at where the road is a little way
+        # ahead holds the track roughly in the middle of the frame and
+        # turns the swing into a lean, which is what being on a road
+        # feels like. Eased, so the aim itself does not snap.
+        ahead = self._road(self.RIDER_AT + self.AIM)[0]
+        self._aimed += (ahead - self._aimed) * self.AIM_EASE
+        # The shake is a decaying wobble on its own fast clock rather than
+        # a sine of the spin, which never stopped moving.
+        self._wobble += 1.0
+        shake = self._shake * self.SHAKE * span
         horizon = QPointF(
-            centre.x() + math.sin(self._spin * 7.3) * shake,
+            centre.x() - self._aimed * focal * self.AIM_PULL
+            + math.sin(self._wobble * 1.9) * shake,
             centre.y() - rect.height() * 0.10
-            + math.sin(self._spin * 9.1) * shake)
+            + math.sin(self._wobble * 2.7) * shake)
         hue = (0.58 + state.synth * 0.25 + surge * 0.12) % 1.0
+        # How close the track is to a beat, 1 on it and falling away.
+        beat = (1.0 - self._pulse) ** 3 if self._beat > 0.0 else 0.0
 
-        self._surface(painter, rect, horizon, focal, hue, surge, flash)
-        self._markings(painter, horizon, focal, hue, kit, flash)
-        self._edges(painter, rect, horizon, focal, hue, kit, flash)
+        self._surface(painter, rect, horizon, focal, hue, surge,
+                      flash + beat * 0.35)
+        self._markings(painter, horizon, focal, hue, kit,
+                       flash + beat * 0.45)
+        self._edges(painter, rect, horizon, focal, hue, kit,
+                    flash + beat * 0.30)
         self._walls(painter, rect, horizon, focal, hue, flash)
+        self._bits(painter, horizon, focal, hue)
         self._ship(painter, rect, horizon, focal, hue, flash)
         self._card(painter, rect, hue)
 
@@ -3974,6 +4166,22 @@ class Rider(Scene):
                     min(1.0, (0.85 + flash * 0.15) * seen)))
                 faces = QPainterPath()
                 rims = QPainterPath()
+
+    def _bits(self, painter, horizon, focal, hue) -> None:
+        """The pieces thrown off a block that was hit."""
+        if not self._sparks:
+            return
+        shards = QPainterPath()
+        for across, up, at, _dx, _dy, _dz, life in self._sparks:
+            if at <= self.NEAR + 0.05:
+                continue
+            here = self._eye(horizon, focal, across, up, at)
+            back = self._eye(horizon, focal, across, up + 0.10 * life,
+                             at + 0.14)
+            shards.moveTo(here)
+            shards.lineTo(back)
+        self._beam(painter, shards, QColor.fromHsvF(
+            (hue + 0.5) % 1.0, 0.25, 1.0, 0.85))
 
     def _ship(self, painter, rect, horizon, focal, hue, flash) -> None:
         """The rider: a lit triangle, low on the road."""
