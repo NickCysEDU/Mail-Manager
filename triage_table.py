@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QLabel,
                                QTextBrowser, QToolButton, QVBoxLayout, QWidget)
 
 import conversations
+from flowlayout import FlowLayout
 import theme
 from imap_engine import MoveReport
 from models import (CATEGORY_COLORS, OTHER_COLOR, TOPIC_COLORS, Category,
@@ -659,6 +660,21 @@ class PreviewPane(QWidget):
     #: either half touches the bar between them.
     GUTTER = 10
 
+    #: How wide the pane has to be before the message and the analysis
+    #: sit side by side, and how narrow before they stack again.
+    #:
+    #: Two columns need about forty-five characters each to read. Measured
+    #: at the widths this pane is really given, the analysis column was
+    #: 203 px - twenty-nine characters - with the preview beside the table
+    #: on a 1440 screen, and 90 px on a small window: "xxxxxx xxxxxxxx
+    #: xxxxxx xx xxxx xxxxx xxx xxxx xx xxxxxxxx xxxx xxxxxxx xxxx xx
+    #: xxxxxx xxx xxxxx". At 760 it gets about forty-six.
+    #:
+    #: Two numbers rather than one, so a pane dragged to the threshold
+    #: does not flip back and forth on every pixel.
+    TWO_COLUMNS = 800
+    ONE_COLUMN = 760
+
     overrideChanged = Signal(int, object)  # source row, folder or None
     #: "Sort this mail too" - the window turns non-job routing on.
     sortNonJobRequested = Signal()
@@ -756,25 +772,61 @@ class PreviewPane(QWidget):
         right_layout.addWidget(self.analysis_label)
         right_layout.addWidget(self.reasoning_view, 1)
 
+        self._left, self._right = left, right
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.addWidget(left)
         self.splitter.addWidget(right)
         self.splitter.setSizes([560, 460])
 
-        folder_row = QHBoxLayout()
+        # A row that wraps. "File into:", a folder path and a button do
+        # not fit across a preview that is beside the table on a small
+        # screen - they need 471 px and the pane can be given 420 - and a
+        # fixed row does not shrink, it clips.
+        folder_row = FlowLayout(margin=0, spacing=6, vertical_spacing=6)
         folder_row.addWidget(QLabel("File into:"))
-        folder_row.addWidget(self.folder_combo, 1)
+        folder_row.addWidget(self.folder_combo)
         folder_row.addWidget(self.reset_button)
+        self.folder_row = QWidget()
+        self.folder_row.setLayout(folder_row)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 8, 10, 8)
         layout.addWidget(self.header)
         layout.addWidget(self.inert_row)
-        layout.addLayout(folder_row)
+        layout.addWidget(self.folder_row)
         layout.addWidget(self.splitter, 1)
 
         self.set_folder_choices([])
         self.clear()
+
+    def resizeEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        super().resizeEvent(event)
+        self._arrange(self.width())
+
+    def _arrange(self, width: int) -> None:
+        """Side by side when there is room for both, stacked when not."""
+        across = self.splitter.orientation() == Qt.Orientation.Horizontal
+        if across and width < self.ONE_COLUMN:
+            self._stack(Qt.Orientation.Vertical, (0, self.GUTTER, 0, 0),
+                        (0, 0, 0, 0))
+        elif not across and width > self.TWO_COLUMNS:
+            self._stack(Qt.Orientation.Horizontal, (0, 0, self.GUTTER, 0),
+                        (self.GUTTER, 0, 0, 0))
+
+    def _stack(self, orientation, left_edge, right_edge) -> None:
+        """Turn the inner splitter, and move the gutter with it.
+
+        The gutter is there to keep the two halves off the handle between
+        them, so it belongs on whichever side the handle is now on.
+        """
+        self.splitter.setOrientation(orientation)
+        self._left.layout().setContentsMargins(*left_edge)
+        self._right.layout().setContentsMargins(*right_edge)
+        span = (self.splitter.width()
+                if orientation == Qt.Orientation.Horizontal
+                else self.splitter.height())
+        if span > 1:
+            self.splitter.setSizes([int(span * 0.55), int(span * 0.45)])
 
     def set_backend_label(self, label: str) -> None:
         """Name the backend that produced the reasoning shown on the right."""

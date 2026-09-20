@@ -661,6 +661,19 @@ six different widths.
 The status bar elides to the space available and keeps the full text in its
 tooltip, so a long summary line can no longer force the window wider.
 
+The preview pane holds the message and the model's analysis side by side,
+and that splitter turns when the pane is too narrow to carry two columns.
+It has to: beside the table the preview is about two fifths of the window,
+and splitting that again left the analysis at 203 px - twenty-nine
+characters a line - on a 1440 screen, and 90 px on a small window. Below
+760 px the two halves stack, which keeps both above forty characters at
+every width the pane is ever given. The threshold back is 800, so dragging
+the splitter across it does not flip the layout on every pixel.
+
+The row that files a message uses the same wrapping layout as the toolbars,
+because "File into:", a folder path and a button need 471 px and the pane
+can be given 420.
+
 ---
 
 ## Watching a scan
@@ -852,7 +865,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,587 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,606 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1213,7 +1226,7 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 3,587 tests, about three minutes
+./dev test        # 3,606 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

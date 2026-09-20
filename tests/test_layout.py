@@ -723,3 +723,145 @@ class TestNothingTouchesTheSplitterBar:
         assert left - bar >= self.LEAST, (
             f"the reasoning box starts at {left} and the bar ends at {bar}, "
             f"a gap of {left - bar}px")
+
+
+class TestTheAnalysisHasRoomToBeRead:
+    """"Xxxxxx xxxxxxxx xxxxxx xx xxxx xxxxx xxx xxxx xx xxxxxxxx xxxx
+    xxxxxxx xxxx xx xxxxxx xxx xxxxx."
+
+    The preview is a splitter of its own: the message on one side and the
+    analysis on the other. Beside the table the whole pane is about two
+    fifths of the window, and splitting that again left the analysis at
+    203 px - twenty-nine characters a line - on a 1440 screen, and 90 px
+    on a small window.
+    """
+
+    #: The narrowest line anybody should be asked to read a paragraph
+    #: across, in characters. Forty is a newspaper column.
+    LEAST = 40
+
+    @staticmethod
+    def _pane(qapp, width, height=460):
+        from triage_table import PreviewPane
+
+        pane = PreviewPane()
+        pane.show()
+        pane.resize(width, height)
+        qapp.processEvents()
+        return pane
+
+    @staticmethod
+    def _characters(view) -> int:
+        from PySide6.QtGui import QFontMetrics
+
+        metrics = QFontMetrics(view.font())
+        return int(view.width() / max(1.0, metrics.horizontalAdvance("n")))
+
+    @pytest.mark.parametrize("width", [1600, 1200, 1000, 840, 700, 620,
+                                       560, 480, 420])
+    def test_the_analysis_is_readable_at_every_width(self, qapp, width):
+        pane = self._pane(qapp, width)
+        try:
+            wide = self._characters(pane.reasoning_view)
+            assert wide >= self.LEAST, (
+                f"at a pane {width}px wide the analysis is {wide} characters "
+                f"a line ({pane.reasoning_view.width()}px)")
+        finally:
+            pane.close()
+
+    def test_the_message_keeps_its_room_too(self, qapp):
+        """Stacking is not an excuse to squeeze the other half."""
+        pane = self._pane(qapp, 480)
+        try:
+            wide = self._characters(pane.body_view)
+            assert wide >= self.LEAST, (
+                f"the message text is {wide} characters a line")
+        finally:
+            pane.close()
+
+    def test_it_is_side_by_side_when_there_is_room(self, qapp):
+        """Below the table on a wide screen, which is what the splitter
+        was for."""
+        from PySide6.QtCore import Qt
+
+        pane = self._pane(qapp, 1400)
+        try:
+            assert pane.splitter.orientation() == Qt.Orientation.Horizontal
+            # In the pane's own coordinates: each view's geometry is
+            # relative to the half it lives in, so comparing them raw
+            # compares two different origins.
+            body = pane.body_view.mapTo(pane, pane.body_view.rect().topRight())
+            analysis = pane.reasoning_view.mapTo(
+                pane, pane.reasoning_view.rect().topLeft())
+            assert body.x() <= analysis.x() + 1, (
+                f"the message ends at x={body.x()} and the analysis starts "
+                f"at x={analysis.x()}, so they are not beside each other")
+        finally:
+            pane.close()
+
+    def test_it_stacks_when_there_is_not(self, qapp):
+        from PySide6.QtCore import Qt
+
+        pane = self._pane(qapp, 560)
+        try:
+            assert pane.splitter.orientation() == Qt.Orientation.Vertical, (
+                "the analysis is still in a column of its own on a pane "
+                "too narrow for two")
+        finally:
+            pane.close()
+
+    def test_it_does_not_flip_back_and_forth_on_one_pixel(self, qapp):
+        """A pane dragged across the threshold would otherwise re-lay
+        itself on every pixel of the drag."""
+        from PySide6.QtCore import Qt
+
+        pane = self._pane(qapp, 1200)
+        try:
+            seen = []
+            # A pixel at a time across the threshold and back, which is
+            # what a drag is. With the two thresholds a pixel apart this
+            # turns twice; with a real gap between them it stacks on the
+            # way down and stays stacked on the way back.
+            for width in list(range(790, 749, -1)) + list(range(750, 791)):
+                pane.resize(width, 460)
+                qapp.processEvents()
+                seen.append(pane.splitter.orientation())
+            turns = sum(1 for a, b in zip(seen, seen[1:]) if a != b)
+            assert turns == 1, (
+                f"the pane changed its mind {turns} times over a forty "
+                f"pixel drag across the threshold")
+        finally:
+            pane.close()
+
+    def test_the_pane_fits_where_it_is_put(self, qapp):
+        """Beside the table on a small window the preview is given about
+        420px, and a pane that cannot be that narrow clips instead."""
+        from triage_table import PreviewPane
+
+        pane = PreviewPane()
+        pane.show()
+        qapp.processEvents()
+        try:
+            least = pane.minimumSizeHint().width()
+            assert least <= 420, (
+                f"the preview cannot be drawn narrower than {least}px, so "
+                f"beside the table on a small window it is cut off")
+        finally:
+            pane.close()
+
+    @pytest.mark.parametrize("width", [1600, 1000, 700, 560, 480])
+    def test_nothing_in_the_folder_row_runs_off_the_edge(self, qapp, width):
+        """"File into:", a folder path and a button need 471px, and the
+        pane can be given less than that."""
+        pane = self._pane(qapp, width, height=520)
+        try:
+            row = pane.folder_row
+            for child in (pane.folder_combo, pane.reset_button):
+                assert child.geometry().right() <= row.width() + 1, (
+                    f"{child.__class__.__name__} runs "
+                    f"{child.geometry().right() - row.width()}px past the "
+                    f"edge of a {width}px pane")
+                assert child.geometry().bottom() <= row.height() + 1, (
+                    f"{child.__class__.__name__} runs below the row")
+        finally:
+            pane.close()
