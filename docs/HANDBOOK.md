@@ -725,6 +725,34 @@ Press **⌘/** in the app for this list.
 | **⌘M** | Model settings |
 | **⌘,** | Settings |
 
+### The oscilloscope
+
+The scene draws the signal itself on a phosphor that takes its time: a
+screen that survives between frames, dimmed a little each frame and struck
+once, so a long persistence costs the same as a short one. **Sweep** runs
+the beam round a circle once a frame; **X-Y** plots left against right,
+which is what a record cut for a scope draws its picture in.
+
+What makes it a tube rather than a drawing of one is that a beam deposits
+energy at a rate. Where the signal moves slowly - a turning point, the
+corner of a figure, anywhere the beam reverses - the phosphor is struck
+hard and washes towards white; where the beam crosses the screen quickly
+it barely marks it, and where it stops moving altogether it burns a spot.
+The trace is cut into six brightnesses by how far apart consecutive
+samples are, measured against the trace's own speed so a small figure and
+a big one are both exposed properly, and the hot stretches are drawn wider
+as well as brighter, the way a spot blooms when it is driven hard.
+
+Six brightnesses is six strokes, which is cheap. The number of *stretches*
+inside them is not, so a brightness covers eight samples at a time: taking
+one per sample cut an ordinary stereo mix - which is noise, not a figure -
+into eight hundred stretches and cost 154 ms a frame. Each stretch is
+drawn as a stack of one-pixel lines rather than one wide pen, for the
+reason in `HAIRLINE`: on the worst trace in a real record at full screen,
+one wide pen over that path measured 880 ms and the stack 3. End to end
+the scene runs 7.4 ms a frame at full screen against 16.6 before, and its
+worst frame 36 ms against 205.
+
 ### The shape of the track
 
 Above the seek bar, in the window, is the whole track drawn as a waveform:
@@ -865,7 +893,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,606 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,613 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1226,7 +1254,7 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 3,606 tests, about three minutes
+./dev test        # 3,613 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

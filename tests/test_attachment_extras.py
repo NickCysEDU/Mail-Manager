@@ -2735,7 +2735,8 @@ class TestOscilloscopeMusic:
                 share = step / 8.0
                 trace.append(int(x0 + (x1 - x0) * share))
                 trace.append(int(y0 + (y1 - y0) * share))
-        path = scope._path(trace, True)
+        # The shape as the beam draws it: the samples, smoothed.
+        path = visualizers.smooth_path(scope._points(trace, True))
 
         def sharpest(shape, samples=400):
             at = [shape.pointAtPercent(n / samples)
@@ -2801,7 +2802,8 @@ class TestOscilloscopeMusic:
                 state.vector.append(int(y0 + (y1 - y0) * share))
         # Built in a unit box - the window size and the strobe are a
         # transform applied when it is drawn, not part of the shape.
-        path = scope._path(state.vector, True)
+        path = visualizers.smooth_path(
+            scope._points(state.vector, True))
         box = path.boundingRect()
         assert box.width() > 1.7 and box.height() > 1.7, (
             f"the plot is {box.width():.2f} by {box.height():.2f} of a unit "
@@ -2823,8 +2825,8 @@ class TestOscilloscopeMusic:
 
         scope = visualizers.by_name("Oscilloscope")
         trace = [0.4, -0.2, 0.9, -0.7, 0.1]
-        once = scope._path(trace, False)
-        twice = scope._path(trace, False)
+        once = visualizers.smooth_path(scope._points(trace, False))
+        twice = visualizers.smooth_path(scope._points(trace, False))
         assert once.elementCount() == twice.elementCount()
         for index in range(once.elementCount()):
             assert once.elementAt(index).x == twice.elementAt(index).x
@@ -9631,3 +9633,299 @@ class TestTheStrobeSlidersSayWhatTheyDo:
                 "the automatic settings did not come back")
         finally:
             pane.deleteLater()
+
+
+class TestTheScopeIsATube:
+    """"Xxxxxxxxx xx xxxxxx xxxxxxxxxxxx xxxx xxxxxxx. X xxxx xx xx xxxx
+    xx play xxx xxxx xxxxxxxxxxxx xxxxx xx xxx xxxx xxxxxxx xx Xxxxxxxx
+    Xxxxxxxxx videos."
+
+    The thing that makes oscilloscope music look like oscilloscope music
+    is that a beam deposits energy at a rate. Where the signal moves
+    slowly - a turning point, the corner of a figure, anywhere the beam
+    reverses - the phosphor is struck hard and glows white; where it
+    crosses the screen quickly it barely marks it. A trace stroked at one
+    alpha is a line drawing whatever else is done to it.
+    """
+
+    POINTS = 512
+
+    @staticmethod
+    def _trace(place):
+        """A figure, as the interleaved int16 a record carries."""
+        import math
+        from array import array
+
+        out = array("h")
+        for index in range(TestTheScopeIsATube.POINTS):
+            x, y = place(index / TestTheScopeIsATube.POINTS)
+            out.append(int(max(-1.0, min(1.0, x)) * 32000))
+            out.append(int(max(-1.0, min(1.0, y)) * 32000))
+        return out
+
+    #: Where the slow figure sits, as a share of the frame from its
+    #: middle, and where the fast strokes are.
+    SLOW_AT = 0.45
+    SLOW_WIDE = 0.35
+
+    @classmethod
+    def _fast_then_slow(cls):
+        """A figure in the lower half, with fast strokes over the upper.
+
+        Mostly figure, because the reference is a step from the middle of
+        the trace: a trace that is mostly flight has no slow part to be
+        measured against and every level comes out the same.
+
+        The fast strokes do not cross each other, because a stroke laid
+        over another stroke is two strokes' worth of light and would read
+        as dwell that is not there.
+        """
+        import math
+
+        fast = 112
+        slow = cls.POINTS - fast
+
+        def place(t):
+            index = int(t * cls.POINTS)
+            if index >= slow:
+                # Seven strokes straight across the top half, one after
+                # another, each drawn once.
+                step = index - slow
+                line, along = divmod(step, 16)
+                # Positive here is up the screen: the scope flips the
+                # sign, the way a scope does.
+                return (-0.9 + 1.8 * (along / 15.0),
+                        0.30 + line * 0.09)
+            turn = index / slow * math.tau
+            return (math.cos(turn) * cls.SLOW_WIDE,
+                    -cls.SLOW_AT + math.sin(turn) * cls.SLOW_WIDE)
+        return cls._trace(place)
+
+    @staticmethod
+    def _scene(mode="X-Y", decay=0.05):
+        import visualizers
+
+        scene = visualizers.Oscilloscope()
+        scene.set_mode(mode)
+        scene.set_decay(decay)
+        return scene
+
+    @classmethod
+    def _drawn(cls, scene, trace, side=600):
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        from attachment_widgets import SpectrumState
+
+        state = SpectrumState()
+        state.levels = [0.3] * 27
+        state.bass = state.mid = state.high = 0.3
+        state.synth = 0.2
+        state.kit = {}
+        state.at = 1.0
+        state.vector = trace
+        state.trace = trace
+        image = QImage(side, side, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0))
+        painter = QPainter(image)
+        try:
+            scene.paint(painter, QRectF(0, 0, side, side), state)
+        finally:
+            painter.end()
+        return image
+
+    @staticmethod
+    def _brightest(image, box):
+        """The brightest green anywhere in a box of the picture."""
+        left, top, wide, tall = box
+        best = 0
+        for y in range(top, top + tall):
+            for x in range(left, left + wide):
+                best = max(best, image.pixelColor(x, y).green())
+        return best
+
+    def test_the_beam_is_brighter_where_it_lingers(self, qapp):
+        """The whole point. Same signal, same pen, different dwell."""
+        side = 600
+        image = self._drawn(self._scene(), self._fast_then_slow(), side)
+        # The fast strokes are across the upper half, the figure lower.
+        flying = self._brightest(image, (60, 40, side - 120, 200))
+        lingering = self._brightest(image, (60, side // 2 + 20,
+                                            side - 120, side // 2 - 40))
+        assert flying > 20, "the fast stretch was not drawn at all"
+        assert lingering > flying * 1.3, (
+            f"the beam reads {lingering} where it crawls and {flying} where "
+            f"it flies, which is a line drawing rather than a phosphor")
+
+    def test_a_beam_that_stops_still_draws(self, qapp):
+        """A parked beam is the brightest thing on a scope, and Qt
+        strokes nothing at all for a stretch of zero length."""
+        import visualizers
+
+        scene = self._scene()
+        parked = self._trace(lambda t: (0.5, -0.25))
+        points = scene._vector_points(parked)
+        paths = scene._beams(points)
+        assert any(not path.isEmpty() for path in paths), (
+            "a beam that never moved drew nothing at all")
+        image = self._drawn(scene, parked)
+        assert self._brightest(image, (0, 0, image.width(), image.height())) \
+            > 60, "the parked beam left no mark on the phosphor"
+
+    def test_the_moving_part_of_a_mostly_silent_trace_is_not_the_dimmest(
+            self, qapp):
+        """Silence, a held note and the gap between two figures all park
+        the beam for more than half the trace. Measured from the middle
+        step, the reference is then zero and every moving part of the
+        trace falls to the faintest level there is."""
+        import visualizers
+
+        import math
+
+        scene = self._scene()
+
+        # Parked for three fifths of the trace, so the middle step is
+        # squarely zero and only a reference taken from further up the
+        # order has anything in it.
+        def place(t):
+            if t < 0.6:
+                return (0.5, -0.25)       # parked
+            turn = (t - 0.6) / 0.4 * math.tau
+            return (math.cos(turn) * 0.8, math.sin(turn) * 0.8)
+
+        paths = scene._beams(scene._vector_points(self._trace(place)))
+        used = [level for level, path in enumerate(paths)
+                if not path.isEmpty()]
+        assert used, "nothing was drawn"
+        assert max(used) == visualizers.Oscilloscope.DWELL_LEVELS - 1, (
+            f"the parked half is at level {max(used)}, not the top")
+        assert min(used) > 0, (
+            f"the moving half fell to level {min(used)}, the faintest there "
+            f"is, because the trace is parked for more than half its length")
+
+    def test_a_figure_is_shaded_whatever_size_it_is(self, qapp):
+        """The reference is the trace's own speed, which is a person
+        turning the intensity up until the figure is right."""
+        import math
+
+        scene = self._scene()
+        for radius in (0.15, 0.9):
+            trace = self._trace(lambda t, r=radius: (
+                math.cos(t * math.tau) * r,
+                math.sin(t * math.tau * 3.0) * r))
+            paths = scene._beams(scene._vector_points(trace))
+            used = [level for level, path in enumerate(paths)
+                    if not path.isEmpty()]
+            assert len(used) >= 2, (
+                f"a figure of radius {radius} came out at one brightness "
+                f"({used}), so nothing in it is shaded")
+
+    class Watched:
+        """A painter that notes every pen the beam is struck with.
+
+        And how many times each one was drawn with: a wide beam is a
+        stack of one-pixel lines nudged around a circle (see ``stroke``),
+        so the width of the beam is the size of the stack, not the width
+        of the pen.
+        """
+
+        def __init__(self, painter):
+            self._painter = painter
+            self.pens = []
+
+        def __getattr__(self, name):
+            if name not in ("setPen", "drawPath"):
+                return getattr(self._painter, name)
+
+            def set_pen(pen):
+                scale = abs(self._painter.combinedTransform().m11()) or 1.0
+                self.pens.append([
+                    0.0 if pen.isCosmetic() else pen.widthF() * scale,
+                    pen.color().saturationF(), pen.color().alphaF(), 0])
+                return self._painter.setPen(pen)
+
+            def draw_path(path):
+                if self.pens:
+                    self.pens[-1][3] += 1
+                return self._painter.drawPath(path)
+
+            return set_pen if name == "setPen" else draw_path
+
+    @classmethod
+    def _struck(cls, trace, side=600):
+        """The pens one pass of the beam used, in the order it used them."""
+        from PySide6.QtCore import QSize
+        from PySide6.QtGui import QImage, QPainter
+
+        screen = QImage(QSize(side, side),
+                        QImage.Format.Format_ARGB32_Premultiplied)
+        screen.fill(0)
+        painter = QPainter(screen)
+        eye = cls.Watched(painter)
+        try:
+            cls._scene()._strike(eye, screen, trace, True, 0.0, 1.0)
+        finally:
+            painter.end()
+        return eye.pens
+
+    def test_the_hottest_stretches_wash_towards_white(self, qapp):
+        """A phosphor struck hard stops being green.
+
+        Read off the pens rather than off the picture: a faint stroke
+        composited against black is a nearly black pixel, and a nearly
+        black pixel has almost no saturation whatever colour drew it.
+        """
+        pens = self._struck(self._fast_then_slow())
+        assert len(pens) >= 2, f"the beam was struck {len(pens)} times"
+        # Dimmest first, brightest last - see _beams.
+        faint, hot = pens[0], pens[-1]
+        assert hot[1] < faint[1] * 0.9, (
+            f"the hottest pass is {hot[1]:.2f} saturated against "
+            f"{faint[1]:.2f} for the faintest, so it is not washing out")
+        assert hot[3] > faint[3], (
+            f"the hottest pass is a stack of {hot[3]} hairlines against "
+            f"{faint[3]}, so the beam does not spread when driven hard")
+
+    def test_the_trace_is_a_handful_of_stretches_not_hundreds(self, qapp):
+        """A level per sample cuts an ordinary stereo mix - which is
+        noise, not a figure - into eight hundred stretches, each one a
+        subpath with two ends to cap. That was 154 ms a frame."""
+        import random
+
+        from PySide6.QtGui import QPainterPath
+
+        scene = self._scene()
+        dice = random.Random(20260920)
+        x = y = 0.0
+        pairs = []
+        for _ in range(self.POINTS):
+            x = x * 0.86 + dice.uniform(-1.0, 1.0) * 0.5
+            y = y * 0.86 + dice.uniform(-1.0, 1.0) * 0.5
+            pairs.append((max(-1.0, min(1.0, x)), max(-1.0, min(1.0, y))))
+        trace = self._trace(lambda t: pairs[int(t * self.POINTS)])
+        paths = scene._beams(scene._vector_points(trace))
+        subpaths = 0
+        for path in paths:
+            subpaths += sum(
+                1 for index in range(path.elementCount())
+                if path.elementAt(index).type
+                == QPainterPath.ElementType.MoveToElement)
+        assert subpaths <= self.POINTS // 4, (
+            f"a noisy trace of {self.POINTS} samples was cut into "
+            f"{subpaths} stretches")
+
+    def test_the_beam_never_goes_over_the_hairline_cliff(self, qapp):
+        """Qt's raster engine falls off a thirty-six fold cliff at
+        exactly one pixel of pen, and a trace - hundreds of reversals,
+        a join at every one - is the worst thing to take over it.
+        Measured on the worst trace in a real record at full screen: one
+        wide pen over that path was 880 ms and the hairline stack 3."""
+        import visualizers
+
+        pens = self._struck(self._fast_then_slow())
+        assert pens, "the beam never set a pen"
+        over = [width for width, _sat, _alpha, _passes in pens
+                if width > visualizers.HAIRLINE + 0.01]
+        assert not over, (
+            f"the beam was struck with pens {over} real pixels wide, over "
+            f"the {visualizers.HAIRLINE} pixel cliff")

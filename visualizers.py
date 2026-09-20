@@ -933,6 +933,72 @@ class Oscilloscope(Scene):
     #: it costs nothing and does not invalidate a cached path.
     FLASH_GAIN = 0.03
 
+    # -- dwell -------------------------------------------------------------
+    #: What makes this a tube rather than a drawing of one.
+    #:
+    #: A beam deposits energy at a rate, so how bright a stretch of trace
+    #: comes out depends on how long the beam spent there. Where the
+    #: signal moves slowly - the turning points, the corners of a figure,
+    #: anywhere the beam reverses - the phosphor is struck hard and glows
+    #: white. Where it crosses the screen quickly it barely marks it. That
+    #: single fact is most of what oscilloscope music looks like, and a
+    #: trace stroked at one alpha is a line drawing whatever else is done
+    #: to it.
+    #:
+    #: DWELL_STEP is the distance between two samples, in the figure's own
+    #: unit box, at which the beam is at full brightness: about what a
+    #: circle of radius one drawn with a thousand samples takes. Slower
+    #: than that saturates, faster than that fades - down to DWELL_LEAST,
+    #: because a fast stroke on a real tube is faint and not absent.
+    #: Measured against the trace's own median step rather than against a
+    #: fixed distance, which is a person turning the intensity up until
+    #: the figure is right: a small figure and a big one are then both
+    #: exposed properly and what shows is the shading *within* each,
+    #: which is the part that carries the shape. Below one, so the median
+    #: sits in the upper middle and there is room above it for the slow
+    #: parts to blaze.
+    DWELL_AIM = 0.62
+    DWELL_LEAST = 0.22
+    #: How many brightnesses the trace is cut into. Each is one stroke, so
+    #: this is also what the beam costs: six is enough that the shading
+    #: reads as continuous and few enough that a frame is six paths.
+    DWELL_LEVELS = 6
+    #: How many samples share one brightness.
+    #:
+    #: Six paths a frame is cheap; the number of *stretches* inside them
+    #: is not. A figure written for a scope changes speed smoothly and
+    #: gives long runs, but an ordinary stereo mix is noise, and taking a
+    #: level per sample cut a thousand-point trace into eight hundred
+    #: stretches - each one a subpath with two ends to cap. Measured, that
+    #: was 154 ms a frame at full screen against 6 before.
+    #:
+    #: A block of eight caps it at a hundred and twenty-eight, and the
+    #: shading loses nothing anybody can see: the beam has mass and the
+    #: phosphor integrates, so brightness that changes every eighth of a
+    #: sample was never real.
+    DWELL_BLOCK = 8
+    #: How far a parked beam is nudged so that it draws at all.
+    #:
+    #: A beam that stops moving is a stretch of trace with no length in
+    #: it, and Qt strokes nothing for a subpath of exactly zero length -
+    #: not even a round cap. Measured: a zero-length run painted 0 pixels
+    #: and one a ten-thousandth of a unit long painted the dot. A parked
+    #: beam is the brightest thing on a scope; it should not be the one
+    #: thing missing from it.
+    DWELL_PARKED = 1e-4
+
+    #: How much wider the beam is drawn where it is brightest.
+    #:
+    #: A tube blooms in the glass as well as in the phosphor: drive the
+    #: spot hard and it grows. Without this the shading is a change of
+    #: colour on a line of constant thickness, which reads as a drawing
+    #: shaded in rather than as a filament being run hotter.
+    DWELL_SPREAD = (0.80, 1.55)
+    #: How far the hottest parts wash out towards white. A phosphor struck
+    #: hard stops being green and goes white in the middle, which is the
+    #: other half of why a bright node looks bright.
+    DWELL_WHITE = 0.34
+
     def __init__(self) -> None:
         self._decay = 0.28
         self._mode = "Sweep"
@@ -1098,7 +1164,6 @@ class Oscilloscope(Scene):
             scale = side * 0.30 * (1.0 + flash * self.FLASH_GAIN)
         beam.translate(screen.width() / 2.0, screen.height() / 2.0)
         beam.scale(scale, scale)
-        path = self._path(trace, drawing)
         # A figure has detail in it that a fat beam fills in, so X-Y is
         # struck finer than a sweep.
         # In the tube's own pixels, so the beam ends up the same thickness
@@ -1108,55 +1173,157 @@ class Oscilloscope(Scene):
         # rather than a pen line, and at 1.3 pixels the figures read as a
         # diagram of one.
         core = ((1.8 if drawing else 2.2) + flash * 1.2) * dpr
-        colour = QColor.fromHsvF(0.34 - flash * 0.08,
-                                 max(0.0, 0.42 - flash * 0.3), 1.0, 0.92)
-        pen = QPen(colour, core, Qt.PenStyle.SolidLine,
-                   Qt.PenCapStyle.FlatCap, Qt.PenJoinStyle.BevelJoin)
-        # In device pixels, so the scale above does not turn a two pixel
-        # beam into a hundred pixel stripe. Bevelled and flat-capped
-        # because a trace made of a thousand short segments has a join at
-        # every one of them, and a round join there is an arc nobody can
-        # see and everybody pays for.
-        pen.setCosmetic(True)
-        beam.setPen(pen)
-        beam.drawPath(path)
+        for level, path in enumerate(self._beams(self._points(trace,
+                                                              drawing))):
+            if path.isEmpty():
+                continue
+            share = level / max(1, self.DWELL_LEVELS - 1)
+            # Bright and white where the beam lingered, faint and green
+            # where it hurried: a phosphor struck harder or softer rather
+            # than a pen changed for another pen.
+            colour = QColor.fromHsvF(
+                max(0.0, 0.34 - flash * 0.08),
+                max(0.0, (0.42 - flash * 0.3)
+                    * (1.0 - share * self.DWELL_WHITE)),
+                1.0,
+                self.DWELL_LEAST + (1.0 - self.DWELL_LEAST) * share)
+            thin, fat = self.DWELL_SPREAD
+            # Through ``stroke``, which fakes a wide line with a stack of
+            # hairlines. See HAIRLINE: Qt's raster engine falls off a
+            # thirty-six fold cliff at exactly one pixel of pen, and a
+            # trace is the worst thing to take over it - hundreds of
+            # reversals, every one of them a join. Measured on the worst
+            # trace in a real record at full screen, one wide pen over
+            # this path was 880 ms and the hairline stack is 3.
+            #
+            # Widths are handed over in the painter's own units, because
+            # that is what ``stroke`` scales; the beam is thought about
+            # in real pixels, hence the divide.
+            stroke(beam, path, colour,
+                   core * (thin + (fat - thin) * share) / scale,
+                   # Round-capped, because a beam that stops moving draws
+                   # a stretch of zero length and a flat cap draws
+                   # nothing at all for one - a parked beam is the
+                   # brightest thing on a scope, not the one thing
+                   # missing from it. Bevelled joins, because a trace
+                   # made of a thousand short segments has a join at
+                   # every one of them and a round join there is an arc
+                   # nobody can see and everybody pays for.
+                   cap=Qt.PenCapStyle.RoundCap,
+                   join=Qt.PenJoinStyle.BevelJoin)
 
     # -- paths -------------------------------------------------------------
-    def _path(self, trace, drawing: bool):
-        """One trace, in a box that does not depend on the window.
+    def _points(self, trace, drawing: bool):
+        """One trace, as points in a box that does not depend on the window.
 
         Built at unit scale so that resizing, and the strobe pumping the
         gain, are a transform rather than a rebuild.
         """
-        return self._vector_path(trace) if drawing else self._sweep_path(trace)
+        return (self._vector_points(trace) if drawing
+                else self._sweep_points(trace))
 
-    def _vector_path(self, trace):
+    def _beams(self, points):
+        """One path per brightness, dimmest first.
+
+        Per brightness rather than per stretch of trace. A stretch is a
+        run of samples that happen to share a level, and on real music
+        the level changes every few samples - so a path per run is a
+        thousand paths a frame, while a path per level is four however
+        noisy the signal is.
+
+        Dimmest first, so the bright stretches are laid over the faint
+        ones where they meet rather than under them.
+
+        Each run carries the point before it as well, so consecutive runs
+        share the sample between them and there is no gap where the
+        brightness changes.
+        """
+        top = self.DWELL_LEVELS - 1
+        if len(points) < 2:
+            paths = [QPainterPath() for _ in range(self.DWELL_LEVELS)]
+            if points:
+                paths[top].moveTo(points[0])
+            return paths
+        steps = [math.hypot(points[i].x() - points[i - 1].x(),
+                            points[i].y() - points[i - 1].y())
+                 for i in range(1, len(points))]
+        # The seventieth of them rather than the middle one. A signal
+        # that is parked for more than half the trace - silence, a held
+        # note, the gap between two figures - has a median step of zero,
+        # and a reference of zero puts every moving part of the trace at
+        # the dimmest level there is. Taking a step from the part that is
+        # actually moving exposes the movement properly and leaves the
+        # parked beam where it belongs, which is blazing.
+        ranked = sorted(steps)
+        middle = ranked[min(len(ranked) - 1, int(len(ranked) * 0.70))]
+        reach = max(1e-9, middle * self.DWELL_AIM)
+        levels = []
+        for start in range(0, len(steps), self.DWELL_BLOCK):
+            # Energy per unit length: how long the beam spent here. Over
+            # a block rather than a sample, because a single sample's
+            # spacing on real music jitters enough to dither the shading
+            # into noise - and see DWELL_BLOCK for what that dithering
+            # costs to draw.
+            block = steps[start:start + self.DWELL_BLOCK]
+            step = sum(block) / len(block)
+            lit = 1.0 if step <= 1e-9 else min(1.0, reach / step)
+            levels.extend([min(top, int(lit * self.DWELL_LEVELS))]
+                          * len(block))
+        paths = [QPainterPath() for _ in range(self.DWELL_LEVELS)]
+        start = 0
+        for index in range(1, len(levels) + 1):
+            if index < len(levels) and levels[index] == levels[start]:
+                continue
+            run = points[start:index + 1]
+            paths[levels[start]].addPath(self._run(run))
+            start = index
+        return paths
+
+    def _run(self, run):
+        """One stretch of the trace as a path, parked or moving.
+
+        Always a curve, never a polyline. Drawing the fast stretches
+        straight was tried on the grounds that a beam crossing the whole
+        screen between two samples really does fly straight: it was
+        slower, at every threshold, because the curve cuts the corners
+        and there is less of it to stroke. 31 ms for the worst frame of a
+        real record with the curve, 56 without.
+        """
+        spread = max(abs(run[-1].x() - run[0].x()),
+                     abs(run[-1].y() - run[0].y()))
+        if len(run) > 1 and spread < self.DWELL_PARKED:
+            # The beam stopped. See DWELL_PARKED: a hair, so that there
+            # is a subpath for the round cap to sit on.
+            dot = QPainterPath()
+            dot.moveTo(run[0])
+            dot.lineTo(QPointF(run[0].x() + self.DWELL_PARKED, run[0].y()))
+            return dot
+        return smooth_path(run)
+
+    def _vector_points(self, trace):
         """Left against right, plotted straight, in a unit box.
 
         No trigger and no clock: where the beam is, is what the record
         says. A disc cut for a scope draws a picture here; an ordinary mix
         draws the blob a vectorscope shows, leaning with the stereo image.
+
+        The curve through them, rather than a line between them, is drawn
+        by the caller: a beam is a physical thing with a mass of electrons
+        in it and a deflection coil that cannot change direction
+        instantly, so it rounds every corner it is asked to draw. Joining
+        the samples with straight lines draws the corners the signal asks
+        for and not the ones a scope makes, which is why the figures came
+        out "straight and taking sharp turns".
         """
         count = len(trace) // 2
         # Stored as int16 so a long track's worth fits in memory.
         scale = 1.0 / 32768.0
-        points = []
-        for index in range(count):
-            points.append(QPointF(
-                trace[index * 2] * scale,
-                # Screen y grows downwards and a scope's does not.
-                -trace[index * 2 + 1] * scale))
-        # A curve through the samples, not a line between them.
-        #
-        # A beam is a physical thing with a mass of electrons in it and a
-        # deflection coil that cannot change direction instantly, so it
-        # rounds every corner it is asked to draw. Joining the samples
-        # with straight lines draws the corners the signal asks for and
-        # not the ones a scope makes, which is why the figures came out
-        # "straight and taking sharp turns".
-        return smooth_path(points)
+        return [QPointF(trace[index * 2] * scale,
+                        # Screen y grows downwards and a scope's does not.
+                        -trace[index * 2 + 1] * scale)
+                for index in range(count)]
 
-    def _sweep_path(self, trace):
+    def _sweep_points(self, trace):
         """One sweep, swept around a circle rather than across.
 
         The beam starts at twelve o'clock and goes round once; how far
@@ -1167,21 +1334,16 @@ class Oscilloscope(Scene):
         Built with the zero ring at radius one, so the caller scales it to
         whatever the window is now.
         """
-        path = QPainterPath()
         count = len(trace)
-        first = None
+        points = []
         for index, value in enumerate(trace):
             angle = (index / count) * math.tau - math.pi / 2.0
             reach = 1.0 + value * self.SWING
-            point = QPointF(math.cos(angle) * reach, math.sin(angle) * reach)
-            if index:
-                path.lineTo(point)
-            else:
-                path.moveTo(point)
-                first = point
-        if first is not None:
-            path.lineTo(first)        # close the sweep
-        return path
+            points.append(QPointF(math.cos(angle) * reach,
+                                  math.sin(angle) * reach))
+        if points:
+            points.append(points[0])      # close the sweep
+        return points
 
     def _from_levels(self, state):
         """A fallback shape when no waveform was captured.
