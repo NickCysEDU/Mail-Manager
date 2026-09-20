@@ -9136,3 +9136,268 @@ class TestTheRiderIsDecorated:
         assert edge.lightnessF() < here.lightnessF(), (
             "the lamp is lighting the corner as much as the horizon, so it "
             "is a wash rather than a lamp")
+
+
+class TestTheTrackHasAShapeAboveTheSeekBar:
+    """"Xxx x xxxxxxxxxx xxxxx xxxxxxxx xxxxx xxx xxxx xxx xx xxxxxxxx
+    xxxx xx xxx xxxxxxxx xxxx."
+
+    A seek bar says where you are and nothing about what is there. The
+    shape says where the drop is, where the break is and where the track
+    stops, so seeking is aiming rather than guessing.
+    """
+
+    #: A calibration that undoes to plain decibels, so a frame can be
+    #: written at a level this test knows: db = shown * 55 - 55.
+    PLAIN = {"floor": 0.0, "reach": 1.0, "gamma": 1.0, "range_db": 55.0}
+
+    @classmethod
+    def _at_db(cls, db: float):
+        from array import array
+
+        return array("f", [(db + 55.0) / 55.0])
+
+    def test_the_shape_is_amplitude_not_the_stretched_display(self):
+        """The frames are stretched to fill the strip of bars, which is
+        right for the strip and wrong here: drawn straight, a limited
+        dance track comes out at 0.88 of full height everywhere, which is
+        a solid block."""
+        import attachment_audio
+
+        frames = ([self._at_db(0.0)] * 50 + [self._at_db(-20.0)] * 50)
+        shape = attachment_audio.outline(frames, self.PLAIN, columns=100)
+        loud = sum(shape[:50]) / 50
+        quiet = sum(shape[50:]) / 50
+        assert loud == pytest.approx(1.0, abs=0.02), (
+            f"the loud half is drawn at {loud:.3f} of full height")
+        assert quiet == pytest.approx(0.1, abs=0.02), (
+            f"a passage 20 dB down is drawn at {quiet:.3f} of full height "
+            f"when a tenth of the amplitude is a tenth of the height")
+
+    def test_it_is_the_loudest_moment_in_a_column_not_the_average(self):
+        """What makes a waveform readable is the transients.
+
+        Two columns of the same ten frames: one is a single hit in
+        silence, the other is loud the whole way through. A drum track is
+        the first kind, and averaged it draws at a tenth of the height of
+        a held chord that is no louder.
+        """
+        import attachment_audio
+
+        hit = [self._at_db(0.0)] + [self._at_db(-60.0)] * 9
+        held = [self._at_db(0.0)] * 10
+        shape = attachment_audio.outline(hit + held, self.PLAIN, columns=2)
+        assert shape[0] > shape[1] * 0.9, (
+            f"a column with one full-scale hit in it is drawn at "
+            f"{shape[0]:.3f} against {shape[1]:.3f} for one that is loud "
+            f"throughout, so the hit has been averaged away")
+
+    def test_a_quiet_recording_still_fills_the_bar(self):
+        """Every track is drawn at the height it has, not at the height
+        it was mastered to: a podcast that never goes near full scale is
+        otherwise a flat line."""
+        import attachment_audio
+
+        frames = ([self._at_db(-20.0)] * 60 + [self._at_db(-40.0)] * 40)
+        shape = attachment_audio.outline(frames, self.PLAIN, columns=100)
+        assert max(shape) > 0.9, (
+            f"a recording whose loudest moment is 20 dB down is drawn "
+            f"{max(shape):.2f} of full height")
+        assert min(shape) < 0.2, "the quiet half is drawn as loud as the rest"
+
+    def test_silence_is_drawn_as_silence(self):
+        import attachment_audio
+
+        frames = [self._at_db(0.0)] * 50 + [self._at_db(-70.0)] * 50
+        shape = attachment_audio.outline(frames, self.PLAIN, columns=100)
+        assert max(shape[50:]) < 0.02, (
+            f"silence is drawn at {max(shape[50:]):.3f} of full height")
+
+    def test_a_track_with_no_calibration_still_gets_a_shape(self):
+        import attachment_audio
+
+        frames = [self._at_db(0.0)] * 50 + [self._at_db(-20.0)] * 50
+        shape = attachment_audio.outline(frames, None, columns=100)
+        assert len(shape) == 100
+        assert max(shape) > min(shape), "the shape is flat"
+
+    def test_nothing_analysed_is_no_shape(self):
+        import attachment_audio
+
+        assert attachment_audio.outline([], self.PLAIN) == []
+        assert attachment_audio.outline([[]], self.PLAIN, columns=4) == [
+            0.0, 0.0, 0.0, 0.0]
+
+    def test_a_real_track_is_not_one_flat_bar(self):
+        """End to end on written audio with real dynamics in it: a swung
+        jazz pattern, which is the one style here with no limiter on."""
+        import statistics
+
+        import attachment_audio
+        import drumkit
+
+        pcm, _truth = drumkit.styled("jazz", seconds=20.0)
+        calibration = {}
+        frames = attachment_audio.analyse(pcm, drumkit.RATE, 2,
+                                          calibration=calibration)
+        shape = attachment_audio.outline(frames, calibration)
+        assert statistics.mean(shape) < 0.6, (
+            f"the whole track is drawn at a mean {statistics.mean(shape):.2f} "
+            f"of full height, which is a block rather than a waveform")
+        assert max(shape) > 0.9, "nothing in the track reaches full height"
+
+
+class TestTheWaveformWidget:
+    """The bar itself: what it shows, and what clicking it does."""
+
+    @staticmethod
+    def _made(shape=None, span=60_000, at=0):
+        from attachment_widgets import Waveform
+
+        bar = Waveform()
+        bar.resize(300, bar.TALL)
+        if shape is not None:
+            bar.set_shape(shape)
+        bar.set_span(span)
+        bar.set_position(at)
+        return bar
+
+    @staticmethod
+    def _drawn(bar):
+        from PySide6.QtCore import QPoint, QRect
+        from PySide6.QtGui import QColor, QImage, QRegion
+        from PySide6.QtWidgets import QWidget
+
+        image = QImage(bar.width(), bar.height(),
+                       QImage.Format.Format_ARGB32_Premultiplied)
+        # Transparent, not black: filled with an opaque colour every pixel
+        # has an alpha of 1 and "was anything drawn here" is always yes.
+        image.fill(QColor(0, 0, 0, 0))
+        # Without the window background, for the same reason: render()
+        # fills the whole widget with it by default, and then every
+        # column is full height whatever was drawn on it.
+        bar.render(image, QPoint(),
+                   QRegion(QRect(0, 0, bar.width(), bar.height())),
+                   QWidget.RenderFlag.DrawChildren)
+        return image
+
+    def test_there_is_nothing_to_see_until_the_track_is_analysed(self, qapp):
+        bar = self._made()
+        assert not bar.isVisible() or bar.isHidden(), (
+            "the bar is on screen with nothing in it")
+        bar.set_shape([0.5] * 100)
+        assert not bar.isHidden(), "the bar stayed hidden with a shape in it"
+        bar.clear()
+        assert bar.isHidden(), "the bar stayed up after the shape was cleared"
+
+    def test_the_part_already_played_is_drawn_apart_from_the_rest(self,
+                                                                 qapp):
+        """Which is the whole reason it is above the seek bar and not
+        somewhere else."""
+        bar = self._made([0.9] * 200, span=100_000, at=50_000)
+        image = self._drawn(bar)
+        middle = bar.height() // 2
+        # On a bar rather than in the gap after one: the columns are
+        # STEP apart and BAR wide, so only some x are drawn on.
+        step = int(bar.STEP)
+        early = image.pixelColor(step * 7, middle)
+        late = image.pixelColor(bar.width() - step * 7, middle)
+        assert early != late, (
+            "the played part and the rest are drawn the same colour")
+        assert early.alphaF() > 0.5 and late.alphaF() > 0.0, (
+            "one side of the playhead was not drawn at all")
+
+    def test_a_quiet_passage_is_drawn_shorter_than_a_loud_one(self, qapp):
+        bar = self._made([1.0] * 100 + [0.1] * 100, span=100_000)
+        image = self._drawn(bar)
+
+        def height(x):
+            column = [y for y in range(image.height())
+                      if image.pixelColor(x, y).alphaF() > 0.05]
+            return (max(column) - min(column)) if column else 0
+
+        loud = height(bar.width() // 4)
+        quiet = height(bar.width() * 3 // 4)
+        assert loud > quiet * 2.5, (
+            f"a full column is {loud}px and a tenth-height one {quiet}px")
+        assert quiet > 0, "a quiet passage is drawn as a gap in the bar"
+
+    def test_clicking_it_seeks_to_that_point_in_the_track(self, qapp):
+        from PySide6.QtCore import QPointF, Qt
+        from PySide6.QtGui import QMouseEvent
+        from PySide6.QtCore import QEvent
+
+        bar = self._made([0.5] * 200, span=200_000)
+        seen = []
+        bar.seeked.connect(seen.append)
+        bar.mousePressEvent(QMouseEvent(
+            QEvent.Type.MouseButtonPress,
+            QPointF(bar.width() * 0.25, bar.height() / 2),
+            Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier))
+        assert seen, "clicking the waveform seeked nowhere"
+        assert seen[-1] == pytest.approx(50_000, abs=2_000), (
+            f"a click a quarter of the way along a 200 s track seeked to "
+            f"{seen[-1] / 1000:.0f}s")
+
+    def test_it_cannot_seek_past_the_end_or_before_the_start(self, qapp):
+        from PySide6.QtCore import QEvent, QPointF, Qt
+        from PySide6.QtGui import QMouseEvent
+
+        bar = self._made([0.5] * 200, span=200_000)
+        seen = []
+        bar.seeked.connect(seen.append)
+        for x in (-40.0, bar.width() + 80.0):
+            bar.mousePressEvent(QMouseEvent(
+                QEvent.Type.MouseButtonPress, QPointF(x, 4.0),
+                Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier))
+        assert seen == [0, 200_000], f"seeked to {seen}"
+
+
+class TestTheWaveformIsInTheWindowedPane:
+    """Where it was asked for, and not where it was not."""
+
+    def test_it_sits_between_the_picture_and_the_transport(self, qapp,
+                                                           tmp_path):
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        try:
+            layout = pane.layout()
+            order = [layout.itemAt(i) for i in range(layout.count())]
+            places = {}
+            for index, item in enumerate(order):
+                if item.widget() is pane.wave:
+                    places["wave"] = index
+                elif item.widget() is pane.spectrum:
+                    places["picture"] = index
+                elif item.layout() is not None and any(
+                        item.layout().itemAt(j).widget() is pane.position
+                        for j in range(item.layout().count())):
+                    places["transport"] = index
+            assert set(places) == {"wave", "picture", "transport"}, (
+                f"only found {sorted(places)} in the pane")
+            assert places["picture"] < places["wave"] < places["transport"], (
+                f"the waveform is at {places['wave']} with the picture at "
+                f"{places['picture']} and the seek bar at "
+                f"{places['transport']}")
+        finally:
+            pane.deleteLater()
+
+    def test_it_starts_with_nothing_in_it(self, qapp):
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        try:
+            assert pane.wave.isHidden(), (
+                "the bar is up before anything has been analysed")
+        finally:
+            pane.deleteLater()
+
+    def test_the_full_screen_view_does_not_carry_one(self, qapp):
+        """It has its own bar and no room for furniture."""
+        from attachment_widgets import FullScreenSpectrum, Waveform
+
+        assert not any(isinstance(child, Waveform)
+                       for child in FullScreenSpectrum.__dict__.values())

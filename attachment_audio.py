@@ -25,7 +25,7 @@ import logging
 import math
 from array import array
 from operator import mul
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 log = logging.getLogger(__name__)
 
@@ -897,6 +897,73 @@ FIGURE_SURE = 0.45
 #: any width the scene is drawn at, small enough that a three minute track
 #: costs about a megabyte of them.
 TRACE_POINTS = 256
+
+
+#: How many columns the track outline is cut into.
+#:
+#: More than any window is wide, so the bar can be drawn at any width
+#: without asking for the track to be measured again, and few enough that
+#: the whole thing is a few kilobytes.
+OUTLINE_COLUMNS = 2000
+
+
+def outline(frames: Sequence, calibration: Optional[dict] = None,
+            columns: int = OUTLINE_COLUMNS) -> List[float]:
+    """How loud the track is across its length, 0..1 a column.
+
+    The shape drawn above the seek bar. Off the frames the analysis has
+    already produced rather than a second pass over the samples: a linear
+    walk of a few minutes of stereo PCM in Python costs about as much as
+    the analysis itself, and the frames already say what this needs.
+
+    The frames are stretched to fill the display, which is right for a
+    strip of bars and wrong for this: drawn straight, a dubstep track came
+    out at a mean of 0.88 of full height, which is a solid block. So the
+    calibration is used to put them back into decibels and then into plain
+    amplitude, which is what a waveform is. Without a calibration the
+    stretched numbers are all there is and the shape is flatter, rather
+    than there being no shape at all.
+
+    Peak rather than average within a column, because what makes a
+    waveform readable is the transients: an average over a sixteenth of a
+    second turns a drum track into a flat bar.
+
+    Scaled so that the loudest column is full height, taken at the 98th
+    percentile rather than the maximum. One clipped moment in a track is
+    otherwise the only thing at full height and everything else is drawn
+    at a fraction of the room it could have had.
+    """
+    if not frames or columns <= 0:
+        return []
+    floor = (calibration or {}).get("floor")
+    reach = (calibration or {}).get("reach")
+    gamma = (calibration or {}).get("gamma") or GAMMA
+    range_db = (calibration or {}).get("range_db") or RANGE_DB
+    levels: List[float] = []
+    for frame in frames:
+        if not frame:
+            levels.append(0.0)
+            continue
+        if floor is None or not reach:
+            levels.append(0.35 * (sum(frame) / len(frame)) + 0.65 * max(frame))
+            continue
+        # Back out of the display stretch, into decibels, into plain
+        # amplitude, and add the bands up as power: how loud the moment
+        # actually was.
+        power = 0.0
+        for shown in frame:
+            raw = floor + reach * (max(0.0, shown) ** (1.0 / gamma))
+            amplitude = 10.0 ** ((raw * range_db - range_db) / 20.0)
+            power += amplitude * amplitude
+        levels.append(math.sqrt(power))
+    out: List[float] = []
+    for column in range(columns):
+        low = column * len(levels) // columns
+        high = max(low + 1, (column + 1) * len(levels) // columns)
+        out.append(max(levels[low:high]))
+    ranked = sorted(out)
+    top = ranked[int(len(ranked) * 0.98)] or max(ranked) or 1.0
+    return [min(1.0, value / top) for value in out]
 
 
 def traces(samples: array, sample_rate: int, channels: int = 1,

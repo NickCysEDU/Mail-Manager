@@ -2763,6 +2763,132 @@ class PostProcess:
         shade.setColorAt(1.0, QColor(0, 0, 0, int(230 * amount)))
         painter.fillRect(rect, shade)
 
+class Waveform(QWidget):
+    """The shape of the whole track, above the seek bar.
+
+    What it is for: a seek bar says where you are and nothing about what
+    is there. A waveform says where the drop is, where the break is and
+    where the track stops, so seeking is aiming rather than guessing.
+
+    Bars rather than a filled curve, mirrored about the middle, and the
+    part already played drawn in the window's highlight over the part that
+    is not. Click or drag anywhere on it to seek.
+
+    It draws from the same analysis the scenes use, so it appears when the
+    picture does and is empty until then rather than being a second reason
+    to decode the file.
+    """
+
+    #: Emitted with a position in milliseconds when somebody clicks it.
+    seeked = Signal(int)
+
+    #: How tall the bar is, and how wide one column of it is with the gap
+    #: that follows. Three pixels a column: any narrower and the gaps
+    #: close up into a filled shape, any wider and a four minute track is
+    #: drawn from a few hundred readings.
+    TALL = 44
+    STEP = 3.0
+    BAR = 2.0
+    #: The least a column may be drawn at, so silence is still a line
+    #: rather than a gap in the middle of the picture.
+    FLOOR = 1.5
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._shape: List[float] = []
+        self._span = 0
+        self._at = 0
+        self.setFixedHeight(self.TALL)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        policy = self.sizePolicy()
+        policy.setHorizontalPolicy(QSizePolicy.Policy.Expanding)
+        self.setSizePolicy(policy)
+        self.setToolTip("Click to jump to a point in the track")
+        self.hide()
+
+    # -- what it is showing ------------------------------------------------
+    def set_shape(self, shape) -> None:
+        """The outline of the track, or nothing to clear it."""
+        self._shape = list(shape or ())
+        self.setVisible(bool(self._shape))
+        self.update()
+
+    def set_span(self, milliseconds: int) -> None:
+        self._span = max(0, int(milliseconds))
+        self.update()
+
+    def set_position(self, milliseconds: int) -> None:
+        was = self._at
+        self._at = max(0, int(milliseconds))
+        # Only when it would move a column. A track redraws this sixty
+        # times a second otherwise, for a picture that changed by nothing.
+        if self._span > 0 and self.width() > 0:
+            step = max(1, self._span * int(self.STEP) // max(1, self.width()))
+            if abs(self._at - was) < step:
+                return
+        self.update()
+
+    def clear(self) -> None:
+        self.set_shape(())
+        self._span = self._at = 0
+
+    # -- seeking -----------------------------------------------------------
+    def _seek_to(self, x: float) -> None:
+        if self._span <= 0 or self.width() <= 0:
+            return
+        share = min(1.0, max(0.0, x / self.width()))
+        self.seeked.emit(int(share * self._span))
+
+    def mousePressEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._seek_to(event.position().x())
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        if event.buttons() & Qt.MouseButton.LeftButton:
+            self._seek_to(event.position().x())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    # -- drawing -----------------------------------------------------------
+    def paintEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        if not self._shape:
+            return
+        painter = QPainter(self)
+        try:
+            self._paint(painter)
+        finally:
+            painter.end()
+
+    def _paint(self, painter) -> None:
+        width, tall = self.width(), self.height()
+        middle = tall / 2.0
+        played = (self._at / self._span * width) if self._span > 0 else 0.0
+        tint = self.palette().highlight().color()
+        rest = self.palette().windowText().color()
+        rest.setAlphaF(0.30)
+        painter.setPen(Qt.PenStyle.NoPen)
+        columns = int(width / self.STEP) + 1
+        for column in range(columns):
+            x = column * self.STEP
+            # Nearest reading rather than an average of several: the
+            # outline is already a peak per column and averaging peaks
+            # is how a waveform turns into a sausage.
+            index = min(len(self._shape) - 1,
+                        int(column * len(self._shape) / max(1, columns)))
+            high = max(self.FLOOR, self._shape[index] * (middle - 2.0))
+            painter.setBrush(tint if x + self.BAR <= played else rest)
+            painter.drawRect(QRectF(x, middle - high, self.BAR, high * 2.0))
+        # The column the playhead is in, half played and half not, so the
+        # line does not jump a whole column at a time.
+        if 0.0 < played < width:
+            painter.setBrush(tint)
+            painter.drawRect(QRectF(played - 1.0, 0.0, 1.0, tall))
+
+
 class Spinner(QWidget):
     """A small turning arc, shown while something is being worked out.
 

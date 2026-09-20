@@ -712,6 +712,23 @@ Press **⌘/** in the app for this list.
 | **⌘M** | Model settings |
 | **⌘,** | Settings |
 
+### The shape of the track
+
+Above the seek bar, in the window, is the whole track drawn as a waveform:
+a bar a column, mirrored about the middle, the part already played in the
+window's highlight over the part that is not. Click or drag anywhere on it
+to jump there.
+
+It comes from the same analysis the scenes use, so it appears when the
+picture does and there is no second reason to decode the file. The frames
+that analysis produces are stretched to fill the strip of bars, which is
+right for the strip and wrong here - drawn straight, a limited dance track
+comes out at 0.88 of full height everywhere, which is a block rather than
+a waveform - so they are put back into decibels and then into plain
+amplitude first. Loudest moment in a column rather than the average, since
+what makes a waveform readable is the transients; and every track is drawn
+to its own loudest moment, so a quiet recording fills the bar too.
+
 ### Playing the visualiser
 
 The attachment viewer's visualiser has its own keys, and they work in the
@@ -820,7 +837,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,559 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,574 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1181,7 +1198,7 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 3,559 tests, about three minutes
+./dev test        # 3,574 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

@@ -45,6 +45,7 @@ import shiboken6
 import attachment_meta
 import attachments
 from attachment_widgets import (FlowHolder, FlowRow, SeekBar, Spectrum,
+                                Waveform,
                                 Spinner)
 from widgets import _html, system_font
 
@@ -533,6 +534,10 @@ class AudioPane(QWidget):
         self.play.setFixedWidth(52)
         _name_transport(self.play, False)
         self.position = SeekBar()
+        # Above the bar: what the track looks like, so seeking is aiming
+        # rather than guessing. Windowed only - the full-screen view has
+        # its own bar and no room for furniture.
+        self.wave = Waveform()
         self.clock = QLabel("0:00 / 0:00")
         self.clock.setFont(system_font())
         self.clock.setMinimumWidth(96)
@@ -573,6 +578,7 @@ class AudioPane(QWidget):
         # of pixels landed on the scene's last one - not enough to see,
         # but they should not be touching either.
         layout.addSpacing(8)
+        layout.addWidget(self.wave)
         layout.addLayout(controls)
         # Below the transport, outside the picture. Putting them inside the
         # visualiser frame meant they were hidden whenever it was, and they
@@ -584,6 +590,7 @@ class AudioPane(QWidget):
 
         self.play.clicked.connect(self._toggle)
         self.position.seeked.connect(self._seek)
+        self.wave.seeked.connect(self._seek)
         self.volume.valueChanged.connect(self._set_volume)
 
     def _ensure_player(self) -> bool:
@@ -672,6 +679,7 @@ class AudioPane(QWidget):
         import attachment_audio
 
         self.spectrum.clear()
+        self.wave.clear()
         self._analysis_token += 1
         token = self._analysis_token
 
@@ -698,6 +706,7 @@ class AudioPane(QWidget):
             # read against the finished list rather than the one that
             # arrived early. It is the same list on an uninterrupted run.
             self.spectrum.set_frames(frames, attachment_audio.RATE)
+            self.wave.set_shape(attachment_audio.outline(frames, calibration))
             self._decoder = None
 
         def bands(result) -> None:
@@ -715,6 +724,7 @@ class AudioPane(QWidget):
             self.spectrum.set_calibration(calibration)
             self.spectrum.set_working(None)
             self.spectrum.set_frames(frames, attachment_audio.RATE)
+            self.wave.set_shape(attachment_audio.outline(frames, calibration))
 
         def failed(_detail: str) -> None:
             if alive():
@@ -755,6 +765,7 @@ class AudioPane(QWidget):
         if self._player is not None:
             self._player.setPosition(value)
             self.spectrum.set_position(value)
+            self.wave.set_position(value)
             self._show_clock(value)
 
     @Slot(int)
@@ -766,11 +777,13 @@ class AudioPane(QWidget):
     def _moved(self, value: int) -> None:
         self.position.report(value)
         self.spectrum.set_position(value)
+        self.wave.set_position(value)
         self._show_clock(self.position.value())
 
     @Slot(int)
     def _duration(self, value: int) -> None:
         self.position.setRange(0, value)
+        self.wave.set_span(value)
         self._show_clock(self.position.value())
 
     @Slot(bool)
@@ -815,6 +828,7 @@ class AudioPane(QWidget):
             self.spectrum.set_working(None)
             self.spectrum.set_playing(False)
             self.spectrum.clear()
+            self.wave.clear()
             return
         if self._path is not None:
             self._start_analysis(self._path)
