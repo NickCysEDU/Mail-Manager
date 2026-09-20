@@ -245,6 +245,11 @@ class Spectrum(QWidget):
     #: Sixty a second, which is what the scenes are budgeted against.
     FRAME_MS = 16
 
+    #: How much of the way a newly chosen scene fades up each frame.
+    #: A fifth of a second at sixty, which is long enough to read as a
+    #: change and short enough not to be in the way.
+    FRESH_STEP = 0.085
+
     #: Frames up to this many pixels are drawn at their real size without
     #: anything being measured first, because at that size every scene
     #: holds a frame. Above it ``Sharpness`` times the scene and decides,
@@ -325,6 +330,8 @@ class Spectrum(QWidget):
         #: 0 while a track is playing, 1 while the scene is drifting on
         #: its own. Everything in between is the crossfade.
         self._settle = 0.0
+        #: 0 to 1 while a newly chosen scene fades up. See FRESH_STEP.
+        self._fresh = 1.0
         self._last_watched = 0.0
         self._since_hit = 99
         #: A clock of our own that leans on the playhead. See ``_heard``.
@@ -386,6 +393,10 @@ class Spectrum(QWidget):
         start = getattr(scene, "reset", None)
         if scene is not was and callable(start):
             start()
+            # Faded in rather than cut to. A scene starts with nothing in
+            # it - see Scene.reset - so the first frames of it are half
+            # built, and a hard cut shows that.
+            self._fresh = 0.0
         self._suit_the_scene(scene)
         self.update()
 
@@ -971,6 +982,8 @@ class Spectrum(QWidget):
                 self._position = max(0, int(self._source()))
             except Exception:      # noqa: BLE001 - a dead player is not fatal
                 pass
+        if self._fresh < 1.0:
+            self._fresh = min(1.0, self._fresh + self.FRESH_STEP)
         self._drift += 0.035
         # Ease between the track and the idle drift rather than swapping
         # one for the other. Switching outright made the scene lurch the
@@ -1455,6 +1468,9 @@ class Spectrum(QWidget):
         if self._reveal < 0.999:
             painter.setOpacity(self._reveal)
             painter.translate(0.0, (1.0 - self._reveal) * rect.height() * 0.45)
+        if self._fresh < 0.999:
+            # The new scene coming up over the background, which stays.
+            painter.setOpacity(painter.opacity() * self._fresh)
         if not self._level:
             painter.fillRect(rect, QColor(8, 6, 18))
             if self._working is not None:
