@@ -5977,11 +5977,19 @@ class TestTheAirIsAsVividAtFullScreenAsInAWindow:
     """
 
     #: Both frames are of the same room, and a window was never the thing
-    #: that looked wrong, so "as vibrant as windowed" is the bar. A twenty
-    #: fifth of slack, because the two frames cannot be identical: the room
-    #: has a fixed number of lines in it, so they cover more of a small
-    #: frame and the ink is part of what is measured.
-    SLACK = 0.96
+    #: that looked wrong, so "as vibrant as windowed" is the bar. A
+    #: fifteenth of slack now rather than a twenty-fifth, because a later
+    #: report asked for the window's *dark* back at full screen as well -
+    #: "I like how there is still some black visible in the background of
+    #: rave in windowed mode, I want this in fullscreen as well" - and
+    #: those two pull against each other. Filling the bare air with enough
+    #: light to match the window exactly lifts the darkest tenth of the
+    #: frame from 0.216 to 0.247, which is the dark being asked for.
+    #:
+    #: At the setting that keeps it, full screen holds 0.275 of colour
+    #: against a window's 0.289 and is still the more colourful of the two
+    #: over the outer thirds, where the complaint began.
+    SLACK = 0.93
 
     @staticmethod
     def _frame(width, height, bass=0.95):
@@ -6046,6 +6054,29 @@ class TestTheAirIsAsVividAtFullScreenAsInAWindow:
             f"a 640x360 window holds {window:.3f} of colour and a "
             f"1920x1080 frame {full:.3f}, so full screen is the greyer of "
             f"the two")
+
+    def test_a_big_frame_keeps_its_dark(self):
+        """"I like how there is still some black visible in the background
+        of rave in windowed mode. I want this in fullscreen as well."
+
+        Measured as the darkest tenth of the frame. Filling the bare air
+        until a full screen matched a window for colour took that from
+        0.216 to 0.247: the corners the room sits in were lit.
+        """
+        import statistics
+
+        def darkest(width, height):
+            image = self._frame(width, height)
+            seen = [image.pixelColor(x, y)
+                    for y in range(0, height, 5) for x in range(0, width, 5)]
+            values = sorted(one.valueF() for one in seen)
+            return values[len(values) // 10]
+
+        window = darkest(640, 360)
+        full = darkest(1920, 1080)
+        assert full <= window * 1.06, (
+            f"the darkest tenth of a window is {window:.3f} and of a full "
+            f"screen {full:.3f}, so full screen has lost the dark")
 
     def test_the_edges_hold_as_much_colour_as_the_middle_does(self):
         """Where the fault actually was, and the reason the whole-frame
@@ -7934,16 +7965,44 @@ class TestANewSceneFadesIn:
             f"the new scene came up at {pane._fresh:.2f} of full strength")
 
     def test_it_comes_all_the_way_up(self, qtbot):
+        from array import array
+
+        import attachment_audio
         import visualizers
         from attachment_widgets import Spectrum
 
         pane = Spectrum()
         qtbot.addWidget(pane)
         pane.set_scene(visualizers.by_name("Music rider"))
+        # The fade waits for a scene to fade *in*, so there has to be
+        # something to draw. See test_it_waits_for_the_analysis.
+        bands = attachment_audio.BANDS
+        pane.set_frames([array("f", [0.4] * bands) for _ in range(60)],
+                        attachment_audio.RATE)
         for _ in range(int(1.0 / Spectrum.FRESH_STEP) + 4):
             pane._tick()
         assert pane._fresh == 1.0, (
             f"the fade stalled at {pane._fresh:.2f}")
+
+    def test_it_waits_for_the_analysis(self, qtbot):
+        """"Music rider fade in should occur once the actual scene loads,
+        not when the analyzing screen is up."
+
+        While a track is being analysed the pane shows a progress ring
+        instead of the scene, and the fade ran out behind it.
+        """
+        import visualizers
+        from attachment_widgets import Spectrum
+
+        pane = Spectrum()
+        qtbot.addWidget(pane)
+        pane.set_scene(visualizers.by_name("Music rider"))
+        pane.set_working(0.4)
+        for _ in range(int(1.0 / Spectrum.FRESH_STEP) + 4):
+            pane._tick()
+        assert pane._fresh < 0.2, (
+            f"the fade ran to {pane._fresh:.2f} while the analysis screen "
+            f"was still up")
 
     def test_picking_the_same_scene_again_does_not_fade(self, qtbot):
         import visualizers
@@ -8297,3 +8356,75 @@ class TestTheRiderIsOnTheBeat:
             assert statistics.median(off) < 30, (
                 f"at {bpm:.0f} bpm the median figure sits "
                 f"{statistics.median(off):.0f} ms from a beat")
+
+
+class TestThePolishPassCoversTheWholeFrame:
+    """"It looks like the post processing layer is small and in the top
+    left corner." And, from the report before it, "a box in the top left
+    that looks like a blurry mirror of the visualizer, present in all
+    visualizers in windowed mode."
+
+    Both are the same thing. QPixmap.scaled keeps the source's device
+    pixel ratio, so on a 2x display the small blurred copy of the frame
+    claimed to be half the size it really was. Composing it into a pixmap
+    of the same real size put the picture in the top-left quarter and left
+    the other three empty; stretching that over the frame put the whole
+    polish pass in the corner.
+
+    It only showed in a window because full screen shrinks the buffer to
+    logical size, which makes the ratio 1.
+    """
+
+    @staticmethod
+    def _glow_at(dpr):
+        """The composed glow for a buffer with this device ratio."""
+        from PySide6.QtCore import QRectF, QSize
+        from PySide6.QtGui import QColor, QPixmap
+
+        from attachment_widgets import PostProcess
+
+        buffer = QPixmap(QSize(800, 400))
+        buffer.setDevicePixelRatio(dpr)
+        buffer.fill(QColor(255, 255, 255))
+        post = PostProcess()
+        scale = buffer.devicePixelRatio() or 1.0
+        box = QRectF(0, 0, buffer.width() / scale, buffer.height() / scale)
+        return post._glow(post._halo(box, buffer), 0.9, 0.0).toImage()
+
+    def test_the_glow_fills_itself_on_a_retina_buffer(self, qapp):
+        glow = self._glow_at(2.0)
+        wide, tall = glow.width(), glow.height()
+        corner = glow.pixelColor(wide // 8, tall // 8).alphaF()
+        middle = glow.pixelColor(wide // 2, tall // 2).alphaF()
+        far = glow.pixelColor(wide * 7 // 8, tall * 7 // 8).alphaF()
+        assert corner > 0.3, "nothing was composed at all"
+        assert middle > corner * 0.8 and far > corner * 0.8, (
+            f"the glow is {corner:.2f} at the corner, {middle:.2f} in the "
+            f"middle and {far:.2f} at the far edge, so it is in a box")
+
+    def test_it_is_the_same_at_every_buffer_ratio(self, qapp):
+        """A window and a full screen differ only in the ratio, and the
+        polish should not be able to tell."""
+        plain = self._glow_at(1.0)
+        retina = self._glow_at(2.0)
+        for image, name in ((plain, "1x"), (retina, "2x")):
+            far = image.pixelColor(image.width() * 7 // 8,
+                                   image.height() * 7 // 8).alphaF()
+            assert far > 0.3, f"the {name} glow is empty at its far edge"
+
+    def test_the_halo_is_measured_in_plain_pixels(self, qapp):
+        """Where the fault was: everything downstream treats it as such."""
+        from PySide6.QtCore import QRectF, QSize
+        from PySide6.QtGui import QColor, QPixmap
+
+        from attachment_widgets import PostProcess
+
+        buffer = QPixmap(QSize(800, 400))
+        buffer.setDevicePixelRatio(2.0)
+        buffer.fill(QColor(255, 255, 255))
+        post = PostProcess()
+        halo = post._halo(QRectF(0, 0, 400, 200), buffer)
+        assert halo.devicePixelRatio() == 1.0, (
+            f"the halo claims a ratio of {halo.devicePixelRatio()}, so it "
+            f"claims to be {halo.width() / halo.devicePixelRatio():.0f} "
+            f"wide when it is {halo.width()}")

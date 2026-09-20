@@ -1658,16 +1658,38 @@ class Meters(Scene):
         # had spilled. That is the strobe "clipping behind other meters".
         # Light does not belong to a cell.
         if flash > 0.02:
+            # A wash over the whole frame first, so the lamps sit in lit
+            # air rather than in the dark. It is also what puts back the
+            # light the lamps near an edge had to give up.
+            wash = QColor(state.dial_colour)
+            wash.setAlphaF(min(1.0, 0.16 * flash))
+            painter.fillRect(rect, wash)
             for box, _value, _label in boxes:
                 self._backlight(painter, rect, box, state, flash)
         for box, value, label in boxes:
             self._meter(painter, box, value, label, state, flash, dpr)
 
     def _backlight(self, painter, rect, box, state, flash) -> None:
-        """One meter's lamp coming up, over whatever is around it."""
+        """One meter's lamp coming up, over whatever is around it.
+
+        The lamp finishes inside the frame. A radial gradient is drawn by
+        filling a rectangle with it, and the rectangle is clipped to the
+        picture - so a lamp whose reach ran past the edge was cut off
+        while it was still bright, leaving a straight bright line down the
+        side of the frame. In a window the strip is short and every meter
+        is near an edge, which is "VU meter strobe effects clip in
+        windowed mode as well".
+
+        So the reach is whatever fits. A lamp near an edge is a smaller
+        lamp rather than a cut one, and the wash below puts the light it
+        gave up back into the frame.
+        """
         geometry = self._geometry(QRectF(0, 0, box.width(), box.height()))
         pivot = geometry["pivot"] + box.topLeft()
-        reach = geometry["radius"] * 1.5
+        room = min(pivot.x() - rect.left(), rect.right() - pivot.x(),
+                   pivot.y() - rect.top(), rect.bottom() - pivot.y())
+        reach = max(geometry["radius"] * 0.5,
+                    min(geometry["radius"] * 1.5, room))
         glow = QRadialGradient(pivot, reach)
         tint = QColor(state.dial_colour)
         tint.setAlphaF(0.55 * flash)
@@ -2144,12 +2166,15 @@ class Waterfall(Scene):
         # Every other row at most. A third of them left fifteen ridges
         # with gaps between, which reads as tangled lines rather than as
         # a surface - the saving was not worth what it cost to look at.
-        stride = 2 if rect.width() * rect.height() > 480_000 else 1
+        # Every row, at every size.
+        #
+        # A big frame used to drop every other one, which is "waterfall
+        # lines are less dense in fullscreen compared to windowed". It was
+        # dropping them because the rows were expensive, and they are not
+        # any more - see the note on the pen below. At full density the
+        # scene costs 5.4 ms at 1512x982 against the 7.05 it cost at half
+        # density before, so this is denser *and* cheaper.
         field = field[-self.DEPTH:]
-        if stride > 1:
-            # Keep the newest row whatever the stride, so the front edge
-            # is always the current frame.
-            field = field[::-1][::stride][::-1]
 
         flash = self.flash(state)
         # The plot sits in the lower left, leaning up and to the right.
@@ -2226,12 +2251,20 @@ class Waterfall(Scene):
             colour = QColor.fromHsvF(hue, 0.85 - flash * 0.5, value,
                                      min(1.0, 0.35 + share * 0.55
                                          + flash * 0.45))
-            # The strobe used to add more than a pixel to every ridge at
-            # once, which is the whole plot drawn wider on the beat: the
-            # frames that hit cost twice what the quiet ones did, and they
-            # are exactly the frames nobody wants to see stutter. It
-            # brightens instead, above, which costs nothing.
-            stroke(painter, path, colour, 1.0 + share * 1.4 + flash * 0.4)
+            # One pass a pixel wide, with the width carried as light.
+            #
+            # A width over one pixel is faked with a stack of hairlines,
+            # and this scene lays down a couple of thousand curve segments
+            # a frame: measured, 9.04 ms at 900x500 and 7.05 at 1512x982
+            # against 3.92 and 2.72 drawn as single passes. That saving is
+            # what pays for the density below.
+            wide = 1.0 + share * 1.4 + flash * 0.4
+            lit = QColor(colour)
+            lit.setAlphaF(min(1.0, lit.alphaF() * wide))
+            pen = QPen(lit, 0.0)
+            pen.setCosmetic(True)
+            painter.setPen(pen)
+            painter.drawPath(path)
 
         self._axis(painter, rect, state, origin_x, origin_y, plot_w, rise)
 
@@ -2394,6 +2427,9 @@ class Rave(Scene):
     #: harder.
     SURGE = 1.6
 
+    #: How quickly the room notices that the track has stopped.
+    GOING_EASE = 0.18
+
     #: How fast the push behind the room follows the bass. The curve above
     #: is chosen by it, so a value that jumps about changes where the room
     #: is rather than how fast it is going.
@@ -2449,6 +2485,9 @@ class Rave(Scene):
         #: several seconds. A big moment is the first running away from
         #: the second - see ``RING_OVER``.
         self._push = 0.0
+        #: 1 while the track is going, 0 while it is paused.
+        self._going = 1.0
+        self._lunge_held = 1.0
         self._peak = 0.0
         self._quiet = None
         self._quick = 0.0
@@ -2488,6 +2527,17 @@ class Rave(Scene):
         now = time.monotonic()
         step = 0.016 if self._last is None else min(0.1, max(0.0, now - self._last))
         self._last = now
+        # Nothing travels under a stopped track.
+        #
+        # The room's position is worked out from how far through the beat
+        # the track is *and* from the push behind it, and the push went on
+        # easing towards the last bass it saw after a pause - so the
+        # corridor crept forward and jittered while nothing was playing.
+        # Eased rather than switched, so that pausing is a stop rather
+        # than a freeze-frame.
+        self._going += ((1.0 if getattr(state, "moving", True) else 0.0)
+                        - self._going) * self.GOING_EASE
+        step *= self._going
 
         def ease(was, to, rise, fall):
             return was + (to - was) * (rise if to > was else fall)
@@ -2532,7 +2582,12 @@ class Rave(Scene):
             lunge = 1.0 + self._push * self.SURGE
             whole = math.floor(beats)
             through = beats - whole
-            went = 1.0 - (1.0 - through) ** lunge
+            # The curve is frozen with the track. Recomputing it while
+            # paused moves the room even though the beat has not, because
+            # the push is still easing.
+            if self._going > 0.02:
+                self._lunge_held = lunge
+            went = 1.0 - (1.0 - through) ** self._lunge_held
             # Never backwards. The curve is chosen by the push, so a push
             # that moves within a beat moves the whole mapping, and the
             # room can be asked to stand where it stood two frames ago.
@@ -2680,8 +2735,25 @@ class Rave(Scene):
     #:
     #: Swept at 1920x1080 against a 640x360 window's 0.288 of colour, and
     #: 0.207 over the outer thirds: 0.257/0.198 at 0.8, 0.277/0.231 at
-    #: 1.8, 0.293/0.257 at 2.4, 0.305/0.276 at 2.8. 2.4 is the match.
-    WASH_FILL = 2.4
+    #: 1.8, 0.293/0.257 at 2.4, 0.305/0.276 at 2.8.
+    #:
+    #: 2.4 matched the window for colour and lost its dark. Filling the
+    #: bare air that far lifts the darkest tenth of the frame to 0.247
+    #: against a window's 0.216, so the corners the room used to sit in
+    #: were lit: "I like how there is still some black visible in the
+    #: background of rave in windowed mode, I want this in fullscreen as
+    #: well." At 1.6 the darkest tenth is 0.224, which is the window's
+    #: dark, and the colour is 0.206 against the window's 0.190 - still
+    #: the more colourful of the two. Most of the vibrancy was never this
+    #: knob anyway; it was the crisp blit (see blit_scene).
+    WASH_FILL = 1.6
+
+    #: Making up the difference with saturation instead was tried: a
+    #: factor on ``deep`` keyed to the same edge. It does put the colour
+    #: back, and it flattens the one thing the air is supposed to do -
+    #: with the floor that high the bass moved the saturation from 0.62 to
+    #: 0.68 where it needs half again, so the room stopped answering the
+    #: music. The dark is worth more than the last hundredth of colour.
 
     #: How much smaller the lamps get as the frame grows, and the least
     #: they are allowed to shrink to.
