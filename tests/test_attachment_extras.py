@@ -7644,15 +7644,20 @@ class TestTheMusicRiderIsAGame:
         assert got["hits"] >= 1, (
             f"sat in a closed lane for three walls and was never hit: {got}")
 
-    def test_dodging_scores(self, qapp):
+    def test_dodging_the_grey_keeps_you_clean(self, qapp):
+        """A kick lays a grey obstacle - Audiosurf's Mono mode is grey
+        against colour, and dodging is what the grey is for. It does not
+        score; keeping the run clean is worth a third of the whole tally
+        at the end of it."""
         scene = self._rider()
         chart = {"Kick": (2.0,)}
         open_lane = int(2.0 * 977) % 3
         scene._lane = open_lane
         got = self._play(scene, chart, seconds=4.0)
         assert got["hits"] == 0, f"hit while in the open lane: {got}"
-        assert got["score"] >= 2, (
-            f"dodging two walls scored {got['score']}")
+        assert got["clean"], "the run was marked dirty without a hit"
+        assert got["streak"] >= 2, (
+            f"dodging two walls left a streak of {got['streak']}")
 
     def test_it_runs_without_a_chart(self, qapp):
         """The analysis lands a few seconds after playback starts, and the
@@ -8381,7 +8386,7 @@ class TestTheRiderIsOnTheBeat:
         scene._lane = 1
         scene._lane_here = scene._lane_at(1)
         scene._heard = 5.0
-        scene._blocks = [[4.0, 1, "wall", False]]
+        scene._blocks = [[4.0, 1, "wall", False, True]]
         scene._collide()
         assert scene._hits == 1, "the block missed"
         # A literal, not the constant this is about: written as
@@ -9214,7 +9219,7 @@ class TestTheRiderIsDecorated:
 
         # Two seconds out, which the playhead at 1.0s puts two thirds of
         # the way down the road.
-        block = (2.0, 1, "wall", False)
+        block = (2.0, 1, "wall", False, True)
         with_pool = self._frame(self._flat(), blocks=(block,))
         without = self._frame(self._flat(MIRROR=0.0), blocks=(block,))
         changed = self._changed(with_pool, without)
@@ -10760,7 +10765,7 @@ class TestTheWholeScreenFeelsAHit:
         scene._lane = 1
         scene._lane_here = scene._lane_at(1)
         scene._heard = 5.0
-        scene._blocks = [[4.0, 1, "wall", False]]
+        scene._blocks = [[4.0, 1, "wall", False, True]]
         scene._collide()
         assert scene._hits == 1, "the block missed"
         assert scene._hurt == pytest.approx(1.0), (
@@ -10994,3 +10999,195 @@ class TestTheRoadIsBuiltFromTheSong:
 
         scene = self._scene(None)
         assert scene._apart(4.0) == visualizers.Rider.GAP_BEATS
+
+
+class TestMonoScoring:
+    """Audiosurf's Mono mode: grey against colour.
+
+    A grey block is an obstacle to be dodged and a coloured one is a
+    prize to be driven into. The scoring is a chain rather than a tally -
+    the first colour is worth one and every one after it four more, up to
+    two hundred - and a grey breaks it. What that does to how it plays is
+    the whole point: a run of forty clean blocks is worth far more than
+    four runs of ten, so a grey costs much more than the points it does
+    not give you.
+    """
+
+    @staticmethod
+    def _scene():
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._last = None
+        scene._lane = 1
+        scene._lane_here = scene._lane_at(1)
+        scene._heard = 100.0
+        return scene
+
+    @classmethod
+    def _take(cls, scene, count, grey=False, lane=1):
+        """Drive through that many blocks in the rider's own lane."""
+        scene._blocks = [[10.0 + step, lane, "block", False, grey]
+                         for step in range(count)]
+        scene._collide()
+
+    def test_the_chain_steps_by_four(self, qapp):
+        """1, 5, 9, 13, 17, 21 - so the running total is 1, 6, 15, 28,
+        45, 66. Written out rather than worked out from the constants:
+        taken from those, this passes with the step set to zero."""
+        scene = self._scene()
+        seen = []
+        for _ in range(6):
+            self._take(scene, 1)
+            seen.append(scene._score)
+        assert seen == [1, 6, 15, 28, 45, 66], (
+            f"six prizes in a row scored {seen}")
+
+    def test_the_chain_is_capped_at_two_hundred(self, qapp):
+        """The fiftieth block would be worth 197 and the fifty-first 201,
+        so the cap bites there and never lets go."""
+        scene = self._scene()
+        self._take(scene, 60)
+        before = scene._score
+        self._take(scene, 1)
+        assert scene._score - before == 200, (
+            f"the sixty-first prize was worth {scene._score - before}")
+        before = scene._score
+        self._take(scene, 1)
+        assert scene._score - before == 200, (
+            f"and the next {scene._score - before}")
+
+    def test_a_grey_breaks_the_chain(self, qapp):
+        scene = self._scene()
+        self._take(scene, 5)
+        assert scene._chain == 5
+        self._take(scene, 1, grey=True)
+        assert scene._chain == 0, (
+            f"the chain survived a grey at {scene._chain}")
+        was = scene._score
+        self._take(scene, 1)
+        assert scene._score - was == 1, (
+            f"the prize after a grey was worth {scene._score - was}, and "
+            f"the chain starts again at one")
+
+    def test_a_clean_run_is_worth_a_third_again(self, qapp):
+        """Thirty per cent, written out: taken from the constant this
+        passes with the bonus set to nothing."""
+        scene = self._scene()
+        self._take(scene, 4)
+        plain = scene._score
+        assert plain == 28, f"four prizes scored {plain}"
+        assert scene._clean
+        assert scene._worth() == 36, (
+            f"a clean {plain} is worth {scene._worth()}, and a third again "
+            f"of {plain} is 36")
+        scene._sore = 0.0
+        self._take(scene, 1, grey=True)
+        assert not scene._clean
+        assert scene._worth() == scene._score, (
+            "the bonus survived a grey")
+
+    def test_dodging_a_grey_costs_nothing_and_scores_nothing(self, qapp):
+        scene = self._scene()
+        # In lane 1; the grey is in lane 0.
+        scene._blocks = [[10.0, 0, "block", False, True]]
+        scene._collide()
+        assert scene._hits == 0 and scene._score == 0, (
+            f"dodging scored {scene._score} and took {scene._hits} hits")
+        assert scene._streak == 1, "dodging did not count as a dodge"
+
+    def test_missing_a_prize_costs_nothing(self, qapp):
+        """It is a prize, not an obstacle: going past one is a shame and
+        not a penalty."""
+        scene = self._scene()
+        scene._blocks = [[10.0, 0, "block", False, False]]
+        scene._collide()
+        assert scene._hits == 0
+        assert scene._chain == 0 and scene._score == 0
+
+    def test_the_obstacles_are_the_minority(self, qapp):
+        """A road of nothing but obstacles is a road you cannot score on,
+        which is what tying them to the kick gave: on four to the floor
+        the kick wins every slot."""
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        beat = 60.0 / 128.0
+        scene = visualizers.Rider()
+        scene._beat = beat
+        scene._grid = scene._origin = 0.0
+        state = SpectrumState()
+        state.levels = [0.4] * 27
+        state.chart = {
+            "Kick": tuple(i * beat for i in range(400)),
+            "Snare": tuple(beat * (1 + 2 * i) for i in range(200)),
+            "Hats": tuple(i * beat / 2 for i in range(800)),
+        }
+        scene._heard = 0.0
+        while scene._heard < 40.0:
+            scene._heard += 0.5
+            scene._lay(state)
+        greys = sum(1 for block in scene._blocks if block[4])
+        total = len(scene._blocks)
+        assert total > 20, f"only {total} blocks were laid"
+        assert 0.05 < greys / total < 0.55, (
+            f"{greys} of {total} blocks are obstacles, which is "
+            f"{greys / total:.0%}")
+
+    def test_the_two_kinds_do_not_look_alike(self, qapp):
+        """They have to be told apart at the far end of the road.
+
+        Off the drawn frame rather than off the constants: read from
+        those, this passes with the two drawn in the same colour.
+        """
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        side = 700
+        seen = {}
+        for name, grey in (("obstacle", True), ("prize", False)):
+            scene = visualizers.Rider()
+            scene._last = None
+
+            class Flat(visualizers.Rider):
+                def _road(self, at):
+                    return (0.0, 0.0, 0.0)
+
+            scene = Flat()
+            scene._last = None
+            state = SpectrumState()
+            state.levels = [0.4] * 27
+            state.bass = state.mid = state.high = 0.3
+            state.synth = 0.0
+            state.kit = {}
+            state.at = 1.0
+            state.chart = {"Kick": ()}
+            image = QImage(side, side,
+                           QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(QColor(0, 0, 0))
+            painter = QPainter(image)
+            was = visualizers.time.monotonic
+            visualizers.time.monotonic = lambda: 500.0
+            try:
+                scene._chart_from = state.chart
+                scene._laid = 99.0
+                scene._blocks = [[2.0, 1, "block", False, grey]]
+                scene.paint(painter, QRectF(0, 0, side, side), state)
+            finally:
+                painter.end()
+                visualizers.time.monotonic = was
+            # Sampled where the block is, worked out the way the scene
+            # works it out. The brightest thing in the frame is the
+            # rider's own nose, which is the same either way.
+            horizon, focal, _tilt = scene._camera(
+                QRectF(0, 0, side, side), scene._loudness, state.bass)
+            at = scene._where(2.0)
+            spot = scene._eye(horizon, focal, scene._lane_at(1), -0.3, at)
+            seen[name] = image.pixelColor(int(spot.x()), int(spot.y()))
+        assert seen["prize"].saturationF() > \
+            seen["obstacle"].saturationF() + 0.3, (
+            f"the obstacle draws {seen['obstacle'].saturationF():.2f} "
+            f"saturated and the prize {seen['prize'].saturationF():.2f}")

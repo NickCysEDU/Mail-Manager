@@ -4118,6 +4118,12 @@ class Rider(Scene):
         #: 1 the moment something was hit, falling to nothing over
         #: HURT_FOR. Everything the picture does about a hit reads this.
         self._hurt = 0.0
+        #: How many coloured blocks have been taken in a row, and 1 the
+        #: moment one is. See CHAIN_FIRST.
+        self._chain = 0
+        self._got = 0.0
+        #: Whether a grey has been touched yet. See CLEAN_BONUS.
+        self._clean = True
         self._score = 0
         self._streak = 0
         self._best = 0
@@ -4195,7 +4201,9 @@ class Rider(Scene):
 
     def report(self) -> dict:
         return {"score": self._score, "streak": self._streak,
-                "best": self._best, "hits": self._hits}
+                "best": self._best, "hits": self._hits,
+                "chain": self._chain, "clean": self._clean,
+                "worth": self._worth()}
 
     # -- the chart --------------------------------------------------------
     #: Which drum makes which shape, and the order they win a slot in.
@@ -4271,12 +4279,41 @@ class Rider(Scene):
                 if (due[other][1], self._off_beat(due[other][0])) < (
                         due[best][1], self._off_beat(due[best][0])):
                     best = other
-            when, _order, shape = due[best]
+            when, order, shape = due[best]
             when = self._snap(when)
             self._placed = when
-            self._shape(self._varied(shape, when), when)
+            self._shape(self._varied(shape, when), when,
+                        grey=self._greyed(when, order))
             index = best + 1
         self._blocks = self._blocks[-200:]
+
+    #: Which slots carry an obstacle rather than a prize.
+    #:
+    #: A quarter of them. Audiosurf's greys are a hazard among the
+    #: colours, not the other way round - a road of nothing but obstacles
+    #: is a road you cannot score on, and tying them to the kick gave
+    #: exactly that: on four to the floor the kick wins every slot.
+    #:
+    #: Indexed by the slot like the shapes are, so a track lays out the
+    #: same way every time it is played, and the two pools are different
+    #: lengths so the pattern of shape-against-hazard does not repeat
+    #: every eight figures.
+    GREY_POOL = (False, False, True, False, False, True, False)
+
+    def _greyed(self, when: float, order: int) -> bool:
+        """Whether the figure at this slot is an obstacle.
+
+        The drum still has a say: a slot the pool calls safe stays safe,
+        and one it calls dangerous is only dangerous if the heaviest
+        thing in it was the kick. So the obstacles land on the beats you
+        can hear coming.
+        """
+        if order != 0:
+            return False
+        if self._beat <= 0.0:
+            return True
+        slot = int(round(when / self._beat / max(1e-6, self.GAP_BEATS)))
+        return self.GREY_POOL[slot % len(self.GREY_POOL)]
 
     def _varied(self, shape: str, when: float) -> str:
         """What shape this slot takes.
@@ -4331,22 +4368,29 @@ class Rider(Scene):
         beats = (when - (self._grid or 0.0)) / self._beat
         return abs(beats - round(beats)) * self._beat
 
-    def _shape(self, pattern: str, when: float) -> None:
-        """One hit, as one or more blocks in lanes."""
+    def _shape(self, pattern: str, when: float, grey: bool = True) -> None:
+        """One hit, as one or more blocks in lanes.
+
+        ``grey`` is Audiosurf's distinction and the whole of its Mono
+        mode: a grey block is an obstacle to be dodged and a coloured one
+        is a prize to be driven into. A figure is grey when the drum that
+        put it there was the kick - the heavy one, the one you feel
+        coming - and coloured otherwise.
+        """
         # The lane comes from the time rather than from a random number,
         # so a track lays out the same way every time it is played.
         seed = int(when * 977) % self.LANES
         if pattern == "wall":
             for lane in range(self.LANES):
                 if lane != seed:
-                    self._blocks.append([when, lane, "wall", False])
+                    self._blocks.append([when, lane, "wall", False, grey])
         elif pattern == "block":
-            self._blocks.append([when, seed, "block", False])
+            self._blocks.append([when, seed, "block", False, grey])
         elif pattern == "run":
             for step in range(3):
                 lane = (seed + step) % self.LANES
                 self._blocks.append([when + step * self.RUN_GAP, lane,
-                                     "run", False])
+                                     "run", False, grey])
 
     # -- the world --------------------------------------------------------
     #: The colour of the road, by how much is going on in the music.
@@ -4720,6 +4764,7 @@ class Rider(Scene):
         self._shake = min(1.0, self._shake + kit.get("Kick", 0.0) * 0.5)
         self._sore = max(0.0, self._sore - step)
         self._hurt = max(0.0, self._hurt - step / self.HURT_FOR)
+        self._got = max(0.0, self._got - step / 0.35)
         return step
 
     def _surge(self) -> float:
@@ -4732,16 +4777,33 @@ class Rider(Scene):
             return 0.0
         return max(0.0, min(1.0, (self._quick - quiet) / span))
 
+    #: Audiosurf's Mono scoring, which is a chain rather than a tally.
+    #:
+    #: The first coloured block is worth one, and every one after it four
+    #: more - 1, 5, 9, 13 - up to two hundred. Hitting a grey breaks the
+    #: chain and the next colour starts at one again. What that does to
+    #: how it plays is the whole point: a run of forty clean blocks is
+    #: worth more than four runs of ten, so a grey costs far more than
+    #: the points it does not give you.
+    CHAIN_FIRST = 1
+    CHAIN_STEP = 4
+    CHAIN_MOST = 200
+    #: And finishing without touching one is worth a third again.
+    CLEAN_BONUS = 0.30
+
     def _collide(self) -> None:
         for block in self._blocks:
-            when, lane, _kind, done = block
+            when, lane, _kind, done, grey = block
             if done or self._heard < when:
                 continue
             block[3] = True
-            if abs(self._lane_at(lane) - self._lane_here) < self.FORGIVE:
+            on_it = abs(self._lane_at(lane) - self._lane_here) < self.FORGIVE
+            if grey and on_it:
                 if self._sore <= 0.0:
                     self._hits += 1
                     self._streak = 0
+                    self._chain = 0
+                    self._clean = False
                     self._sore = self.SORE
                     self._shake = min(1.0, self._shake + 0.8)
                     self._slow = self.SLOW
@@ -4749,19 +4811,44 @@ class Rider(Scene):
                     # Not the block, not the ship: the picture.
                     self._hurt = 1.0
                     self._burst(self._lane_at(lane))
-            else:
-                self._score += 1
+            elif grey:
                 self._streak += 1
                 self._best = max(self._best, self._streak)
+            elif on_it:
+                # A prize. See CHAIN_FIRST.
+                self._chain += 1
+                self._score += min(
+                    self.CHAIN_MOST,
+                    self.CHAIN_FIRST + (self._chain - 1) * self.CHAIN_STEP)
+                self._got = 1.0
+                self._burst(self._lane_at(lane), prize=True)
 
-    def _burst(self, across: float) -> None:
-        """Throw pieces off the block that was just hit."""
-        for index in range(self.SPARKS):
-            angle = (index / self.SPARKS) * math.tau + self._at
+    def _worth(self) -> int:
+        """The score as it would be totted up now.
+
+        Audiosurf pays the clean-finish bonus at the end of the track.
+        There is no end here - somebody can stop a song anywhere - so it
+        is shown as it stands, which also means it is showing what a
+        clean run is *worth* while there is still one to keep.
+        """
+        if not self._clean:
+            return self._score
+        return int(self._score * (1.0 + self.CLEAN_BONUS))
+
+    def _burst(self, across: float, prize: bool = False) -> None:
+        """Throw pieces off the block that was just taken or hit.
+
+        A prize throws fewer and throws them up: a shower rather than a
+        wreck, so that the two read differently at a glance.
+        """
+        how_many = self.SPARKS // 2 if prize else self.SPARKS
+        for index in range(how_many):
+            angle = (index / max(1, how_many)) * math.tau + self._at
             self._sparks.append([
                 across, 0.0, self.RIDER_AT,
-                math.cos(angle) * self.SPARK_GO * 0.22,
-                -abs(math.sin(angle)) * self.SPARK_GO * 0.16,
+                math.cos(angle) * self.SPARK_GO * (0.14 if prize else 0.22),
+                -abs(math.sin(angle)) * self.SPARK_GO
+                * (0.26 if prize else 0.16),
                 math.sin(angle * 1.7) * self.SPARK_GO * 0.12,
                 1.0])
 
@@ -5051,64 +5138,90 @@ class Rider(Scene):
         edge = self.LANE_WIDE * 0.5 * 0.82
         tall = 0.62
         painter.setPen(Qt.PenStyle.NoPen)
-        for kind in ("wall", "block", "run"):
+        # Grey first and coloured second, so the prizes are laid over
+        # the obstacles where they overlap - which is the way round that
+        # tells you the lane is worth taking.
+        for grey_now in (True, False):
+            for kind in ("wall", "block", "run"):
+                self._blocks_of(painter, rect, horizon, focal, hue, flash,
+                                kind, grey_now, edge, tall)
+
+    #: What a grey obstacle and a coloured prize are made of.
+    #:
+    #: Audiosurf's Mono mode is grey against colour and nothing else, so
+    #: the two have to be unmistakable at the far end of the road. A grey
+    #: is a grey: no hue worth the name and no light in it. A prize is
+    #: the road's own colour at full strength, which is the tier the
+    #: passage is in - red in a chorus, blue in a verse.
+    GREY_SAT = 0.10
+    GREY_LIT = 0.42
+    PRIZE_SAT = 0.95
+    PRIZE_LIT = 1.00
+
+    def _blocks_of(self, painter, rect, horizon, focal, hue, flash,
+                   kind, grey_now, edge, tall) -> None:
+        """One shape of one kind, as one batch of paths."""
+        if grey_now:
+            shade = (hue + self.BLOCK_HUE[kind]) % 1.0
+            wet = max(0.0, self.GREY_SAT - flash * 0.08)
+            lit = self.GREY_LIT + flash * 0.30
+        else:
+            shade = hue
+            wet = max(0.0, self.PRIZE_SAT - flash * 0.4)
+            lit = self.PRIZE_LIT
+        faces = QPainterPath()
+        rims = QPainterPath()
+        for when, lane, shape, _done, grey in self._blocks:
+            if shape != kind or grey is not grey_now:
+                continue
+            at = self._where(when)
+            # Gone once it is behind the rider. Clamping it to NEAR
+            # instead left everything that had already gone past
+            # stacked against the bottom of the frame at the size of a
+            # house, which is most of what the first attempt looked
+            # like.
+            if at < self.GONE or at > self.FAR:
+                continue
+            # Out of the fog with the road, rather than appearing
+            # whole at the far end of it.
+            near = max(0.0, min(1.0, 1.0 - (at - self._near)
+                                / max(1e-6, self.FAR - self._near)))
+            seen = min(1.0, near / max(1e-6, self.FOG))
+            across = self._lane_at(lane)
+            foot_l = self._eye(horizon, focal, across - edge, 0.0, at)
+            foot_r = self._eye(horizon, focal, across + edge, 0.0, at)
+            top_r = self._eye(horizon, focal, across + edge, -tall, at)
+            top_l = self._eye(horizon, focal, across - edge, -tall, at)
+            faces.moveTo(foot_l)
+            faces.lineTo(foot_r)
+            faces.lineTo(top_r)
+            faces.lineTo(top_l)
+            faces.closeSubpath()
+            rims.moveTo(top_l)
+            rims.lineTo(top_r)
+            # The block in the road under it. Squashed and dim, the
+            # way a wet floor holds a light: one more quad a block,
+            # and it is most of what makes them stand on the road
+            # rather than hover over it.
+            pool = QPainterPath()
+            pool.moveTo(foot_l)
+            pool.lineTo(foot_r)
+            pool.lineTo(self._eye(horizon, focal, across + edge,
+                                  tall * self.MIRROR, at))
+            pool.lineTo(self._eye(horizon, focal, across - edge,
+                                  tall * self.MIRROR, at))
+            pool.closeSubpath()
+            painter.fillPath(pool, QColor.fromHsvF(
+                shade, wet, lit * 0.62, 0.30 * seen))
+            # One path per block rather than one for the lot, because
+            # each is a different distance into the fog.
+            painter.fillPath(faces, QColor.fromHsvF(
+                shade, wet, lit, 0.90 * seen))
+            self._beam(painter, rims, QColor.fromHsvF(
+                shade, max(0.0, wet - 0.45), 1.0,
+                min(1.0, (0.85 + flash * 0.15) * seen)))
             faces = QPainterPath()
             rims = QPainterPath()
-            for when, lane, shape, _done in self._blocks:
-                if shape != kind:
-                    continue
-                at = self._where(when)
-                # Gone once it is behind the rider. Clamping it to NEAR
-                # instead left everything that had already gone past
-                # stacked against the bottom of the frame at the size of a
-                # house, which is most of what the first attempt looked
-                # like.
-                if at < self.GONE or at > self.FAR:
-                    continue
-                # Out of the fog with the road, rather than appearing
-                # whole at the far end of it.
-                near = max(0.0, min(1.0, 1.0 - (at - self._near)
-                                    / max(1e-6, self.FAR - self._near)))
-                seen = min(1.0, near / max(1e-6, self.FOG))
-                across = self._lane_at(lane)
-                foot_l = self._eye(horizon, focal, across - edge, 0.0, at)
-                foot_r = self._eye(horizon, focal, across + edge, 0.0, at)
-                top_r = self._eye(horizon, focal, across + edge, -tall, at)
-                top_l = self._eye(horizon, focal, across - edge, -tall, at)
-                faces.moveTo(foot_l)
-                faces.lineTo(foot_r)
-                faces.lineTo(top_r)
-                faces.lineTo(top_l)
-                faces.closeSubpath()
-                rims.moveTo(top_l)
-                rims.lineTo(top_r)
-                # The block in the road under it. Squashed and dim, the
-                # way a wet floor holds a light: one more quad a block,
-                # and it is most of what makes them stand on the road
-                # rather than hover over it.
-                pool = QPainterPath()
-                pool.moveTo(foot_l)
-                pool.lineTo(foot_r)
-                pool.lineTo(self._eye(horizon, focal, across + edge,
-                                      tall * self.MIRROR, at))
-                pool.lineTo(self._eye(horizon, focal, across - edge,
-                                      tall * self.MIRROR, at))
-                pool.closeSubpath()
-                painter.fillPath(pool, QColor.fromHsvF(
-                    (hue + self.BLOCK_HUE[kind]) % 1.0,
-                    max(0.0, 0.90 - flash * 0.4), 0.55 + flash * 0.35,
-                    0.30 * seen))
-                # One path per block rather than one for the lot, because
-                # each is a different distance into the fog.
-                shade = (hue + self.BLOCK_HUE[kind]) % 1.0
-                painter.fillPath(faces, QColor.fromHsvF(
-                    shade, max(0.0, 0.90 - flash * 0.4),
-                    0.55 + flash * 0.35, 0.90 * seen))
-                self._beam(painter, rims, QColor.fromHsvF(
-                    shade, max(0.0, 0.45 - flash * 0.4), 1.0,
-                    min(1.0, (0.85 + flash * 0.15) * seen)))
-                faces = QPainterPath()
-                rims = QPainterPath()
 
     #: The horizon lamp: how far it reaches as a share of the frame, and
     #: how much the bass opens it.
@@ -5250,7 +5363,9 @@ class Rider(Scene):
         painter.drawText(
             rect.adjusted(14, 10, -14, 0),
             int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop),
-            f"{self._score}   streak {self._streak}   best {self._best}")
+            f"{self._worth()}   chain {self._chain}"
+            + ("   clean" if self._clean and self._score else "")
+            + f"   best {self._best}")
         painter.restore()
 
     @staticmethod

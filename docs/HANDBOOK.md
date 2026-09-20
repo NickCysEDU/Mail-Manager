@@ -844,10 +844,25 @@ numbers.
 | **?** | Show or hide this list, over the picture |
 | **Esc** | Close the list, or leave full screen |
 
-**Music rider** is a game rather than a picture. Three lanes down a road
-that bends and climbs with the track, and obstacles laid out on the drums:
-a kick closes two lanes and leaves one open, a snare drops a single block,
-a run of hats steps across the three. The arrow keys change lane.
+**Music rider** is a game rather than a picture, built to Audiosurf's
+Mono mode. Three lanes down a road the song itself shapes, with grey
+obstacles to dodge and coloured blocks to drive into. The shapes come off
+the drums - a kick closes two lanes and leaves one open, a snare drops a
+single block, a run of hats steps across the three - and the arrow keys
+change lane.
+
+The scoring is a chain rather than a tally. The first coloured block is
+worth one and every one after it four more, 1, 5, 9, 13, up to two
+hundred; touching a grey breaks the chain and the next colour starts at
+one again. Finishing without touching one is worth a third again. So a
+run of forty clean blocks is worth far more than four runs of ten, and a
+grey costs much more than the points it does not give you.
+
+A quarter of the slots carry an obstacle rather than a prize, and only
+where the heaviest thing in the slot was the kick - so the hazards land
+on the beats you can hear coming. Tying them to the kick alone was tried
+and gives a road of nothing but obstacles: on four to the floor the kick
+wins every slot.
 
 **The road is the song.** Audiosurf does not invent its track: it reads
 the file once before anything is drawn, and the amplitude becomes the
@@ -996,7 +1011,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,722 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,730 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1357,7 +1372,7 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 3,722 tests, about three minutes
+./dev test        # 3,730 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```
