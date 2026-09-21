@@ -6,6 +6,7 @@ what happens when those bytes are wrong.
 
 from __future__ import annotations
 
+import math
 import struct
 import zlib
 
@@ -7640,9 +7641,102 @@ class TestTheMusicRiderIsAGame:
         chart = {"Kick": tuple(times[:3])}
         assert len(chart["Kick"]) == 3, "found no three walls alike"
         scene._lane = (want + 1) % scene.LANES
-        got = self._play(scene, chart)
+        # The bumper would shatter the first grey harmlessly (see
+        # SHIELD_BACK); this is about the hit, so it is held down for
+        # the whole run rather than zeroed once and left to recharge.
+        got = self._play(scene, chart,
+                         steer=lambda scene, at: setattr(scene, "_shield", 0.0))
         assert got["hits"] >= 1, (
             f"sat in a closed lane for three walls and was never hit: {got}")
+
+    def _slid(self, fps, seconds=1.0):
+        """How long a lane change takes, in milliseconds, at that rate.
+
+        Measured off the scene's own lane position frame by frame, from
+        the frame the input was given on to the frame it is nine tenths
+        of the way there.
+        """
+        scene = self._rider()
+        seen = []
+
+        def steer(scene, at):
+            seen.append((at, scene._lane_here))
+            if at >= 0.5:
+                scene._lane = 2
+
+        self._play(scene, {"Kick": ()}, seconds=seconds, steer=steer, fps=fps)
+        goal = scene._lane_at(2)
+        start, was = next((at, here) for at, here in seen if at >= 0.5)
+        got = next(at for at, here in seen
+                   if at > start and (here - was) / (goal - was) >= 0.9)
+        return (got - start) * 1000.0
+
+    def test_a_dodge_lands_inside_the_blueprints_window(self, qapp):
+        """"An incredibly tight interpolation window, roughly 50ms-70ms."
+        A dodge begun on the beat has to land on the beat: at the old
+        rate it was nine tenths done after 140 ms, which at twelve units
+        of road a second is two units of ground spent arriving."""
+        got = self._slid(60)
+        assert 45.0 <= got <= 70.0, (
+            f"a lane change at 60 fps took {got:.0f} ms")
+
+    def test_a_dodge_is_the_same_length_at_any_frame_rate(self, qapp):
+        """The lane slide is a share of the remaining distance, and a
+        share *per frame* is a different game on every machine: the same
+        dodge took 167 ms on a pane managing 30 and 25 ms on one running
+        at 120. Written as milliseconds rather than off SNAP, because
+        SNAP is the thing under test."""
+        got = {fps: self._slid(fps) for fps in (30, 60, 120, 144)}
+        for fps, took in got.items():
+            assert 45.0 <= took <= 70.0, (
+                f"a lane change at {fps} fps took {took:.0f} ms, and the "
+                f"whole set is "
+                + ", ".join(f"{k}: {v:.0f}ms" for k, v in got.items()))
+        spread = max(got.values()) - min(got.values())
+        assert spread <= 25.0, (
+            "the dodge window moves with the frame rate: "
+            + ", ".join(f"{k}: {v:.0f}ms" for k, v in got.items()))
+
+    def test_a_stopped_track_slides_nowhere(self, qapp):
+        """The lane is on the track's clock like everything else.
+
+        Played first and then stopped, because a pause is eased rather
+        than switched - a scene that has never seen a playhead move
+        cannot know the track is stopped, and the coast into the stop is
+        the point of easing it.
+        """
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+
+        scene = self._rider()
+        clock = [1000.0]
+        was = visualizers.time.monotonic
+        visualizers.time.monotonic = lambda: clock[0]
+        image = QImage(320, 200, QImage.Format.Format_ARGB32_Premultiplied)
+        painter = QPainter(image)
+
+        def run(frames, at):
+            for frame in range(frames):
+                clock[0] += 1 / 60.0
+                image.fill(QColor(0, 0, 0))
+                scene.paint(painter, QRectF(0, 0, 320, 200),
+                            self._state({"Kick": ()}, at(frame)))
+
+        try:
+            run(60, lambda frame: 5.0 + frame / 60.0)   # playing
+            run(60, lambda frame: 6.0)                  # and stopped
+            stood = scene._lane_here
+            scene._lane = 2
+            run(90, lambda frame: 6.0)
+        finally:
+            painter.end()
+            visualizers.time.monotonic = was
+        moved = abs(scene._lane_here - stood)
+        assert moved < 0.01, (
+            f"a second and a half of paused slid the craft {moved:.3f} "
+            f"of the way towards the lane it was asked for")
 
     def test_dodging_the_grey_keeps_you_clean(self, qapp):
         """A kick lays a grey obstacle - Audiosurf's Mono mode is grey
@@ -8393,6 +8487,9 @@ class TestTheRiderIsOnTheBeat:
         scene._lane = 1
         scene._lane_here = scene._lane_at(1)
         scene._heard = 5.0
+        # The bumper is down, so this is a hit rather than the one grey
+        # a run gets for free. See SHIELD_BACK.
+        scene._shield = 0.0
         scene._blocks = [[4.0, 1, "wall", False, True]]
         scene._collide()
         assert scene._hits == 1, "the block missed"
@@ -9038,8 +9135,12 @@ class TestTheShakeIsAKnockNotADrop:
         for _ in range(400):
             settled, _f, _t = scene._camera(box, 0.0, 0.0)
         scene._shake = shake
-        # The wobble runs on its own clock, one step per frame, so this
-        # walks every phase of it rather than picking one.
+        # The wobble runs on its own clock, in sixtieths of a second
+        # rather than in frames, and that clock is kept by _advance -
+        # which the rig is being driven without here. A frame's worth of
+        # it, so this walks every phase of the wobble rather than
+        # measuring one.
+        scene._went = 1 / 60.0
         most = 0.0
         for _ in range(400):
             horizon, _f, _t = scene._camera(box, 0.0, 0.0)
@@ -10775,6 +10876,9 @@ class TestTheWholeScreenFeelsAHit:
         scene._lane = 1
         scene._lane_here = scene._lane_at(1)
         scene._heard = 5.0
+        # The bumper is down, so this is a hit rather than the one grey
+        # a run gets for free. See SHIELD_BACK.
+        scene._shield = 0.0
         scene._blocks = [[4.0, 1, "wall", False, True]]
         scene._collide()
         assert scene._hits == 1, "the block missed"
@@ -11035,8 +11139,14 @@ class TestMonoScoring:
         return scene
 
     @classmethod
-    def _take(cls, scene, count, grey=False, lane=1):
-        """Drive through that many blocks in the rider's own lane."""
+    def _take(cls, scene, count, grey=False, lane=1, shielded=False):
+        """Drive through that many blocks in the rider's own lane.
+
+        With the bumper down unless asked otherwise: a run gets one grey
+        for free, and most of these are about what the next one costs.
+        """
+        if not shielded:
+            scene._shield = 0.0
         scene._blocks = [[10.0 + step, lane, "block", False, grey]
                          for step in range(count)]
         scene._collide()
@@ -11202,6 +11312,261 @@ class TestMonoScoring:
             f"the obstacle draws {seen['obstacle'].saturationF():.2f} "
             f"saturated and the prize {seen['prize'].saturationF():.2f}")
 
+
+class TestTheMonoBumper:
+    """Mono's side bumper: the first grey is shattered, not hit.
+
+    Guidelines §5. What it is for is the chain. A chain of forty is
+    worth far more than four chains of ten, so one grey late in a long
+    run costs a fortune - and a run that can never survive one is a run
+    played cautiously, which is the opposite of what Audiosurf is for.
+    One free grey, and then eight seconds of playing without a net:
+    the bumper does not make the run safer, it makes the eight seconds
+    after it tense.
+
+    It saves the chain. It does not save the clean finish - shattering
+    a grey is still touching one.
+    """
+
+    @staticmethod
+    def _scene():
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._last = None
+        scene._lane = 1
+        scene._lane_here = scene._lane_at(1)
+        scene._heard = 100.0
+        return scene
+
+    @staticmethod
+    def _into(scene, grey=True, when=10.0):
+        """Drive into one block in the rider's own lane."""
+        scene._blocks = [[when, 1, "block", False, grey]]
+        scene._collide()
+
+    @classmethod
+    def _chain(cls, scene, count=10):
+        for step in range(count):
+            cls._into(scene, grey=False, when=10.0 + step)
+
+    @staticmethod
+    def _run(scene, seconds, playing=True, fps=60.0):
+        """Run the scene's clock forward, played or paused."""
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        state = SpectrumState()
+        state.levels = [0.4] * 27
+        state.bass = state.mid = state.high = 0.4
+        state.synth = 0.3
+        state.kit = {}
+        state.chart = {}
+        state.tempo = 120.0
+        clock = [1000.0]
+        was = visualizers.time.monotonic
+        visualizers.time.monotonic = lambda: clock[0]
+        try:
+            for frame in range(int(seconds * fps)):
+                clock[0] += 1.0 / fps
+                state.at = 5.0 + (frame / fps if playing else 0.0)
+                scene._advance(state)
+        finally:
+            visualizers.time.monotonic = was
+
+    def test_a_run_starts_with_the_bumper_up(self, qapp):
+        scene = self._scene()
+        assert scene._shield == 1.0, (
+            f"a fresh run has {scene._shield:.0%} of a bumper")
+        assert scene.report()["shield"] == 1.0
+
+    def test_a_full_bumper_shatters_the_grey_and_the_chain_lives(self, qapp):
+        """The point of the whole mechanic."""
+        scene = self._scene()
+        self._chain(scene, 10)
+        was = scene.report()
+        assert was["chain"] == 10 and was["score"] > 0, was
+        self._into(scene)
+        got = scene.report()
+        assert got["hits"] == 0, f"the bumper was up and it still hit: {got}"
+        assert got["chain"] == 10, (
+            f"the chain broke on a shattered grey: {got}")
+        assert got["score"] == was["score"], (
+            f"shattering a grey moved the score from {was['score']} "
+            f"to {got['score']}")
+        assert got["shield"] == 0.0, (
+            f"the bumper shattered a grey and is still at {got['shield']:.0%}")
+
+    def test_shattering_a_grey_still_ends_the_clean_run(self, qapp):
+        """It is a bumper, not a dodge. Worth a third of the tally at
+        the end, so this is the price of being saved."""
+        scene = self._scene()
+        self._chain(scene, 3)
+        assert scene.report()["clean"] is True
+        self._into(scene)
+        assert scene.report()["clean"] is False, (
+            "a shattered grey left the run counting as clean")
+
+    def test_a_shattered_grey_does_not_wash_the_screen(self, qapp):
+        """A hit throws the picture about and goes red. Shattering one
+        is a knock, not a hit, and has to read as the lesser thing."""
+        scene = self._scene()
+        self._into(scene)
+        shattered = (scene._hurt, scene._shake, scene._slow)
+        scene = self._scene()
+        scene._shield = 0.0
+        self._into(scene)
+        hit = (scene._hurt, scene._shake, scene._slow)
+        assert shattered[0] == 0.0 and hit[0] == 1.0, (
+            f"the screen washed {shattered[0]:.2f} on a shatter and "
+            f"{hit[0]:.2f} on a hit")
+        assert shattered[1] < hit[1], (
+            f"a shatter shook the frame {shattered[1]:.2f} and a hit "
+            f"{hit[1]:.2f}")
+        assert shattered[2] > hit[2], (
+            f"a shatter slowed the run to {shattered[2]:.2f} and a hit "
+            f"to {hit[2]:.2f}")
+
+    def test_the_bumper_only_covers_one_grey(self, qapp):
+        """The second one inside the eight seconds is a hit like any
+        other: chain gone, streak gone, on the tally."""
+        scene = self._scene()
+        self._chain(scene, 10)
+        self._into(scene)
+        scene._sore = 0.0            # past the moment of not being hit twice
+        self._into(scene, when=31.0)
+        got = scene.report()
+        assert got["hits"] == 1, (
+            f"the bumper covered a second grey as well: {got}")
+        assert got["chain"] == 0 and got["streak"] == 0, (
+            f"a grey with the bumper down left the chain running: {got}")
+
+    def test_the_bumper_comes_back_over_eight_seconds(self, qapp):
+        """Written as times rather than off SHIELD_BACK: read from the
+        constant, this passes with the bumper coming back instantly."""
+        marks = {}
+        for seconds in (2.0, 4.0, 8.0):
+            scene = self._scene()
+            scene._shield = 0.0
+            self._run(scene, seconds)
+            marks[seconds] = scene._shield
+        assert 0.20 < marks[2.0] < 0.30, (
+            f"two seconds of playing brought back {marks[2.0]:.0%}")
+        assert 0.45 < marks[4.0] < 0.55, (
+            f"four seconds of playing brought back {marks[4.0]:.0%}")
+        assert marks[8.0] >= 0.999, (
+            f"eight seconds of playing brought back {marks[8.0]:.0%}")
+
+    def test_the_bumper_does_not_come_back_under_a_stopped_track(self, qapp):
+        """Everything on the track's clock, the bumper with it: three
+        seconds of paused would otherwise be three eighths of a free
+        grey for nothing."""
+        scene = self._scene()
+        scene._shield = 0.0
+        self._run(scene, 3.0, playing=False)
+        assert scene._shield < 0.05, (
+            f"three seconds of paused recharged the bumper to "
+            f"{scene._shield:.0%}")
+
+    def test_the_bumper_never_goes_past_full(self, qapp):
+        scene = self._scene()
+        scene._shield = 0.0
+        self._run(scene, 20.0)
+        assert scene._shield == 1.0, (
+            f"twenty seconds of playing left the bumper at {scene._shield}")
+
+    def test_the_card_says_when_the_bumper_is_down(self, qapp):
+        """Up is the quiet state and says nothing; anything less is a
+        number, because the eight seconds are what you are playing."""
+        scene = self._scene()
+        said = {}
+        for name, shield in (("up", 1.0), ("spent", 0.0), ("half", 0.5)):
+            scene._shield = shield
+            said[name] = self._read(scene)
+        assert "shield" not in said["up"], (
+            f"a full bumper is announced on the card: {said['up']!r}")
+        assert "shield 0%" in said["spent"], said["spent"]
+        assert "shield 50%" in said["half"], said["half"]
+
+    @staticmethod
+    def _read(scene):
+        """The card's text, off the card rather than off the frame."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QFont
+
+        class Recorder:
+            """Enough of a painter for the card, which only writes."""
+
+            def __init__(self):
+                self.said = ""
+
+            def save(self):
+                pass
+
+            def restore(self):
+                pass
+
+            def font(self):
+                return QFont()
+
+            def setFont(self, font):
+                pass
+
+            def setPen(self, pen):
+                pass
+
+            def drawText(self, rect, flags, text):
+                self.said += text
+
+        recorder = Recorder()
+        scene._card(recorder, QRectF(0, 0, 640, 360), 0.5)
+        return recorder.said
+
+    def test_the_bumper_shows_on_the_craft(self, qapp):
+        """Up or down is something to see rather than remember, so the
+        two states draw differently around the ship. Off the frame:
+        read off the card, this passes with the bars deleted."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        side = 480
+        drawn = {}
+        for name, shield in (("up", 1.0), ("spent", 0.0)):
+            scene = self._scene()
+            scene._last = None
+            state = SpectrumState()
+            state.levels = [0.4] * 27
+            state.bass = state.mid = state.high = 0.3
+            state.synth = 0.0
+            state.kit = {}
+            state.at = 1.0
+            state.chart = {"Kick": ()}
+            image = QImage(side, side,
+                           QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(QColor(0, 0, 0))
+            painter = QPainter(image)
+            was = visualizers.time.monotonic
+            visualizers.time.monotonic = lambda: 500.0
+            try:
+                scene._shield = shield
+                scene.paint(painter, QRectF(0, 0, side, side), state)
+            finally:
+                painter.end()
+                visualizers.time.monotonic = was
+            drawn[name] = image.copy()
+        # The lower half only: the card is at the top and its own text
+        # changes with the bumper, which would pass this on its own.
+        moved = sum(
+            1
+            for y in range(side // 2, side)
+            for x in range(side)
+            if drawn["up"].pixelColor(x, y) != drawn["spent"].pixelColor(x, y))
+        assert moved > 40, (
+            f"a full bumper and a spent one drew the same craft "
+            f"({moved} pixels apart)")
 
 class TestThePuzzleGrid:
     """Audiosurf's matrix, and the half of the game the road is the other

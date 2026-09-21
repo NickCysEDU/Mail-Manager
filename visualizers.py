@@ -313,6 +313,31 @@ def _hair_alpha(spots: tuple, reach: float, target: float) -> float:
     return answer
 
 
+def bounded(value, most: float = 1.0, least: float = 0.0) -> float:
+    """A number from the analysis, forced back into the range it claims.
+
+    Levels are nought to one by construction and tempos are positive,
+    but a decode that goes wrong, a calibration that comes out zero or a
+    tempo found in silence can put a nan or an infinity in one. Several
+    of these scenes *accumulate* what they are given - the field's drift,
+    the rider's envelope followers - so a single bad frame does not draw
+    a bad frame, it poisons the scene for the rest of the session and
+    takes the window with it if the value reaches an ``int()``.
+
+    Nan comes back as the floor rather than as the nearest bound,
+    because a nan is an answer that was never computed.
+    """
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return least
+    if value != value:
+        return least
+    if value < least:
+        return least
+    return most if value > most else value
+
+
 class Scene:
     """One way of drawing the music."""
 
@@ -460,13 +485,18 @@ class Plasma:
         # direction, make it fold and drift instead - and the music drives
         # both how fast they run and how deep the folds are, so a loud
         # passage churns and a quiet one barely moves.
-        pace = (0.55 + state.bass * 1.9 + state.mid * 0.8) * going
+        # Bounded, because these three accumulate: a level that arrives
+        # as an infinity puts the drift beyond every sine in the frame
+        # and it never comes back. See ``bounded``.
+        bass, mid, high = (bounded(state.bass), bounded(state.mid),
+                           bounded(state.high))
+        pace = (0.55 + bass * 1.9 + mid * 0.8) * going
         self._drift_a += 0.016 * pace
-        self._drift_b -= 0.011 * pace + state.high * 0.02 * going
+        self._drift_b -= 0.011 * pace + high * 0.02 * going
         self._drift_c += 0.007 * pace
-        hit = self.flash_of(state) if flash is None else max(0.0, flash)
-        swell = 0.55 + state.bass * 0.8 + hit * 0.9
-        hue_shift = state.hue
+        hit = bounded(self.flash_of(state) if flash is None else flash)
+        swell = 0.55 + bass * 0.8 + hit * 0.9
+        hue_shift = bounded(state.hue)
         image = self._image
         for row in range(self.ROWS):
             y = row / self.ROWS
@@ -3875,9 +3905,29 @@ class Rider(Scene):
     EYE_UP = 2.1
     EYE_BACK = 2.4
 
+    #: The longest a track can be, in seconds - a day of music.
+    #:
+    #: Not a limit, a sanity check on the playhead. Everything here is
+    #: measured *from* the playhead, and an infinite one is worse than a
+    #: large one: the origin is set from it too, so the road's position
+    #: comes out as infinity minus infinity, which is a nan, and the
+    #: first thing that asks which beat it is in raises out of paint.
+    LONGEST = 86400.0
+
     #: Where the rider sits along the road, and how fast it slides lanes.
     RIDER_AT = 3.0
-    SNAP = 0.30
+    #: How fast the rider slides to a new lane, as a share of the way
+    #: there each frame.
+    #:
+    #: The blueprint asks for "an incredibly tight interpolation window,
+    #: roughly 50ms-70ms". At 0.30 a lane change was nine tenths done
+    #: after 140 ms, which at twelve units of road a second is two units
+    #: of ground spent arriving. 0.55 puts it at 50 ms, and the
+    #: difference is whether a dodge you begin on the beat lands on it.
+    #:
+    #: A share of the way there per sixtieth of a second, not per frame.
+    #: See ``_slide``.
+    SNAP = 0.55
 
     # -- pace -------------------------------------------------------------
     #: Seconds from the horizon to the rider. This is the reaction time the
@@ -4152,6 +4202,9 @@ class Rider(Scene):
         self._got = 0.0
         #: Whether a grey has been touched yet. See CLEAN_BONUS.
         self._clean = True
+        #: The bumper: 1 when it is up, 0 the moment it shatters a grey,
+        #: and back to 1 over SHIELD_BACK.
+        self._shield = 1.0
         #: Audiosurf's matrix, a list of colours per column from the
         #: bottom up. See CELLS_WIDE.
         self._cells = [[] for _ in range(self.CELLS_WIDE)]
@@ -4211,6 +4264,8 @@ class Rider(Scene):
         self._chase_to = 0.0
         #: The shake's own clock, so it is not tied to anything else.
         self._wobble = 0.0
+        #: The last frame's worth of the track's clock. See ``_advance``.
+        self._went = 0.0
         self._bend = 0.0
         self._climb = 0.0
         #: How high the road is under the rider. The eye rides on it
@@ -4262,6 +4317,7 @@ class Rider(Scene):
                 "best": self._best, "hits": self._hits,
                 "chain": self._chain, "clean": self._clean,
                 "worth": self._worth(), "cleared": self._cleared,
+                "shield": self._shield,
                 "stunned": self._stunned > 0.0,
                 "cells": [list(pile) for pile in self._cells]}
 
@@ -4702,8 +4758,12 @@ class Rider(Scene):
         # into. The aim is already measured from under the rider.
         self._banked += (self._aimed - self._banked) * self.AIM_EASE * going
         # The shake is a decaying wobble on its own fast clock rather than
-        # a sine of the spin, which never stopped moving.
-        self._wobble += self._rolling
+        # a sine of the spin, which never stopped moving. In sixtieths of
+        # a second rather than in frames, so the rattle is the same
+        # rattle on a pane managing thirty as on one running at 120 -
+        # counted in frames it halves in frequency when the machine is
+        # busy, which turns a hit from a crack into a sway.
+        self._wobble += self._went * 60.0
         shake = self._shake * self.SHAKE * self.SHAKE_LESS * span
         # Up the hill with the road, within reason. A climb puts the road
         # ahead higher in the frame, so the view drops to meet it - which
@@ -4777,11 +4837,15 @@ class Rider(Scene):
         step = 0.016 if self._last is None else min(0.1, max(0.0,
                                                              now - self._last))
         self._last = now
-        kit = state.kit or {}
-        bass = max(state.bass, kit.get("Bass", 0.0))
-        loud = (bass + state.mid + state.high) / 3.0
+        kit = {name: bounded(value)
+               for name, value in (state.kit or {}).items()}
+        bass = max(bounded(state.bass), kit.get("Bass", 0.0))
+        loud = (bass + bounded(state.mid) + bounded(state.high)) / 3.0
 
-        said = getattr(state, "at", 0.0) or 0.0
+        # The playhead, which everything here is measured from. A player
+        # that reports a nan position would otherwise hand it to the
+        # road, the chart and the grid in one frame.
+        said = bounded(getattr(state, "at", 0.0), most=self.LONGEST)
         # Whether the track is actually playing. A paused player reports
         # the same position every frame, and the road went on rolling
         # under a stopped song: "xxxxxx xxxxxx xxxxxx xxxx xxxx xxxxxx".
@@ -4807,8 +4871,14 @@ class Rider(Scene):
         elif moving:
             self._heard += step * self._rolling + (said - self._heard) * 0.06
 
-        self._beat = 60.0 / state.tempo if getattr(state, "tempo", 0) else 0.0
-        self._pulse = getattr(state, "beat_at", 0.0) or 0.0
+        # Truthiness is not a tempo test: a nan is true, and a nan beat
+        # is a nan road position, a nan block distance and finally an
+        # int() of a nan, which is a window that closes. Bounded at a
+        # thousand because the road is laid a beat at a time and a beat
+        # of a millionth of a second is a million figures a second.
+        tempo = bounded(getattr(state, "tempo", 0.0), most=1000.0)
+        self._beat = 60.0 / tempo if tempo > 0.0 else 0.0
+        self._pulse = bounded(getattr(state, "beat_at", 0.0))
         if self._beat > 0.0 and said > 0.0:
             # One known beat, so that a figure can be put exactly on the
             # grid rather than wherever the detector heard a drum. See
@@ -4924,6 +4994,11 @@ class Rider(Scene):
         self._sore = max(0.0, self._sore - step)
         self._hurt = max(0.0, self._hurt - step / self.HURT_FOR)
         self._got = max(0.0, self._got - step / 0.35)
+        self._shield = min(1.0, self._shield + step / self.SHIELD_BACK)
+        #: How much of a sixtieth of a second this frame was worth on the
+        #: track's clock. The rig reads it: a shake counted in frames is
+        #: a different shake on every machine. See ``_slide``.
+        self._went = step
         self._burn(step)
         return step
 
@@ -4951,6 +5026,21 @@ class Rider(Scene):
     #: And finishing without touching one is worth a third again.
     CLEAN_BONUS = 0.30
 
+    #: Mono's bumpers: how long one takes to come back after it has
+    #: shattered a grey, and what using one costs.
+    #:
+    #: Audiosurf's Mono rides with side-lane bumpers that shatter a grey
+    #: safely, once, and then need time. Without them a single mistake
+    #: forty blocks into a chain takes the whole chain, which is a game
+    #: that punishes one slip more than it rewards a good minute. With
+    #: them the first slip costs the shield and the second costs the
+    #: chain, and the eight seconds between are played differently -
+    #: which is the tension the mechanic is for.
+    #:
+    #: It does not save the clean-finish bonus. Shattering a grey is
+    #: still touching one.
+    SHIELD_BACK = 8.0
+
     def _collide(self) -> None:
         for block in self._blocks:
             when, lane, _kind, done, grey = block
@@ -4959,18 +5049,28 @@ class Rider(Scene):
             block[3] = True
             on_it = abs(self._lane_at(lane) - self._lane_here) < self.FORGIVE
             if grey and on_it:
-                if self._sore <= 0.0:
-                    self._hits += 1
-                    self._streak = 0
-                    self._chain = 0
+                if self._sore > 0.0:
+                    continue
+                if self._shield >= 1.0:
+                    # Shattered rather than hit. It still counts as
+                    # having touched one, so the clean run is over.
+                    self._shield = 0.0
                     self._clean = False
                     self._sore = self.SORE
-                    self._shake = min(1.0, self._shake + 0.8)
-                    self._slow = self.SLOW
-                    # "Xxxx xxx xxxxxx xxxxxx xxxxx xx xx obstacle hit."
-                    # Not the block, not the ship: the picture.
-                    self._hurt = 1.0
-                    self._burst(self._lane_at(lane))
+                    self._shake = min(1.0, self._shake + 0.35)
+                    self._burst(self._lane_at(lane), prize=True)
+                    continue
+                self._hits += 1
+                self._streak = 0
+                self._chain = 0
+                self._clean = False
+                self._sore = self.SORE
+                self._shake = min(1.0, self._shake + 0.8)
+                self._slow = self.SLOW
+                # "Xxxx xxx xxxxxx xxxxxx xxxxx xx xx obstacle hit."
+                # Not the block, not the ship: the picture.
+                self._hurt = 1.0
+                self._burst(self._lane_at(lane))
             elif grey:
                 self._streak += 1
                 self._best = max(self._best, self._streak)
@@ -5232,13 +5332,28 @@ class Rider(Scene):
         return (when - self._origin) / self._beat * self.PER_BEAT
 
     # -- drawing ----------------------------------------------------------
+    def _slide(self, step: float) -> float:
+        """How much of the way to the wanted lane this frame is worth.
+
+        SNAP is a share of the remaining distance per sixtieth of a
+        second rather than per frame. Taken per frame, the dodge window
+        is whatever the pane is managing: the same lane change takes
+        50 ms at 60 fps, 100 ms at 30 and 25 ms at 120, so a busy
+        machine plays a slower game than a quiet one and the blueprint's
+        "incredibly tight interpolation window" holds on neither.
+
+        Off the track's clock, so a stopped track slides nowhere.
+        """
+        if step <= 0.0:
+            return 0.0
+        return 1.0 - (1.0 - self.SNAP) ** (step * 60.0)
+
     def paint(self, painter, rect, state) -> None:
         self._carve(state)
-        self._advance(state)
+        step = self._advance(state)
         self._lay(state)
         wanted = self._lane_at(self._lane)
-        self._lane_here += ((wanted - self._lane_here) * self.SNAP
-                            * self._rolling)
+        self._lane_here += (wanted - self._lane_here) * self._slide(step)
         self._collide()
 
         flash = self.flash(state)
@@ -5807,6 +5922,22 @@ class Rider(Scene):
             1.0, 0.85))
         stroke(painter, path, QColor.fromHsvF(shade, 0.2, 1.0, 1.0),
                2.0 * max(0.75, min(1.3, rect.height() / 700.0)))
+        # The bumpers, when they are up: two short bars either side of
+        # the craft. Faint while they are coming back, so the state you
+        # are playing in is something you can see rather than remember.
+        if self._shield > 0.01:
+            ready = self._shield >= 1.0
+            guard = QPainterPath()
+            for side in (-1.0, 1.0):
+                out = across + side * wide * 1.55
+                guard.moveTo(self._eye(horizon, focal, out, -0.02, at - 0.3))
+                guard.lineTo(self._eye(horizon, focal, out, -0.30,
+                                       at + 0.55))
+            stroke(painter, guard, QColor.fromHsvF(
+                (hue + 0.34) % 1.0, 0.25 if ready else 0.75, 1.0,
+                (0.95 if ready else 0.30 + 0.25 * self._shield)),
+                (2.4 if ready else 1.2)
+                * max(0.75, min(1.3, rect.height() / 700.0)))
 
     def _card(self, painter, rect, hue) -> None:
         painter.save()
@@ -5821,6 +5952,8 @@ class Rider(Scene):
             + (f"   cleared {self._cleared}" if self._mode == "Puzzle"
                else f"   chain {self._chain}")
             + ("   clean" if self._clean and self._score else "")
+            + ("" if self._shield >= 1.0 else "   shield "
+               + f"{self._shield:.0%}")
             + f"   best {self._best}")
         painter.restore()
 

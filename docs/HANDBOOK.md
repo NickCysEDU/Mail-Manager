@@ -858,6 +858,21 @@ one again. Finishing without touching one is worth a third again. So a
 run of forty clean blocks is worth far more than four runs of ten, and a
 grey costs much more than the points it does not give you.
 
+A bumper either side of the craft shatters the first grey you touch
+rather than letting it hit you - Audiosurf's Mono ships with side-lane
+shields and a cooldown, and this is that. The chain survives, the bumper
+does not, and it takes eight seconds of playing to come back. It is not
+there to make the run safer: what it buys is the eight seconds after it,
+played with nothing behind you. That is the point of the mechanic, and
+it is why the cooldown is long enough to notice - a run that can never
+survive a grey is a run played cautiously, which is the opposite of what
+the mode is for, and one that can always survive one is not a run at
+all. It does not save the clean finish; shattering a grey is still
+touching one. The bars show on the craft and the card counts the bumper
+back up in per cent, because which of those two games you are playing
+should be something to see rather than remember. The bumper is on the
+track's clock like everything else, so a pause does not recharge it.
+
 A quarter of the slots carry an obstacle rather than a prize, and only
 where the heaviest thing in the slot was the kick - so the hazards land
 on the beats you can hear coming. Tying them to the kick alone was tried
@@ -932,6 +947,17 @@ and one at the end. The lunge is also chosen once a beat and held for the
 whole of it: it shapes where the road is *within* a beat, so changing it
 part-way through moves the road, and a road that may only go forwards
 stops instead and waits for the curve to catch up.
+
+**The same game on every machine.** A lane change is a share of the
+remaining distance, and a share *per frame* is a different game on every
+machine: the blueprint asks for a dodge that lands in 50 to 70 ms, and
+taken per frame the same dodge took 167 ms on a pane managing thirty
+frames a second and 25 ms on one running at 120. It is a share per
+sixtieth of a second instead, which holds the window between 50 and 67 ms
+from thirty frames a second to a hundred and forty-four. The camera's
+shake was counted in frames too, which halved its frequency when the
+machine was busy - a crack became a sway - and is now counted in the same
+sixtieths.
 
 **Stopped means stopped.** Every clock in the scene runs on the track's
 own time rather than the wall's: the shake, the pieces thrown off a hit,
@@ -1038,6 +1064,22 @@ a hand setting into the automatic strobe or the other way round, and the
 captions follow the mode so a slider is never called one thing while it
 does another.
 
+**Nothing the analysis says can close the window.** A level is nought to
+one and a tempo is a count of beats - by construction, which is not the
+same as in fact. A decode that goes wrong, a calibration that comes out
+zero or a tempo looked for in silence can put a nan or an infinity in
+one, and these scenes accumulate what they are handed: the field's three
+drifts and the rider's envelope followers are running sums, so one bad
+value is not a bad frame, it is every frame after it. Found by playing
+the rider hostile music rather than by reading the code - a nan tempo
+closed the window on the first frame, because a nan is *truthy* and the
+tempo was tested for truth rather than for being a tempo, and an
+infinite level stopped the field moving for the rest of the session.
+Every number that arrives from the analysis is now forced back into the
+range it claims before anything sums it, and a nan comes back as the
+floor rather than as the nearest bound, because a nan is an answer that
+was never worked out.
+
 ---
 
 ## Building the `.app`
@@ -1068,7 +1110,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,759 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,780 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1429,7 +1471,7 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 3,759 tests, about three minutes
+./dev test        # 3,780 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```
@@ -1452,7 +1494,7 @@ and replays scripted responses.
 | `test_beatmap.py` | Finding the beat, and refusing to find one that is not there |
 | `test_cleanup.py` | What the server is asked to delete, and everything that is never offered |
 | `test_stress_mailbox.py` | Deletion against twenty thousand awkward messages, on a server that really answers the search |
-| `test_stress_visualiser.py` | Every scene at every shape, with half-finished data and the playhead thrown around |
+| `test_stress_visualiser.py` | Every scene at every shape, with half-finished data, a playhead thrown around, and numbers the analysis should never produce |
 | `test_gui.py` | Table model, filters, delegate, window wiring |
 | `test_gui_dialogs.py` | Settings dialog, preview rendering, export, apply confirmation |
 | `test_worker_threads.py` | The QThread workers driven synchronously with fake engines |

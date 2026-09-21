@@ -215,6 +215,59 @@ class SpectrumState:
         self.beat_at = 0.0
 
 
+    def settle(self) -> None:
+        """Force every number in here back into the range it claims.
+
+        The boundary between what was measured and what is drawn. A
+        level is nought to one and a tempo is a count of beats by
+        construction, which is not the same as in fact: a decode that
+        goes wrong, a calibration that comes out zero or a tempo looked
+        for in silence can put a nan or an infinity in one of these.
+
+        It matters more than one bad frame. The scenes accumulate what
+        they are handed - the field's drifts, the rider's followers are
+        running sums - so one bad value is not a bad frame, it is every
+        frame after it; and a nan or an infinity that reaches an
+        ``int()`` raises out of paint, which closes the window.
+
+        Once a frame, in one place, because there is one of these and
+        every scene is handed it. ``phase`` is a running angle rather
+        than a level and is only checked for being a number at all.
+        ``trace`` and ``vector`` are samples rather than levels, and are
+        the same lists the history holds, so they are left alone.
+        """
+        from visualizers import bounded
+
+        self.levels = [bounded(value) for value in self.levels]
+        self.peaks = [bounded(value) for value in self.peaks]
+        # A scene draws a peak over the bar it belongs to and reads the
+        # two by the same index, so the two are the same length here
+        # rather than in every scene that pairs them.
+        if len(self.peaks) != len(self.levels):
+            self.peaks = (self.peaks + [0.0] * len(self.levels)
+                          )[:len(self.levels)]
+        self.bass = bounded(self.bass)
+        self.mid = bounded(self.mid)
+        self.synth = bounded(self.synth)
+        self.high = bounded(self.high)
+        self.hit = bounded(self.hit)
+        self.hue = bounded(self.hue)
+        self.scroll = bounded(self.scroll)
+        self.phase = bounded(self.phase, most=1e9)
+        self.beat_at = bounded(self.beat_at)
+        #: A tempo of a millionth of a beat a minute is a beat of sixty
+        #: million seconds, and one of a million is a road laid sixteen
+        #: thousand figures a second.
+        self.tempo = bounded(self.tempo, most=1000.0)
+        #: A day of music. An *infinite* playhead is worse than a large
+        #: one: the rider's origin is set from it, so its position comes
+        #: out as infinity minus infinity, which is a nan.
+        self.at = bounded(self.at, most=86400.0)
+        if self.kit:
+            self.kit = {name: bounded(value)
+                        for name, value in self.kit.items()}
+
+
 class Spectrum(QWidget):
     """The equaliser, and whichever scene is drawing it.
 
@@ -284,6 +337,7 @@ class Spectrum(QWidget):
 
     SPARKS = 60
     IDLE_SECONDS = 30
+
 
     def __init__(self) -> None:
         super().__init__()
@@ -1716,6 +1770,9 @@ class Spectrum(QWidget):
 
         import time as _time
 
+        # Nothing a scene is handed has ever been outside its own range
+        # by the time it gets there. See SpectrumState.settle.
+        self._state.settle()
         recipe = visualizers.post_for(self._scene) if self._post else {}
         ratio = self.devicePixelRatioF()
         pixels = rect.width() * ratio * rect.height() * ratio

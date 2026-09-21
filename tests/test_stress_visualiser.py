@@ -462,3 +462,316 @@ class TestQuittingWhileItIsStillWorking:
 
         attachment_audio._arm_shutdown()
         assert attachment_audio._ARMED
+
+
+class TestNothingTheAnalysisSaysCanCloseTheWindow:
+    """A level is nought to one and a tempo is a count of beats - by
+    construction, which is not the same as in fact.
+
+    A decode that goes wrong, a calibration that comes out zero, a tempo
+    looked for in silence: any of them can put a nan or an infinity in
+    one of these numbers. It matters more than one bad frame, because
+    these scenes *accumulate* what they are handed. The field's drift
+    and the rider's envelope followers are running sums, so one bad
+    value is not a bad frame - it is every frame after it. And a nan
+    that reaches an ``int()`` is not a bad frame either: it is a
+    traceback out of paint, which takes the window with it.
+
+    Found by playing the rider hostile music rather than by reading the
+    code: a nan tempo closed the window on the first frame, and an
+    infinite level stopped the field moving for the rest of the session.
+    """
+
+    NAN, INF = float("nan"), float("inf")
+
+    @staticmethod
+    def _state(**kw):
+        from attachment_widgets import SpectrumState
+
+        said = SpectrumState()
+        said.levels = kw.pop("levels", [0.4] * 27)
+        said.bass = kw.pop("bass", 0.5)
+        said.mid = kw.pop("mid", 0.4)
+        said.high = kw.pop("high", 0.3)
+        said.synth = kw.pop("synth", 0.2)
+        said.kit = kw.pop("kit", {"Kick": 0.5, "Snare": 0.2, "Hats": 0.3})
+        said.at = kw.pop("at", 0.0)
+        said.chart = kw.pop("chart", {})
+        said.tempo = kw.pop("tempo", 120.0)
+        said.beat_at = kw.pop("beat_at", 0.0)
+        for name, value in kw.items():
+            setattr(said, name, value)
+        return said
+
+    @classmethod
+    def _run(cls, scene, frames, said_for, size=(320, 200)):
+        """Paint a scene through a run of states, on a held clock."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+
+        image = QImage(size[0], size[1],
+                       QImage.Format.Format_ARGB32_Premultiplied)
+        painter = QPainter(image)
+        clock = [1000.0]
+        was = visualizers.time.monotonic
+        visualizers.time.monotonic = lambda: clock[0]
+        try:
+            for frame in range(frames):
+                clock[0] += 1 / 60.0
+                image.fill(QColor(0, 0, 0))
+                scene.paint(painter, QRectF(0, 0, size[0], size[1]),
+                            said_for(frame))
+        finally:
+            painter.end()
+            visualizers.time.monotonic = was
+        return image
+
+    # -- the guard itself --------------------------------------------------
+    def test_a_number_is_forced_back_into_the_range_it_claims(self):
+        """Written out rather than worked out: every answer is a
+        literal, so this cannot pass by agreeing with the code."""
+        import visualizers
+
+        assert visualizers.bounded(0.5) == 0.5
+        assert visualizers.bounded(0.0) == 0.0
+        assert visualizers.bounded(1.0) == 1.0
+        assert visualizers.bounded(-3.0) == 0.0
+        assert visualizers.bounded(9.0) == 1.0
+        assert visualizers.bounded(self.INF) == 1.0
+        assert visualizers.bounded(-self.INF) == 0.0
+        # A nan is an answer that was never worked out, so it comes back
+        # as the floor rather than as whichever bound it is nearest -
+        # there is no such bound.
+        assert visualizers.bounded(self.NAN) == 0.0
+        assert visualizers.bounded(self.NAN, least=0.25) == 0.25
+        assert visualizers.bounded(None) == 0.0
+        assert visualizers.bounded("loud") == 0.0
+        assert visualizers.bounded(174.0, most=1000.0) == 174.0
+        assert visualizers.bounded(4000.0, most=1000.0) == 1000.0
+
+    # -- the two it was written for ---------------------------------------
+    def test_a_nan_tempo_does_not_close_the_window(self, qapp):
+        """It used to reach ``int(round(when / self._beat / ...))`` on
+        the first frame and raise out of paint.
+
+        A nan is *truthy*, which is what made this a crash rather than a
+        shrug: the tempo was tested for truth rather than for being a
+        tempo, so nothing without a beat was told apart from a beat of
+        nan.
+        """
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._last = None
+        beats = tuple(i * 0.5 for i in range(200))
+        self._run(scene, 40, lambda frame: self._state(
+            at=frame / 60.0, tempo=self.NAN, chart={"Kick": beats}))
+        assert scene._beat == 0.0, (
+            f"a nan tempo was taken for a beat of {scene._beat}")
+        assert math.isfinite(scene._at), (
+            f"the road ended up at {scene._at}")
+
+    def test_an_infinite_level_does_not_stop_the_field_moving(self, qapp):
+        """The field's three drifts are running sums. An infinity in one
+        of them is not a bad frame, it is every frame after it: the
+        drift never comes back, every sine in the picture is called on
+        an infinity, and the scene raises a domain error from then on.
+        """
+        import visualizers
+
+        field = visualizers.Plasma()
+        self._run(field, 8, lambda frame: self._state(
+            at=frame / 60.0, bass=self.INF, mid=self.INF, high=self.INF,
+            hue=self.INF))
+        for name in ("_drift_a", "_drift_b", "_drift_c"):
+            assert math.isfinite(getattr(field, name)), (
+                f"the field's {name} is {getattr(field, name)} after "
+                f"eight frames of an infinite level")
+        # And it still draws a field afterwards rather than one colour.
+        image = self._run(field, 8, lambda frame: self._state(
+            at=1.0 + frame / 60.0))
+        seen = {image.pixelColor(x, y).rgb()
+                for x in range(0, 320, 5) for y in range(0, 200, 5)}
+        assert len(seen) > 8, (
+            f"the field draws {len(seen)} colours after a bad passage")
+
+    # -- and everything else the analysis could say ------------------------
+    def test_every_scene_survives_a_bad_passage_and_comes_back(self, qapp):
+        """Every scene there is, not only the one the fault was found
+        in: they share the field, the flash and the levels.
+        """
+        import visualizers
+
+        nasty = {
+            "nan": dict(levels=[self.NAN] * 27, bass=self.NAN,
+                        mid=self.NAN, high=self.NAN, synth=self.NAN,
+                        tempo=self.NAN, hue=self.NAN,
+                        kit={"Kick": self.NAN}),
+            "inf": dict(levels=[self.INF] * 27, bass=self.INF,
+                        mid=self.INF, high=self.INF, synth=self.INF,
+                        tempo=self.INF, hue=self.INF,
+                        kit={"Kick": self.INF}),
+            "negative": dict(levels=[-3.0] * 27, bass=-3.0, mid=-3.0,
+                             high=-3.0, synth=-3.0, tempo=-120.0,
+                             kit={"Kick": -3.0}),
+        }
+        beats = tuple(i * 0.5 for i in range(80))
+        blank = []
+
+        def settled(**kw):
+            """Through the boundary the pane puts every frame through."""
+            said = self._state(**kw)
+            said.settle()
+            return said
+
+        for made in visualizers.SCENES:
+            for name, kw in nasty.items():
+                scene = type(made)()
+                scene._last = None
+                self._run(scene, 12, lambda frame: settled(
+                    at=frame / 60.0, **kw), size=(240, 160))
+                image = self._run(scene, 12, lambda frame: settled(
+                    at=1.0 + frame / 60.0, chart={"Kick": beats}),
+                    size=(240, 160))
+                seen = {image.pixelColor(x, y).rgb()
+                        for x in range(0, 240, 5)
+                        for y in range(0, 160, 5)}
+                if len(seen) < 3:
+                    blank.append(f"{made.name} after {name}: "
+                                 f"{len(seen)} colour(s)")
+        assert not blank, (
+            "these scenes stopped drawing after a bad passage: "
+            + "; ".join(blank))
+
+    # -- and the boundary it all goes through ------------------------------
+    def test_the_state_forces_every_number_back_into_its_range(self, qapp):
+        """Written out rather than worked out."""
+        from attachment_widgets import SpectrumState
+
+        said = SpectrumState()
+        said.levels = [self.NAN, 5.0, -2.0, 0.25]
+        said.peaks = [self.INF, 0.5]
+        said.bass = self.INF
+        said.mid = -4.0
+        said.high = self.NAN
+        said.hit = 9.0
+        said.hue = self.NAN
+        said.tempo = self.NAN
+        said.at = self.INF
+        said.beat_at = 4.0
+        said.kit = {"Kick": self.INF, "Snare": self.NAN, "Hats": 0.5}
+        # A running angle rather than a level: it is allowed to be large,
+        # it is not allowed to be infinite.
+        said.phase = self.INF
+        said.settle()
+        assert said.levels == [0.0, 1.0, 0.0, 0.25]
+        # Padded to the length of the levels, because a scene draws a
+        # peak over the bar it belongs to and reads the two by the same
+        # index.
+        assert said.peaks == [1.0, 0.5, 0.0, 0.0]
+        assert (said.bass, said.mid, said.high) == (1.0, 0.0, 0.0)
+        assert (said.hit, said.hue, said.beat_at) == (1.0, 0.0, 1.0)
+        assert said.tempo == 0.0, "a nan tempo has to read as no tempo"
+        assert said.at == 86400.0
+        assert said.phase == 1e9
+        assert said.kit == {"Kick": 1.0, "Snare": 0.0, "Hats": 0.5}
+
+    def test_a_peak_is_kept_for_every_bar_there_is(self, qapp):
+        """Both ways round: a short list is padded and a long one is
+        cut, because the scenes that draw the two together index them
+        the same."""
+        from attachment_widgets import SpectrumState
+
+        said = SpectrumState()
+        said.levels = [0.5] * 6
+        said.peaks = [0.9]
+        said.settle()
+        assert said.peaks == [0.9, 0.0, 0.0, 0.0, 0.0, 0.0]
+        said.peaks = [0.9] * 10
+        said.settle()
+        assert said.peaks == [0.9] * 6
+
+    def test_the_pane_settles_every_frame_before_a_scene_sees_it(self, qapp):
+        """The guarantee is only worth anything if it is wired in. Off
+        the pane's own painting rather than off a call count: read that
+        way, this passes with the call moved anywhere at all."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        from attachment_widgets import Spectrum
+
+        pane = Spectrum()
+        pane.resize(320, 200)
+        pane._state.bass = self.INF
+        pane._state.tempo = self.NAN
+        pane._state.levels = [self.NAN] * 27
+        image = QImage(320, 200, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0))
+        painter = QPainter(image)
+        try:
+            pane._paint_scene(painter, QRectF(0, 0, 320, 200))
+        finally:
+            painter.end()
+        assert pane._state.bass == 1.0, (
+            f"the pane handed a scene a bass of {pane._state.bass}")
+        assert pane._state.tempo == 0.0
+        assert pane._state.levels == [0.0] * 27
+
+    def test_the_rider_stays_a_game_through_a_hostile_song(self, qapp):
+        """Not "does it raise": does it stay a game. The road only goes
+        forwards, the craft stays on it, the grid never holds more than
+        it has room for and nothing scores below nothing - whatever the
+        song says."""
+        import visualizers
+
+        beats = tuple(i * 0.5 for i in range(400))
+        songs = {
+            "silence": lambda frame: self._state(
+                at=frame / 60.0, levels=[0.0] * 27, bass=0.0, mid=0.0,
+                high=0.0, synth=0.0, kit={}, tempo=0.0),
+            "clipping": lambda frame: self._state(
+                at=frame / 60.0, levels=[1.0] * 27, bass=1.0, mid=1.0,
+                high=1.0, synth=1.0,
+                kit={"Kick": 1.0, "Snare": 1.0, "Hats": 1.0},
+                chart={"Kick": beats, "Snare": beats, "Hats": beats}),
+            "three hundred bpm": lambda frame: self._state(
+                at=frame / 60.0, tempo=300.0,
+                chart={"Kick": tuple(i * 0.2 for i in range(600))}),
+            "an infinite playhead": lambda frame: self._state(
+                at=self.INF, chart={"Kick": beats}),
+            "a playhead that never moves": lambda frame: self._state(
+                at=7.0, chart={"Kick": beats}),
+        }
+        faults = []
+        for name, feed in songs.items():
+            scene = visualizers.Rider()
+            scene._last = None
+            was_at = None
+            for frame in range(90):
+                self._run(scene, 1, feed)
+                got = scene.report()
+                if not math.isfinite(scene._at):
+                    faults.append(f"{name}: the road is at {scene._at}")
+                elif was_at is not None and scene._at < was_at - 1e-6:
+                    faults.append(f"{name}: the road went backwards "
+                                  f"{was_at:.3f} -> {scene._at:.3f}")
+                was_at = scene._at
+                edge = scene.LANE_WIDE * scene.LANES / 2.0
+                if not -edge <= scene._lane_here <= edge:
+                    faults.append(f"{name}: the craft is at "
+                                  f"{scene._lane_here:.2f}, off a road "
+                                  f"{edge * 2:.2f} wide")
+                if got["score"] < 0 or got["chain"] < 0 or got["hits"] < 0:
+                    faults.append(f"{name}: {got}")
+                for column, pile in enumerate(got["cells"]):
+                    if len(pile) > scene.CELLS_DEEP:
+                        faults.append(f"{name}: column {column} holds "
+                                      f"{len(pile)}")
+                if not 0.0 <= got["shield"] <= 1.0:
+                    faults.append(f"{name}: the bumper is at "
+                                  f"{got['shield']}")
+                if faults:
+                    break
+        assert not faults, "; ".join(faults[:4])
