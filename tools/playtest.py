@@ -244,6 +244,12 @@ def steer_well(scene):
     one - which is exactly the behaviour the coins exist to change, and
     exactly what this has to be able to measure.
     """
+    # Wakeboard: leave the road where the road is leaving you. A jump
+    # off the flat is worth nothing, so a player that jumped on a timer
+    # would measure nothing either.
+    crest = getattr(scene, "_crest", None)
+    if callable(crest) and crest() > 0.6:
+        scene.jump()
     soon = [b for b in scene._blocks
             if not b[3] and b[0] > scene._heard]
     if not soon:
@@ -396,6 +402,8 @@ def main(argv=None) -> int:
         off = "-" if median is None else f"{median:5.0f}/{most:5.0f}"
         low, mean, high = out["speed"]
         got = out["score"]
+        air = (f"  air {got['airs']}x{got['best_air']}"
+               if got.get("airs") else "")
         print(f"{name[:26]:26} {out['bpm']:5.0f} {out['blocks']:6d} "
               f"{off:>11} "
               f"{low:5.1f}/{mean:5.1f}/{high:5.1f} "
@@ -403,7 +411,7 @@ def main(argv=None) -> int:
               f"{got['hits']:5d} "
               f"{got['coins']:3d}/x{got['coin_best']:<3d} "
               f"{got['twists']:5d} "
-              f"{out['ms'][0]:5.1f}/{out['ms'][1]:5.1f}")
+              f"{out['ms'][0]:5.1f}/{out['ms'][1]:5.1f}" + air)
         fair = out["fair"]
         if fair and fair["stuck_at"] is not None:
             print(f"     UNFAIR: nothing to move to at {fair['stuck_at']}s, "

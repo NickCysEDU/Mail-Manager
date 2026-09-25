@@ -484,6 +484,10 @@ class AudioPane(QWidget):
             "Which game to play on the road.\n\n"
             "Mono: colours are points on a chain and greys are hazards. "
             "A chain breaks when you take a grey.\n\n"
+            "Ninja: the same, with far more to dodge and twice as much "
+            "for getting down the track without touching one.\n\n"
+            "Wakeboard: Mono, but the up arrow leaves the road. A jump "
+            "taken where the road crests is worth the most.\n\n"
             "Puzzle: a colour is worth nothing until three of them touch "
             "in the grid, and the grid is three columns deep by six.")
         self.game_box.currentTextChanged.connect(self.spectrum.set_scope_mode)
@@ -1048,6 +1052,8 @@ class AudioPane(QWidget):
         # leaves the key to whatever else wanted it.
         Qt.Key.Key_Left: ("lane", -1),
         Qt.Key.Key_Right: ("lane", 1),
+        # And up, for the one game that is not locked to the road.
+        Qt.Key.Key_Up: ("jump", 1),
     }
 
     @staticmethod
@@ -1077,6 +1083,8 @@ class AudioPane(QWidget):
             return True
         if action == "lane":
             return self._steer(value)
+        if action == "jump":
+            return self._jump()
         if action == "reaction" and self._steering() is not None:
             # A and D drive the game while the game is on screen. They step
             # through what the strobe listens to the rest of the time.
@@ -1117,6 +1125,20 @@ class AudioPane(QWidget):
         if scene is None:
             return False
         scene.steer(way)
+        self.spectrum.update()
+        return True
+
+    def _jump(self) -> bool:
+        """Leave the road, if the game on screen is the one that can.
+
+        Returns False everywhere else, which leaves the key to whatever
+        else wanted it - the list scrolls on the arrows the rest of the
+        time.
+        """
+        scene = getattr(self.spectrum, "_scene", None)
+        leap = getattr(scene, "jump", None)
+        if not callable(leap) or not leap():
+            return False
         self.spectrum.update()
         return True
 

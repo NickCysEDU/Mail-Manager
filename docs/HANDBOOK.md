@@ -834,6 +834,7 @@ numbers.
 |---|---|
 | **1 – 9** | Pick a scene, in the order the menu lists them |
 | **← →** | Change lane, in Music rider |
+| **↑** | Leave the road, in Wakeboard |
 | **S** | Strobe on or off |
 | **A** / **D** | Step through what the strobe listens to |
 | **M** | Set it to listen to nobody, so the hotkeys are the only light |
@@ -967,7 +968,22 @@ rather than 30. Audiosurf 2 pays Mono's clean finish at 10 per cent and
 Ninja's stealth bonus at "20 per cent or more" - twice as much, for the
 mode with the spikes in it - and the same ratio applies here.
 
-**Puzzle** is the third game on the same road, chosen with the **game**
+**Wakeboard** is the one game here that is not locked to the road.
+Audiosurf 2 describes it as "like mono but puts you on a surfboard that
+can leap off the track, gaining more points for jumping at a peak", and
+the road already has peaks: it is cut from the track's own amplitude, so
+a crest is a place where the music is about to drop away. **Up** leaves
+the road. A jump taken at a crest is worth 150 and one off the flat is
+worth nothing at all - it is a measurement rather than a switch, so half
+a crest is half the points.
+
+It clears half a world unit, which is most of a block's height, and
+lasts two thirds of a second - about a figure's worth at 128. Nothing
+touches you up there and nothing is collected either, so a jump is a
+trade rather than a way past the hard parts, and whatever you flew over
+is gone rather than waiting for you when you land.
+
+**Puzzle** is the fourth game on the same road, chosen with the **game**
 box beside the scene. There a colour is worth nothing on its own: it
 drops into a grid three columns wide and six deep, and three or more of a
 colour touching - edge to edge, never corner to corner - light a fuse.
@@ -1244,7 +1260,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,843 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,865 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1627,7 +1643,7 @@ corkscrews the track earned, and what a frame costs. No song, path or
 frame of one is ever written into the repository.
 
 ```bash
-./dev test        # 3,843 tests, about three minutes
+./dev test        # 3,865 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

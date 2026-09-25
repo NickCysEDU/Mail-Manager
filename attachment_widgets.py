@@ -26,7 +26,7 @@ import visualizers
 from flowlayout import FlowHolder as _FlowHolder
 
 from PySide6.QtCore import (QEasingCurve, QPoint, QPointF, QRect, QRectF, QSize, Qt,
-                            QThread, QTimer, QVariantAnimation, Signal)
+                            QTimer, QVariantAnimation, Signal)
 from PySide6.QtGui import (QColor, QFont, QFontMetricsF, QImage, QLinearGradient,
                            QPainter, QPainterPath, QPixmap,
                            QPen, QRadialGradient)
@@ -149,17 +149,18 @@ def _hz_label(value) -> str:
     return f"{int(value)}Hz"
 
 
-#: Held while the glyph cache is being warmed, because Qt calls qFatal
-#: when a running QThread is destroyed. Dropped when it finishes, which
-#: is why whether it *has* run is a separate flag: a pane made after the
-#: first one finished would otherwise start another, and the app makes
-#: several - the preview, the full-screen view, the window's own.
-_WARMER = None
+#: Whether the font machinery has been woken up yet. See warm_the_glyphs.
 _WARMED = False
 
 
-class _Glyphs(QThread):
-    """Pay the font machinery's one-off cost off the GUI thread.
+#: Enough of the alphabet to cover every caption and readout: the scenes
+#: letter their labels, their cards and their dials from it.
+_LETTERS = ("0123456789 abcdefghijklmnopqrstuvwxyz"
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ %.:-+/,()[]")
+
+
+def warm_the_glyphs() -> None:
+    """Pay the font machinery's one-off cost before anything animates.
 
     The first piece of text drawn in a process is not the cost of
     drawing text: it is Qt populating its font database, resolving the
@@ -167,61 +168,39 @@ class _Glyphs(QThread):
     to be first. Measured at 1440x810, the equaliser's first frame cost
     168 ms against 6 ms for every frame after it - ten dropped frames at
     the moment a scene appears, which is most of what "xxx xxxxxxxxxxx
-    xxx xxxxx xxxx xxxxx xxxxxx" was.
+    xxx xxxxx xxxx xxxxx xxxxxx" was. One string is enough: the cost is
+    the machinery rather than the glyphs, and a single ``drawText`` takes
+    that frame to 13 ms.
 
-    One string is enough: the cost is the machinery rather than the
-    glyphs, and a single ``drawText`` takes the first frame from 168 ms
-    to 13. Into a QImage rather than a QPixmap, because a pixmap belongs
-    to the GUI thread and an image does not.
+    On this thread, and that is not an implementation detail. Doing it
+    on a worker was tried, because 145 ms is a long time to hold the GUI
+    thread, and it segfaults: QCoreTextFontDatabase::populateFamilyAliases
+    is not safe to run off the GUI thread and races the GUI thread doing
+    the same thing. A stall is a nuisance and a crash is not a trade.
+
+    Called while the pane is being built, so the stall lands before
+    anything is moving; the scene's own fade then covers what is left.
+    See Spectrum.WARM_FRAMES.
     """
-
-    #: Enough of the alphabet to cover every caption and readout: the
-    #: scenes letter their labels, their cards and their dials from it.
-    LETTERS = ("0123456789 abcdefghijklmnopqrstuvwxyz"
-               "ABCDEFGHIJKLMNOPQRSTUVWXYZ %.:-+/,()[]")
-
-    def run(self) -> None:
-        try:
-            image = QImage(700, 48, QImage.Format.Format_ARGB32_Premultiplied)
-            image.fill(QColor(0, 0, 0))
-            painter = QPainter(image)
-            try:
-                for family in (None, visualizers.dial_face()):
-                    font = QFont(family) if family else QFont(painter.font())
-                    font.setPointSizeF(12.0)
-                    painter.setFont(font)
-                    painter.drawText(QRectF(0, 0, 700, 48), 0, self.LETTERS)
-            finally:
-                painter.end()
-        except Exception:      # noqa: BLE001 - a cold cache is not fatal
-            pass
-
-
-def warm_the_glyphs() -> None:
-    """Start the warm-up, once per process, and never wait for it.
-
-    Nothing depends on it finishing: a scene drawn before it lands pays
-    what it would have paid anyway. See ``_Glyphs``.
-    """
-    global _WARMED, _WARMER
+    global _WARMED
 
     if _WARMED:
         return
     _WARMED = True
     try:
-        _WARMER = _Glyphs()
-        _WARMER.finished.connect(_glyphs_warmed)
-        _WARMER.start()
-    except Exception:      # noqa: BLE001
-        _WARMER = None
-
-
-def _glyphs_warmed() -> None:
-    """Let the thread go, now that it has stopped."""
-    global _WARMER
-
-    if _WARMER is not None and _WARMER.isFinished():
-        _WARMER = None
+        image = QImage(700, 48, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0))
+        painter = QPainter(image)
+        try:
+            for family in (None, visualizers.dial_face()):
+                font = QFont(family) if family else QFont(painter.font())
+                font.setPointSizeF(12.0)
+                painter.setFont(font)
+                painter.drawText(QRectF(0, 0, 700, 48), 0, _LETTERS)
+        finally:
+            painter.end()
+    except Exception:      # noqa: BLE001 - a cold cache is not fatal
+        pass
 
 
 class SpectrumState:

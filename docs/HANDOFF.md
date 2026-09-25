@@ -7,6 +7,137 @@ future session should pick up.
 
 ---
 
+## Round three: Music rider, and the road it runs on
+
+The visualiser pane has nine scenes. One of them, **Music rider**, is a
+game, and this round turned it into a replica of Audiosurf - built to the
+blueprint in `audiosurf clone guidelines.rtf` in the working folder and
+then to Audiosurf 2's own documented mechanics. It is four games on one
+road now, and almost everything below was found by *measuring* rather
+than by reading the code.
+
+### The one tool that matters
+
+    ./dev playtest ~/Music/*.mp3
+
+Plays real records through the real pane, headless, frame by frame, and
+reports where each block landed against its beat, what the road's speed
+did, whether it ever went backwards or stood empty, what a player who
+dodges perfectly is still hit by, how many coins that player took, how
+many corkscrews the track earned, and what a frame costs. Nearly every
+fault in this list was found there and then written back into the suite
+as a test. A test says a block arrives on the beat when the chart is
+three evenly spaced kicks; a record says whether it does when the
+detector heard the kick 40 ms late and the tempo came out at 87.3.
+
+No song, path or frame of one is ever written into the repository.
+`*.png` is in the ignore file for exactly this reason: `--save` writes a
+frame of the scene while somebody's music is playing.
+
+### The four games
+
+| Game | What it is |
+|---|---|
+| **Mono** | Grey against colour. A chain: 1, 5, 9 … capped at 200, broken by a grey. Clean finish +30%. A side bumper shatters the first grey free and comes back over 8 s. |
+| **Ninja** | The same road with 4 hazard slots in 7 rather than 2 - fifteen hazards a minute against seven on a real record. Clean finish +60%. |
+| **Wakeboard** | **Up** leaves the road. A jump is paid by how much of a crest it left from: a measurement, not a switch, so half a crest is half the points. Nothing touches you or is collected in the air. |
+| **Puzzle** | The grid: 3 wide, 6 deep, 4-connected, 750 ms fuse, cascading gravity, quadratic cluster scoring, overfill stun. |
+
+Coins sit where you have to be brave to take them - beside a single
+obstacle, or in a lane a wall is *about to close*, ending 0.3 s before it
+arrives. Corkscrews turn the whole world over at the song's loudest
+moments, with a power block at the mouth of each.
+
+### Invariants. Break these and the scene breaks
+
+Each one cost a round of measurement to find. Each has a test.
+
+- **One clock.** The road's position is a function of the beat:
+  `PER_BEAT = (FAR - RIDER_AT) / LOOK_BEATS`, so a block laid on beat *n*
+  sits at *n* of them and arrives exactly on it. Before this there were
+  two clocks and blocks slid over the ground.
+- **`_origin` is not `_grid`.** `_grid` is re-derived every frame and
+  phase-locked; `_origin` is a *fixed* distance origin. A distance
+  measured from something that walks with you is always the same
+  distance, and that is a road that never moves.
+- **A block must be read against the road.** The road, the lamp and the
+  sky behind it are held near the floor on purpose. An obstacle and the
+  road it stood on once differed in hue and not in brightness - 0.400
+  against 0.401 - which is invisible. Anything that brightens the middle
+  of the frame has to be measured against `TestTheRoadIsBuiltFromTheSong`
+  and the coin and block contrast tests before it ships.
+- **Stopped means stopped.** Every clock in the scene runs on the
+  track's own time: the shake, the sparks, the field, the camera easing,
+  the envelope followers, the fuse, the bumper's recharge and the origin's
+  own phase correction. That last one crept ten units of road a second
+  under a stopped song.
+- **The same game on every machine.** A share *per frame* is a different
+  game on every machine. The lane slide and the camera's shake are shares
+  per sixtieth of a second: the dodge window holds between 50 and 67 ms
+  from 30 fps to 144, and was 167 ms at 30 and 25 at 120.
+- **Nothing the analysis says can close the window.** `SpectrumState.settle()`
+  forces every number back into its range once a frame, before any scene
+  sees it. A nan is *truthy*, and a nan tempo used to raise out of paint
+  on the first frame.
+
+### Measured, at the end of this round
+
+- A block arrives a median of **10 ms** from its own beat on a real
+  record; the road runs 4.8 to 19 units a second around a mean of 12.3,
+  with a floor at 45% of the mean rather than stopping.
+- A beat changes **43% of the frame** and swings its brightness 0.064.
+  It was 7% and 0.026, which is what "the beat isn't felt" measured as.
+  The beat hits at the frame's *edge* and on the craft, never in the
+  middle, so block contrast is identical on the beat and off it.
+- A frame costs **8.7 ms median at 1920x1080** against a 16.7 ms budget.
+- A scene's first frame costs 12-16 ms rather than up to 168. The font
+  machinery is warmed on a worker thread and a scene is drawn invisibly
+  for its first six frames.
+- The road bends up to 1.37 lane widths and is within a third of a lane
+  of straight 63% of the time. It was straight **100%** of the time: the
+  stereo lean was summed with its own bias in it, and summing a biased
+  signal gives a ramp, which with the camera pinned to the road is
+  exactly what straight looks like.
+- 14,625 hostile inputs through `tools/stress.py`: nothing raised,
+  nothing hung.
+
+### Watch out for
+
+- **Never draw text off the GUI thread.** The font machinery's one-off
+  cost is 145 ms, and moving it to a worker thread to keep it off the
+  frame clock segfaults the process:
+  `QCoreTextFontDatabase::populateFamilyAliases` is not thread-safe and
+  races the GUI thread doing the same thing. It is warmed on the GUI
+  thread while the pane is built, where a stall costs nothing because
+  nothing is animating yet. A crash is not a trade for a stall.
+- **Nothing in a frame settles exactly.** The pane's level envelopes
+  ease towards a held row, and the clock closes on the playhead, both
+  asymptotically - so under a *stopped* track every number still creeps
+  in the tenth decimal place. A gradient's interior rounds through that
+  without moving; the edge of the region it is painted into does not,
+  because a step function on a creeping number is a step. Anything
+  clipped to an area has to compute that area from a constant, not from
+  a value that creeps. Measured as exactly one pixel of a 640x360 frame
+  changing by one step of red, which is the sort of thing that is
+  invisible and still wrong.
+- **Measure before culling for speed.** Dropping a block's reflection
+  past a distance took a third of the frame's fills out and saved 0.2 ms
+  of 8.9 - and spent the thing that makes a block sit on the road at
+  exactly the distances a player reads. The test caught it. Four
+  gradient fills of a band also cost more than one fill of the whole
+  frame, because the per-call setup dominates the pixels.
+- **Mutation runs edit the source in place.** `finally` restores it - but
+  a killed run does not, and a previous session left the game box
+  hard-wired to two modes and `_collide` returning early in mid-air. A
+  green full suite is the proof that no mutant survives, because every
+  mutant written for this scene is caught by a test.
+- **A test that means "figures" must exclude coins.** A coin trail is
+  three things a sixth of a second apart on purpose.
+- **`_pulse` is an attribute, not a method.** The beat phase. The rim
+  flash is `_rim`.
+
+---
+
 ## Round two: non-job mail, church, and going public
 
 **Non-job mail had no menu.** Job mail could be ticked and filed in one
@@ -128,7 +259,7 @@ That first figure is the one that matters and it must stay at zero.
 
 **Speed.** Rules engine 10.1 ms per message. Lexicon opens in 38 ms using
 1.95 MB, down from 70 ms and 10.5 MB, and neither number now grows with the
-table. Test suite 3,843 tests (with the evaluation sets present) in about three minutes on four workers.
+table. Test suite 3,865 tests (with the evaluation sets present) in about three minutes on four workers.
 
 ---
 
@@ -166,6 +297,31 @@ table. Test suite 3,843 tests (with the evaluation sets present) in about three 
 ---
 
 ## The list
+
+### Music rider, next
+
+- [ ] **The four Audiosurf character classes are not built.** Pointman's
+  LIFO buffer, Vegas's shuffle, Pusher, Eraser. They all act on the
+  puzzle grid with mouse clicks, and this scene has no mouse input - so
+  they need an input design before they need code.
+- [ ] **The playtest has only ever been run over one record at a time.**
+  It takes a list. A dozen records of different genres in one run is the
+  evidence that would say whether the chart is fair on something that is
+  not 128 bpm four-to-the-floor. Run it one song at a time in one
+  process: a previous session killed the machine by running the batch
+  next to two other heavy jobs.
+- [ ] **Nothing profiles the scene at 4K.** It fits at 1080p with 47 per
+  cent of the budget spare. Sharpness shrinks the buffer above that and
+  nothing has measured what it looks like when it does.
+- [ ] **A GPU renderer is the ceiling worth raising.** The scene is
+  QPainter on the CPU and the drawing is the frame: `fillPath` is 5 ms of
+  a 8.7 ms frame at 1080p. Everything that would make it *more*
+  spectacular - real particle counts, bloom, a road with more in it -
+  spends that budget. The game logic is renderer-independent, so this is
+  a drawing-layer change rather than a rewrite. Worth doing before the
+  scene grows much further, and the point at which a separate repository
+  starts to make sense, because it means a dependency Mail Manager does
+  not otherwise need.
 
 ### Done in this round
 

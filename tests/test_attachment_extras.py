@@ -12479,29 +12479,36 @@ class TestASceneIsNotShownUntilItIsUpToSpeed:
             "picking the scene that was already showing hid it again")
 
     # -- the font machinery ------------------------------------------------
-    def test_the_glyph_cache_is_warmed_once_and_let_go(self, qapp):
-        """Off the GUI thread, because 145 ms of it is Qt populating a
-        font database and the GUI thread is the one drawing frames."""
+    def test_the_glyph_cache_is_warmed_once(self, qapp):
+        """Once per process, and on this thread.
+
+        Doing it on a worker was tried, because 145 ms is a long time to
+        hold the GUI thread, and it segfaults:
+        QCoreTextFontDatabase::populateFamilyAliases is not safe off the
+        GUI thread and races the GUI thread doing the same thing. A
+        stall is a nuisance and a crash is not a trade.
+        """
         import attachment_widgets
 
         attachment_widgets.warm_the_glyphs()
-        warmer = attachment_widgets._WARMER
-        if warmer is not None:
-            # Started rather than finished: it is deliberately not waited
-            # for. Wait here so the test leaves nothing running.
-            assert warmer.isRunning() or warmer.isFinished()
-            warmer.wait(10_000)
-            qapp.processEvents()
-        # And asking again does not start a second one, whether the
-        # first has finished or not: the app makes several panes, and a
-        # thread each would be a thread each for nothing.
         assert attachment_widgets._WARMED is True
+        # And asking again is free: the app builds several panes, and
+        # the cost is paid by whichever one is first.
         attachment_widgets.warm_the_glyphs()
-        again = attachment_widgets._WARMER
-        assert again is None or again is warmer, (
-            "a second warm-up thread was started")
-        if again is not None:
-            again.wait(10_000)
+        assert attachment_widgets._WARMED is True
+
+    def test_no_font_work_is_handed_to_another_thread(self, qapp):
+        """The crash this cost. Qt's font database is populated the
+        first time anything is lettered, and populating it off the GUI
+        thread took the whole process down with a segmentation fault in
+        QCoreTextFontDatabase."""
+        import inspect
+
+        import attachment_widgets
+
+        source = inspect.getsource(attachment_widgets.warm_the_glyphs)
+        assert "QThread" not in source and "Thread" not in source, (
+            "the glyph warm-up is being handed to a thread again")
 
     def test_warming_the_glyphs_draws_text(self, qapp):
         """Not a mock: the thread's own body, run here, has to put
@@ -12518,7 +12525,7 @@ class TestASceneIsNotShownUntilItIsUpToSpeed:
         try:
             painter.setPen(QColor(255, 255, 255))
             painter.drawText(QRectF(0, 0, 700, 48), 0,
-                             attachment_widgets._Glyphs.LETTERS)
+                             attachment_widgets._LETTERS)
         finally:
             painter.end()
         lit = sum(1 for x in range(0, 700, 3) for y in range(0, 48, 2)
@@ -12526,7 +12533,7 @@ class TestASceneIsNotShownUntilItIsUpToSpeed:
         assert lit > 50, (
             f"the warm-up string drew {lit} lit pixels, so it is not "
             f"putting glyphs through the font machinery")
-        assert len(attachment_widgets._Glyphs.LETTERS) > 40, (
+        assert len(attachment_widgets._LETTERS) > 40, (
             "the warm-up string is too short to cover the captions")
 
 
@@ -13372,3 +13379,521 @@ class TestNinjaIsTheSameRoadWithMoreToDodge:
         ninja = [b for b in self._laid("Ninja")._blocks if b[2] == "coin"]
         assert len(ninja) > len(mono), (
             f"Ninja laid {len(ninja)} coins and Mono {len(mono)}")
+
+
+class TestTheGameBoxPicksTheGame:
+    """The control a player actually uses to choose between the games.
+
+    Nothing tested it at all, which is how a game could be added to the
+    scene and never reach anybody: the box is built from the scene's own
+    list of games, so the wiring is easy to believe in and worth
+    checking once.
+    """
+
+    @staticmethod
+    def _pane(qtbot):
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        qtbot.addWidget(pane)
+        return pane
+
+    def test_it_lists_every_game_the_scene_has(self, qtbot):
+        import visualizers
+
+        pane = self._pane(qtbot)
+        listed = [pane.game_box.itemText(i)
+                  for i in range(pane.game_box.count())]
+        assert listed == list(visualizers.by_name("Music rider").MODES), (
+            f"the box offers {listed}")
+        assert "Ninja" in listed
+
+    def test_choosing_one_changes_the_game(self, qtbot):
+        import visualizers
+
+        pane = self._pane(qtbot)
+        rider = visualizers.by_name("Music rider")
+        pane.spectrum.set_scene(rider)
+        for wanted in ("Ninja", "Puzzle", "Mono"):
+            pane.game_box.setCurrentText(wanted)
+            assert rider.mode == wanted, (
+                f"the box says {wanted} and the scene is playing "
+                f"{rider.mode}")
+
+    def test_it_is_only_shown_for_the_rider(self, qtbot):
+        """It is the rider's control. On any other scene it is a box
+        that does nothing, which is worse than no box."""
+        pane = self._pane(qtbot)
+        pane.enable_box.setChecked(True)
+        for scene, shown in (("Music rider", True), ("Rave", False),
+                             ("Oscilloscope", False)):
+            pane.scene_box.setCurrentText(scene)
+            pane._show_visual_controls(True)
+            # isHidden rather than isVisible: Qt calls a widget
+            # invisible when any ancestor is, and this pane is never
+            # shown in a test.
+            assert pane.game_box_holder.isHidden() is not shown, (
+                f"with {scene} showing, the game box is "
+                f"{'hidden' if pane.game_box_holder.isHidden() else 'shown'}")
+
+
+class TestWakeboardLeavesTheRoad:
+    """Audiosurf 2's fourth mode: "like mono but puts you on a surfboard
+    that can leap off the track, gaining more points for jumping at a
+    peak".
+
+    The road already has peaks - it is cut from the track's own
+    amplitude - so a crest is where the music is about to drop away, and
+    a jump taken there is worth everything while one off the flat is
+    worth nothing at all. It is the one thing on this road that is not
+    locked to it: the blueprint's "the vehicle is completely locked to
+    the 3D spline" holds for every other game here.
+
+    Nothing is collected in the air and nothing can hit you there
+    either, so a jump is a trade rather than a way past the hard parts.
+    """
+
+    @staticmethod
+    def _board(hill=None):
+        import visualizers
+
+        class Road(visualizers.Rider):
+            def _road(self, at):
+                return (0.0, 0.0 if hill is None else hill(at), 0.0)
+
+        scene = Road()
+        scene._last = None
+        scene.set_mode("Wakeboard")
+        scene._lane = 1
+        scene._lane_here = scene._lane_at(1)
+        scene._heard = 100.0
+        return scene
+
+    @staticmethod
+    def _flight(scene, seconds=1.5, fps=60):
+        """Carry a jump to the ground, and give back every height."""
+        seen = []
+        for _ in range(int(seconds * fps)):
+            scene._fly(1.0 / fps)
+            seen.append(scene._air)
+        return seen
+
+    # -- the mode ----------------------------------------------------------
+    def test_it_is_one_of_the_games(self, qapp):
+        import visualizers
+
+        assert "Wakeboard" in visualizers.Rider.MODES
+
+    def test_only_this_game_can_leave_the_road(self, qapp):
+        """Every other game here is locked to the spline, which is what
+        the blueprint asks for."""
+        import visualizers
+
+        for mode in ("Mono", "Ninja", "Puzzle"):
+            scene = visualizers.Rider()
+            scene.set_mode(mode)
+            assert scene.jump() is False, f"{mode} left the road"
+            assert scene.report()["air"] == 0.0
+
+    def test_you_cannot_jump_again_until_you_land(self, qapp):
+        scene = self._board()
+        assert scene.jump() is True
+        assert scene.jump() is False, "it jumped twice without landing"
+        self._flight(scene)
+        assert scene.jump() is True, "it could not jump again after landing"
+
+    # -- the arc -----------------------------------------------------------
+    def test_it_goes_up_and_comes_down(self, qapp):
+        scene = self._board()
+        scene.jump()
+        seen = self._flight(scene)
+        assert max(seen) > 0.45, (
+            f"the craft got {max(seen):.2f} units off the road, and a "
+            f"block is 0.62 tall - that does not read as leaving it")
+        assert seen[-1] == 0.0, "it never came down"
+        up = seen.index(max(seen))
+        assert 0 < up < len(seen) - 1, "there is no arc, only a jump"
+
+    def test_it_is_in_the_air_for_about_a_figure(self, qapp):
+        """Long enough to be a decision, short enough not to be a way of
+        sitting out the hard parts. Written as a time rather than off
+        the push and the gravity that make it."""
+        scene = self._board()
+        scene.jump()
+        seen = self._flight(scene)
+        air = sum(1 for height in seen if height > 0.0) / 60.0
+        assert 0.45 < air < 0.9, f"a jump lasts {air:.2f}s"
+
+    def test_a_stopped_track_stops_the_jump_too(self, qapp):
+        """Everything on this road runs on the track's own clock, and
+        the step this is driven with is already gated on it."""
+        scene = self._board()
+        scene.jump()
+        scene._fly(1 / 60.0)
+        was = scene._air
+        for _ in range(120):
+            scene._fly(0.0)
+        assert scene._air == was, (
+            f"the craft drifted from {was:.3f} to {scene._air:.3f} with "
+            f"the track stopped")
+
+    # -- what it pays ------------------------------------------------------
+    def test_a_jump_off_the_flat_is_worth_nothing(self, qapp):
+        """"More points for jumping at a peak" cuts both ways."""
+        scene = self._board()
+        scene.jump()
+        self._flight(scene)
+        got = scene.report()
+        assert got["score"] == 0 and got["airs"] == 0, got
+
+    def test_a_jump_off_a_crest_pays(self, qapp):
+        """A crest is where the road ahead falls away from the road
+        under you."""
+        import visualizers
+
+        scene = self._board(hill=lambda at: 0.0 if at < 4.0 else 1.0)
+        assert scene._crest() == pytest.approx(1.0)
+        scene.jump()
+        self._flight(scene)
+        got = scene.report()
+        assert got["score"] == visualizers.Rider.AIR_WORTH, (
+            f"a jump off a full crest paid {got['score']}")
+        assert got["airs"] == 1 and got["best_air"] == got["score"]
+
+    def test_what_it_pays_follows_the_peak(self, qapp):
+        """Half a crest is half the points: it is a measurement, not a
+        switch."""
+        import visualizers
+
+        full = visualizers.Rider.CREST_FULL
+        paid = {}
+        for share in (0.0, 0.5, 1.0):
+            scene = self._board(
+                hill=lambda at, s=share: 0.0 if at < 4.0 else full * s)
+            scene.jump()
+            self._flight(scene)
+            paid[share] = scene.report()["score"]
+        assert paid[0.0] == 0
+        assert paid[0.5] == pytest.approx(paid[1.0] / 2, abs=2), paid
+        assert paid[1.0] > 0
+
+    def test_the_crest_is_read_when_it_leaves_not_when_it_lands(self, qapp):
+        """By the time it lands the crest is behind it."""
+        scene = self._board(hill=lambda at: 0.0 if at < 4.0 else 1.0)
+        scene.jump()
+        assert scene._air_from == pytest.approx(1.0)
+        # The road goes flat while it is in the air; the jump is still
+        # the jump it was.
+        scene._road = lambda at: (0.0, 0.0, 0.0)
+        self._flight(scene)
+        assert scene.report()["score"] > 0, (
+            "the jump was re-read on landing rather than on take-off")
+
+    def test_a_power_block_doubles_a_jump(self, qapp):
+        import visualizers
+
+        scene = self._board(hill=lambda at: 0.0 if at < 4.0 else 1.0)
+        scene._double = visualizers.Rider.POWER_DOUBLE
+        scene.jump()
+        self._flight(scene)
+        assert scene.report()["score"] == visualizers.Rider.AIR_WORTH * 2
+        assert scene.report()["double"] == 1.0, "it was not spent"
+
+    # -- what happens up there ---------------------------------------------
+    def test_nothing_touches_you_in_the_air(self, qapp):
+        scene = self._board()
+        scene.jump()
+        scene._fly(1 / 60.0)
+        scene._blocks = [[10.0, 1, "block", False, True],
+                         [10.1, 1, "block", False, False],
+                         [10.2, 1, "coin", False, False]]
+        scene._collide()
+        got = scene.report()
+        assert got["hits"] == 0, "an obstacle hit a craft that was over it"
+        assert got["score"] == 0 and got["chain"] == 0, (
+            f"something was collected in the air: {got}")
+        assert got["coins"] == 0
+        assert got["clean"] is True
+
+    def test_what_was_passed_over_is_not_waiting_when_you_land(self, qapp):
+        """Otherwise every block flown over lands on you at once."""
+        scene = self._board()
+        scene.jump()
+        scene._fly(1 / 60.0)
+        scene._blocks = [[10.0, 1, "block", False, True]]
+        scene._collide()
+        self._flight(scene)
+        scene._collide()
+        assert scene.report()["hits"] == 0, (
+            "the obstacle flown over was collected on landing")
+
+    def test_it_is_drawn_off_the_road(self, qapp):
+        """Off the frame: read off the height, this passes with the
+        craft drawn flat on the road."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        side = 480
+        drawn = {}
+        for name, air in (("down", 0.0), ("up", 0.5)):
+            scene = visualizers.Rider()
+            scene._last = None
+            scene.set_mode("Wakeboard")
+            state = SpectrumState()
+            state.levels = [0.4] * 27
+            state.bass = state.mid = state.high = 0.3
+            state.synth = 0.0
+            state.kit = {}
+            state.at = 1.0
+            state.chart = {"Kick": ()}
+            image = QImage(side, side,
+                           QImage.Format.Format_ARGB32_Premultiplied)
+            painter = QPainter(image)
+            was = visualizers.time.monotonic
+            visualizers.time.monotonic = lambda: 500.0
+            try:
+                scene._chart_from = state.chart
+                scene._laid = 99.0
+                scene._blocks = []
+                image.fill(QColor(0, 0, 0))
+                scene.paint(painter, QRectF(0, 0, side, side), state)
+                scene._air = air
+                image.fill(QColor(0, 0, 0))
+                scene.paint(painter, QRectF(0, 0, side, side), state)
+            finally:
+                painter.end()
+                visualizers.time.monotonic = was
+            drawn[name] = image.copy()
+        # Where the two frames differ is where the craft moved, and the
+        # only thing that moved is the craft. Below the card, which is
+        # at the top and says different things in the two.
+        moved = [y for y in range(side // 4, side)
+                 for x in range(0, side, 2)
+                 if drawn["up"].pixelColor(x, y)
+                 != drawn["down"].pixelColor(x, y)]
+        assert moved, "the craft drew identically in the air and on the road"
+        assert min(moved) < side * 0.72, (
+            f"the highest thing that moved is at row {min(moved)} of "
+            f"{side}, so the craft is not drawn off the road")
+
+
+class TestTheBeatHitsHardEnoughToFeel:
+    """"Make the beat hit harder."
+
+    It was not hitting at all, and the frame says so. Played the same
+    128 bpm track through every scene and measured what a beat does to
+    the picture: the rider swung its brightness 0.026 and changed 7 per
+    cent of the frame, where the rave swung 0.140 and changed 97. The
+    weakest beat of the three by a long way.
+
+    The reason is the road. Everything it is made of is held near the
+    floor on purpose - a block is read against the road, the lamp and
+    the sky behind it, and brightening any of those is exactly how
+    blocks became invisible the first time. So the beat hits where
+    nothing is read against anything: the frame's own edge, and a halo
+    on the craft in the foreground. Neither is ever behind a block, and
+    the measured contrast of a block against the road is the same on the
+    beat as off it.
+    """
+
+    W, H = 240, 135
+    BEAT = 60.0 / 128.0
+
+    @classmethod
+    def _played(cls, scene, seconds=3.0, fps=60, kicks=True):
+        """Play a house track and keep every frame."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        image = QImage(cls.W, cls.H,
+                       QImage.Format.Format_ARGB32_Premultiplied)
+        rect = QRectF(0, 0, cls.W, cls.H)
+        painter = QPainter(image)
+        clock = [1000.0]
+        was = visualizers.time.monotonic
+        visualizers.time.monotonic = lambda: clock[0]
+        shots = []
+        chart = {"Kick": tuple(i * cls.BEAT for i in range(200))}
+        try:
+            for frame in range(int(seconds * fps)):
+                clock[0] += 1 / fps
+                at = frame / fps
+                since = at % cls.BEAT
+                kick = (max(0.0, 1.0 - since / (cls.BEAT * 0.55))
+                        if kicks else 0.0)
+                state = SpectrumState()
+                state.levels = [0.4] * 27
+                state.bass = 0.35 + 0.6 * kick
+                state.mid = 0.3
+                state.high = 0.3
+                state.synth = 0.2
+                state.kit = {"Kick": kick}
+                state.at = at
+                state.tempo = 128.0
+                state.beat_at = since / cls.BEAT if kicks else 0.5
+                state.chart = chart
+                state.settle()
+                image.fill(QColor(0, 0, 0))
+                scene.paint(painter, rect, state)
+                shots.append((at, image.copy()))
+        finally:
+            painter.end()
+            visualizers.time.monotonic = was
+        return shots
+
+    @classmethod
+    def _light(cls, shot, x, y):
+        colour = shot.pixelColor(x, y)
+        return colour.lightnessF()
+
+    @classmethod
+    def _changed(cls, shots, skip=1.0):
+        """How much of the frame moves as each beat lands."""
+        live = [s for s in shots if s[0] > skip]
+        moved = []
+        for index in range(1, len(live)):
+            at, shot = live[index]
+            was_at, was = live[index - 1]
+            if int(at / cls.BEAT) == int(was_at / cls.BEAT):
+                continue
+            moved.append(sum(
+                1 for x in range(0, cls.W, 4) for y in range(0, cls.H, 4)
+                if abs(cls._light(shot, x, y) - cls._light(was, x, y)) > 0.04)
+                / ((cls.W // 4) * (cls.H // 4)))
+        return moved
+
+    def test_a_beat_moves_a_good_share_of_the_frame(self, qapp):
+        """The number this was written for. Seven per cent was the
+        measurement that said it was not being felt; a fifth is the
+        floor, and it measures about twice that now."""
+        import statistics
+
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._last = None
+        moved = self._changed(self._played(scene))
+        assert moved, "no beats landed at all"
+        share = statistics.fmean(moved)
+        assert share > 0.20, (
+            f"a beat changes {share:.1%} of the frame, and seven per cent "
+            f"was the measurement that said the beat was not being felt")
+
+    def test_a_track_with_no_kick_in_it_does_not_flash(self, qapp):
+        """It is the beat that hits, not the clock."""
+        import statistics
+
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._last = None
+        # No kick and the playhead pinned between beats: nothing should
+        # be pulsing.
+        shots = self._played(scene, kicks=False)
+        live = [s for s in shots if s[0] > 1.0]
+        # The top two corners, which are the only part of the frame
+        # nothing else draws in: the road runs up the middle, the
+        # pillars sweep the sides at road height, and the rim is the
+        # only thing that ever lights a corner.
+        corners = ((2, 2), (self.W - 3, 2))
+        swing = max(
+            abs(self._light(b, x, y) - self._light(a, x, y))
+            for (_at, a), (_bt, b) in zip(live, live[1:])
+            for x, y in corners)
+        assert swing < 0.08, (
+            f"with no kick in the track the frame's corners still jump "
+            f"{swing:.2f} from one frame to the next")
+
+    def test_the_edge_is_what_lights_rather_than_the_road(self, qapp):
+        """Where the beat is allowed to hit. The middle of the frame is
+        where a block is read, so it is the one place that must not."""
+        import statistics
+
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._last = None
+        shots = self._played(scene)
+        live = [s for s in shots if s[0] > 1.0]
+        spot = (2, 2)
+        on = max(live, key=lambda row: self._light(row[1], *spot))[1]
+        off = min(live, key=lambda row: self._light(row[1], *spot))[1]
+        edge = self._light(on, *spot) - self._light(off, *spot)
+        assert edge > 0.05, (
+            f"the frame's edge only moves {edge:.3f} between the loudest "
+            f"and quietest moment of a beat")
+
+    def test_a_block_reads_the_same_on_the_beat_as_off_it(self, qapp):
+        """The whole constraint. Measured against the road beside it at
+        the instant of a kick and again between kicks."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        side = 560
+
+        class Flat(visualizers.Rider):
+            def _road(self, at):
+                return (0.0, 0.0, 0.0)
+
+        seen = {}
+        for name, kick in (("on the beat", 1.0), ("between", 0.0)):
+            scene = Flat()
+            scene._last = None
+            state = SpectrumState()
+            state.levels = [0.4] * 27
+            state.bass = state.mid = state.high = 0.6
+            state.synth = 0.2
+            state.kit = {"Kick": kick}
+            state.at = 1.0
+            state.tempo = 128.0
+            state.beat_at = 0.0 if kick else 0.5
+            state.chart = {"Kick": ()}
+            image = QImage(side, side,
+                           QImage.Format.Format_ARGB32_Premultiplied)
+            painter = QPainter(image)
+            was = visualizers.time.monotonic
+            visualizers.time.monotonic = lambda: 500.0
+            try:
+                scene._chart_from = state.chart
+                scene._laid = 99.0
+                scene._blocks = []
+                image.fill(QColor(0, 0, 0))
+                scene.paint(painter, QRectF(0, 0, side, side), state)
+                want = min((abs(scene._where(w / 100.0) - 8.0), w / 100.0)
+                           for w in range(1, 400))[1]
+                scene._blocks = [[want, 1, "block", False, True]]
+                image.fill(QColor(0, 0, 0))
+                scene.paint(painter, QRectF(0, 0, side, side), state)
+                horizon, focal, _tilt = scene._camera(
+                    QRectF(0, 0, side, side), scene._loudness, state.bass)
+                spot = scene._eye(horizon, focal, scene._lane_at(1), -0.3,
+                                  scene._where(want))
+            finally:
+                painter.end()
+                visualizers.time.monotonic = was
+            x, y = int(spot.x()), int(spot.y())
+
+            def lit(px, py):
+                colour = image.pixelColor(px, py)
+                return (0.2126 * colour.redF() + 0.7152 * colour.greenF()
+                        + 0.0722 * colour.blueF())
+
+            here = lit(x, y)
+            road = statistics.median(
+                [lit(x + 48, y), lit(x - 48, y), lit(x, y + 52)])
+            seen[name] = ((max(here, road) + 0.05)
+                          / (min(here, road) + 0.05))
+        assert seen["on the beat"] > 2.0, seen
+        assert seen["on the beat"] == pytest.approx(seen["between"], rel=0.2), (
+            f"a block reads at {seen['on the beat']:.2f} to one on the "
+            f"beat and {seen['between']:.2f} between, so the beat is "
+            f"washing out the thing you have to see")

@@ -3853,7 +3853,7 @@ class Rider(Scene):
     #: hazards, and the grid is only somewhere for them to go. Puzzle is
     #: the grid: a colour is worth nothing until three of them touch, and
     #: what the road hands you is a supply problem.
-    MODES = ("Mono", "Ninja", "Puzzle")
+    MODES = ("Mono", "Ninja", "Wakeboard", "Puzzle")
     blurb = "a game: three lanes, and the track is the song"
 
     # -- the road ---------------------------------------------------------
@@ -4210,6 +4210,13 @@ class Rider(Scene):
         self._got = 0.0
         #: Whether a grey has been touched yet. See CLEAN_BONUS.
         self._clean = True
+        #: How far off the road the craft is, how fast it is rising,
+        #: and how much of a peak it left from. See JUMP_UP.
+        self._air = 0.0
+        self._air_up = 0.0
+        self._air_from = 0.0
+        self._airs = 0
+        self._best_air = 0
         #: Coins taken, coins in a row now, and the best row of the run.
         #: See COIN_WORTH.
         self._coins = 0
@@ -4284,6 +4291,8 @@ class Rider(Scene):
         self._rolled = 0.0
         #: And how deep into a corkscrew, 0 at both ends and 1 half way.
         self._twisting = 0.0
+        #: How close to a beat the track is, held while it is stopped.
+        self._beat_lit = 0.0
         #: The last frame's worth of the track's clock. See ``_advance``.
         self._went = 0.0
         self._bend = 0.0
@@ -4345,6 +4354,8 @@ class Rider(Scene):
                 "worth": self._worth(), "cleared": self._cleared,
                 "shield": self._shield, "coins": self._coins,
                 "double": self._double, "twists": len(self._twists),
+                "air": self._air, "airs": self._airs,
+                "best_air": self._best_air,
                 "coin_run": self._coin_run, "coin_best": self._coin_best,
                 "stunned": self._stunned > 0.0,
                 "cells": [list(pile) for pile in self._cells]}
@@ -4588,6 +4599,84 @@ class Rider(Scene):
     #: worth of room at the snap the craft actually moves at, and about
     #: three quarters of a beat at 130.
     COIN_LEAD = 0.30
+
+    #: Wakeboard: how hard a jump pushes off, how hard it comes down,
+    #: how far ahead a crest is read, and what a jump off one pays.
+    #:
+    #: Audiosurf 2's fourth mode is "like mono but puts you on a
+    #: surfboard that can leap off the track, gaining more points for
+    #: jumping at a peak". The road already has peaks: it is cut from
+    #: the track's own amplitude, so a crest is where the music is about
+    #: to drop away. The jump is the one thing on this road that is not
+    #: locked to it - the blueprint's "the vehicle is completely locked
+    #: to the 3D spline" holds for every other game here.
+    #:
+    #: Three and a fifth of push against ten of gravity clears half a
+    #: unit, which is most of a block's height, and is two thirds of a
+    #: second in the air - about a beat and a half at 128, or one
+    #: figure's worth. Long enough to be a decision and short enough not
+    #: to be a way of sitting out the hard parts; and nothing at all is
+    #: collected up there, so it never is one. Two units of push was
+    #: tried first and lifted the craft a quarter of a unit, which
+    #: against a block six tenths tall does not read as leaving the
+    #: road at all.
+    JUMP_UP = 3.2
+    JUMP_DOWN = 10.0
+    CREST_LOOK = 2.5
+    CREST_FULL = 0.45
+    AIR_WORTH = 150
+
+    def jump(self) -> bool:
+        """Leave the road, in the game that lets you.
+
+        Returns whether the key meant anything, the way ``steer`` does,
+        so it is left to whatever else wanted it in the eight scenes and
+        three games that are not this one.
+        """
+        if self._mode != "Wakeboard" or self._air > 0.0 or self._air_up > 0.0:
+            return False
+        self._air_up = self.JUMP_UP
+        # What the road was doing at the moment it left, which is what a
+        # jump is scored on. Read here rather than on landing: by then
+        # the crest is behind you.
+        self._air_from = self._crest()
+        return True
+
+    def _crest(self) -> float:
+        """How much of a peak the road is at, from nothing to one.
+
+        A crest is where the road ahead falls away from the road under
+        you. Heights are drawn larger downwards - see ``_eye`` - so the
+        road ahead sitting at a *larger* height than the road here is
+        the road dropping away, which is the top of a hill and the place
+        a board would leave the ground on its own.
+        """
+        here = self._road(self.RIDER_AT)[1]
+        ahead = self._road(self.RIDER_AT + self.CREST_LOOK)[1]
+        return max(0.0, min(1.0, (ahead - here) / self.CREST_FULL))
+
+    def _fly(self, step: float) -> None:
+        """Carry a jump through the air, and land it."""
+        if self._air <= 0.0 and self._air_up <= 0.0:
+            return
+        self._air += self._air_up * step
+        self._air_up -= self.JUMP_DOWN * step
+        if self._air > 0.0:
+            return
+        # Down. What it paid is how much of a peak it left from, which
+        # is the whole of "more points for jumping at a peak": a jump
+        # off the flat scores nothing at all.
+        self._air = 0.0
+        self._air_up = 0.0
+        paid = int(self.AIR_WORTH * self._air_from * self._double)
+        if paid:
+            self._airs += 1
+            self._best_air = max(self._best_air, paid)
+            self._score += paid
+            self._double = 1.0
+            self._got = 1.0
+            self._burst(self._lane_here, prize=True)
+        self._air_from = 0.0
 
     #: What a power block multiplies, and how long it waits to be spent.
     #:
@@ -5281,6 +5370,20 @@ class Rider(Scene):
         self._got = max(0.0, self._got - step / 0.35)
         self._shield = min(1.0, self._shield + step / self.SHIELD_BACK)
         self._coin_spin += step * self.COIN_TURN
+        self._fly(step)
+        # How close the track is to a beat, 1 on it and falling away -
+        # held while the track is stopped rather than recomputed.
+        #
+        # The pane's clock closes on the playhead asymptotically, so a
+        # stopped track still creeps a hair every frame, and everything
+        # the beat lights moved with it. That was invisible while the
+        # beat only fed things held near the floor; the rim is a
+        # gradient across the whole frame and it showed up as a pixel
+        # changing between two frames a second apart under a stopped
+        # track. Stopped means stopped.
+        if self._rolling > 0.02:
+            self._beat_lit = ((1.0 - self._pulse) ** 3
+                              if self._beat > 0.0 else 0.0)
         # How far over the road is turned, if it is turning at all.
         # Worked out here rather than in the camera because the camera
         # is asked for an answer more than once a frame.
@@ -5348,6 +5451,14 @@ class Rider(Scene):
     SHIELD_BACK = 8.0
 
     def _collide(self) -> None:
+        # Over the lot of it. A jump clears whatever is in the lane and
+        # collects none of it either: it is not a way past the hard
+        # parts, it is a trade. See JUMP_UP.
+        if self._air > 0.0:
+            for block in self._blocks:
+                if not block[3] and self._heard >= block[0]:
+                    block[3] = True
+            return
         for block in self._blocks:
             when, lane, kind, done, grey = block
             if done or self._heard < when:
@@ -5715,7 +5826,8 @@ class Rider(Scene):
         horizon, focal, tilt = self._camera(rect, surge, bass)
         hue = self._tier(surge, state.synth)
         # How close the track is to a beat, 1 on it and falling away.
-        beat = (1.0 - self._pulse) ** 3 if self._beat > 0.0 else 0.0
+        # Worked out on the track's clock: see ``_advance``.
+        beat = self._beat_lit
 
         # The whole view banks into the bend. One transform around the
         # horizon, so everything drawn after it leans together.
@@ -5740,8 +5852,15 @@ class Rider(Scene):
                     flash + beat * 0.30)
         self._walls(painter, rect, horizon, focal, hue, flash)
         self._bits(painter, horizon, focal, hue)
-        self._ship(painter, rect, horizon, focal, hue, flash)
+        self._ship(painter, rect, horizon, focal, hue, flash,
+                   max(beat, kit.get("Kick", 0.0)))
         painter.restore()
+        # The beat, where nothing is read against anything. On the grid
+        # and on the drum both: the grid keeps it in time through a bar
+        # the drummer left alone, and the drum makes it land on what was
+        # actually played.
+        self._rim(painter, rect, hue,
+                  max(beat, kit.get("Kick", 0.0)))
         self._wash(painter, rect)
         if self._mode == "Puzzle":
             self._matrix(painter, rect)
@@ -6156,6 +6275,12 @@ class Rider(Scene):
             # way a wet floor holds a light: one more quad a block,
             # and it is most of what makes them stand on the road
             # rather than hover over it.
+            #
+            # Every block that is drawn at all gets one. Dropping them
+            # past a distance was tried: it took a third of the frame's
+            # fills out and saved 0.2 ms of 8.9, and what it spent was
+            # the thing that makes a block sit on the road at exactly
+            # the distances a player is reading. Not a trade.
             pool = QPainterPath()
             pool.moveTo(foot_l)
             pool.lineTo(foot_r)
@@ -6216,6 +6341,75 @@ class Rider(Scene):
     #: of the picture out altogether.
     GLOW_MOST = 0.26
 
+    #: How hard the frame's own edge lights on the beat, and how far in
+    #: from the edge it reaches.
+    #:
+    #: The beat had nowhere left to hit. Everything the road is made of
+    #: is held near the floor on purpose - a block is read against the
+    #: road, the lamp and the sky behind it, and brightening those is
+    #: exactly how blocks became invisible the first time. Measured
+    #: against the other scenes on the same 128 bpm track, the rider
+    #: swung the picture's brightness 0.026 on a beat where the rave
+    #: swung 0.140, and changed 7 per cent of the frame where the rave
+    #: changed 97.
+    #:
+    #: So it hits where nothing is read: the edge. A rim of the road's
+    #: own colour on the kick, transparent well before the middle, which
+    #: is a lot of pixels doing something and none of them behind a
+    #: block.
+    RIM_MOST = 0.45
+    RIM_REACH = 0.58
+
+    def _rim(self, painter, rect, hue, punch) -> None:
+        """The frame's edge, lit on the beat.
+
+        Outside the bank and the shake, because it belongs to the
+        picture rather than to the road: a rim that tilted with the
+        camera would read as part of the world and this is the world
+        hitting *you*.
+        """
+        if punch <= 0.02:
+            return
+        centre = rect.center()
+        reach = max(1.0, math.hypot(rect.width(), rect.height()) / 2.0)
+        rim = QRadialGradient(centre, reach)
+        rim.setColorAt(self.RIM_REACH, QColor(0, 0, 0, 0))
+        rim.setColorAt(1.0, QColor.fromHsvF(
+            (hue + 0.04) % 1.0, 0.80, 1.0,
+            min(1.0, self.RIM_MOST * punch)))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(rim)
+        # One fill, not a ring of four. Skipping the transparent middle
+        # was tried and is slower: four gradient fills of a band cost
+        # more than one of the whole frame, because the per-call setup
+        # is what dominates rather than the pixels.
+        painter.drawRect(rect)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+    @staticmethod
+    def _ring_fill(painter, rect, middle, reach: float) -> None:
+        """Fill only the part of ``rect`` a radial gradient can reach.
+
+        A radial brush that is transparent outside ``reach`` still costs
+        the whole rectangle to fill, and at 1920x1080 that is two
+        million pixels for a lamp a few hundred across. It costs the
+        whole rectangle for a transparent *middle* too. Measured, the
+        two gradients in this scene were 3 ms of a 9.6 ms frame.
+
+        So the rectangle is clipped to the circle's bounding box, which
+        is the same picture: nothing is drawn in the part left out.
+
+        Skipping a transparent *middle* the same way was tried and is
+        slower - four gradient fills of a band cost more than one of the
+        whole frame, because the per-call setup dominates rather than
+        the pixels - so only the bounding box is worth taking.
+        """
+        box = QRectF(middle.x() - reach, middle.y() - reach,
+                     reach * 2.0, reach * 2.0).intersected(rect)
+        if box.isEmpty():
+            return
+        painter.drawRect(box)
+
     def _glow(self, painter, rect, horizon, hue, surge, bass, beat,
               flash) -> None:
         """A lamp at the end of the road, behind everything.
@@ -6225,6 +6419,21 @@ class Rider(Scene):
         """
         reach = max(1.0, rect.height() * (self.GLOW_REACH
                                           + bass * self.GLOW_BASS))
+        # The area to fill is worked out from the *widest* the lamp can
+        # ever be, not from how wide it is now.
+        #
+        # Nothing in this frame settles exactly: the pane's levels ease
+        # towards a held row asymptotically, so under a stopped track
+        # the bass still creeps in the tenth decimal place and anything
+        # measured from it creeps with it. A gradient's interior rounds
+        # through that without moving, but the *edge of the area it is
+        # painted into* is a step, and a step on a creeping number
+        # changes. Measured: one pixel of a 640x360 frame, one step of
+        # red, between two frames a second apart with the track
+        # stopped. The widest case is a constant for a given frame, so
+        # the area is one too.
+        widest = max(1.0, rect.height() * (self.GLOW_REACH
+                                           + self.GLOW_BASS))
         lamp = QRadialGradient(horizon, reach)
         lamp.setColorAt(0.0, QColor.fromHsvF(
             (hue + 0.08) % 1.0, max(0.0, 0.70 - flash * 0.4), 1.0,
@@ -6236,7 +6445,8 @@ class Rider(Scene):
         lamp.setColorAt(1.0, QColor(0, 0, 0, 0))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(lamp)
-        painter.drawRect(rect)
+        # Only where the lamp can reach. See _ring_fill.
+        self._ring_fill(painter, rect, horizon, widest)
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
     def _lanes(self, painter, horizon, focal, hue, beat, flash) -> None:
@@ -6317,7 +6527,12 @@ class Rider(Scene):
         self._beam(painter, shards, QColor.fromHsvF(
             (hue + 0.5) % 1.0, 0.25, 1.0, 0.85))
 
-    def _ship(self, painter, rect, horizon, focal, hue, flash) -> None:
+    #: How big the craft's own halo is on a kick, and how strong.
+    HALO_REACH = 0.085
+    HALO_MOST = 0.55
+
+    def _ship(self, painter, rect, horizon, focal, hue, flash,
+              punch=0.0) -> None:
         """The rider: a lit triangle, low on the road."""
         at = self.RIDER_AT
         across = self._lane_here
@@ -6326,9 +6541,32 @@ class Rider(Scene):
         # leaning into the road rather than as a bar lying on it.
         # Nose down the road, tail towards the camera: pointed the other
         # way it read as an arrow aimed at the viewer.
-        nose = self._eye(horizon, focal, across, -0.26, at + 1.4)
-        left = self._eye(horizon, focal, across - wide, -0.02, at)
-        right = self._eye(horizon, focal, across + wide, -0.02, at)
+        # Heights are drawn larger downwards, so being off the road
+        # is a height taken away.
+        lift = self._air
+        nose = self._eye(horizon, focal, across, -0.26 - lift, at + 1.4)
+        left = self._eye(horizon, focal, across - wide, -0.02 - lift, at)
+        right = self._eye(horizon, focal, across + wide, -0.02 - lift, at)
+        # And the craft itself answers the kick. A halo around it rather
+        # than a brighter fill: the fill is already near the top of the
+        # scale, and what wants to be felt is the thing being ridden
+        # reacting rather than the thing being lit. In the foreground and
+        # below the road's far end, so it is never what a block is read
+        # against.
+        if punch > 0.02:
+            middle = self._eye(horizon, focal, across, -0.14 - lift,
+                               at + 0.4)
+            reach = max(2.0, rect.height() * self.HALO_REACH
+                        * (0.75 + punch * 0.5))
+            halo = QRadialGradient(middle, reach)
+            halo.setColorAt(0.0, QColor.fromHsvF(
+                (hue + 0.5) % 1.0, 0.45, 1.0,
+                min(1.0, self.HALO_MOST * punch)))
+            halo.setColorAt(1.0, QColor(0, 0, 0, 0))
+            painter.setBrush(halo)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(middle, reach, reach)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
         path = QPainterPath()
         path.moveTo(nose)
         path.lineTo(left)
@@ -6371,6 +6609,7 @@ class Rider(Scene):
             f"{self._worth()}"
             + (f"   cleared {self._cleared}" if self._mode == "Puzzle"
                else f"   chain {self._chain}")
+            + (f"   air {self._airs}" if self._airs else "")
             + ("   x2" if self._double > 1.0 else "")
             + (f"   coins {self._coins}" if self._coins else "")
             + (f" x{self._coin_run}" if self._coin_run > 1 else "")
