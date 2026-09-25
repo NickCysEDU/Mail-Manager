@@ -138,8 +138,10 @@ def paned(got, mode="Mono", size=(1280, 720)):
     pane._reveal_changed(1.0)
     rider = next(s for s in visualizers.SCENES if s.name == "Music rider")
     rider = type(rider)()
-    rider._mode = mode
     pane.set_scene(rider)
+    # After the pane has taken it, not before: set_scene resets a new
+    # scene, and a reset puts the mode back to the one it starts in.
+    rider.set_mode(mode)
     pane.set_playing(True)
     return pane, rider
 
@@ -362,7 +364,10 @@ def main(argv=None) -> int:
     parser.add_argument("songs", nargs="+", type=Path)
     parser.add_argument("--seconds", type=float, default=45.0,
                         help="how much of each track to play (default 45)")
-    parser.add_argument("--mode", default="Mono", choices=("Mono", "Puzzle"))
+    import visualizers as _vis
+
+    parser.add_argument("--mode", default="Mono",
+                        choices=_vis.by_name("Music rider").MODES)
     parser.add_argument("--fps", type=int, default=60)
     parser.add_argument("--save", type=Path, default=None,
                         help="write the last frame of the first track here")

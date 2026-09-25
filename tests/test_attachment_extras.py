@@ -13228,3 +13228,147 @@ class TestTheRoadActuallyTurns:
     def test_the_same_track_bends_the_same_way_every_time(self, qapp):
         lean = self._wobbly()
         assert self._road(lean)._curve == self._road(lean)._curve
+
+
+class TestNinjaIsTheSameRoadWithMoreToDodge:
+    """Audiosurf 2's third monocolour mode.
+
+    "The final monocolor mode is Ninja Mode, which contains a much
+    larger collection of obstacles and a special set of bonuses for
+    successfully dodging them." The bonuses are already on this road - a
+    coin trail goes beside every obstacle - so more obstacles is more to
+    dodge *and* more to be paid for dodging, which is the shape the mode
+    is meant to have.
+
+    What it pays for getting through untouched is bigger too. Audiosurf
+    2 has Mono's clean finish at 10 per cent and Ninja's stealth bonus
+    at "20 per cent or more": twice as much, for the mode with the
+    spikes in it.
+    """
+
+    BEAT = 60.0 / 128.0
+    CHART = {"Kick": tuple(i * (60.0 / 128.0) for i in range(600)),
+             "Hats": tuple(i * (60.0 / 128.0) / 2 for i in range(1200))}
+
+    @classmethod
+    def _laid(cls, mode, seconds=40.0):
+        """Everything the chart lays over a house track, in that game."""
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        scene = visualizers.Rider()
+        scene._last = None
+        scene.set_mode(mode)
+        scene._beat = cls.BEAT
+        state = SpectrumState()
+        state.levels = [0.4] * 27
+        state.chart = cls.CHART
+        scene._heard = 0.0
+        while scene._heard < seconds:
+            scene._heard += 0.25
+            scene._lay(state)
+        return scene
+
+    def test_it_is_one_of_the_games(self, qapp):
+        import visualizers
+
+        assert "Ninja" in visualizers.Rider.MODES, (
+            f"the games are {visualizers.Rider.MODES}")
+
+    def test_choosing_it_sticks(self, qapp):
+        """A reset rebuilds the scene from a new one of itself, which
+        puts the mode back - so the mode is set again afterwards."""
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene.set_mode("Ninja")
+        assert scene.mode == "Ninja"
+
+    def test_there_is_much_more_to_dodge(self, qapp):
+        mono = [b for b in self._laid("Mono")._blocks if b[4]]
+        ninja = [b for b in self._laid("Ninja")._blocks if b[4]]
+        assert len(ninja) > len(mono) * 1.6, (
+            f"Ninja laid {len(ninja)} obstacles against Mono's "
+            f"{len(mono)}, which is not much larger a collection")
+
+    def test_the_figures_come_no_faster_than_in_mono(self, qapp):
+        """What changes is how many of them are obstacles, not how often
+        one lands. Putting them closer together as well was tried: the
+        gap has a floor in seconds, so at 128 bpm both games quantise to
+        the same two beats and nothing happens, and at slower tempos it
+        pushes under the floor that "xxxx xxx xxxxxxx xxx xxx xxxx xxx
+        it's unplayable" put there.
+        """
+        import statistics
+
+        def gaps(mode):
+            times = sorted({b[0] for b in self._laid(mode)._blocks
+                            if b[2] in ("wall", "block", "run")})
+            return statistics.median(
+                [b - a for a, b in zip(times, times[1:])] or [0.0])
+
+        assert gaps("Ninja") == pytest.approx(gaps("Mono")), (
+            f"Ninja puts its figures {gaps('Ninja'):.2f}s apart and Mono "
+            f"{gaps('Mono'):.2f}s")
+
+    def test_there_is_still_something_to_score_on(self, qapp):
+        """A road of nothing but obstacles is a road nobody can score
+        on, which is why Ninja takes four slots in seven and not all of
+        them. Measured off what gets laid rather than off the pool, so
+        it holds however the pool is written."""
+        scene = self._laid("Ninja")
+        figures = [b for b in scene._blocks
+                   if b[2] in ("wall", "block", "run")]
+        prizes = [b for b in figures if not b[4]]
+        assert figures, "nothing was laid at all"
+        share = len(prizes) / len(figures)
+        assert share > 0.25, (
+            f"only {share:.0%} of Ninja's figures are worth anything, so "
+            f"there is nothing to score on")
+
+    def test_it_is_still_a_road_somebody_can_get_down(self, qapp):
+        """More to dodge is not the same as nothing to dodge *into*.
+        Whatever the chart does, every moment has to leave a lane open -
+        in either game, but Ninja is where it could go wrong."""
+        for mode in ("Mono", "Ninja"):
+            scene = self._laid(mode)
+            shut = {}
+            for when, lane, _kind, _done, grey in scene._blocks:
+                if grey:
+                    shut.setdefault(round(when, 3), set()).add(lane)
+            worst = max((len(lanes) for lanes in shut.values()), default=0)
+            assert worst < scene.LANES, (
+                f"{mode} closed all {scene.LANES} lanes at once")
+
+    def test_dodging_all_of_it_is_worth_more_than_it_is_in_mono(self, qapp):
+        """Written out rather than worked out: a hundred points clean is
+        130 in Mono and 160 in Ninja."""
+        import visualizers
+
+        for mode, wanted in (("Mono", 130), ("Ninja", 160)):
+            scene = visualizers.Rider()
+            scene.set_mode(mode)
+            scene._score = 100
+            scene._clean = True
+            assert scene.report()["worth"] == wanted, (
+                f"a clean hundred is worth {scene.report()['worth']} in "
+                f"{mode}")
+
+    def test_touching_one_costs_the_bonus_in_either_game(self, qapp):
+        import visualizers
+
+        for mode in ("Mono", "Ninja"):
+            scene = visualizers.Rider()
+            scene.set_mode(mode)
+            scene._score = 100
+            scene._clean = False
+            assert scene.report()["worth"] == 100
+
+    def test_more_obstacles_means_more_coins(self, qapp):
+        """Which is the point of putting the coins beside them: the mode
+        with the most to dodge is the mode that pays most for dodging
+        it."""
+        mono = [b for b in self._laid("Mono")._blocks if b[2] == "coin"]
+        ninja = [b for b in self._laid("Ninja")._blocks if b[2] == "coin"]
+        assert len(ninja) > len(mono), (
+            f"Ninja laid {len(ninja)} coins and Mono {len(mono)}")

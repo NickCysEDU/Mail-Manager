@@ -947,7 +947,27 @@ on the beats you can hear coming. Tying them to the kick alone was tried
 and gives a road of nothing but obstacles: on four to the floor the kick
 wins every slot.
 
-**Puzzle** is the other game on the same road, chosen with the **game**
+**Ninja** is Mono with far more to dodge, and it is chosen with the
+**game** box beside the scene like the others. Audiosurf 2 describes it
+as "a much larger collection of obstacles and a special set of bonuses
+for successfully dodging them", and the bonuses are already on this
+road - a coin trail goes beside every obstacle - so more obstacles is
+more to dodge *and* more to be paid for dodging. Four slots in seven
+carry a hazard rather than two; on a real record that is fifteen hazards
+in a minute against seven, and a player who dodges perfectly still takes
+none of them. What changes is how many of the figures are obstacles, not
+how often one lands: putting them closer together as well was tried and
+is not worth having, because the gap has a floor in seconds, so at 128
+bpm both games quantise to the same two beats and nothing happens at
+all, while at slower tempos it pushes under the floor that "xxxx xxx
+xxxxxxx xxx xxx xxxx xxx it's unplayable" put there.
+
+Getting down a Ninja track without touching a grey is worth 60 per cent
+rather than 30. Audiosurf 2 pays Mono's clean finish at 10 per cent and
+Ninja's stealth bonus at "20 per cent or more" - twice as much, for the
+mode with the spikes in it - and the same ratio applies here.
+
+**Puzzle** is the third game on the same road, chosen with the **game**
 box beside the scene. There a colour is worth nothing on its own: it
 drops into a grid three columns wide and six deep, and three or more of a
 colour touching - edge to edge, never corner to corner - light a fuse.
@@ -1224,7 +1244,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,833 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,843 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1607,7 +1627,7 @@ corkscrews the track earned, and what a frame costs. No song, path or
 frame of one is ever written into the repository.
 
 ```bash
-./dev test        # 3,833 tests, about three minutes
+./dev test        # 3,843 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

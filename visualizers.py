@@ -3853,7 +3853,7 @@ class Rider(Scene):
     #: hazards, and the grid is only somewhere for them to go. Puzzle is
     #: the grid: a colour is worth nothing until three of them touch, and
     #: what the road hands you is a supply problem.
-    MODES = ("Mono", "Puzzle")
+    MODES = ("Mono", "Ninja", "Puzzle")
     blurb = "a game: three lanes, and the track is the song"
 
     # -- the road ---------------------------------------------------------
@@ -4453,6 +4453,29 @@ class Rider(Scene):
     #: every eight figures.
     GREY_POOL = (False, False, True, False, False, True, False)
 
+    #: And Ninja's, which is the same road with far more to dodge.
+    #:
+    #: Audiosurf 2: "the final monocolor mode is Ninja Mode, which
+    #: contains a much larger collection of obstacles and a special set
+    #: of bonuses for successfully dodging them". The bonuses are
+    #: already here - a coin trail goes beside every obstacle - so more
+    #: obstacles is more to dodge *and* more to be paid for dodging,
+    #: which is the shape the mode is meant to have.
+    #:
+    #: Four slots in seven against two. Still a pool rather than every
+    #: slot: a road of nothing but obstacles is a road nobody can score
+    #: on.
+    #:
+    #: The obstacles are what changes, not how often a figure lands.
+    #: Putting the figures closer together as well was tried and is not
+    #: worth having: the gap has a floor in seconds, so at 128 bpm both
+    #: games quantise to the same two beats and nothing happens at all,
+    #: while at slower tempos it pushes under the floor that "xxxx xxx
+    #: xxxxxxx xxx xxx xxxx xxx it's unplayable" put there. A larger
+    #: collection of obstacles is a larger collection of obstacles
+    #: whether or not there is more of everything else.
+    NINJA_POOL = (True, False, True, True, False, True, False)
+
     def _greyed(self, when: float, order: int) -> bool:
         """Whether the figure at this slot is an obstacle.
 
@@ -4473,7 +4496,8 @@ class Rider(Scene):
         if self._beat <= 0.0:
             return True
         slot = int(round(when / self._beat / max(1e-6, self.GAP_BEATS)))
-        return self.GREY_POOL[slot % len(self.GREY_POOL)]
+        pool = self.NINJA_POOL if self._mode == "Ninja" else self.GREY_POOL
+        return pool[slot % len(pool)]
 
     def _varied(self, shape: str, when: float) -> str:
         """What shape this slot takes.
@@ -5298,6 +5322,16 @@ class Rider(Scene):
     #: And finishing without touching one is worth a third again.
     CLEAN_BONUS = 0.30
 
+    #: And what Ninja pays for the same thing, which is worth more
+    #: because there is so much more of it to get past.
+    #:
+    #: Audiosurf 2 has Mono's clean finish at 10 per cent and Ninja's
+    #: stealth bonus at "20 per cent or more" - twice as much, for the
+    #: mode with the spikes in it. Audiosurf 1's blueprint puts Mono's
+    #: at a flat 30, which is the number this road already used, so
+    #: Ninja's is twice that.
+    STEALTH_BONUS = 0.60
+
     #: Mono's bumpers: how long one takes to come back after it has
     #: shattered a grey, and what using one costs.
     #:
@@ -5538,7 +5572,9 @@ class Rider(Scene):
         """
         if not self._clean:
             return self._score
-        return int(self._score * (1.0 + self.CLEAN_BONUS))
+        kept = (self.STEALTH_BONUS if self._mode == "Ninja"
+                else self.CLEAN_BONUS)
+        return int(self._score * (1.0 + kept))
 
     def _burst(self, across: float, prize: bool = False) -> None:
         """Throw pieces off the block that was just taken or hit.
