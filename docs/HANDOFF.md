@@ -115,6 +115,15 @@ Each one cost a round of measurement to find. Each has a test.
   races the GUI thread doing the same thing. It is warmed on the GUI
   thread while the pane is built, where a stall costs nothing because
   nothing is animating yet. A crash is not a trade for a stall.
+- **Anything drawn as a gradient goes on whole pixels.** The same
+  asymptote bites twice: a filled path's antialiased edge rounds through
+  a millionth of a pixel unmoved, and a radial gradient's smooth ramp
+  does not. The craft's halo is placed and sized on integers for that
+  reason, and the lamp's fill area is computed from a constant. Both
+  were found the same way - one pixel of a 640x360 frame changing by one
+  step of red between two frames a second apart with the track stopped -
+  and `xxxx_xxxxxxx_xx_xxxxxx_xxxxx_xxxxx_xxx_xxxxx_xx_xxxxxxx` is the
+  test that catches it every time.
 - **Nothing in a frame settles exactly.** The pane's level envelopes
   ease towards a held row, and the clock closes on the playhead, both
   asymptotically - so under a *stopped* track every number still creeps
@@ -264,7 +273,7 @@ That first figure is the one that matters and it must stay at zero.
 
 **Speed.** Rules engine 10.1 ms per message. Lexicon opens in 38 ms using
 1.95 MB, down from 70 ms and 10.5 MB, and neither number now grows with the
-table. Test suite 3,876 tests (with the evaluation sets present) in about three minutes on four workers.
+table. Test suite 3,881 tests (with the evaluation sets present) in about three minutes on four workers.
 
 ---
 
@@ -309,12 +318,14 @@ table. Test suite 3,876 tests (with the evaluation sets present) in about three 
   LIFO buffer, Vegas's shuffle, Pusher, Eraser. They all act on the
   puzzle grid with mouse clicks, and this scene has no mouse input - so
   they need an input design before they need code.
-- [ ] **The playtest has only ever been run over one record at a time.**
-  It takes a list. A dozen records of different genres in one run is the
-  evidence that would say whether the chart is fair on something that is
-  not 128 bpm four-to-the-floor. Run it one song at a time in one
-  process: a previous session killed the machine by running the batch
-  next to two other heavy jobs.
+- [x] **Run the playtest over a batch rather than one record.** Done,
+  over eight of different genres, and it immediately found two things a
+  single track had hidden for the whole project: the road going bare for
+  8.6 seconds where the drums stopped, and a tempo octave error that
+  drove one track at twice its own speed. Run it one song at a time in
+  one process - a previous session killed the machine by running the
+  batch next to two other heavy jobs - and run it after anything that
+  touches the chart, the clock or the road.
 - [ ] **Nothing profiles the scene at 4K.** It fits at 1080p with 47 per
   cent of the budget spare. Sharpness shrinks the buffer above that and
   nothing has measured what it looks like when it does.

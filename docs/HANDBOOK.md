@@ -942,6 +942,16 @@ and three in a row is a fairground ride. Fourteen was tried first and
 gave one every fifteen seconds on a loud dance record, which ate a
 sixth of the track.
 
+**A run is something you can see.** A chain of forty is worth far more
+than four of ten, and it looked exactly like a chain of one: a number in
+small text at the top of the frame. What a run is worth is the whole of
+Mono's scoring, so it has to be visible without reading - and it has to
+be something you feel yourself lose. The craft's halo grows and warms as
+the run builds, from nothing at all to a gold glow at forty, which is
+where the chain pays near its cap and a grey stops costing points and
+starts costing the run. Puzzle has no chain to measure, so there it
+follows how full the grid is, which is the thing that game is building.
+
 **A tempo is counted the way a person would count it.** Tempo detectors
 make octave errors - they find the right pulse and report it doubled or
 halved - and across eight real records one came out at 230 bpm on a
@@ -1290,7 +1300,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,876 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,881 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1673,7 +1683,7 @@ corkscrews the track earned, and what a frame costs. No song, path or
 frame of one is ever written into the repository.
 
 ```bash
-./dev test        # 3,876 tests, about three minutes
+./dev test        # 3,881 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

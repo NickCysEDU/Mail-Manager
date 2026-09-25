@@ -14124,3 +14124,117 @@ class TestATempoIsCountedTheWayAPersonWouldCountIt:
         assert abs(state.beat_at - wanted) < 0.02, (
             f"the phase says {state.beat_at:.3f} and the folded grid "
             f"says {wanted:.3f}, so the two describe different grids")
+
+
+class TestARunIsSomethingYouCanSee:
+    """A chain of forty is worth far more than four of ten, and it
+    looked exactly like a chain of one: a number in small text at the
+    top of the frame.
+
+    What a run is worth is the whole of Mono's scoring, so it has to be
+    something you can see without reading - and something you can feel
+    yourself lose. The craft's halo grows and warms as the run builds,
+    from nothing at all to a gold glow at forty, which is where the
+    chain is paying near its cap and a grey stops costing points and
+    starts costing the run.
+    """
+
+    @staticmethod
+    def _rider(chain=0, mode="Mono"):
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._last = None
+        scene.set_mode(mode)
+        scene._chain = chain
+        return scene
+
+    def test_the_heat_follows_the_run(self, qapp):
+        """Written out rather than worked out from CHAIN_HOT."""
+        assert self._rider(0)._heat() == 0.0
+        assert self._rider(10)._heat() == pytest.approx(0.25)
+        assert self._rider(20)._heat() == pytest.approx(0.5)
+        assert self._rider(40)._heat() == pytest.approx(1.0)
+
+    def test_it_cannot_go_past_the_top(self, qapp):
+        assert self._rider(400)._heat() == 1.0
+
+    def test_the_grid_game_measures_the_grid(self, qapp):
+        """Puzzle keeps no chain: what it is building is the cluster
+        sitting in its columns."""
+        scene = self._rider(mode="Puzzle")
+        scene._cells = [[], [], []]
+        assert scene._heat() == 0.0
+        scene._cells = [[1, 1, 1], [1, 1, 1], [1, 1, 1]]
+        assert scene._heat() == pytest.approx(0.5)
+
+    def test_losing_the_run_loses_the_heat(self, qapp):
+        """The half of it that matters: it has to be something you feel
+        go."""
+        scene = self._rider(mode="Mono")
+        scene._lane = 1
+        scene._lane_here = scene._lane_at(1)
+        scene._heard = 100.0
+        scene._shield = 0.0
+        for step in range(12):
+            scene._blocks = [[10.0 + step, 1, "block", False, False]]
+            scene._collide()
+        assert scene._heat() > 0.2, "twelve prizes built no heat at all"
+        scene._sore = 0.0
+        scene._blocks = [[40.0, 1, "block", False, True]]
+        scene._collide()
+        assert scene.report()["hits"] == 1
+        assert scene._heat() == 0.0, (
+            f"the run was broken and the craft is still at "
+            f"{scene._heat():.2f}")
+
+    def test_a_long_run_draws_a_bigger_craft_than_a_short_one(self, qapp):
+        """Off the frame: read off the chain, this passes with the halo
+        drawn the same size however long the run is."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        side = 420
+        lit = {}
+        for name, chain in (("cold", 0), ("hot", 40)):
+            scene = visualizers.Rider()
+            scene._last = None
+            image = QImage(side, side,
+                           QImage.Format.Format_ARGB32_Premultiplied)
+            painter = QPainter(image)
+            was = visualizers.time.monotonic
+            clock = [500.0]
+            visualizers.time.monotonic = lambda: clock[0]
+            try:
+                for step in range(20):
+                    clock[0] += 1 / 60.0
+                    state = SpectrumState()
+                    state.levels = [0.4] * 27
+                    state.bass = 0.6
+                    state.mid = 0.4
+                    state.high = 0.3
+                    state.synth = 0.2
+                    # On the beat, which is when the halo is drawn.
+                    state.kit = {"Kick": 1.0}
+                    state.at = 2.0 + step / 60.0
+                    state.tempo = 128.0
+                    state.beat_at = 0.0
+                    state.chart = {"Kick": ()}
+                    state.settle()
+                    scene._chain = chain
+                    image.fill(QColor(0, 0, 0))
+                    scene.paint(painter, QRectF(0, 0, side, side), state)
+            finally:
+                painter.end()
+                visualizers.time.monotonic = was
+            # How much of the lower half of the frame the craft lights.
+            lit[name] = sum(
+                1 for y in range(side // 2, side, 2)
+                for x in range(0, side, 2)
+                if image.pixelColor(x, y).lightnessF() > 0.16)
+        assert lit["hot"] > lit["cold"] * 1.25, (
+            f"a run of forty lights {lit['hot']} of the frame and a run "
+            f"of nothing lights {lit['cold']}")

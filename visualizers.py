@@ -6599,6 +6599,31 @@ class Rider(Scene):
         self._beam(painter, shards, QColor.fromHsvF(
             (hue + 0.5) % 1.0, 0.25, 1.0, 0.85))
 
+    #: How long a run has to get before the craft is as hot as it gets,
+    #: and how much of a lift that is worth.
+    #:
+    #: A chain of forty is worth far more than four of ten, and it felt
+    #: exactly the same as a chain of one: a number in small text at the
+    #: top of the frame. What a run is worth is the whole of Mono's
+    #: scoring, so what a run is worth has to be something you can see
+    #: without reading - and something you can feel yourself lose.
+    #:
+    #: Forty because that is the number the scoring is built around: at
+    #: forty the chain is paying near its cap, which is the point at
+    #: which a grey stops costing points and starts costing the run.
+    CHAIN_HOT = 40.0
+    HEAT_HALO = 1.7
+    HEAT_HUE = 0.10
+
+    def _heat(self) -> float:
+        """How far into a run the craft is, from nothing to all of it."""
+        if self._mode == "Puzzle":
+            # The grid's game keeps no chain: what it is building is the
+            # cluster sitting in the columns.
+            return max(0.0, min(1.0, sum(len(pile) for pile in self._cells)
+                                / max(1.0, self.CELLS_WIDE * self.CELLS_DEEP)))
+        return max(0.0, min(1.0, self._chain / self.CHAIN_HOT))
+
     #: How big the craft's own halo is on a kick, and how strong.
     HALO_REACH = 0.085
     HALO_MOST = 0.55
@@ -6626,14 +6651,30 @@ class Rider(Scene):
         # below the road's far end, so it is never what a block is read
         # against.
         if punch > 0.02:
-            middle = self._eye(horizon, focal, across, -0.14 - lift,
-                               at + 0.4)
+            spot = self._eye(horizon, focal, across, -0.14 - lift,
+                             at + 0.4)
+            # Bigger and hotter the longer the run is. See CHAIN_HOT.
+            heat = self._heat()
             reach = max(2.0, rect.height() * self.HALO_REACH
-                        * (0.75 + punch * 0.5))
+                        * (0.75 + punch * 0.5)
+                        * (1.0 + heat * (self.HEAT_HALO - 1.0)))
+            # On whole pixels, both of them.
+            #
+            # A soft glow does not need placing to a fraction of a pixel,
+            # and a gradient's ramp does: nothing in a frame settles
+            # exactly - the camera closes on its mark asymptotically -
+            # so a centre carried at full precision moves a millionth of
+            # a pixel every frame and rounds differently somewhere along
+            # the ramp. Measured as one pixel of a 640x360 frame
+            # changing by one step of red between two frames a second
+            # apart with the track stopped. Stopped means stopped.
+            middle = QPointF(round(spot.x()), round(spot.y()))
+            reach = float(round(reach))
             halo = QRadialGradient(middle, reach)
             halo.setColorAt(0.0, QColor.fromHsvF(
-                (hue + 0.5) % 1.0, 0.45, 1.0,
-                min(1.0, self.HALO_MOST * punch)))
+                (hue + 0.5 - heat * self.HEAT_HUE) % 1.0,
+                0.45 + heat * 0.35, 1.0,
+                min(1.0, self.HALO_MOST * punch * (1.0 + heat * 0.6))))
             halo.setColorAt(1.0, QColor(0, 0, 0, 0))
             painter.setBrush(halo)
             painter.setPen(Qt.PenStyle.NoPen)
