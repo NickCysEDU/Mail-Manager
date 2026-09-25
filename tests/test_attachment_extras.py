@@ -976,6 +976,7 @@ class TestTheBuildKeepsWhatTheViewerNeeds:
     @pytest.mark.parametrize("module", [
         "PySide6.QtMultimedia", "PySide6.QtMultimediaWidgets",
         "PySide6.QtPdf", "PySide6.QtPdfWidgets",
+        "PySide6.QtOpenGL", "PySide6.QtOpenGLWidgets",
     ])
     def test_it_is_not_excluded(self, module):
         spec = self._spec()
@@ -984,7 +985,7 @@ class TestTheBuildKeepsWhatTheViewerNeeds:
             f"{module} is excluded; the feature that needs it will not ship")
 
     @pytest.mark.parametrize("module", [
-        "PySide6.QtMultimedia", "PySide6.QtPdf",
+        "PySide6.QtMultimedia", "PySide6.QtPdf", "PySide6.QtOpenGL",
     ])
     def test_it_is_named_as_a_hidden_import(self, module):
         """They are imported inside methods, where analysis cannot see them."""
@@ -997,10 +998,12 @@ class TestTheBuildKeepsWhatTheViewerNeeds:
 
         source = inspect.getsource(main)
         start = source.index("def _attachment_viewer")
-        body = source[start:start + 2000]
+        body = source[start:source.index("check(\"attachment viewer\"", start)]
         assert "QMediaPlayer()" in body, "it does not build a player"
         assert "QPdfDocument()" in body, "it does not build a PDF document"
         assert "visualizers" in body
+        assert "QOpenGLFramebufferObjectFormat()" in body, (
+            "it does not build anything from the card's library")
 
 
 class _FakeClock:
@@ -12846,6 +12849,154 @@ class TestTheCoinsBesideTheObstacles:
         import visualizers
 
         assert visualizers.Rider.COIN_SIZE < visualizers.Rider.LANE_WIDE * 0.4
+
+    @staticmethod
+    def _close_coin(turn=0.0, ground=None, image_out=None):
+        """The lit pixels of one coin just past the craft, on a 2x screen.
+
+        ``turn`` is how far round it has spun from face on, in radians;
+        ``ground`` is what it is drawn over, black if nothing is said.
+        """
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        side = 720
+        scene = visualizers.Rider()
+        scene._last = None
+        state = SpectrumState()
+        state.levels = [0.4] * 27
+        state.bass = state.mid = state.high = 0.5
+        state.kit = {}
+        state.at = 1.0
+        state.chart = {"Kick": ()}
+        image = QImage(side * 2, side * 2,
+                       QImage.Format.Format_ARGB32_Premultiplied)
+        image.setDevicePixelRatio(2.0)
+        image.fill(QColor(0, 0, 0))
+        was = visualizers.time.monotonic
+        visualizers.time.monotonic = lambda: 500.0
+        try:
+            painter = QPainter(image)
+            scene._chart_from = state.chart
+            scene._laid = 99.0
+            scene._blocks = []
+            scene.paint(painter, QRectF(0, 0, side, side), state)
+            painter.end()
+        finally:
+            visualizers.time.monotonic = was
+        # Just past the craft, where a coin is biggest.
+        near = min((abs(scene._where(w / 100.0) - (scene.RIDER_AT + 1.2)),
+                    w / 100.0) for w in range(1, 400))[1]
+        scene._blocks = [[near, 1, "coin", False, False]]
+        scene._coin_spin = -near * 5.0 + turn
+        horizon, focal, _tilt = scene._camera(
+            QRectF(0, 0, side, side), scene._loudness, 0.5)
+        image.fill(ground or QColor(0, 0, 0))
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        scene._coins_now(painter, horizon, focal, 0.0)
+        painter.end()
+        if image_out is not None:
+            image_out.append(image)
+        return [(x, y) for y in range(image.height())
+                for x in range(image.width())
+                if image.pixelColor(x, y).lightnessF() > 0.3]
+
+    def test_a_coin_close_up_on_a_retina_screen_is_round(self, qapp):
+        """A disc, not a ring of points joined by straight lines.
+
+        Ten points were round enough while the frame was drawn at half
+        the screen's resolution. Drawn at all of it, a coin passing the
+        craft is ninety pixels across and its ten flats are three pixels
+        deep each, which reads as a ten-sided shape. Measured off the
+        drawn coin as how far its rim strays from the ellipse that best
+        fits it: 6.0 per cent as ten points, 1.5 as an ellipse, which is
+        what whole pixels leave of a perfect one.
+        """
+        import math
+
+        lit = self._close_coin()
+        assert len(lit) > 4000, "the coin is not close enough to measure"
+        count = len(lit)
+        mx = sum(x for x, _ in lit) / count
+        my = sum(y for _, y in lit) / count
+        sxx = sum((x - mx) ** 2 for x, _ in lit) / count
+        syy = sum((y - my) ** 2 for _, y in lit) / count
+        sxy = sum((x - mx) * (y - my) for x, y in lit) / count
+        det = sxx * syy - sxy * sxy
+        # The rim's distance from the middle in every direction, measured
+        # in the ellipse's own terms, so a perfect one is the same all
+        # the way round.
+        rim = [0.0] * 72
+        for x, y in lit:
+            dx, dy = x - mx, y - my
+            reach = math.sqrt((syy * dx * dx - 2 * sxy * dx * dy
+                               + sxx * dy * dy) / det)
+            bearing = int((math.atan2(dy, dx) + math.pi)
+                          / math.tau * 72) % 72
+            rim[bearing] = max(rim[bearing], reach)
+        stray = (max(rim) - min(rim)) / (sum(rim) / len(rim))
+        assert stray < 0.03, (
+            f"the rim strays {stray:.1%} from a true ellipse: a coin close "
+            f"up has flat sides")
+
+    def test_a_coin_is_ringed_in_dark_whatever_it_is_over(self, qapp):
+        """A coin is white, and at a chorus the road is already gold, so
+        what a coin is read against is its own dark silhouette, drawn a
+        little bigger than it - the same one every block gets."""
+        from PySide6.QtGui import QColor
+
+        # Where the face is, found on black where nothing else is lit.
+        face = self._close_coin()
+        y = int(sum(y for _, y in face) / len(face))
+        row = [x for x, yy in face if yy == y]
+        left, right = min(row), max(row)
+        drawn = []
+        self._close_coin(ground=QColor.fromHsvF(0.12, 0.6, 0.9),
+                         image_out=drawn)
+        image = drawn[0]
+        assert image.pixelColor(left - 60, y).lightnessF() > 0.5, (
+            "the ground is not the gold it was meant to be")
+
+        def dark_run(edge, outward):
+            x = edge + outward
+            # Past the face's own antialiased edge, which is part face
+            # and part ring.
+            for _ in range(2):
+                if image.pixelColor(x, y).lightnessF() >= 0.15:
+                    x += outward
+            run = 0
+            while image.pixelColor(x, y).lightnessF() < 0.15 and run < 40:
+                x += outward
+                run += 1
+            return run
+
+        rings = [dark_run(left, -1), dark_run(right, 1)]
+        assert min(rings) >= 3, (
+            f"the dark ring round a coin {right - left} px across is "
+            f"{rings} px wide on its two sides: over a gold road the coin "
+            f"has no edge")
+
+    def test_a_coin_turns_and_never_turns_to_nothing(self, qapp):
+        """Side on is narrow, and never so narrow it vanishes: a disc
+        exactly edge-on is one pixel wide and reads as a coin that is
+        not there."""
+        import math
+
+        def across(lit):
+            xs = [x for x, _ in lit]
+            return max(xs) - min(xs)
+
+        face = across(self._close_coin())
+        side = across(self._close_coin(turn=math.pi / 2))
+        assert side < face * 0.5, (
+            f"a coin a quarter of the way round is {side} px across "
+            f"against {face} face on: it is not turning")
+        assert side > face * 0.2, (
+            f"and {side} px side on is a coin that has vanished")
 
 
 class TestTheRoadTurnsOverAtTheBigMoments:

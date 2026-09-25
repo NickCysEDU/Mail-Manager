@@ -142,6 +142,9 @@ hiddenimports += collect_submodules("anthropic")
 hiddenimports += [
     "PySide6.QtMultimedia", "PySide6.QtMultimediaWidgets",
     "PySide6.QtPdf", "PySide6.QtPdfWidgets",
+    # Where the audio pane draws when there is a graphics card - which is
+    # what makes a Retina full screen sharp rather than stretched.
+    "PySide6.QtOpenGL", "PySide6.QtOpenGLWidgets",
 ]
 
 # QtMultimedia, QtMultimediaWidgets, QtPdf and QtPdfWidgets used to be on

@@ -6271,9 +6271,6 @@ class Rider(Scene):
     COIN_SIZE = 0.26
     COIN_TALL = 0.40
     COIN_TURN = 2.6
-    #: How many points around the rim. Ten is round enough at the size
-    #: one is ever drawn and a third of the cost of a smooth curve.
-    COIN_FACES = 10
     #: How much bigger a power block is than a coin. It is the thing a
     #: corkscrew is *for*, so it is not something to notice late.
     POWER_SIZE = 1.9
@@ -6310,25 +6307,25 @@ class Rider(Scene):
             # Never edge-on to nothing: a disc exactly side on is one
             # pixel wide and reads as a coin that vanished.
             wide = size * max(0.28, abs(math.cos(phase)))
-            face = QPainterPath()
-            back = QPainterPath()
-            for step in range(self.COIN_FACES):
-                angle = step / self.COIN_FACES * math.tau
-                out = math.cos(angle)
-                up = math.sin(angle)
-                spot = self._eye(horizon, focal, across + wide * out,
-                                 -tall - size * up, at)
-                shade = self._eye(
-                    horizon, focal, across + wide * out * self.BACKING,
-                    -tall - size * up * self.BACKING, at)
-                if step == 0:
-                    face.moveTo(spot)
-                    back.moveTo(shade)
-                else:
-                    face.lineTo(spot)
-                    back.lineTo(shade)
-            face.closeSubpath()
-            back.closeSubpath()
+            # A true ellipse rather than a ring of points. Everything in
+            # a coin sits at one distance, and at one distance the view
+            # is a straight scale, turn and shift of the road - so a disc
+            # lands on the glass as an ellipse exactly, and three points
+            # say which. It had been ten points joined by straight lines,
+            # which was round enough while the frame was drawn at half
+            # the screen's resolution and read as a ten-sided shape once
+            # it was drawn at all of it.
+            middle = self._eye(horizon, focal, across, -tall, at)
+            side = self._eye(horizon, focal, across + wide, -tall, at)
+            top = self._eye(horizon, focal, across, -tall - size, at)
+            glass = QTransform(side.x() - middle.x(), side.y() - middle.y(),
+                               top.x() - middle.x(), top.y() - middle.y(),
+                               middle.x(), middle.y())
+            disc = QPainterPath()
+            disc.addEllipse(QPointF(0.0, 0.0), 1.0, 1.0)
+            face = glass.map(disc)
+            back = (QTransform.fromScale(self.BACKING, self.BACKING)
+                    * glass).map(disc)
             # The same dark silhouette every block gets, for the same
             # reason: what a coin is read against is this rather than
             # whatever the music has put behind it.

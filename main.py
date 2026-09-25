@@ -296,6 +296,20 @@ def self_test(offline: bool = False) -> int:
         import visualizers
         if len(visualizers.SCENES) < 2:
             raise RuntimeError("part of the audio pane is not in this build")
+
+        # The pane draws on the graphics card when there is one, and a full
+        # screen is only sharp there. Built, for the same reason as the
+        # player: the module importing proves the Python half is present,
+        # and the Qt library behind it is the half a bundle can lose.
+        from PySide6.QtOpenGL import QOpenGLFramebufferObjectFormat
+        import attachment_widgets
+        wanted = QOpenGLFramebufferObjectFormat()
+        wanted.setSamples(4)
+        if wanted.samples() != 4:
+            raise RuntimeError("drawing on the graphics card is not in this build")
+        if not hasattr(attachment_widgets, "_GpuCanvas"):
+            raise RuntimeError("the audio pane cannot draw on the card in this build")
+        working.append("drawing on the card")
         return ", ".join(working)
 
     check("attachment viewer", _attachment_viewer)

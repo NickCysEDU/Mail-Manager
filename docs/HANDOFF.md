@@ -90,6 +90,9 @@ Each one cost a round of measurement to find. Each has a test.
   The beat hits at the frame's *edge* and on the craft, never in the
   middle, so block contrast is identical on the beat and off it.
 - A frame costs **8.7 ms median at 1920x1080** against a 16.7 ms budget.
+  On the graphics card, at a Retina full screen's every pixel with 4x
+  multisampling and all of the polish, it is **10.2 ms at 2880x1800**,
+  where the CPU took 41.9 and had to draw at half the resolution.
 - A scene's first frame costs 12-16 ms rather than up to 168. The font
   machinery is warmed on a worker thread and a scene is drawn invisibly
   for its first six frames.
@@ -149,6 +152,31 @@ Each one cost a round of measurement to find. Each has a test.
   three things a sixth of a second apart on purpose.
 - **`_pulse` is an attribute, not a method.** The beat phase. The rim
   flash is `_rim`.
+- **The pane draws on the graphics card, and the suite cannot see it.**
+  `_GpuCanvas` in `attachment_widgets.py` is a `QOpenGLWidget` laid over
+  the pane; `_paint_on_gpu` runs the same `_paint` into a 4x multisampled
+  framebuffer at the screen's real resolution, and the polish goes on
+  after. The suite runs on the offscreen platform, where no context can
+  be made, so every other test goes through the CPU path - which is also
+  the fallback. `tests/test_gpu_canvas.py` is the only file that runs the
+  card: each test is a subprocess on the real platform reporting JSON,
+  and it skips on a machine with no context. Anything that touches
+  drawing has to pass both. `MAIL_MANAGER_GPU=0` forces the CPU path.
+  `CardSharpness` measures each frame *finished* (`glFinish`), because
+  on a card the calls return long before the drawing is done, and it
+  judges on a median of thirty, never a running average.
+- **Traps on the card, each found the hard way.**
+  A framebuffer counts rows from the bottom: a sub-rectangle read from
+  one has to be flipped, and it only shows when the scene is not
+  centred. A hidden widget's resize events are held back until it is
+  shown, so the canvas is resized in `update()` as well as
+  `resizeEvent`, or it draws a pane of no height. A `QOpenGLPaintDevice`
+  made as a temporary is collected while it is being painted on - keep
+  a reference. Reparenting into full screen can bring a new context, so
+  `initializeGL` throws away every framebuffer. Shrinking on the card is
+  done in halves; one blit reads a pixel in sixteen and the bloom comes
+  out beaded. Never monkeypatch `QGuiApplication.instance` in a test -
+  pytest-qt's teardown calls it; `_platform_name()` is the seam.
 
 ---
 
@@ -273,7 +301,7 @@ That first figure is the one that matters and it must stay at zero.
 
 **Speed.** Rules engine 10.1 ms per message. Lexicon opens in 38 ms using
 1.95 MB, down from 70 ms and 10.5 MB, and neither number now grows with the
-table. Test suite 3,907 tests (with the evaluation sets present) in about three minutes on four workers.
+table. Test suite 3,934 tests (with the evaluation sets present) in about three minutes on four workers.
 
 ---
 
@@ -326,18 +354,23 @@ table. Test suite 3,907 tests (with the evaluation sets present) in about three 
   one process - a previous session killed the machine by running the
   batch next to two other heavy jobs - and run it after anything that
   touches the chart, the clock or the road.
-- [ ] **Nothing profiles the scene at 4K.** It fits at 1080p with 47 per
-  cent of the budget spare. Sharpness shrinks the buffer above that and
-  nothing has measured what it looks like when it does.
-- [ ] **A GPU renderer is the ceiling worth raising.** The scene is
-  QPainter on the CPU and the drawing is the frame: `fillPath` is 5 ms of
-  a 8.7 ms frame at 1080p. Everything that would make it *more*
-  spectacular - real particle counts, bloom, a road with more in it -
-  spends that budget. The game logic is renderer-independent, so this is
-  a drawing-layer change rather than a rewrite. Worth doing before the
-  scene grows much further, and the point at which a separate repository
-  starts to make sense, because it means a dependency Mail Manager does
-  not otherwise need.
+- [x] **A GPU renderer.** Done, and without the new dependency or the
+  separate repository this item used to predict: Qt's own OpenGL paint
+  engine ships in PySide6 and draws the same QPainter calls, so no scene
+  changed. `_GpuCanvas` and `_paint_on_gpu` in `attachment_widgets.py`.
+  A Retina full screen is drawn at every real pixel with 4x multisampling
+  - it was half resolution, stretched, which is what "soft" was. At
+  2880x1800 on an M1: 10.2 ms with every effect, against 41.9 on the CPU.
+- [x] **Profile the scene at 4K and above.** Measured on the card on an
+  M1 at MacBook Air, 14-inch and 16-inch MacBook Pro, 5K and 6K sizes:
+  8.9, 11.2, 13.8, 22.7 and 32.3 ms at full quality. `CardSharpness`
+  governs it - samples first, then the logical resolution - and a 5K
+  display settles at 10 ms, a 6K at 9.6. The numbers are on the class.
+- [ ] **Bigger spectacle now has a budget to spend.** The card draws the
+  scene at 2880x1800 in under 5 ms, so real particle counts, a denser
+  road and a proper bloom are affordable on a MacBook's own screen.
+  Anything added has to be measured against the 5K and 6K rungs as well,
+  because on a small card that is where it costs.
 
 ### Done in this round
 

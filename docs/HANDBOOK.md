@@ -1313,6 +1313,73 @@ range it claims before anything sums it, and a nan comes back as the
 floor rather than as the nearest bound, because a nan is an answer that
 was never worked out.
 
+**Full screen is sharp.** It was soft because it could not afford to be
+anything else. A Retina full screen is 2880x1800 real pixels, and on the
+CPU Music rider cost 42 ms a frame there with its bloom and vignette,
+against a sixtieth of a second for everything. So the pane
+drew it at half the resolution and stretched it back up - one buffer
+pixel per point, which on a Retina screen is exactly what soft looks
+like.
+
+The pane now draws on the graphics card, through Qt's own OpenGL paint
+engine: the same QPainter calls every scene already makes, so no scene
+changed and nothing new is installed. At the same size the frame is
+4.8 ms for the scene and 10.2 with every effect, against 23.6 and 41.9,
+and the two pictures differ by 0.004 in brightness on average. It draws
+at every real pixel the screen has - a line one pixel wide on a Retina
+screen comes out one pixel wide, which is what the test measures -
+multisampled four times for its edges, with the whole of the polish the
+scene asks for rather than whatever a budget left room for.
+
+The bloom is the one part that comes back off the card. A bloom is a
+blur, and a blur is a small picture made big, so the frame is shrunk on
+the card and only the small copy is read back. It is shrunk in halves:
+done in one step, the card reads one pixel in sixteen and skips the
+rest, so a thin line reached the small copy only where it crossed a
+pixel that was read, and every chevron on the road bloomed as a row of
+beads. In halves, each step is an exact average of what it covers.
+
+A big display can ask more of a small card than it has. Measured on an
+M1, the least of the Apple GPUs, the whole frame at every real pixel is
+8.9 ms on a MacBook Air's screen and 13.8 on a 16-inch MacBook Pro's -
+and 22.7 on a 5K display and 32.3 on a 6K, which is 44 and 31 frames a
+second. So the card is governed the way the CPU always was, by
+measuring rather than by a rule written on one machine. What goes first
+is the multisampling, because at a Retina display's density two samples
+a pixel is most of the smoothness of four and at 5K it is half the
+scene's cost. Only after that does resolution go, and then to the
+screen's logical resolution and no lower, stretched without smoothing
+because it is a whole-number stretch. On that M1 a MacBook's own screen
+keeps every pixel, a 5K display settles at 10 ms and a 6K at 9.6.
+
+Each rung is judged on the median of thirty frames rather than on a
+running average. The average was tried first and moved a MacBook Pro's
+own screen to half its resolution over the odd frame the system took
+for something else, for a frame that fitted nine times in ten. A rung
+that measured over the budget is not tried again until the scene or the
+window changes, so a frame sitting between two rungs does not go soft
+and sharp by turns. The polish is drawn into the frame before it is
+stretched rather than over the screen afterwards: at 6K each pass over
+the whole screen is twenty million pixels read and written, and that
+was most of what a half-resolution frame still cost.
+
+Where there is no card to draw on - a virtual machine, a remote
+session, a driver that will not start a painter - the pane draws on the
+CPU as it always has, and a card that fails one frame is not asked
+again that session. `MAIL_MANAGER_GPU=0` forces the CPU everywhere, for
+anybody chasing a drawing problem who wants to know whether the card is
+part of it.
+
+**A coin is round.** It was ten points joined by straight lines, which
+was round enough while the frame was drawn at half the screen's
+resolution. At all of it, a coin passing the craft is ninety pixels
+across and each of its ten flats is three pixels deep. Everything in a
+coin sits at one distance, and at one distance the view is a straight
+scale, turn and shift of the road - so a disc lands on the glass as an
+ellipse exactly, and three projected points say which one. It is drawn
+as that ellipse now, a true curve at any size, from three projections
+where there were twenty.
+
 ---
 
 ## Building the `.app`
@@ -1343,7 +1410,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,907 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,934 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1726,7 +1793,7 @@ corkscrews the track earned, and what a frame costs. No song, path or
 frame of one is ever written into the repository.
 
 ```bash
-./dev test        # 3,907 tests, about three minutes
+./dev test        # 3,934 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

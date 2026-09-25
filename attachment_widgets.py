@@ -29,7 +29,11 @@ from PySide6.QtCore import (QEasingCurve, QPoint, QPointF, QRect, QRectF, QSize,
                             QTimer, QVariantAnimation, Signal)
 from PySide6.QtGui import (QColor, QFont, QFontMetricsF, QImage, QLinearGradient,
                            QPainter, QPainterPath, QPixmap,
-                           QPen, QRadialGradient)
+                           QPen, QRadialGradient, QGuiApplication)
+from PySide6.QtOpenGL import (QOpenGLFramebufferObject,
+                              QOpenGLFramebufferObjectFormat,
+                              QOpenGLPaintDevice, QOpenGLTextureBlitter)
+from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import (QGraphicsOpacityEffect, QHBoxLayout, QLabel,
                                QLayout, QSizePolicy,
                                QSlider, QStyle, QStyleOptionSlider,
@@ -322,6 +326,113 @@ class SpectrumState:
                         for name, value in self.kit.items()}
 
 
+def _gpu_wanted() -> bool:
+    """Whether the pane may draw on the graphics card at all.
+
+    Not under the offscreen and minimal platforms, which is where the
+    test suite runs: every test of what the scenes draw goes through the
+    CPU path, which is the path that has always been there and the one
+    any machine without a working GPU falls back to. ``MAIL_MANAGER_GPU=0``
+    forces that path everywhere, for anybody chasing a drawing problem
+    who wants to know whether the card is part of it.
+    """
+    import os
+
+    if os.environ.get("MAIL_MANAGER_GPU", "1").strip() == "0":
+        return False
+    return _platform_name() not in ("", "offscreen", "minimal", "vnc")
+
+
+def _platform_name() -> str:
+    """Which windowing platform Qt is running on, or nothing yet."""
+    app = QGuiApplication.instance()
+    return app.platformName() if app is not None else ""
+
+
+class _GpuCanvas(QOpenGLWidget):
+    """Where the pane draws when there is a graphics card to draw on.
+
+    "Xxxxxxxx xxxxxxxxxx xx xxxx xxxxxx xx xxx xxxxx xx xxxxx." It was
+    not sharp because it could not afford to be: at a Retina full screen
+    - 2880x1800 real pixels - the rider cost 24 ms a frame on the CPU
+    with nothing else going on, and 42 once the bloom and the vignette
+    were added, against a sixtieth of a second for everything. So the
+    pane drew it at half the resolution and stretched it, which is one
+    buffer pixel per point, which on a Retina screen is soft.
+
+    Qt's own OpenGL paint engine draws the same QPainter calls on the
+    card. Measured at the same size: 4.8 ms for the scene and 10.2 for
+    the scene with every effect, against 23.6 and 41.9 on the CPU, with
+    a mean difference between the two frames of 0.004 in brightness. No
+    new dependency - it ships in PySide6 - and every scene keeps drawing
+    exactly what it drew.
+
+    Transparent to the mouse, so the pane underneath still gets every
+    click it always got. It covers the pane completely, so the pane
+    itself paints nothing while it is there.
+    """
+
+    def __init__(self, pane) -> None:
+        super().__init__(pane)
+        self._pane = pane
+        #: The framebuffers, built for one size on one context.
+        self._buffers = None
+        self._halves = {}
+        self._blitter = None
+        #: The small copy of the last frame the bloom was made from.
+        self.last_halo = None
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents,
+                          True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+    def initializeGL(self) -> None:      # noqa: N802 - Qt's name
+        # A new context, which reparenting into full screen can bring:
+        # whatever was built on the old one is gone with it.
+        self._buffers = None
+        self._halves = {}
+        self._blitter = QOpenGLTextureBlitter()
+        self._blitter.create()
+
+    def buffers(self, width: int, height: int, halo: QSize,
+                samples: int = 4):
+        """The three framebuffers and the device for this size.
+
+        Multisampled for the scene itself, because that is where the
+        antialiasing comes from on a card; a plain one it is resolved
+        into; and a small one the bloom is read back from.
+        """
+        key = (width, height, halo.width(), halo.height(), samples,
+               id(self.context()))
+        if self._buffers is None or self._buffers[0] != key:
+            def made(w, h, samples=0):
+                shape = QOpenGLFramebufferObjectFormat()
+                shape.setSamples(samples)
+                shape.setAttachment(
+                    QOpenGLFramebufferObject.Attachment.CombinedDepthStencil)
+                return QOpenGLFramebufferObject(QSize(w, h), shape)
+
+            device = QOpenGLPaintDevice(QSize(width, height))
+            self._buffers = (key, made(width, height, samples),
+                             made(width, height),
+                             made(halo.width(), halo.height()), device)
+            self._halves = {}
+        return self._buffers[1:]
+
+    def half(self, width: int, height: int):
+        """A plain framebuffer of this size, kept for the next frame."""
+        key = (width, height)
+        found = self._halves.get(key)
+        if found is None:
+            shape = QOpenGLFramebufferObjectFormat()
+            shape.setSamples(0)
+            found = self._halves[key] = QOpenGLFramebufferObject(
+                QSize(width, height), shape)
+        return found
+
+    def paintGL(self) -> None:      # noqa: N802 - Qt's name
+        self._pane._paint_on_gpu(self)
+
+
 class Spectrum(QWidget):
     """The equaliser, and whichever scene is drawing it.
 
@@ -452,6 +563,8 @@ class Spectrum(QWidget):
         self._post = True
         self._effects = PostProcess()
         self._sharpness = Sharpness()
+        #: The same question, asked of the graphics card. See _paint_on_gpu.
+        self._card = CardSharpness()
         self._buffer = None
         #: None for the fixed strip, else width-to-height.
         self._aspect = None
@@ -548,8 +661,224 @@ class Spectrum(QWidget):
         # for the pane that is putting a file away.
         self._away = QTimer(self)
         self._away.setSingleShot(True)
-        # Before anything animates, and off this thread. See _Glyphs.
+        # Before anything animates. See warm_the_glyphs.
         warm_the_glyphs()
+        #: Where the scene was drawn on the card this frame, and through
+        #: what, for the polish to be put over it. See _paint_on_gpu.
+        self._on_gpu = False
+        self._gpu_scene = None
+        #: The GPU canvas, where there is a GPU. See _GpuCanvas.
+        self._canvas = self._make_canvas()
+
+    # -- drawing on the graphics card --------------------------------------
+    def _make_canvas(self):
+        """A GPU canvas over the pane, where there is a GPU to draw on."""
+        if not _gpu_wanted():
+            return None
+        try:
+            canvas = _GpuCanvas(self)
+            canvas.setGeometry(self.rect())
+            canvas.show()
+            return canvas
+        except Exception:      # noqa: BLE001 - the CPU path is always there
+            return None
+
+    def _drop_canvas(self) -> None:
+        """Give up on the card for the rest of the session.
+
+        Once, and quietly: the pane goes on drawing exactly as it did
+        before there was a canvas, and a card that failed one frame is
+        not asked again.
+        """
+        canvas, self._canvas = self._canvas, None
+        if canvas is not None:
+            canvas.hide()
+            canvas.deleteLater()
+        super().update()
+
+    @property
+    def on_gpu(self) -> bool:
+        """Whether the pane is drawing on the graphics card."""
+        return self._canvas is not None
+
+    def update(self, *args) -> None:      # noqa: D401 - Qt's name
+        super().update(*args)
+        if self._canvas is not None:
+            # Kept the pane's size here as well as in resizeEvent: Qt
+            # holds a hidden widget's resize events back until it is
+            # shown, and a canvas that missed one draws at whatever size
+            # it last heard about - which, for a pane built hidden, is a
+            # strip with no height at all.
+            if self._canvas.geometry() != self.rect():
+                self._canvas.setGeometry(self.rect())
+            self._canvas.update()
+
+    def _paint_on_gpu(self, canvas) -> None:
+        """One frame, drawn on the card at the screen's own resolution.
+
+        The same ``_paint`` as ever, into a multisampled framebuffer the
+        size of the pane in real pixels, so nothing is drawn small and
+        stretched. The polish the scene asks for is then put on over the
+        top, from a small copy of the frame made on the card - the bloom
+        is a blur, and a blur is a small picture made big, so only that
+        small picture ever comes back off the card.
+
+        Unless the card cannot draw that many pixels sixty times a
+        second, which a big external display can ask of a small card:
+        then fewer samples, and after that fewer pixels. See
+        CardSharpness.
+        """
+        import time as _time
+
+        started = _time.perf_counter()
+        try:
+            ratio = canvas.devicePixelRatioF()
+            screen_w = int(round(canvas.width() * ratio))
+            screen_h = int(round(canvas.height() * ratio))
+            if screen_w < 2 or screen_h < 2:
+                # A pane with no room - collapsed, or not laid out yet -
+                # has nothing to draw, and a framebuffer with no height
+                # is one the card will not paint into.
+                return
+            samples, share = self._card.choice(
+                screen_w * screen_h, ratio, self._scene)
+            width = max(2, int(round(screen_w * share)))
+            height = max(2, int(round(screen_h * share)))
+            halo = QSize(
+                max(PostProcess.BLOOM_MIN, width // PostProcess.BLOOM_DIVISOR),
+                max(PostProcess.BLOOM_MIN, height // PostProcess.BLOOM_DIVISOR))
+            multi, flat, small, device = canvas.buffers(
+                width, height, halo, samples)
+            device.setDevicePixelRatio(ratio * share)
+            self._gpu_scene = None
+            multi.bind()
+            painter = QPainter(device)
+            if not painter.isActive():
+                # The card would not start a painter on a buffer it was
+                # given, which is a card that is not going to work.
+                multi.release()
+                raise RuntimeError("the graphics card refused a painter")
+            self._on_gpu = True
+            try:
+                self._paint(painter)
+            finally:
+                self._on_gpu = False
+                painter.end()
+            multi.release()
+            full = QRect(0, 0, width, height)
+            QOpenGLFramebufferObject.blitFramebuffer(flat, full, multi, full)
+            if self._gpu_scene is not None:
+                self._polish_on_gpu(canvas, flat, small, device, ratio * share)
+            # Back onto the canvas's own framebuffer, which the blits
+            # above unbound.
+            functions = canvas.context().functions()
+            functions.glBindFramebuffer(0x8D40, canvas.defaultFramebufferObject())
+            screen = QRect(0, 0, screen_w, screen_h)
+            functions.glViewport(0, 0, screen_w, screen_h)
+            functions.glClearColor(0.0, 0.0, 0.0, 1.0)
+            functions.glClear(0x00004000)
+            # Stretched without smoothing when the stretch is a whole
+            # number, for the reason blit_scene gives: every pixel
+            # doubled evenly holds the edge a smoothed stretch blurs.
+            grew = screen_w / width
+            whole = abs(grew - round(grew)) < 0.02
+            smooth = (getattr(self._scene, "stretch_smooth", False)
+                      or not whole)
+            functions.glBindTexture(0x0DE1, flat.texture())
+            functions.glTexParameteri(0x0DE1, 0x2800,
+                                      0x2601 if smooth else 0x2600)
+            canvas._blitter.bind()
+            canvas._blitter.blit(
+                flat.texture(),
+                QOpenGLTextureBlitter.targetTransform(
+                    QRectF(screen), screen),
+                QOpenGLTextureBlitter.Origin.OriginBottomLeft)
+            canvas._blitter.release()
+            # Waited for, so that what is measured is what the card
+            # took rather than how long it took to be asked.
+            functions.glFinish()
+            self._card.record((_time.perf_counter() - started) * 1000.0,
+                              ratio)
+        except Exception:      # noqa: BLE001
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "drawing on the graphics card failed; drawing on the CPU "
+                "from here on")
+            QTimer.singleShot(0, self._drop_canvas)
+
+    def _polish_on_gpu(self, canvas, flat, small, device, ratio) -> None:
+        """The scene's own post-processing, over the frame on the card.
+
+        Through the same PostProcess as ever, with the same transform
+        and opacity the scene was drawn through - the reveal slides the
+        scene and a new scene fades up, and the polish has to slide and
+        fade with it or a hidden scene would still bloom.
+
+        Into the scene's own framebuffer, before the frame goes to the
+        screen, rather than over the screen afterwards. At 6K each pass
+        over the whole screen is twenty million pixels read and written,
+        which on a small card is two milliseconds a pass whatever is in
+        it - and it was most of what a frame drawn at half the
+        resolution still cost: 13.7 ms, against 8 for the same buffer
+        on a screen a third the size. Drawn into the buffer, a smaller
+        buffer makes all of the frame cheaper rather than some of it.
+        """
+        rect, transform, opacity, recipe = self._gpu_scene
+        # Where the scene landed in real pixels, which is what the small
+        # copy is taken from: the polish belongs to the scene, not to
+        # the pane's background around it.
+        box = transform.mapRect(rect)
+        source = QRect(int(box.x() * ratio), int(box.y() * ratio),
+                       max(1, int(box.width() * ratio)),
+                       max(1, int(box.height() * ratio)))
+        # Upside down, because a framebuffer counts its rows from the
+        # bottom and a painter counts them from the top. With the scene
+        # filling the pane the two agree and nobody would notice; with
+        # the control strip reserved or the scene letterboxed, the bloom
+        # would be made from the wrong band of the picture.
+        flipped = QRect(source.x(),
+                        flat.height() - source.y() - source.height(),
+                        source.width(), source.height())
+        # Down to the bloom's size in halves rather than in one step.
+        #
+        # A linear blit reads a two-by-two patch of the source for each
+        # pixel it writes, so a halving is an exact average of every
+        # pixel it covers - and an eightfold shrink done in one blit
+        # reads one pixel in sixteen and skips the rest. A thin line
+        # then only reaches the small copy where it happens to cross
+        # the pixels that were read, and the bloom made from it put a
+        # row of soft blobs along every chevron on the road: measured,
+        # twelve bright peaks along a single one. The CPU's own shrink
+        # averages the whole block, which is what this now matches.
+        here, area = flat, flipped
+        while (area.width() // 2 >= small.width() * 2
+               and area.height() // 2 >= small.height() * 2):
+            step = canvas.half(max(1, area.width() // 2),
+                               max(1, area.height() // 2))
+            whole = QRect(0, 0, step.width(), step.height())
+            QOpenGLFramebufferObject.blitFramebuffer(
+                step, whole, here, area, 0x00004000, 0x2601)
+            here, area = step, whole
+        QOpenGLFramebufferObject.blitFramebuffer(
+            small, QRect(0, 0, small.width(), small.height()), here, area,
+            0x00004000, 0x2601)
+        halo = QPixmap.fromImage(small.toImage())
+        # Kept, so what the bloom was made from can be looked at: it is
+        # the one thing that comes back off the card, and the one place
+        # a mistake in which part of the frame it came from would show.
+        canvas.last_halo = halo
+        flat.bind()
+        painter = QPainter(device)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setWorldTransform(transform)
+            painter.setOpacity(opacity)
+            self._effects.apply_on_gpu(painter, rect, halo, recipe)
+        finally:
+            painter.end()
+            flat.release()
+
 
     # -- what it shows ----------------------------------------------------
     def set_scene(self, scene) -> None:
@@ -1166,6 +1495,8 @@ class Spectrum(QWidget):
 
     def resizeEvent(self, event) -> None:      # noqa: N802 - Qt's name
         super().resizeEvent(event)
+        if self._canvas is not None:
+            self._canvas.setGeometry(self.rect())
         if self._aspect is not None and not self._unbounded:
             wanted = int(self._full_height() * self._reveal)
             if abs(self.maximumHeight() - wanted) > 1:
@@ -1264,9 +1595,14 @@ class Spectrum(QWidget):
         # The scene's own time plus the polish pass's, because what
         # decides whether a frame fits is the whole frame. Both are
         # measured; neither is a guess about this machine.
-        wanted = self._sharpness.interval_ms(
-            self.devicePixelRatioF(), self.FRAME_MS,
-            extra=self._effects.cost_ms())
+        if self._canvas is not None:
+            # On the card the whole frame is measured at once, polish
+            # and all. See CardSharpness.
+            wanted = self._card.interval_ms(self.FRAME_MS)
+        else:
+            wanted = self._sharpness.interval_ms(
+                self.devicePixelRatioF(), self.FRAME_MS,
+                extra=self._effects.cost_ms())
         if self._giving_way and not (self._holding or self._spamming):
             # Not while somebody is playing the strobe by hand. The bar
             # coming up halves the frame rate, and the bar comes up on any
@@ -1828,6 +2164,12 @@ class Spectrum(QWidget):
         on the backing store, which then crashes the process. Whatever
         goes wrong in a scene, the painter has to be closed.
         """
+        if self._canvas is not None:
+            # The canvas covers the pane and draws it. A repaint of the
+            # pane from anywhere - a resize, an expose, Qt's own reasons
+            # - is a repaint of the canvas.
+            self._canvas.update()
+            return
         painter = QPainter(self)
         try:
             self._paint(painter)
@@ -1908,6 +2250,17 @@ class Spectrum(QWidget):
         # and stretched, which costs the same as turning it off and still
         # looks smooth. How much smaller is measured rather than fixed -
         # see Sharpness, and the note on SHARP_PIXELS.
+        if self._on_gpu:
+            # Straight in, at every pixel the screen has. There is no
+            # buffer to shrink into and no stretching back out: the
+            # card draws the full resolution inside the frame, which is
+            # the whole reason for drawing on it. The polish is put on
+            # afterwards, over the finished frame. See _paint_on_gpu.
+            self._scene.paint(painter, rect, self._state)
+            if recipe:
+                self._gpu_scene = (QRectF(rect), painter.worldTransform(),
+                                   painter.opacity(), recipe)
+            return
         shrink = self._sharpness.scale_for(pixels, ratio, self._scene)
         if (not recipe and shrink >= 0.999) or rect.width() < 8.0 or rect.height() < 8.0:
             started = _time.perf_counter()
@@ -2868,6 +3221,124 @@ class Sharpness:
         return max(frame_ms, min(33, int(whole * 1.1) + 1))
 
 
+class CardSharpness:
+    """What a frame on the graphics card may ask of it.
+
+    The card draws a MacBook's full screen with room to spare and a big
+    external display without it. Measured on an M1 - the least of the
+    Apple GPUs - for Music rider with all of its polish at every real
+    pixel and four samples a pixel:
+
+        2560x1664   8.9 ms      3456x2234  13.8 ms      6016x3384  32.3 ms
+        3024x1964  11.2 ms      5120x2880  22.7 ms
+
+    The last two are 44 and 31 frames a second. What gives first is the
+    multisampling, because at a Retina display's density two samples a
+    pixel is most of the smoothness of four and at 5K it is half the
+    scene's cost - 9.1 ms against 5.5. Only once that is not enough does
+    the resolution go, and then to the screen's logical resolution, the
+    whole-number step the CPU's own ladder settles on (see Sharpness for
+    why a whole number beats anything in between).
+
+    Measured rather than guessed from the pixel count, for the same
+    reason Sharpness is: the same frame costs very different amounts on
+    different cards, and a rule written against this one would be wrong
+    on any other. What is measured is the whole frame on the card,
+    finished, because on a card the drawing calls return long before
+    the drawing is done.
+    """
+
+    #: Everything the card does for a frame, at sixty a second. The rest
+    #: of the sixteen milliseconds is Qt putting the window together and
+    #: the app doing whatever else it does between frames.
+    BUDGET_MS = 12.5
+
+    #: Frames not believed after a scene or a size changes, and after a
+    #: rung changes - a new rung is new framebuffers, and their first
+    #: frames are the card setting them up. See Sharpness.
+    WARMUP = 24
+    SETTLE = 12
+
+    #: How many frames a rung is judged on, by their median. A running
+    #: average was tried first and is the wrong statistic here: one frame
+    #: in thirty that the system took for something else lifted it over
+    #: the budget on a screen whose typical frame fitted with room to
+    #: spare, and a MacBook Pro's own display ended up at half its
+    #: resolution for a frame that was 10.5 ms nine times in ten.
+    WINDOW = 30
+
+    def __init__(self) -> None:
+        self._rung = None
+        self._cost = 0.0
+        self._settle = 0
+        self._warm = self.WARMUP
+        self._key = None
+        self._window: list = []
+        #: What each rung measured, once it has been drawn at.
+        self._seen: dict = {}
+
+    @staticmethod
+    def rungs(ratio: float) -> tuple:
+        """(samples a pixel, share of the screen's pixels), best first."""
+        logical = round(1.0 / max(1.0, ratio), 4)
+        if logical < 1.0:
+            return ((4, 1.0), (2, 1.0), (4, logical), (2, logical))
+        return ((4, 1.0), (2, 1.0), (0, 1.0))
+
+    def choice(self, pixels: float, ratio: float, scene) -> tuple:
+        """What to draw this frame at. A new scene or size starts sharp."""
+        key = (id(scene), int(pixels / 100_000.0), round(ratio, 3))
+        if key != self._key:
+            self._key = key
+            self._cost = 0.0
+            self._settle = 0
+            self._warm = self.WARMUP
+            self._window = []
+            self._seen = {}
+            self._rung = self.rungs(ratio)[0]
+        return self._rung
+
+    def record(self, taken_ms: float, ratio: float) -> None:
+        """One finished frame, and a rung moved when the median asks."""
+        if self._warm > 0:
+            self._warm -= 1
+            return
+        if self._settle > 0:
+            self._settle -= 1
+            return
+        self._window.append(taken_ms)
+        if len(self._window) < self.WINDOW:
+            return
+        self._cost = sorted(self._window)[len(self._window) // 2]
+        self._window = []
+        self._seen[self._rung] = self._cost
+        rungs = self.rungs(ratio)
+        if self._rung not in rungs:
+            return
+        at = rungs.index(self._rung)
+        if self._cost > self.BUDGET_MS and at < len(rungs) - 1:
+            # Down only. Every scene starts at the top rung, so a rung
+            # below it is only ever reached by measuring the one above
+            # over the budget - and a rung measured over is not tried
+            # again until the scene or the size changes, so a frame that
+            # sits between two does not go back and forth between them,
+            # which would be the picture going soft and sharp by turns.
+            self._rung = rungs[at + 1]
+            self._settle = self.SETTLE
+            self._window = []
+
+    def interval_ms(self, frame_ms: int) -> int:
+        """How often to ask for a frame, given what one is costing.
+
+        The same lesson as Sharpness.interval_ms: a timer that asks for
+        frames faster than they can be drawn does not get them faster,
+        it fills the event queue.
+        """
+        if self._cost <= frame_ms * 0.85:
+            return frame_ms
+        return max(frame_ms, min(33, int(self._cost * 1.1) + 1))
+
+
 class PostProcess:
     """Cheap screen-space polish applied after a scene has drawn itself.
 
@@ -3119,6 +3590,32 @@ class PostProcess:
         painter.setOpacity(0.5)
         painter.drawTiledPixmap(rect, tile)
         painter.restore()
+
+    def apply_on_gpu(self, painter, rect, halo, recipe: dict) -> None:
+        """The recipe over a frame that is already on the card.
+
+        Every effect the scene asks for, rather than the ones a budget
+        allows: the budget is there because these passes cost the CPU
+        several milliseconds at full screen, and on the card the whole
+        polish is a fraction of one. ``halo`` is the small copy of the
+        frame the bloom is made from - see Spectrum._paint_on_gpu.
+        """
+        bloom = float(recipe.get("bloom", 0.0))
+        shift = float(recipe.get("aberration", 0.0))
+        if bloom > 0.01 or shift > 0.05:
+            apart = 0.0
+            if shift > 0.05:
+                apart = shift * halo.width() / max(1.0, rect.width())
+            self._bloom(painter, rect, self._glow(halo, max(bloom, 0.0), apart))
+        lines = float(recipe.get("scanlines", 0.0))
+        if lines > 0.01:
+            self._scanlines(painter, rect, lines)
+        grain = float(recipe.get("grain", 0.0))
+        if grain > 0.01:
+            self._noise(painter, rect, grain)
+        fade = float(recipe.get("vignette", 0.0))
+        if fade > 0.01:
+            self._vignette_over(painter, rect, fade)
 
     def _vignette_over(self, painter, rect, amount: float) -> None:
         """One gradient over the frame.
