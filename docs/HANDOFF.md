@@ -100,6 +100,11 @@ Each one cost a round of measurement to find. Each has a test.
   exactly what straight looks like.
 - 14,625 hostile inputs through `tools/stress.py`: nothing raised,
   nothing hung.
+- Across eight real records of different genres: zero hits for a player
+  that dodges properly, zero backwards steps, a block a median of 8 to
+  15 ms from its beat, and the road bare between 0 and 3.4 per cent of
+  the time. Before the quiet-passage fill, two of those eight were bare
+  for a quarter of the run and one stretch ran 8.6 seconds.
 
 ### Watch out for
 
@@ -259,7 +264,7 @@ That first figure is the one that matters and it must stay at zero.
 
 **Speed.** Rules engine 10.1 ms per message. Lexicon opens in 38 ms using
 1.95 MB, down from 70 ms and 10.5 MB, and neither number now grows with the
-table. Test suite 3,865 tests (with the evaluation sets present) in about three minutes on four workers.
+table. Test suite 3,876 tests (with the evaluation sets present) in about three minutes on four workers.
 
 ---
 

@@ -1529,8 +1529,12 @@ class Spectrum(QWidget):
         if found is None or not found.beats:
             state.tempo = 0.0
             return
-        state.tempo = found.bpm
-        period = 60.0 / max(1e-6, found.bpm)
+        # Folded first: a detector that reports the pulse doubled would
+        # otherwise drive every scene at twice the song's speed. The
+        # phase below is worked out from the same folded period, which
+        # is the whole point of doing it here. See folded_tempo.
+        state.tempo = visualizers.folded_tempo(found.bpm)
+        period = 60.0 / max(1e-6, state.tempo)
         state.at = self._heard()
         # Against the first beat rather than against zero: a grid that
         # starts where the track starts is a grid that is wrong by

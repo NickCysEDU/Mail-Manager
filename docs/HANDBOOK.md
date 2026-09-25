@@ -942,6 +942,36 @@ and three in a row is a fairground ride. Fourteen was tried first and
 gave one every fifteen seconds on a loud dance record, which ate a
 sixth of the track.
 
+**A tempo is counted the way a person would count it.** Tempo detectors
+make octave errors - they find the right pulse and report it doubled or
+halved - and across eight real records one came out at 230 bpm on a
+track anybody would tap at 115. A road built on that is a different game
+from the song: it ran at 21.7 units a second where the others ran at 12,
+laid its figures twice as thick, and gave 0.78 s of warning where the
+rest gave 1.5. Anything outside 70 to 165 bpm is halved or doubled until
+it is inside, which left every other reading in the batch untouched -
+78, 128, 130, 137 and 155 all pass through.
+
+It is folded where the tempo and the beat phase are worked out together,
+and that is not a detail. Folding it in the scene and leaving the phase
+alone is worse than not folding at all: the phase then belongs to a grid
+at the other tempo, and the correction that keeps the road's origin on
+the beat spends every frame pulling against it. Measured, that made the
+road run at exactly twice the speed its own beat asked for, which is how
+it was found.
+
+**The road is never bare.** The chart is the drums, and a breakdown has
+none - so the road had nothing on it at all. Measured across eight real
+records, two of them left it bare for a quarter of the run and one
+stretch ran 8.6 seconds, which is nine seconds of a game with nothing in
+it; a sound effect with almost no drums was bare 90 per cent of the
+time. Where nothing has been laid for a bar, something goes there
+anyway: prizes, on the beat like everything else. Prizes rather than
+hazards, because a quiet passage is a place to collect, and putting a
+hazard where the music played nothing would break the rule that puts
+obstacles on the beats you can hear coming. The same eight records are
+now bare between 0 and 3.4 per cent of the time.
+
 A quarter of the slots carry an obstacle rather than a prize, and only
 where the heaviest thing in the slot was the kick - so the hazards land
 on the beats you can hear coming. Tying them to the kick alone was tried
@@ -1260,7 +1290,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,865 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,876 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1643,7 +1673,7 @@ corkscrews the track earned, and what a frame costs. No song, path or
 frame of one is ever written into the repository.
 
 ```bash
-./dev test        # 3,865 tests, about three minutes
+./dev test        # 3,876 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

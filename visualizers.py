@@ -338,6 +338,49 @@ def bounded(value, most: float = 1.0, least: float = 0.0) -> float:
     return most if value > most else value
 
 
+#: The range of tempos a scene is driven at, and what happens to a
+#: track that comes out beyond it.
+#:
+#: Tempo detectors make octave errors: they find the right pulse and
+#: report it doubled or halved. Measured across eight real records, one
+#: came out at 230 bpm on a track anybody would tap at 115. A road built
+#: on that is a different game from the song - it runs at 21.7 units a
+#: second where the others run at 12, lays its figures twice as thick,
+#: and gives 0.78 s of warning where the rest give 1.5.
+#:
+#: The bounds are wide enough to leave every real reading in the batch
+#: alone - 78, 128, 130, 137 and 155 all pass through - and only the
+#: octave error moves.
+TEMPO_LEAST = 70.0
+TEMPO_MOST = 165.0
+
+
+def folded_tempo(tempo: float) -> float:
+    """The same pulse, counted the way a person would count it.
+
+    Applied where the tempo and the beat phase are worked out together.
+    Folding it in a scene and leaving the phase alone is worse than not
+    folding it at all: the phase then belongs to a grid at the other
+    tempo, and the correction that keeps the road's origin on the beat
+    spends every frame pulling against it. Measured, that made the road
+    run at twice the speed its own beat asked for.
+    """
+    try:
+        tempo = float(tempo)
+    except (TypeError, ValueError):
+        return 0.0
+    if not tempo > 0.0 or tempo != tempo:
+        return 0.0
+    for _ in range(8):
+        if tempo > TEMPO_MOST:
+            tempo /= 2.0
+        elif tempo < TEMPO_LEAST:
+            tempo *= 2.0
+        else:
+            break
+    return tempo
+
+
 class Scene:
     """One way of drawing the music."""
 
@@ -4440,6 +4483,27 @@ class Rider(Scene):
             self._shape(self._varied(shape, when), when,
                         grey=self._greyed(when, order))
             index = best + 1
+        # And something to do where the track went quiet.
+        #
+        # The chart is the drums, and a breakdown has none - so the road
+        # had nothing on it at all. Measured on a real record, it was
+        # bare 16 per cent of the time and one stretch ran 8.6 seconds,
+        # which is nine seconds of a game with nothing in it. Audiosurf
+        # thins out where a track thins out; it does not stop.
+        #
+        # Prizes rather than hazards, on the beat like everything else.
+        # A quiet passage is a place to collect, not a place to be
+        # caught out by something the music never played, and the rule
+        # that puts hazards on the beats you can hear coming would have
+        # to be broken to put one here.
+        if self._beat > 0.0 and self._placed > -90.0:
+            every = self._beat * self.QUIET_BEATS
+            while self._placed + every <= ahead:
+                when = self._snap(max(self._placed + every, low + 1e-6))
+                if when <= self._placed:
+                    break
+                self._placed = when
+                self._shape(self._varied("block", when), when, grey=False)
         # And the powerup at the mouth of each corkscrew. Audiosurf 2
         # puts "corkscrew loops and powerups timed perfectly with big
         # moments in your music" - one comes with the other.
@@ -4450,6 +4514,14 @@ class Rider(Scene):
                     [self._snap(start + self.TWIST_FOR * 0.5),
                      self.LANES // 2, "power", False, False])
         self._blocks = self._blocks[-200:]
+
+    #: How long the road may have nothing on it before something is
+    #: put there anyway, in beats.
+    #:
+    #: Four, which is a bar. Long enough that a real gap in the drums
+    #: still reads as the track thinning out, short enough that it never
+    #: becomes a road with nothing to do on it.
+    QUIET_BEATS = 4.0
 
     #: Which slots carry an obstacle rather than a prize.
     #:

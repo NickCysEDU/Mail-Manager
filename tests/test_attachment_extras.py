@@ -13897,3 +13897,230 @@ class TestTheBeatHitsHardEnoughToFeel:
             f"a block reads at {seen['on the beat']:.2f} to one on the "
             f"beat and {seen['between']:.2f} between, so the beat is "
             f"washing out the thing you have to see")
+
+
+class TestTheRoadIsNeverBare:
+    """A road with nothing on it is not a game.
+
+    The chart is the drums, and a breakdown has none. Measured on eight
+    real records, two of them left the road bare for a quarter of the
+    run and one stretch ran 8.6 seconds - nine seconds of a game with
+    nothing in it. A sound effect with almost no drums in it at all was
+    bare 90 per cent of the time.
+
+    So where the chart has put nothing down for a bar, something goes
+    there anyway: prizes, on the beat like everything else. A quiet
+    passage is a place to collect, not a place to be caught out by
+    something the music never played, and putting a hazard there would
+    break the rule that obstacles land on the beats you can hear
+    coming. Audiosurf thins out where a track thins out; it does not
+    stop.
+    """
+
+    BEAT = 60.0 / 120.0
+
+    @classmethod
+    def _laid(cls, chart, seconds=40.0):
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        scene = visualizers.Rider()
+        scene._last = None
+        scene._beat = cls.BEAT
+        scene._grid = 0.0
+        state = SpectrumState()
+        state.levels = [0.4] * 27
+        state.chart = chart
+        scene._heard = 0.0
+        while scene._heard < seconds:
+            scene._heard += 0.5
+            scene._lay(state)
+        return scene
+
+    @staticmethod
+    def _gaps(scene):
+        """How long the road goes with nothing arriving, in seconds."""
+        times = sorted({b[0] for b in scene._blocks
+                        if b[2] in ("wall", "block", "run")})
+        return [b - a for a, b in zip(times, times[1:])]
+
+    def test_a_break_in_the_drums_is_not_a_break_in_the_game(self, qapp):
+        """Drums for ten seconds, silence for fifteen, drums again."""
+        import visualizers
+
+        beats = ([i * self.BEAT for i in range(20)]
+                 + [25.0 + i * self.BEAT for i in range(30)])
+        scene = self._laid({"Kick": tuple(beats)})
+        gaps = self._gaps(scene)
+        assert gaps, "nothing was laid at all"
+        worst = max(gaps)
+        allowed = self.BEAT * visualizers.Rider.QUIET_BEATS + 0.05
+        assert worst <= allowed, (
+            f"the road had nothing arriving for {worst:.1f}s across a "
+            f"break in the drums, and a bar is {allowed:.1f}s")
+
+    def test_a_track_with_almost_no_drums_still_has_a_game_on_it(self, qapp):
+        """The sound effect that was bare ninety per cent of the time."""
+        scene = self._laid({"Kick": (1.0, 2.0, 3.0)})
+        laid = [b for b in scene._blocks
+                if b[2] in ("wall", "block", "run")]
+        assert len(laid) > 20, (
+            f"a track with three drum hits in it laid {len(laid)} figures "
+            f"over forty seconds")
+
+    def test_what_fills_a_quiet_passage_is_never_a_hazard(self, qapp):
+        """The rule this must not break: an obstacle lands on a beat you
+        can hear coming, and there is nothing to hear here."""
+        scene = self._laid({"Kick": (1.0, 2.0, 3.0)})
+        greys = [b for b in scene._blocks
+                 if b[4] and b[0] > 6.0]
+        assert not greys, (
+            f"{len(greys)} hazards were put where the track went quiet")
+
+    def test_it_stays_on_the_beat(self, qapp):
+        """Everything on this road is on the grid, including this."""
+        import visualizers
+
+        scene = self._laid({"Kick": (1.0, 2.0, 3.0)})
+        # The figures, not every block in them: a run is a slalom and
+        # its second and third steps are a sixth of a beat apart on
+        # purpose. Grouped the way the rest of these tests group them.
+        times = sorted({b[0] for b in scene._blocks
+                        if b[2] in ("wall", "block", "run")})
+        figures = [t for i, t in enumerate(times)
+                   if i == 0 or t - times[i - 1] > scene.RUN_GAP + 0.01]
+        off = [abs(t / self.BEAT - round(t / self.BEAT)) * self.BEAT
+               for t in figures]
+        assert off, "nothing was laid"
+        assert max(off) < 0.001, (
+            f"a figure laid in a quiet passage sits "
+            f"{max(off) * 1000:.0f} ms off the beat")
+
+    def test_a_busy_track_is_not_padded(self, qapp):
+        """It fills gaps; it does not add to a road that is already
+        full. Four to the floor with hats on the eighths leaves no gap a
+        bar wide, so nothing extra belongs in it."""
+        busy = {"Kick": tuple(i * self.BEAT for i in range(100)),
+                "Hats": tuple(i * self.BEAT / 2 for i in range(200))}
+        scene = self._laid(busy)
+        gaps = self._gaps(scene)
+        # Every gap comes from the chart's own spacing rather than from
+        # the filler, which only ever acts after a whole bar of nothing.
+        assert max(gaps) < self.BEAT * 3.0, (
+            f"the widest gap on a busy track is {max(gaps):.2f}s")
+        laid = len([b for b in scene._blocks
+                    if b[2] in ("wall", "block", "run")])
+        plain = len([b for b in self._laid(busy)._blocks
+                     if b[2] in ("wall", "block", "run")])
+        assert laid == plain
+
+    def test_a_track_with_no_tempo_is_left_alone(self, qapp):
+        """Without a beat there is no grid to put anything on, and a
+        figure off the grid is worse than no figure."""
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        scene = visualizers.Rider()
+        scene._last = None
+        scene._beat = 0.0
+        state = SpectrumState()
+        state.levels = [0.4] * 27
+        state.chart = {"Kick": (1.0, 2.0)}
+        scene._heard = 0.0
+        while scene._heard < 30.0:
+            scene._heard += 0.5
+            scene._lay(state)
+        # Whatever it lays comes from the chart, and the chart has two
+        # hits in it.
+        laid = [b for b in scene._blocks
+                if b[2] in ("wall", "block", "run")]
+        assert len(laid) <= 6, (
+            f"{len(laid)} figures were laid from a two-hit chart with no "
+            f"tempo to put them on")
+
+
+class TestATempoIsCountedTheWayAPersonWouldCountIt:
+    """Tempo detectors make octave errors.
+
+    They find the right pulse and report it doubled or halved. Measured
+    across eight real records, one came out at 230 bpm on a track that
+    anybody would tap at 115 - and a road built on that is a different
+    game from the song: it ran at 21.7 units a second where the others
+    ran at 12, laid its figures twice as thick, and gave 0.78 s of
+    warning where the rest gave 1.5.
+
+    Folded where the tempo and the beat phase are worked out together.
+    Folding it in the scene and leaving the phase alone is worse than
+    not folding at all: the phase then belongs to a grid at the other
+    tempo, and the correction that keeps the road's origin on the beat
+    spends every frame pulling against it. Measured, that made the road
+    run at exactly twice the speed its own beat asked for, which is how
+    it was found.
+    """
+
+    def test_an_octave_error_is_folded_back(self, qapp):
+        """Written out rather than worked out from the bounds."""
+        import visualizers
+
+        assert visualizers.folded_tempo(230.0) == 115.0
+        assert visualizers.folded_tempo(300.0) == 150.0
+        assert visualizers.folded_tempo(45.0) == 90.0
+
+    def test_every_real_reading_is_left_alone(self, qapp):
+        """The bounds are wide enough that nothing a detector got right
+        is moved. These are the eight records the batch was run on."""
+        import visualizers
+
+        for bpm in (78.0, 115.0, 128.0, 130.0, 137.0, 155.0, 164.0):
+            assert visualizers.folded_tempo(bpm) == bpm, (
+                f"{bpm} bpm was folded to "
+                f"{visualizers.folded_tempo(bpm)}")
+
+    def test_nothing_is_not_a_tempo(self, qapp):
+        import visualizers
+
+        assert visualizers.folded_tempo(0.0) == 0.0
+        assert visualizers.folded_tempo(-120.0) == 0.0
+        assert visualizers.folded_tempo(float("nan")) == 0.0
+        assert visualizers.folded_tempo(None) == 0.0
+
+    def test_it_always_lands_inside_the_range(self, qapp):
+        import visualizers
+
+        for bpm in (1.0, 17.0, 61.0, 300.0, 512.0, 999.0):
+            got = visualizers.folded_tempo(bpm)
+            assert (visualizers.TEMPO_LEAST <= got
+                    <= visualizers.TEMPO_MOST), f"{bpm} -> {got}"
+
+    def test_the_phase_is_folded_with_the_tempo(self, qapp):
+        """The bug this was found by. The pane hands a scene a tempo and
+        a phase, and they have to describe the same grid.
+        """
+        from array import array
+
+        import attachment_widgets
+        import beatmap
+        import visualizers
+        from attachment_widgets import Spectrum
+
+        pane = Spectrum()
+        pane.set_frames([array("f", [0.3] * 27)] * 600, 15)
+        # A detector that found the pulse at twice the rate.
+        beats = tuple(beatmap.Beat(at=i * 60.0 / 230.0, strength=1.0)
+                      for i in range(400))
+        pane.set_beats({"Bass": beatmap.BeatMap(beats=beats, bpm=230.0,
+                                                locked=True)})
+        pane.set_position(10_000)
+        pane.set_playing(True)
+        pane._tick()
+        state = pane._state
+        assert state.tempo == pytest.approx(115.0), (
+            f"the pane handed over {state.tempo} bpm")
+        # And the phase belongs to the folded grid: at ten seconds, a
+        # 115 bpm grid starting at zero is a whole number of beats in.
+        period = 60.0 / 115.0
+        since = state.at
+        wanted = (since / period) % 1.0
+        assert abs(state.beat_at - wanted) < 0.02, (
+            f"the phase says {state.beat_at:.3f} and the folded grid "
+            f"says {wanted:.3f}, so the two describe different grids")
