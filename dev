@@ -115,6 +115,7 @@ ${B}iCloud Mail Job Triage: dev commands${N}
   ${B}./dev test${N} [args]       run the test suite  ${D}(args pass through to pytest)${N}
   ${B}./dev eval${N} [args]       score the offline sorter against the labelled set
   ${B}./dev tune${N} [args]       score it against your own inbox  ${D}(nothing is written)${N}
+  ${B}./dev playtest${N} songs    play real records through Music rider and measure it
   ${B}./dev screenshot${N}        redraw the README screenshot from the demo window
   ${B}./dev version${N} [part]     show the version, or bump it  ${D}(major|minor|patch)${N}
   ${B}./dev cov${N}               test suite with a coverage report
@@ -161,6 +162,7 @@ case "$command" in
     exec "$PY" tools/devscan.py --prompt --uid "$uid" "$@" ;;
 
   test|t)              ensure_venv; QT_QPA_PLATFORM=offscreen exec "$PY" -m pytest "$@" ;;
+  playtest)            ensure_venv; QT_QPA_PLATFORM=offscreen exec "$PY" tools/playtest.py "$@" ;;
   eval)                ensure_venv; QT_QPA_PLATFORM=offscreen exec "$PY" tools/evaluate.py "$@" ;;
   eval-llm)            ensure_venv; QT_QPA_PLATFORM=offscreen exec "$PY" tools/eval_llm.py "$@" ;;
   tune)                ensure_venv; QT_QPA_PLATFORM=offscreen exec "$PY" tools/tune.py "$@" ;;

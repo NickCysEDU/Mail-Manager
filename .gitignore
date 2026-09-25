@@ -85,6 +85,13 @@ tests/fixtures/private/
 *.avi
 *.mkv
 # Reference pictures and screenshots taken while working.
+#
+# PNG included, and it is not only screenshots: ./dev playtest --save
+# writes out a frame of the scene *while somebody's music is playing*,
+# which is a picture of their music. The exceptions at the bottom of
+# this file keep the icons and the documentation's own pictures, which
+# are committed deliberately.
+*.png
 *.jpg
 *.jpeg
 *.heic

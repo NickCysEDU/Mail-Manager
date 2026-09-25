@@ -873,6 +873,74 @@ back up in per cent, because which of those two games you are playing
 should be something to see rather than remember. The bumper is on the
 track's clock like everything else, so a pause does not recharge it.
 
+**Coins, and why they are next to the obstacles.** Dodging is free.
+Three lanes, one obstacle, two ways past it - and the two are worth
+exactly the same, so the best play is to sit in the far lane and wait,
+which is the least interesting thing a game can ask for. Audiosurf 2
+answers that in Ninja mode with a set of bonuses for successfully
+dodging rather than for merely not being hit, and this is that bonus
+made concrete.
+
+A short trail of three coins sits where you have to be brave to take
+it. Beside a single obstacle that is the lane next to it, spanning the
+moment it passes: the far lane is safe and pays nothing. Beside a wall
+there is no lane next to it - a wall closes two of three and the one
+way through is the one way through - so the trail goes in a lane the
+wall is about to *close* and ends three tenths of a second before it
+arrives. You ride the doomed lane, take what is in it, and leave. That
+case is not a detail: measured on a real record, walls are two thirds
+of every figure laid, and a coin that only ever sat beside a single
+obstacle turned up once in a minute of music.
+
+Each coin is worth more than the one before it - 25, 50, 75, up to 200,
+which is Audiosurf 2's own base block value - and missing one puts the
+row back to nothing, so a trail is worth holding a lane for rather than
+clipping the end of. They pay straight into the score rather than into
+the puzzle grid, because the grid overfills and free blocks in it would
+take the pressure out of the other game. Played through a real track by
+something that dodges perfectly and grabs what it can, the same run
+takes twelve coins in a minute and is still never hit; a cautious run
+takes none.
+
+The screen shake is a third less than it was. A full shake moved the
+frame 0.64 per cent of its width and moves 0.42 now, and a hit throws
+the picture 2.3 degrees rather than 3.4. The ceiling in the test is set
+just above what it measures rather than at the old headroom, so it
+cannot drift back up without saying so.
+
+**Corkscrews.** Audiosurf 2 places "corkscrew loops and powerups timed
+perfectly with big moments in your music", and what counts as a big
+moment is already measured here - the loudness contour the road's hill
+is cut from. The road turns over where the track is at its loudest and
+nowhere else, which on most records means the drops and the last
+chorus, and the same record turns over in the same places every time it
+is played. Loud has to mean loud *for this track* and loud *against
+it*: a share of the peak alone is met by every reading of something
+with no dynamics in it, so a wall of noise would corkscrew on a timer
+for no reason.
+
+One whole turn, still at both ends and quickest through the middle, so
+the moment it ends is not a moment anything jumps - a turn brings the
+world back to where it started. Everything is drawn inside one rotation
+about the horizon, so the road, the blocks, the coins and the craft
+turn together, and the horizon rides up to the middle of the frame
+through one, because rotating about a vanishing point that sits above
+centre swings the road out of the picture half way round.
+
+There is nothing to dodge inside a corkscrew. Half way round, left has
+stopped meaning left, and an obstacle there is not a thing you failed
+to dodge but a thing nobody could have. The corkscrew is the spectacle;
+what it pays is the power block at its mouth - the blueprint's "xxxxxxx
+Xxxxx Xxxxxxxxxx Xxxxx xx xxx centre lane" - which doubles the next
+thing you collect that pays. That is worth carrying: in the puzzle game
+a cluster of six is worth four times a cluster of three, so a doubled
+six is the biggest single thing in the scene.
+
+Twenty-five seconds apart at the least, because a corkscrew is an event
+and three in a row is a fairground ride. Fourteen was tried first and
+gave one every fifteen seconds on a loud dance record, which ate a
+sixth of the track.
+
 A quarter of the slots carry an obstacle rather than a prize, and only
 where the heaviest thing in the slot was the kick - so the hazards land
 on the beats you can hear coming. Tying them to the kick alone was tried
@@ -915,7 +983,30 @@ the pre-pass costs about a millisecond on top of it.
 A chorus runs downhill and a breakdown climbs. A mix that sits to the
 left turns the road left; the lean is *summed* along the road rather than
 used directly, because a lean is a direction and a road is where
-following one gets you. The colour runs from purple at the quietest
+following one gets you.
+
+Summed **about its own middle**, though, and that correction is the
+difference between a road with corners and no road at all. A mix has a
+bias - measured on a real record the lean averaged -0.0097, which over
+three and a half minutes summed to -16 and swamped everything else in
+it - and summing a biased signal gives a ramp: a road that turns
+constantly in one direction at a near-constant rate. The camera is
+pinned to the road, so a constant rate is exactly what straight looks
+like. Measured over the whole visible length, the road moved eight
+thousandths of a lane sideways and was straight a hundred per cent of
+the time.
+
+A mix that sits slightly left for a whole song is not a road that turns
+left for ever. It is a road that goes straight, because every part of
+it leans the same way; what turns a road is one part leaning further
+than the rest. The lean is also divided by how much the record varies,
+so a nearly-mono mix gets the same corners as a wide one, and each
+reading is clamped, because the tail is long - one reading on that
+record sits thirteen spreads out on its own and unclamped it swung the
+visible road three and a half lanes, which is a hairpin rather than a
+bend. The same record now bends a quarter of a lane at the median and a
+lane and a third at its sharpest, and is within a third of a lane of
+straight 63 per cent of the time rather than 100. The colour runs from purple at the quietest
 through blue, green and yellow to red at the loudest, and the figures
 come thicker where there is more going on - three beats apart in a
 breakdown, one and a half in a chorus. And the same track draws the same
@@ -1064,6 +1155,29 @@ a hand setting into the automatic strobe or the other way round, and the
 captions follow the mode so a slider is never called one thing while it
 does another.
 
+**A scene is not shown until it is up to speed.** All of them ran rough
+when first opened, and measurably so: at 1440x810 the equaliser's first
+frame cost 168 ms against 6 ms for every frame after it, the neon
+tunnel had a 56 ms frame in its first second, and the VU meters 27 ms.
+Ten dropped frames at the exact moment a scene appears.
+
+Most of it was not the scenes at all. The first piece of text drawn in
+a process makes Qt populate its font database, resolve the family and
+load the face, and it lands on whichever frame happens to be first -
+nine `drawText` calls on the equaliser's labels, 146 ms between them.
+That is now paid on a worker thread as the pane is built, before
+anything animates, which takes the equaliser's first frame to 13 ms.
+One string is enough: the cost is the machinery rather than the glyphs.
+
+The rest is one-off work inside the scenes themselves, plus Sharpness
+measuring a few frames before it can decide how big to draw, and the
+fade a new scene comes up through used to run straight over exactly
+those frames. The scene is now drawn for its first twenty-four frames
+at an opacity of nothing - drawn, not skipped, so the cost is paid
+where nobody can see it - and the fade begins on a scene that is
+already up to speed. The same wait happens on every scene change,
+because a switch is a first open for the scene being switched to.
+
 **Nothing the analysis says can close the window.** A level is nought to
 one and a tempo is a count of beats - by construction, which is not the
 same as in fact. A decode that goes wrong, a calibration that comes out
@@ -1110,7 +1224,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,780 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,833 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1471,7 +1585,29 @@ the rules that decide where your mail goes can be read and tested on their own.
 ## Tests
 
 ```bash
-./dev test        # 3,780 tests, about three minutes
+./dev playtest ~/Music/*.mp3      # play real records through Music rider
+```
+
+A game is not finished when its tests pass. A test says a block arrives
+on the beat when the chart is three evenly spaced kicks; a record says
+whether it arrives on the beat when the detector heard the kick 40 ms
+late, the tempo came out at 87.3 and the chorus is twice as loud as the
+intro. Nearly everything worth fixing in the rider was found this way
+and then written back into the suite as a test - the two clocks, the
+road that stopped between beats, the blocks that could not be seen, the
+coins that almost never appeared.
+
+It drives the real pane, fed by the app's own decoder, analysis and
+beat map, and steps both clocks by exactly one frame a frame so a slow
+machine measures the same run as a fast one. Per track it reports how
+far each block landed from its own beat, what the road's speed did,
+whether it ever went backwards or stood empty, what a player who dodges
+perfectly still gets hit by, how many coins that player took, how many
+corkscrews the track earned, and what a frame costs. No song, path or
+frame of one is ever written into the repository.
+
+```bash
+./dev test        # 3,833 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

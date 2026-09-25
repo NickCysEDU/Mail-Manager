@@ -4061,14 +4061,22 @@ class Rider(Scene):
     PUSH_REST = 0.45
     PUSH_GAIN = 0.35
 
-    #: How hard the track's own lean bends the road.
+    #: How hard the track's own lean bends the road, and how far any
+    #: single reading of it may push. See ``_carve``.
     #:
-    #: The lean is -1 to +1 and it is summed along the road, so a passage
-    #: mixed a third of the way to one side for a second adds about three
-    #: to the sum at eight readings a second. A tenth of that is about
-    #: what the free-running bend used to reach, which is as much as the
-    #: road can turn and still be read.
-    TRACK_BEND = 0.10
+    #: The lean is summed about its own middle and in units of how much
+    #: the record leans at all, so what comes out is a wander rather
+    #: than a ramp and a narrow mix turns as much as a wide one.
+    #:
+    #: Measured over the whole visible length of road on a real record:
+    #: with the lean summed raw and a tenth of it taken, the road moved
+    #: eight thousandths of a lane sideways and was straight a hundred
+    #: per cent of the time. The clamp is what keeps the tail from
+    #: turning a bend into a hairpin - one reading on that record is
+    #: thirteen spreads out on its own, and unclamped it swung the
+    #: visible road three and a half lanes.
+    TRACK_BEND = 0.22
+    LEAN_MOST = 1.5
 
     #: How much of the track either side of a point is averaged into the
     #: shape of the road there, in seconds.
@@ -4105,7 +4113,7 @@ class Rider(Scene):
     #: How hard a hit washes the frame, throws the camera and drops the
     #: light out of everything else.
     HURT_WASH = 0.34
-    HURT_THROW = 3.4
+    HURT_THROW = 2.3
     HURT_DIM = 0.72
 
     SHAKE = 0.030
@@ -4172,7 +4180,7 @@ class Rider(Scene):
     #: The shake, which was too much of the picture. A kick moved the
     #: whole frame by three per cent of its width; at 1.1 per cent it is
     #: a knock rather than a camera being dropped.
-    SHAKE_LESS = 0.38
+    SHAKE_LESS = 0.25
 
     #: What a hit does to the road: how far the speed drops, and how fast
     #: it comes back. Half speed, back over about a second, which is long
@@ -4202,6 +4210,14 @@ class Rider(Scene):
         self._got = 0.0
         #: Whether a grey has been touched yet. See CLEAN_BONUS.
         self._clean = True
+        #: Coins taken, coins in a row now, and the best row of the run.
+        #: See COIN_WORTH.
+        self._coins = 0
+        self._coin_run = 0
+        self._coin_best = 0
+        #: How far through its spin each coin is, so a trail of them
+        #: turns together rather than each on its own phase.
+        self._coin_spin = 0.0
         #: The bumper: 1 when it is up, 0 the moment it shatters a grey,
         #: and back to 1 over SHIELD_BACK.
         self._shield = 1.0
@@ -4264,6 +4280,10 @@ class Rider(Scene):
         self._chase_to = 0.0
         #: The shake's own clock, so it is not tied to anything else.
         self._wobble = 0.0
+        #: How far through a whole turn the road is. See ``_find_twists``.
+        self._rolled = 0.0
+        #: And how deep into a corkscrew, 0 at both ends and 1 half way.
+        self._twisting = 0.0
         #: The last frame's worth of the track's clock. See ``_advance``.
         self._went = 0.0
         self._bend = 0.0
@@ -4280,6 +4300,12 @@ class Rider(Scene):
         self._hill = ()
         self._curve = ()
         self._energy = ()
+        #: Where the road turns over on itself. See ``_find_twists``.
+        self._twists = ()
+        #: Which twists have had their power block laid.
+        self._twisted = set()
+        #: What the next thing collected is multiplied by, if anything.
+        self._double = 1.0
         self._every = 1.0
         #: Where the road starts, a fixed distance in front of the eye.
         #: Kept until the camera has been worked out for the frame.
@@ -4317,7 +4343,9 @@ class Rider(Scene):
                 "best": self._best, "hits": self._hits,
                 "chain": self._chain, "clean": self._clean,
                 "worth": self._worth(), "cleared": self._cleared,
-                "shield": self._shield,
+                "shield": self._shield, "coins": self._coins,
+                "double": self._double, "twists": len(self._twists),
+                "coin_run": self._coin_run, "coin_best": self._coin_best,
                 "stunned": self._stunned > 0.0,
                 "cells": [list(pile) for pile in self._cells]}
 
@@ -4401,6 +4429,15 @@ class Rider(Scene):
             self._shape(self._varied(shape, when), when,
                         grey=self._greyed(when, order))
             index = best + 1
+        # And the powerup at the mouth of each corkscrew. Audiosurf 2
+        # puts "corkscrew loops and powerups timed perfectly with big
+        # moments in your music" - one comes with the other.
+        for start in self._twists:
+            if low < start <= ahead and start not in self._twisted:
+                self._twisted.add(start)
+                self._blocks.append(
+                    [self._snap(start + self.TWIST_FOR * 0.5),
+                     self.LANES // 2, "power", False, False])
         self._blocks = self._blocks[-200:]
 
     #: Which slots carry an obstacle rather than a prize.
@@ -4425,6 +4462,13 @@ class Rider(Scene):
         can hear coming.
         """
         if order != 0:
+            return False
+        # Nothing to dodge inside a corkscrew. The world turns all the
+        # way over there and left stops meaning left half way round, so
+        # an obstacle in one is not a thing you failed to dodge, it is a
+        # thing nobody could have. The corkscrew is the spectacle and
+        # the power block in it is the reward; the greys wait.
+        if self._twist_at(when) is not None:
             return False
         if self._beat <= 0.0:
             return True
@@ -4484,6 +4528,97 @@ class Rider(Scene):
         beats = (when - (self._grid or 0.0)) / self._beat
         return abs(beats - round(beats)) * self._beat
 
+    #: Coins: what they are worth, how many sit beside one obstacle and
+    #: how far apart.
+    #:
+    #: The problem they solve is that dodging is free. Three lanes, one
+    #: obstacle, two ways past it - and the two are worth exactly the
+    #: same, so the best play is to sit in the far lane and wait, which
+    #: is the least interesting thing the game can ask for. Audiosurf 2
+    #: answers it in Ninja mode with "a special set of bonuses for
+    #: successfully dodging" rather than for merely not being hit, and
+    #: this is that bonus made concrete: a short trail of coins in the
+    #: lane *next to* the obstacle, spanning the moment it passes.
+    #:
+    #: So the far lane is safe and pays nothing, and the near lane pays
+    #: three coins to whoever will hold it while a grey goes by an arm's
+    #: length away. Twenty-five is Audiosurf 2's own base block value.
+    COIN_WORTH = 25
+    COIN_STEP = 25
+    COIN_MOST = 200
+    COINS_RUN = 3
+    COIN_GAP = 0.16
+
+    #: How long before a wall arrives its coin trail has to have ended.
+    #:
+    #: A wall closes two lanes of three, so there is no lane "beside" it
+    #: to be brave in - the one way through is the one way through, and
+    #: a coin in it would pay for having nowhere else to go. Measured on
+    #: a real record, walls are two thirds of every figure laid, so a
+    #: coin that only ever sat beside a single obstacle almost never
+    #: appeared at all: one trail in a minute of music.
+    #:
+    #: So the trail goes in a lane the wall is about to *close*, and
+    #: ends before it gets there. You ride the doomed lane, take what is
+    #: in it and leave. Three tenths of a second is six lane changes'
+    #: worth of room at the snap the craft actually moves at, and about
+    #: three quarters of a beat at 130.
+    COIN_LEAD = 0.30
+
+    #: What a power block multiplies, and how long it waits to be spent.
+    #:
+    #: Audiosurf 1's blueprint: "Xxxxxxxx x xxxx xxxxxx x xxxxxxx Xxxxx
+    #: Xxxxxxxxxx Xxxxx xx xxx centre xxxx. Xxxxxxxxxx xx xxxxxxxxx
+    #: xxxxxxx xxx xxxxx xxxxx xx xxxxxxxx xxxxxx xxx xxxxxxxxx xxxx
+    #: xxxxxx xxx xxxxxx'x xxxx." Audiosurf 2 has the same thing at 1.5x
+    #: with a big one at 2x. Here it doubles the next thing collected
+    #: that pays - the next cluster in Puzzle, the next prize in Mono -
+    #: and is spent when it does.
+    POWER_DOUBLE = 2.0
+
+    def _coins_beside(self, when: float, lane: int, grey: bool) -> None:
+        """A trail of coins in the lane next to an obstacle.
+
+        Beside a single obstacle: the far lane is safe and pays nothing,
+        the near one pays for being held while a grey goes past.
+        """
+        if not grey:
+            return
+        beside = [side for side in (lane - 1, lane + 1)
+                  if 0 <= side < self.LANES]
+        if not beside:
+            return
+        # Which side, from the time, so a track lays out the same way
+        # every time it is played.
+        side = beside[int(when * 613) % len(beside)]
+        self._coin_trail(when - (self.COINS_RUN - 1) * self.COIN_GAP / 2.0,
+                         side)
+
+    def _coins_before(self, when: float, shut, grey: bool) -> None:
+        """A trail in a lane a wall is about to close. See COIN_LEAD."""
+        if not grey or not shut:
+            return
+        shut = sorted(shut)
+        side = shut[int(when * 613) % len(shut)]
+        last = when - self.COIN_LEAD
+        self._coin_trail(last - (self.COINS_RUN - 1) * self.COIN_GAP, side)
+
+    def _coin_trail(self, first: float, side: int) -> None:
+        """Lay one, if the lane is free for the whole of it.
+
+        Never into a lane something else is already using: a coin a
+        player cannot take without being hit is not a reward, and one
+        sitting inside a prize is a coin nobody can see.
+        """
+        last = first + (self.COINS_RUN - 1) * self.COIN_GAP
+        pad = self.COIN_GAP / 2.0
+        for other, taken, _kind, _done, _grey in self._blocks:
+            if taken == side and first - pad <= other <= last + pad:
+                return
+        for step in range(self.COINS_RUN):
+            self._blocks.append(
+                [first + step * self.COIN_GAP, side, "coin", False, False])
+
     def _shape(self, pattern: str, when: float, grey: bool = True) -> None:
         """One hit, as one or more blocks in lanes.
 
@@ -4500,13 +4635,21 @@ class Rider(Scene):
             for lane in range(self.LANES):
                 if lane != seed:
                     self._blocks.append([when, lane, "wall", False, grey])
+            self._coins_before(
+                when, [lane for lane in range(self.LANES) if lane != seed],
+                grey)
         elif pattern == "block":
             self._blocks.append([when, seed, "block", False, grey])
+            self._coins_beside(when, seed, grey)
         elif pattern == "run":
             for step in range(3):
                 lane = (seed + step) % self.LANES
                 self._blocks.append([when + step * self.RUN_GAP, lane,
                                      "run", False, grey])
+            # Beside the first of them only. A slalom already asks for
+            # three moves; paying for a fourth lane change between each
+            # pair would ask for something nobody can do.
+            self._coins_beside(when, seed, grey)
 
     # -- the world --------------------------------------------------------
     #: The colour of the road, by how much is going on in the music.
@@ -4568,10 +4711,119 @@ class Rider(Scene):
         self._hill = self._eased(
             [(value - middle) * 2.0 for value in loud])
         curve, run = [], 0.0
-        for index in range(len(loud)):
-            run += (lean[index] if index < len(lean) else 0.0)
+        # The lean about its own middle, in units of how much this
+        # record leans at all.
+        #
+        # Summing it raw is what a road built from a *direction* wants,
+        # but a mix has a bias: measured on a real record the lean
+        # averaged -0.0097, which over three and a half minutes summed
+        # to -16 and swamped everything else in it. A road built from
+        # that turns constantly in one direction at a near-constant
+        # rate - and since the camera is pinned to the road, a constant
+        # rate is exactly what straight looks like. The whole visible
+        # length of it moved eight thousandths of a lane sideways: the
+        # road was straight a hundred per cent of the time.
+        #
+        # A mix that sits slightly left for a whole song is not a road
+        # that turns left for ever. It is a road that goes straight,
+        # because every part of it leans the same way. What turns a road
+        # is one part leaning further than the rest, which is the lean
+        # about its own middle - and dividing by how much it varies
+        # means a narrow mix turns as much as a wide one, rather than a
+        # nearly-mono record getting a road with no corners in it.
+        wide = [lean[index] if index < len(lean) else 0.0
+                for index in range(len(loud))]
+        middle = sum(wide) / len(wide)
+        spread = math.sqrt(
+            sum((value - middle) ** 2 for value in wide) / len(wide))
+        for value in wide:
+            # And no single reading may throw the road across it. The
+            # distribution has a long tail - one reading on the record
+            # measured above is thirteen spreads out on its own - and
+            # unclamped that one reading swung the visible road three
+            # and a half lanes sideways, which is a hairpin rather than
+            # a bend.
+            step = (value - middle) / (spread or 1.0)
+            run += max(-self.LEAN_MOST, min(self.LEAN_MOST, step))
             curve.append(run)
         self._curve = self._eased(curve)
+        self._twists = self._find_twists()
+        self._twisted = set()
+
+    #: The corkscrews: how loud a moment has to be to turn the road
+    #: over, how long one takes end to end, and how much road there is
+    #: between two of them.
+    #:
+    #: Audiosurf 2 puts "corkscrew loops and powerups timed perfectly
+    #: with big moments in your music", and what counts as a big moment
+    #: is already measured: the loudness contour the road's hill is cut
+    #: from. A corkscrew goes where the track is within a fifth of its
+    #: own loudest and nowhere else, which on most records means the
+    #: drops and the last chorus.
+    #:
+    #: Twenty-five seconds apart at the least, because a corkscrew is
+    #: an event and three in a row is a fairground ride. Measured on a
+    #: loud dance record, fourteen gave one every fifteen seconds and
+    #: ate a sixth of the track: the gate is a share of the *track's*
+    #: own peak, and on something compressed most of the song is near
+    #: it, so the spacing rather than the loudness is what decides. Two
+    #: and a half seconds end to end: long enough to read as a whole
+    #: turn of the world and short enough that nobody is upside down
+    #: while a decision matters.
+    TWIST_LOUD = 0.80
+    TWIST_FOR = 2.5
+    TWIST_APART = 25.0
+
+    def _find_twists(self) -> tuple:
+        """The moments the road turns over, from the loudest of the song.
+
+        Off the track rather than off a timer, so a record corkscrews in
+        the same places every time it is played - which is the whole
+        promise of the scene.
+        """
+        if not self._energy or self._every <= 0.0:
+            return ()
+        loudest = max(self._energy)
+        if loudest <= 0.0:
+            return ()
+        # Loud for this track, and loud *against this track*. The first
+        # alone is a share of the peak, which every reading of a track
+        # with no dynamics in it meets - a wall of noise would corkscrew
+        # every fourteen seconds for no reason, because nothing in it is
+        # a big moment. Half way from the middle of the track to its
+        # peak is the second test, and on a flat track that is the whole
+        # track, so nothing passes.
+        middle = sorted(self._energy)[len(self._energy) // 2]
+        gate = max(loudest * self.TWIST_LOUD, (middle + loudest) / 2.0)
+        found = []
+        for index, value in enumerate(self._energy):
+            if value <= gate:
+                continue
+            at = index / self._every
+            if found and at - found[-1] < self.TWIST_APART:
+                continue
+            found.append(at)
+        return tuple(found)
+
+    def _twist_at(self, when: float):
+        """How far through a corkscrew a moment is, 0 to 1, or None."""
+        for start in self._twists:
+            if start <= when < start + self.TWIST_FOR:
+                return (when - start) / self.TWIST_FOR
+        return None
+
+    @staticmethod
+    def _turned(through: float) -> float:
+        """The roll at that point of a corkscrew, in whole turns.
+
+        Smoothed at both ends rather than linear. A linear sweep starts
+        and stops the world spinning in one frame, which is a cut rather
+        than a corkscrew; this one is still at both ends and quickest
+        through the middle. It is exactly one whole turn either way, so
+        the world comes back to where it started and the moment the
+        twist ends is not a moment anything jumps.
+        """
+        return through * through * (3.0 - 2.0 * through)
 
     def _eased(self, table) -> tuple:
         """The readings with the jitter taken out of them.
@@ -4775,13 +5027,22 @@ class Rider(Scene):
         horizon = QPointF(
             centre.x() - self._aimed * focal * self.AIM_PULL
             + math.sin(self._wobble * 1.9) * shake,
-            centre.y() - rect.height() * (self.HORIZON_UP + lift)
+            centre.y() - rect.height() * (self.HORIZON_UP * (1.0 - self._twisting)
+                                          + lift)
             + math.sin(self._wobble * 2.7) * shake)
         # Negative on a right-hand bend, which is the way round it has to
         # be: leaning right tips the camera's up-vector right, so the
         # world turns the other way and the right-hand end of the horizon
         # comes *up*. Qt's positive rotation takes it down.
         tilt = max(-self.TILT, min(self.TILT, -self._banked * self.TILT))
+        # And the corkscrew, outside that clamp. The clamp is there to
+        # stop a bend tipping the picture over; this is not a bend, it
+        # is the road turning over on purpose, and it goes all the way
+        # round. Everything is drawn inside one rotation about the
+        # horizon, so the road, the blocks, the coins and the craft all
+        # turn together - which is what riding a corkscrew looks like
+        # from inside one.
+        tilt += self._rolled * 360.0
         return horizon, focal, tilt
 
     def _from_track(self, at: float, push: float) -> tuple:
@@ -4990,11 +5251,22 @@ class Rider(Scene):
         self._side = self._road(self.RIDER_AT)[0]
         self._shake = max(0.0, self._shake - self._shake * self.SHAKE_FALL
                           - step * 0.9)
-        self._shake = min(1.0, self._shake + kit.get("Kick", 0.0) * 0.5)
+        self._shake = min(1.0, self._shake + kit.get("Kick", 0.0) * 0.35)
         self._sore = max(0.0, self._sore - step)
         self._hurt = max(0.0, self._hurt - step / self.HURT_FOR)
         self._got = max(0.0, self._got - step / 0.35)
         self._shield = min(1.0, self._shield + step / self.SHIELD_BACK)
+        self._coin_spin += step * self.COIN_TURN
+        # How far over the road is turned, if it is turning at all.
+        # Worked out here rather than in the camera because the camera
+        # is asked for an answer more than once a frame.
+        through = self._twist_at(self._heard)
+        self._rolled = 0.0 if through is None else self._turned(through)
+        # And how deep into one it is, which is a different shape: nought
+        # at both ends and one in the middle. The horizon rides up to the
+        # centre of the frame on it - see ``_camera``.
+        self._twisting = (0.0 if through is None
+                          else 1.0 - abs(2.0 * through - 1.0))
         #: How much of a sixtieth of a second this frame was worth on the
         #: track's clock. The rig reads it: a shake counted in frames is
         #: a different shake on every machine. See ``_slide``.
@@ -5043,11 +5315,34 @@ class Rider(Scene):
 
     def _collide(self) -> None:
         for block in self._blocks:
-            when, lane, _kind, done, grey = block
+            when, lane, kind, done, grey = block
             if done or self._heard < when:
                 continue
             block[3] = True
             on_it = abs(self._lane_at(lane) - self._lane_here) < self.FORGIVE
+            if kind == "power":
+                if on_it:
+                    self._double = self.POWER_DOUBLE
+                    self._got = 1.0
+                    self._burst(self._lane_at(lane), prize=True)
+                continue
+            if kind == "coin":
+                # Taken, or missed. A coin is worth more than the one
+                # before it and missing one puts the row back to nothing,
+                # which is what makes a trail worth holding the lane for
+                # rather than clipping the end of.
+                if on_it:
+                    self._coins += 1
+                    self._coin_run += 1
+                    self._coin_best = max(self._coin_best, self._coin_run)
+                    self._score += min(
+                        self.COIN_MOST,
+                        self.COIN_WORTH + (self._coin_run - 1) * self.COIN_STEP)
+                    self._got = 1.0
+                    self._burst(self._lane_at(lane), prize=True)
+                else:
+                    self._coin_run = 0
+                continue
             if grey and on_it:
                 if self._sore > 0.0:
                     continue
@@ -5063,6 +5358,7 @@ class Rider(Scene):
                 self._hits += 1
                 self._streak = 0
                 self._chain = 0
+                self._coin_run = 0
                 self._clean = False
                 self._sore = self.SORE
                 self._shake = min(1.0, self._shake + 0.8)
@@ -5085,10 +5381,11 @@ class Rider(Scene):
                 else:
                     # A prize. See CHAIN_FIRST.
                     self._chain += 1
-                    self._score += min(
+                    self._score += int(min(
                         self.CHAIN_MOST,
                         self.CHAIN_FIRST
-                        + (self._chain - 1) * self.CHAIN_STEP)
+                        + (self._chain - 1) * self.CHAIN_STEP) * self._double)
+                    self._double = 1.0
                     self._got = 1.0
                     self._burst(self._lane_at(lane), prize=True)
 
@@ -5207,8 +5504,15 @@ class Rider(Scene):
             # Quadratic in the size, so one cluster of six is worth
             # twice two of three - which is what makes the fuse window
             # worth playing for rather than clearing on sight.
-            self._score += self.WORTH[colour] * len(group) * len(group)
+            #
+            # And doubled if a power block is waiting to be spent, which
+            # is what one is for: it is worth carrying through a
+            # corkscrew and cashing on a big cluster rather than on the
+            # next thing that happens to clear.
+            self._score += int(self.WORTH[colour] * len(group) * len(group)
+                               * self._double)
             self._cleared += len(group)
+        self._double = 1.0
         going_cells = {at for _colour, group in going for at in group}
         for column in range(self.CELLS_WIDE):
             self._cells[column] = [
@@ -5657,6 +5961,86 @@ class Rider(Scene):
             for kind in ("wall", "block", "run"):
                 self._blocks_of(painter, rect, horizon, focal, hue, flash,
                                 kind, grey_now, edge, tall)
+        # And the coins over the top of both, because a coin sits beside
+        # an obstacle and the thing you need to see is which lane it is
+        # in.
+        self._coins_now(painter, horizon, focal, flash)
+
+    #: How wide a coin is, how high off the road it floats, and how fast
+    #: it turns. Small: it is a reward for being in a lane rather than
+    #: something to steer at, and a coin the size of a block would hide
+    #: the obstacle it is next to.
+    COIN_SIZE = 0.26
+    COIN_TALL = 0.40
+    COIN_TURN = 2.6
+    #: How many points around the rim. Ten is round enough at the size
+    #: one is ever drawn and a third of the cost of a smooth curve.
+    COIN_FACES = 10
+    #: How much bigger a power block is than a coin. It is the thing a
+    #: corkscrew is *for*, so it is not something to notice late.
+    POWER_SIZE = 1.9
+
+    def _coins_now(self, painter, horizon, focal, flash) -> None:
+        """The coins, as discs standing on the road and turning.
+
+        White rather than the road's own colour. The road runs from
+        purple at its quietest to red at its loudest and a coin has to
+        read against every part of that - at a chorus the road is
+        already gold - so a coin is the one thing in the scene with no
+        hue at all, lit to the top of the scale. It is the greys' trick
+        the other way round: colour against grey there, white against
+        colour here.
+        """
+        for when, lane, kind, _done, _grey in self._blocks:
+            if kind not in ("coin", "power"):
+                continue
+            power = kind == "power"
+            at = self._where(when)
+            if at < self.GONE or at > self.FAR:
+                continue
+            near = max(0.0, min(1.0, 1.0 - (at - self._near)
+                                / max(1e-6, self.FAR - self._near)))
+            seen = self.FOG_LEAST + (1.0 - self.FOG_LEAST) * min(
+                1.0, near / max(1e-6, self.FOG))
+            across = self._lane_at(lane)
+            # Turned a little further than the coin before it, so a
+            # trail of three reads as one object rolling rather than
+            # three things flickering.
+            phase = self._coin_spin + when * 5.0
+            size = self.COIN_SIZE * (self.POWER_SIZE if power else 1.0)
+            tall = self.COIN_TALL * (1.25 if power else 1.0)
+            # Never edge-on to nothing: a disc exactly side on is one
+            # pixel wide and reads as a coin that vanished.
+            wide = size * max(0.28, abs(math.cos(phase)))
+            face = QPainterPath()
+            back = QPainterPath()
+            for step in range(self.COIN_FACES):
+                angle = step / self.COIN_FACES * math.tau
+                out = math.cos(angle)
+                up = math.sin(angle)
+                spot = self._eye(horizon, focal, across + wide * out,
+                                 -tall - size * up, at)
+                shade = self._eye(
+                    horizon, focal, across + wide * out * self.BACKING,
+                    -tall - size * up * self.BACKING, at)
+                if step == 0:
+                    face.moveTo(spot)
+                    back.moveTo(shade)
+                else:
+                    face.lineTo(spot)
+                    back.lineTo(shade)
+            face.closeSubpath()
+            back.closeSubpath()
+            # The same dark silhouette every block gets, for the same
+            # reason: what a coin is read against is this rather than
+            # whatever the music has put behind it.
+            painter.fillPath(back, QColor(3, 2, 8, int(215 * seen)))
+            painter.fillPath(face, QColor.fromHsvF(
+                0.13, (0.02 if power else 0.20) - flash * 0.1, 1.0,
+                min(1.0, 0.95 * seen)))
+            self._beam(painter, face, QColor.fromHsvF(
+                0.12, 0.25 if power else 0.55, 1.0,
+                min(1.0, 0.6 + 0.4 * seen)))
 
     #: What a grey obstacle and a coloured prize are made of.
     #:
@@ -5951,6 +6335,9 @@ class Rider(Scene):
             f"{self._worth()}"
             + (f"   cleared {self._cleared}" if self._mode == "Puzzle"
                else f"   chain {self._chain}")
+            + ("   x2" if self._double > 1.0 else "")
+            + (f"   coins {self._coins}" if self._coins else "")
+            + (f" x{self._coin_run}" if self._coin_run > 1 else "")
             + ("   clean" if self._clean and self._score else "")
             + ("" if self._shield >= 1.0 else "   shield "
                + f"{self._shield:.0%}")

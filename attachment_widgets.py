@@ -26,7 +26,7 @@ import visualizers
 from flowlayout import FlowHolder as _FlowHolder
 
 from PySide6.QtCore import (QEasingCurve, QPoint, QPointF, QRect, QRectF, QSize, Qt,
-                            QTimer, QVariantAnimation, Signal)
+                            QThread, QTimer, QVariantAnimation, Signal)
 from PySide6.QtGui import (QColor, QFont, QFontMetricsF, QImage, QLinearGradient,
                            QPainter, QPainterPath, QPixmap,
                            QPen, QRadialGradient)
@@ -147,6 +147,81 @@ def _hz_label(value) -> str:
         text = f"{thousands:.0f}" if thousands == int(thousands) else f"{thousands:.1f}"
         return f"{text}kHz"
     return f"{int(value)}Hz"
+
+
+#: Held while the glyph cache is being warmed, because Qt calls qFatal
+#: when a running QThread is destroyed. Dropped when it finishes, which
+#: is why whether it *has* run is a separate flag: a pane made after the
+#: first one finished would otherwise start another, and the app makes
+#: several - the preview, the full-screen view, the window's own.
+_WARMER = None
+_WARMED = False
+
+
+class _Glyphs(QThread):
+    """Pay the font machinery's one-off cost off the GUI thread.
+
+    The first piece of text drawn in a process is not the cost of
+    drawing text: it is Qt populating its font database, resolving the
+    family and loading the face, and it lands on whichever frame happens
+    to be first. Measured at 1440x810, the equaliser's first frame cost
+    168 ms against 6 ms for every frame after it - ten dropped frames at
+    the moment a scene appears, which is most of what "xxx xxxxxxxxxxx
+    xxx xxxxx xxxx xxxxx xxxxxx" was.
+
+    One string is enough: the cost is the machinery rather than the
+    glyphs, and a single ``drawText`` takes the first frame from 168 ms
+    to 13. Into a QImage rather than a QPixmap, because a pixmap belongs
+    to the GUI thread and an image does not.
+    """
+
+    #: Enough of the alphabet to cover every caption and readout: the
+    #: scenes letter their labels, their cards and their dials from it.
+    LETTERS = ("0123456789 abcdefghijklmnopqrstuvwxyz"
+               "ABCDEFGHIJKLMNOPQRSTUVWXYZ %.:-+/,()[]")
+
+    def run(self) -> None:
+        try:
+            image = QImage(700, 48, QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(QColor(0, 0, 0))
+            painter = QPainter(image)
+            try:
+                for family in (None, visualizers.dial_face()):
+                    font = QFont(family) if family else QFont(painter.font())
+                    font.setPointSizeF(12.0)
+                    painter.setFont(font)
+                    painter.drawText(QRectF(0, 0, 700, 48), 0, self.LETTERS)
+            finally:
+                painter.end()
+        except Exception:      # noqa: BLE001 - a cold cache is not fatal
+            pass
+
+
+def warm_the_glyphs() -> None:
+    """Start the warm-up, once per process, and never wait for it.
+
+    Nothing depends on it finishing: a scene drawn before it lands pays
+    what it would have paid anyway. See ``_Glyphs``.
+    """
+    global _WARMED, _WARMER
+
+    if _WARMED:
+        return
+    _WARMED = True
+    try:
+        _WARMER = _Glyphs()
+        _WARMER.finished.connect(_glyphs_warmed)
+        _WARMER.start()
+    except Exception:      # noqa: BLE001
+        _WARMER = None
+
+
+def _glyphs_warmed() -> None:
+    """Let the thread go, now that it has stopped."""
+    global _WARMER
+
+    if _WARMER is not None and _WARMER.isFinished():
+        _WARMER = None
 
 
 class SpectrumState:
@@ -314,6 +389,28 @@ class Spectrum(QWidget):
     #: change and short enough not to be in the way.
     FRESH_STEP = 0.085
 
+    #: How many frames a scene draws before the fade even starts.
+    #:
+    #: "Xxx xxxxxxxxxxx xxx xxxxx xxxx xxxxx xxxxxx." A scene's first
+    #: frames cost several times what its later ones do: one-off
+    #: allocations, a pixmap built and then blitted for ever after, and
+    #: the font machinery. The fade used to run through exactly those
+    #: frames, which put the roughest part of every scene on screen.
+    #:
+    #: The frames are still drawn, at an opacity of nothing, so the cost
+    #: is paid where nobody can see it and the fade begins on a scene
+    #: that is already up to speed.
+    #:
+    #: Six rather than the twenty-four Sharpness takes to decide how big
+    #: to draw. Measured once the font machinery is warmed elsewhere,
+    #: only the *first* frame of a scene is expensive - 12 to 16 ms
+    #: against 5 to 11 settled - so six covers the roughness, and the
+    #: rest of Sharpness's window lands under the fade, where a change
+    #: of resolution is not something anybody can see. Twenty-four was
+    #: four tenths of a second of blank pane every time somebody changed
+    #: scene, which is its own kind of rough.
+    WARM_FRAMES = 6
+
     #: Frames up to this many pixels are drawn at their real size without
     #: anything being measured first, because at that size every scene
     #: holds a frame. Above it ``Sharpness`` times the scene and decides,
@@ -397,11 +494,18 @@ class Spectrum(QWidget):
         self._settle = 0.0
         #: 0 to 1 while a newly chosen scene fades up. See FRESH_STEP.
         self._fresh = 1.0
+        #: How many frames the current scene has drawn. The fade waits
+        #: for these: see WARM_FRAMES.
+        self._drawn = 0
         self._last_watched = 0.0
         self._since_hit = 99
         #: A clock of our own that leans on the playhead. See ``_heard``.
         self._heard_now = None
         self._heard_at = None
+        #: The last position the source reported, and when it landed.
+        #: See ``_heard``: a report is a timestamp, not a level.
+        self._said_was = None
+        self._said_at = None
         #: Whether the manual key is being held down.
         self._holding = False
         self._spamming = False
@@ -465,6 +569,8 @@ class Spectrum(QWidget):
         # for the pane that is putting a file away.
         self._away = QTimer(self)
         self._away.setSingleShot(True)
+        # Before anything animates, and off this thread. See _Glyphs.
+        warm_the_glyphs()
 
     # -- what it shows ----------------------------------------------------
     def set_scene(self, scene) -> None:
@@ -480,6 +586,7 @@ class Spectrum(QWidget):
             # it - see Scene.reset - so the first frames of it are half
             # built, and a hard cut shows that.
             self._fresh = 0.0
+            self._drawn = 0
         self._suit_the_scene(scene)
         self.update()
 
@@ -1198,7 +1305,8 @@ class Spectrum(QWidget):
                 self._position = max(0, int(self._source()))
             except Exception:      # noqa: BLE001 - a dead player is not fatal
                 pass
-        if self._fresh < 1.0 and self._level and self._working is None:
+        if (self._fresh < 1.0 and self._level and self._working is None
+                and self._drawn >= self.WARM_FRAMES):
             # Only once there is a scene to fade in. While a track is
             # being analysed the pane shows a progress ring instead, and
             # the fade used to run out behind it - so the scene arrived at
@@ -1456,6 +1564,10 @@ class Spectrum(QWidget):
     #: is corrected each frame.
     SEEK_GAP = 0.30
     PULL = 0.06
+    #: How far a report may be run forward before it is not trusted.
+    #: Comfortably past any sane player's update interval, and well
+    #: inside SEEK_GAP so a stalled source cannot fake a seek.
+    STALE_MOST = 0.25
 
     def _heard(self) -> float:
         """The moment the music is at, as a clock rather than as a poll.
@@ -1479,6 +1591,30 @@ class Spectrum(QWidget):
 
         now = _time.monotonic()
         said = self._position / 1000.0
+        # A report is a timestamp rather than a level: true at the moment
+        # it lands and stale from then on. Easing towards the raw number
+        # leaves the picture behind by the *average* staleness of the
+        # source, which is half its update interval - and the pull cannot
+        # take that out, because the thing it is pulling towards is
+        # itself behind. Measured against a player that moves its
+        # position every 50 ms, the picture sat 25 ms late; against one
+        # that speaks once a second, 300 ms.
+        #
+        # So the report is run forward from the moment it landed, which
+        # costs nothing and does not depend on how talkative the source
+        # is. Capped, because a player that stops reporting while still
+        # claiming to play would otherwise run the picture away from the
+        # music; and only while playing, because a paused player reports
+        # the same position for ever and that is not staleness, it is a
+        # pause.
+        stale = 0.0 if self._said_at is None else now - self._said_at
+        fresh = stale <= self.STALE_MOST
+        if said != self._said_was:
+            self._said_was = said
+            self._said_at = now
+            stale, fresh = 0.0, True
+        elif self._wanted and not self._idling:
+            said += min(self.STALE_MOST, stale)
         step = 0.0 if self._heard_at is None else max(
             0.0, min(0.25, now - self._heard_at))
         self._heard_at = now
@@ -1502,7 +1638,12 @@ class Spectrum(QWidget):
         # but the obstacles: "road continues moving and obstacles xx
         # xxxxxx xxx xxxxxx xxx xxxxxx xxxx xx xxxxx xxxxxxxx xxxxxxxx
         # xxx xxxx xx xxxxxx xxx xxxxxx xx x xxxx".
-        if self._wanted and not self._idling:
+        # And only while the last thing the source said is still worth
+        # anything. A player that claims to be playing and then stops
+        # reporting is a player that has got stuck, and a picture that
+        # goes on running is a picture that has to be yanked back when it
+        # speaks again. It runs on for STALE_MOST and then waits.
+        if self._wanted and not self._idling and fresh:
             self._heard_now += step
         self._heard_now += (said - self._heard_now) * self.PULL
         return self._heard_now
@@ -1773,6 +1914,7 @@ class Spectrum(QWidget):
         # Nothing a scene is handed has ever been outside its own range
         # by the time it gets there. See SpectrumState.settle.
         self._state.settle()
+        self._drawn += 1
         recipe = visualizers.post_for(self._scene) if self._post else {}
         ratio = self.devicePixelRatioF()
         pixels = rect.width() * ratio * rect.height() * ratio

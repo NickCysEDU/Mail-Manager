@@ -7,6 +7,7 @@ what happens when those bytes are wrong.
 from __future__ import annotations
 
 import math
+import statistics
 import struct
 import zlib
 
@@ -832,10 +833,19 @@ class TestEveryScenePaints:
     def test_it_draws_something(self, qtbot, index):
         import visualizers
 
+        from attachment_widgets import Spectrum
+
         spectrum = self._spectrum(qtbot)
         spectrum.set_scene(visualizers.SCENES[index])
-        for _ in range(4):
+        # Past the warm-up and the fade: a scene is drawn at an opacity
+        # of nothing for its first few frames so that its one-off costs
+        # are paid where nobody can see them, and grabbing it before
+        # that is over grabs the blank on purpose. Each grab paints one
+        # frame; ticking alone only schedules one. See WARM_FRAMES.
+        for _ in range(Spectrum.WARM_FRAMES
+                       + int(1.0 / Spectrum.FRESH_STEP) + 2):
             spectrum._tick()
+            spectrum.grab()
         image = spectrum.grab().toImage()
         colours = {image.pixel(x, y)
                    for x in range(0, image.width(), 17)
@@ -7577,7 +7587,11 @@ class TestTheMusicRiderIsAGame:
         """The shape that forces a move."""
         scene = self._rider()
         scene._shape("wall", 4.0)
-        lanes = sorted(block[1] for block in scene._blocks)
+        # The wall itself. A wall also lays a trail of coins in a lane
+        # it is about to close, earlier than the wall and gone before
+        # it: see TestTheCoinsBesideTheObstacles.
+        lanes = sorted(block[1] for block in scene._blocks
+                       if block[2] == "wall")
         assert len(lanes) == scene.LANES - 1, (
             f"a wall closed {len(lanes)} of {scene.LANES} lanes")
         assert len(set(lanes)) == len(lanes), "a wall closed a lane twice"
@@ -7946,7 +7960,12 @@ class TestTheRiderIsPlayable:
         while scene._heard < seconds:
             scene._heard += 0.25
             scene._lay(state)
-        return sorted({block[0] for block in scene._blocks}), scene
+        # The figures the chart laid. A coin trail is three things a
+        # sixth of a second apart on purpose - it is one figure's worth
+        # of reward, not three more things to react to - so it is not
+        # what "how fast are they hitting" is asking about.
+        return sorted({block[0] for block in scene._blocks
+                       if block[2] in ("wall", "block", "run")}), scene
 
     def test_the_figures_are_far_enough_apart_to_read(self):
         import visualizers
@@ -8099,11 +8118,27 @@ class TestANewSceneFadesIn:
         pane.set_scene(visualizers.by_name("Music rider"))
         # The fade waits for a scene to fade *in*, so there has to be
         # something to draw. See test_it_waits_for_the_analysis.
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
         bands = attachment_audio.BANDS
         pane.set_frames([array("f", [0.4] * bands) for _ in range(60)],
                         attachment_audio.RATE)
-        for _ in range(int(1.0 / Spectrum.FRESH_STEP) + 4):
-            pane._tick()
+        pane.resize(320, 200)
+        # Painted rather than only ticked: the fade waits for the scene
+        # to have been *drawn* a few times, because a scene's first
+        # frames cost several times its later ones and the fade used to
+        # run over exactly those. See Spectrum.WARM_FRAMES.
+        image = QImage(320, 200, QImage.Format.Format_ARGB32_Premultiplied)
+        painter = QPainter(image)
+        try:
+            for _ in range(Spectrum.WARM_FRAMES
+                           + int(1.0 / Spectrum.FRESH_STEP) + 4):
+                pane._tick()
+                image.fill(QColor(0, 0, 0))
+                pane._paint_scene(painter, QRectF(0, 0, 320, 200))
+        finally:
+            painter.end()
         assert pane._fresh == 1.0, (
             f"the fade stalled at {pane._fresh:.2f}")
 
@@ -8327,8 +8362,12 @@ class TestTheRiderIsOnTheBeat:
         while scene._heard < seconds:
             scene._heard += 0.5
             scene._lay(state)
-        times = sorted({block[0] for block in scene._blocks})
-        shapes = {round(block[0], 4): block[2] for block in scene._blocks}
+        # The figures the chart laid. A coin trail is deliberately
+        # three things a sixth of a second apart, beside an obstacle
+        # rather than on the beat, so it is not one of them.
+        laid = [b for b in scene._blocks if b[2] in ("wall", "block", "run")]
+        times = sorted({block[0] for block in laid})
+        shapes = {round(block[0], 4): block[2] for block in laid}
         figures = [t for i, t in enumerate(times)
                    if i == 0 or t - times[i - 1] > scene.RUN_GAP + 0.01]
         return figures, [shapes[round(t, 4)] for t in figures], scene
@@ -8705,7 +8744,9 @@ class TestTheRiderSnapsToTheGrid:
         while scene._heard < seconds:
             scene._heard += 0.5
             scene._lay(state)
-        times = sorted({block[0] for block in scene._blocks})
+        # See the note in the other _figures: coins are not figures.
+        times = sorted({block[0] for block in scene._blocks
+                        if block[2] in ("wall", "block", "run")})
         return [t for i, t in enumerate(times)
                 if i == 0 or t - times[i - 1] > scene.RUN_GAP + 0.01]
 
@@ -9156,9 +9197,13 @@ class TestTheShakeIsAKnockNotADrop:
         # shake cut out entirely still moves a few thousandths of a pixel.
         assert most > self.W * 0.003, (
             f"a full shake moves the frame {most:.2f}px, which is nothing")
-        assert most < self.W * 0.015, (
+        # "X xxxxxx xxxx xxxxxx xxxxx xx xxxx." It moved 0.64 per cent
+        # of the width at a full shake and moves 0.42 now; the ceiling
+        # is set just above that rather than at the old headroom, so it
+        # cannot drift back up without saying so.
+        assert most < self.W * 0.006, (
             f"a full shake moves the frame {most:.1f}px of {self.W}, which "
-            f"is {most / self.W * 100:.1f} per cent of its width")
+            f"is {most / self.W * 100:.2f} per cent of its width")
 
     def test_nothing_moves_when_nothing_has_been_hit(self, qapp):
         most, _where = self._shaken(0.0)
@@ -10616,6 +10661,172 @@ class TestThePaneClockStopsWithTheTrack:
             f"the clock jumped {max(moves) * 1000:.1f} ms in one frame, so "
             f"it is stepping with the player's reports")
 
+
+class TestThePictureSitsOnTheMusic:
+    """How far behind the music the picture is, which was not nothing.
+
+    The pane runs its own clock and leans on whatever the player last
+    said. A report is a *timestamp* - true at the moment it lands and
+    stale from then on - and easing towards the raw number leaves the
+    picture behind by the average staleness of the source, which is half
+    its update interval. The pull cannot take that out, because the
+    thing it is pulling towards is itself behind.
+
+    Measured against the real player here, which moves its position
+    every 50 ms: the picture sat 25 ms late. Against a source that
+    speaks once a second it was 300 ms late, which is a third of a beat
+    at 130 bpm and the difference between a road that hits the beat and
+    one that follows it.
+    """
+
+    @staticmethod
+    def _lag(reports_every_ms, frames=600, step=1 / 60.0, playing=True,
+             stalls_after=None, speed=1.0):
+        """How far the pane's clock is from the truth, frame by frame.
+
+        ``reports_every_ms`` is how often the source hands over a new
+        position. ``stalls_after`` is a moment, in seconds, past which it
+        stops reporting at all while still claiming to play.
+        """
+        from array import array
+
+        import attachment_widgets
+        from attachment_widgets import Spectrum
+
+        pane = Spectrum()
+        pane.set_frames([array("f", [0.3] * 27)] * 600, 15)
+        pane.set_position(0)
+        pane.set_playing(playing)
+        # The module's own name for the clock is not enough: the methods
+        # that read it import it again inside themselves, and a local
+        # import binds from sys.modules and walks straight past a name
+        # somebody swapped. The attribute on the module object is what
+        # both of them see.
+        was = attachment_widgets._time.monotonic
+        now = [5_000.0]
+        attachment_widgets._time.monotonic = lambda: now[0]
+        seen = []
+        try:
+            reported = -1.0
+            for frame in range(frames):
+                now[0] += step
+                at = frame * step
+                if (at - reported >= reports_every_ms / 1000.0
+                        and (stalls_after is None or at < stalls_after)):
+                    reported = at
+                    pane.set_position(int(at * speed * 1000.0))
+                seen.append((at * speed, pane._heard()))
+        finally:
+            attachment_widgets._time.monotonic = was
+        return seen
+
+    def test_the_picture_sits_on_the_music(self, qapp):
+        """Written as milliseconds rather than off PULL or STALE_MOST.
+
+        The numbers on the right are what each one measured before the
+        report was treated as a timestamp.
+        """
+        for gap, was in ((50, 25), (100, 50), (250, 125)):
+            seen = self._lag(gap)
+            settled = [(heard - at) * 1000.0 for at, heard in seen
+                       if at > 3.0]
+            lag = statistics.fmean(settled)
+            assert abs(lag) < 8.0, (
+                f"with the source reporting every {gap} ms the picture "
+                f"is {lag:+.0f} ms from the music; it used to be "
+                f"{-was} ms and the aim is nothing")
+
+    def test_it_does_not_get_ahead_of_the_music_either(self, qapp):
+        """Running a report forward is a guess, and a guess that
+        overshoots is worse than one that lags: the beat would land
+        before the sound."""
+        seen = self._lag(50)
+        ahead = max((heard - at) * 1000.0 for at, heard in seen if at > 3.0)
+        assert ahead < 8.0, (
+            f"the picture ran {ahead:.0f} ms ahead of the music")
+
+    def test_a_source_that_stops_talking_cannot_run_the_picture_away(
+            self, qapp):
+        """A player that claims to be playing and then says nothing.
+
+        The clock may run on for a moment - that is the whole point -
+        but it may never get so far ahead that its own seek test fires,
+        because that would be a picture that jumps back every time the
+        source is slow.
+        """
+        seen = self._lag(50, stalls_after=2.0, frames=900)
+        heard = [h for _at, h in seen]
+        after = [h for at, h in seen if at > 2.5]
+        # A quarter of a second of running on, and then it waits: the
+        # last thing a stuck player said is worth about that much.
+        ahead = max(after) - 2.0
+        assert ahead < 0.30, (
+            f"the clock ran {ahead:.2f} s past the last thing the player "
+            f"said before giving up on it")
+        assert after[-1] - after[-60] < 0.005, (
+            f"the clock was still climbing at the end: "
+            f"{after[-60]:.3f} -> {after[-1]:.3f}")
+        # And never backwards, which is the jump a viewer would see.
+        backwards = [b - a for a, b in zip(heard, heard[1:]) if b < a - 1e-9]
+        assert not backwards, (
+            f"the clock jumped backwards {len(backwards)} times while the "
+            f"player was quiet, the worst by {min(backwards):.3f} s")
+
+    def test_a_stopped_track_is_not_a_stale_report(self, qapp):
+        """A paused player reports the same position for ever, which
+        looks exactly like a source that has stopped talking. It is not,
+        and the picture must not run on through a pause: "xxxxxx xxxxx
+        xxx xxxxxxxxxx xxxxxx xxxx xxxx xxxxx xxxxx xx xxxxxx"."""
+        seen = self._lag(50, playing=False, frames=300, stalls_after=0.0)
+        heard = [h for _at, h in seen]
+        assert max(heard) - min(heard) < 0.01, (
+            f"the clock moved {max(heard) - min(heard):.3f} s under a "
+            f"stopped track")
+
+    def test_it_follows_the_player_rather_than_replacing_it(self, qapp):
+        """A clock of its own is not the same as a clock instead.
+
+        Sound cards do not run at exactly the rate they claim and frame
+        steps do not add up to exactly the time that passed, so a clock
+        that only ever runs forward drifts away from the music and never
+        comes back. This one leans on every report it gets. Measured
+        against a player whose position runs two per cent fast, which is
+        far more than any real card is out by and diverges visibly
+        inside a minute.
+        """
+        seen = self._lag(50, frames=3600, speed=1.02)
+        drift = [(heard - at) * 1000.0 for at, heard in seen if at > 5.0]
+        worst = max(abs(d) for d in drift)
+        assert worst < 60.0, (
+            f"after a minute against a player running two per cent fast "
+            f"the picture is {worst:.0f} ms out, so it is running on its "
+            f"own rather than following")
+
+    def test_a_seek_is_still_taken_at_once(self, qapp):
+        """The one jump the picture is supposed to make."""
+        from array import array
+
+        import attachment_widgets
+        from attachment_widgets import Spectrum
+
+        pane = Spectrum()
+        pane.set_frames([array("f", [0.3] * 27)] * 600, 15)
+        pane.set_position(10_000)
+        pane.set_playing(True)
+        was = attachment_widgets._time.monotonic
+        now = [5_000.0]
+        attachment_widgets._time.monotonic = lambda: now[0]
+        try:
+            for _frame in range(120):
+                now[0] += 1 / 60.0
+                pane._heard()
+            pane.set_position(90_000)
+            now[0] += 1 / 60.0
+            landed = pane._heard()
+        finally:
+            attachment_widgets._time.monotonic = was
+        assert landed == pytest.approx(90.0, abs=0.05), (
+            f"a seek to 90 s put the clock at {landed:.2f}")
 
 class TestTheRiderCameraIsOnABoom:
     """"Improve the camera a bit more: it's hard to see obstacle patterns
@@ -12137,3 +12348,883 @@ class TestTheRiderUnderAPlaythrough:
         colour = image.pixelColor(x, y)
         return (0.2126 * colour.redF() + 0.7152 * colour.greenF()
                 + 0.0722 * colour.blueF())
+
+
+class TestASceneIsNotShownUntilItIsUpToSpeed:
+    """"Xxx xxxxxxxxxxx xxx xxxxx xxxx xxxxx xxxxxx."
+
+    They did, and measurably: at 1440x810 the equaliser's first frame
+    cost 168 ms against 6 ms for every frame after it, the neon tunnel
+    had a 56 ms frame in its first second, and the VU meters 27 ms. Ten
+    dropped frames at the exact moment a scene appears.
+
+    Two causes, two fixes. Most of it was the font machinery - the first
+    piece of text drawn in a process makes Qt populate its font
+    database, resolve the family and load the face - and that is now
+    paid on a worker thread before anything animates. The rest is
+    one-off work inside the scenes themselves, plus Sharpness measuring
+    before it can decide how big to draw, and the fade used to run
+    straight through it. The frames are still drawn, at an opacity of
+    nothing, so the cost is paid where nobody can see it.
+    """
+
+    @staticmethod
+    def _pane(scene=None):
+        from array import array
+
+        from attachment_widgets import Spectrum
+
+        pane = Spectrum()
+        pane.resize(480, 270)
+        pane.set_frames([array("f", [0.4] * 27)] * 600, 15)
+        pane.set_labels([str(i) for i in range(27)])
+        pane.set_playing(True)
+        pane._reveal_changed(1.0)
+        if scene is not None:
+            pane.set_scene(scene)
+        return pane
+
+    @staticmethod
+    def _run(pane, frames):
+        """Paint that many frames, the way the pane's own timer would."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        image = QImage(480, 270, QImage.Format.Format_ARGB32_Premultiplied)
+        painter = QPainter(image)
+        try:
+            for frame in range(frames):
+                pane.set_position(int(frame / 60.0 * 1000))
+                pane._tick()
+                image.fill(QColor(0, 0, 0))
+                pane._paint_scene(painter, QRectF(0, 0, 480, 270))
+        finally:
+            painter.end()
+
+    class Counter:
+        """A scene that only counts how often it is asked to draw."""
+
+        name = "counter"
+        blurb = "counts"
+        sharp_pixels = 0
+        smooth_always = False
+
+        def __init__(self):
+            self.frames = 0
+
+        def reset(self):
+            self.frames = 0
+
+        def paint(self, painter, rect, state):
+            self.frames += 1
+
+    def test_the_fade_waits_for_the_scene_to_settle(self, qapp):
+        from attachment_widgets import Spectrum
+
+        pane = self._pane(self.Counter())
+        assert pane._fresh == 0.0, "a newly chosen scene starts hidden"
+        self._run(pane, Spectrum.WARM_FRAMES - 2)
+        assert pane._fresh == 0.0, (
+            f"the fade started after {pane._drawn} frames, while the scene "
+            f"was still warming up")
+        self._run(pane, 8)
+        assert pane._fresh > 0.0, (
+            f"the fade never started: {pane._drawn} frames drawn and the "
+            f"scene is still at an opacity of {pane._fresh}")
+
+    def test_it_is_drawn_while_it_is_hidden_rather_than_skipped(self, qapp):
+        """The whole point. Skipping the frames would hide the roughness
+        by moving it: the first frame anybody sees would then be the
+        first frame that costs anything.
+        """
+        from attachment_widgets import Spectrum
+
+        scene = self.Counter()
+        pane = self._pane(scene)
+        self._run(pane, Spectrum.WARM_FRAMES - 2)
+        assert scene.frames == Spectrum.WARM_FRAMES - 2, (
+            f"the scene drew {scene.frames} of the "
+            f"{Spectrum.WARM_FRAMES - 2} frames it was hidden for")
+        assert pane._fresh == 0.0
+
+    def test_the_fade_comes_all_the_way_up(self, qapp):
+        pane = self._pane(self.Counter())
+        self._run(pane, 90)
+        assert pane._fresh == 1.0, (
+            f"the scene settled at an opacity of {pane._fresh}")
+
+    def test_changing_scene_waits_again(self, qapp):
+        """A scene switch is a first open: the new one has its own
+        one-off costs and Sharpness starts its measuring again."""
+        from attachment_widgets import Spectrum
+
+        pane = self._pane(self.Counter())
+        self._run(pane, 90)
+        assert pane._fresh == 1.0
+        pane.set_scene(self.Counter())
+        assert pane._fresh == 0.0 and pane._drawn == 0
+        self._run(pane, Spectrum.WARM_FRAMES - 2)
+        assert pane._fresh == 0.0, (
+            "the second scene was shown before it had warmed up")
+
+    def test_choosing_the_same_scene_again_does_not_hide_it(self, qapp):
+        """Nothing changed, so there is nothing to fade in - and a scene
+        that blinked every time the box was touched would be worse than
+        one that was rough once."""
+        scene = self.Counter()
+        pane = self._pane(scene)
+        self._run(pane, 90)
+        pane.set_scene(scene)
+        assert pane._fresh == 1.0, (
+            "picking the scene that was already showing hid it again")
+
+    # -- the font machinery ------------------------------------------------
+    def test_the_glyph_cache_is_warmed_once_and_let_go(self, qapp):
+        """Off the GUI thread, because 145 ms of it is Qt populating a
+        font database and the GUI thread is the one drawing frames."""
+        import attachment_widgets
+
+        attachment_widgets.warm_the_glyphs()
+        warmer = attachment_widgets._WARMER
+        if warmer is not None:
+            # Started rather than finished: it is deliberately not waited
+            # for. Wait here so the test leaves nothing running.
+            assert warmer.isRunning() or warmer.isFinished()
+            warmer.wait(10_000)
+            qapp.processEvents()
+        # And asking again does not start a second one, whether the
+        # first has finished or not: the app makes several panes, and a
+        # thread each would be a thread each for nothing.
+        assert attachment_widgets._WARMED is True
+        attachment_widgets.warm_the_glyphs()
+        again = attachment_widgets._WARMER
+        assert again is None or again is warmer, (
+            "a second warm-up thread was started")
+        if again is not None:
+            again.wait(10_000)
+
+    def test_warming_the_glyphs_draws_text(self, qapp):
+        """Not a mock: the thread's own body, run here, has to put
+        glyphs through Qt rather than merely exist. Read off the image it
+        draws into - a body that drew nothing would leave it empty."""
+        from PySide6.QtGui import QColor, QImage, QPainter
+        from PySide6.QtCore import QRectF
+
+        import attachment_widgets
+
+        image = QImage(700, 48, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0))
+        painter = QPainter(image)
+        try:
+            painter.setPen(QColor(255, 255, 255))
+            painter.drawText(QRectF(0, 0, 700, 48), 0,
+                             attachment_widgets._Glyphs.LETTERS)
+        finally:
+            painter.end()
+        lit = sum(1 for x in range(0, 700, 3) for y in range(0, 48, 2)
+                  if image.pixelColor(x, y).lightnessF() > 0.2)
+        assert lit > 50, (
+            f"the warm-up string drew {lit} lit pixels, so it is not "
+            f"putting glyphs through the font machinery")
+        assert len(attachment_widgets._Glyphs.LETTERS) > 40, (
+            "the warm-up string is too short to cover the captions")
+
+
+class TestTheCoinsBesideTheObstacles:
+    """"Collectable coins xxxxxxxxxxx xxx xxxxxx xx xxx xxxxx xx
+    obstacles."
+
+    The problem they solve is that dodging is free. Three lanes, one
+    obstacle, two ways past it - and the two are worth exactly the same,
+    so the best play is to sit in the far lane and wait, which is the
+    least interesting thing a game can ask for. Audiosurf 2 answers it
+    in Ninja mode with "a special set of bonuses for successfully
+    dodging" rather than for merely not being hit.
+
+    So a short trail of coins sits in the lane *next to* an obstacle,
+    spanning the moment it passes. The far lane is safe and pays
+    nothing; the near lane pays three coins to anybody who will hold it
+    while a grey goes past an arm's length away. Each coin is worth more
+    than the one before it and missing one puts the row back to nothing,
+    so a trail is worth holding the lane for rather than clipping the
+    end of.
+    """
+
+    @staticmethod
+    def _scene(mode="Mono"):
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._last = None
+        scene._mode = mode
+        scene._lane = 1
+        scene._lane_here = scene._lane_at(1)
+        scene._heard = 100.0
+        scene._shield = 0.0
+        return scene
+
+    @staticmethod
+    def _coins(scene):
+        return [b for b in scene._blocks if b[2] == "coin"]
+
+    def _laid(self, pattern, when=4.0, grey=True):
+        scene = self._scene()
+        scene._blocks = []
+        scene._shape(pattern, when, grey=grey)
+        return scene
+
+    # -- where they go -----------------------------------------------------
+    def test_a_trail_is_laid_in_the_lane_beside_an_obstacle(self, qapp):
+        import visualizers
+
+        scene = self._laid("block")
+        obstacle = [b for b in scene._blocks if b[2] == "block"][0]
+        coins = self._coins(scene)
+        assert len(coins) == visualizers.Rider.COINS_RUN, (
+            f"{len(coins)} coins were laid beside one obstacle")
+        lanes = {b[1] for b in coins}
+        assert len(lanes) == 1, f"the trail wandered across lanes {lanes}"
+        lane = lanes.pop()
+        assert abs(lane - obstacle[1]) == 1, (
+            f"the obstacle is in lane {obstacle[1]} and its coins are in "
+            f"lane {lane}, which is not beside it")
+
+    def test_the_trail_spans_the_moment_the_obstacle_passes(self, qapp):
+        """Before, on, and after. A trail that sat entirely after the
+        obstacle could be taken by swerving in once it was safely by,
+        which is the behaviour this exists to stop."""
+        scene = self._laid("block", when=4.0)
+        times = sorted(b[0] for b in self._coins(scene))
+        assert times[0] < 4.0 < times[-1], (
+            f"the coins run from {times[0]:.2f} to {times[-1]:.2f} and the "
+            f"obstacle is at 4.00")
+
+    def test_a_wall_puts_its_coins_in_a_lane_it_is_about_to_close(
+            self, qapp):
+        """A wall closes two lanes of three, so there is no lane beside
+        it to be brave in: the one way through is the one way through,
+        and a coin in it would pay for having nowhere else to go.
+
+        So the trail goes in a lane the wall is about to *close*, and
+        ends before it gets there. You ride the doomed lane, take what
+        is in it and leave. This is not a corner case: measured on a
+        real record, walls are two thirds of every figure laid, and a
+        coin that only ever sat beside a single obstacle appeared once
+        in a minute of music.
+        """
+        import visualizers
+
+        scene = self._laid("wall", when=4.0)
+        wall = [b for b in scene._blocks if b[2] == "wall"]
+        coins = self._coins(scene)
+        assert coins, "a wall laid no coins at all"
+        shut = {b[1] for b in wall}
+        open_lane = (set(range(scene.LANES)) - shut).pop()
+        lanes = {b[1] for b in coins}
+        assert lanes <= shut, (
+            f"the wall closes {sorted(shut)} and its coins are in "
+            f"{sorted(lanes)}, which includes the one lane left open "
+            f"({open_lane})")
+        last = max(b[0] for b in coins)
+        assert last <= 4.0 - visualizers.Rider.COIN_LEAD + 1e-9, (
+            f"the last coin is at {last:.2f} and the wall arrives at "
+            f"4.00, which leaves {(4.0 - last) * 1000:.0f} ms to get out")
+
+    def test_there_is_time_to_get_out_of_the_doomed_lane(self, qapp):
+        """The trail is only fair if the lane change fits in the gap it
+        leaves. Measured against the craft's own slide rather than
+        against the constant that sets it."""
+        import visualizers
+
+        lead = visualizers.Rider.COIN_LEAD
+        scene = visualizers.Rider()
+        scene._last = None
+        # How long the craft takes to be nine tenths of the way across,
+        # at sixty frames a second.
+        here, moved = 0.0, 0.0
+        while here < 0.9:
+            here += (1.0 - here) * scene._slide(1 / 60.0)
+            moved += 1 / 60.0
+        assert lead > moved * 3.0, (
+            f"the trail ends {lead * 1000:.0f} ms before the wall and a "
+            f"lane change takes {moved * 1000:.0f} ms, which is not room "
+            f"enough to be fair")
+
+    def test_a_prize_gets_no_coins(self, qapp):
+        """They are a reward for being near an *obstacle*, in either
+        shape it comes in."""
+        assert not self._coins(self._laid("block", grey=False))
+        assert not self._coins(self._laid("wall", grey=False))
+        assert not self._coins(self._laid("run", grey=False))
+
+    def test_no_coin_is_laid_where_something_already_is(self, qapp):
+        """A coin a player cannot take without being hit is not a
+        reward, and one inside a prize is a coin nobody can see.
+
+        The lane is asked for rather than assumed: where a trail goes
+        comes from the time, so blocking a lane picked by hand would be
+        blocking whichever lane that happened to be.
+        """
+        # Which lane this figure's coins want, on a clear road.
+        clear = self._laid("block", when=4.0)
+        wanted = self._coins(clear)[0][1]
+        # Now put something there first, and lay the same figure again.
+        scene = self._scene()
+        scene._blocks = [[4.0, wanted, "block", False, False]]
+        scene._shape("block", 4.0, grey=True)
+        assert not self._coins(scene), (
+            f"coins were laid into lane {wanted}, which already holds "
+            f"{[b for b in scene._blocks if b[2] != 'coin']}")
+
+    # -- what they pay -----------------------------------------------------
+    @staticmethod
+    def _take(scene, count, lane=1, on_it=True):
+        """Drive through that many coins, taking or missing them."""
+        scene._lane_here = scene._lane_at(lane if on_it else
+                                          (lane + 1) % scene.LANES)
+        scene._blocks = [[10.0 + step, lane, "coin", False, False]
+                         for step in range(count)]
+        scene._collide()
+
+    def test_each_coin_is_worth_more_than_the_one_before(self, qapp):
+        """25, 50, 75, 100 - so the running total is 25, 75, 150, 250.
+        Written out rather than worked out from the constants: taken
+        from those, this passes with the step set to zero."""
+        scene = self._scene()
+        seen = []
+        for _ in range(4):
+            self._take(scene, 1)
+            seen.append(scene._score)
+        assert seen == [25, 75, 150, 250], (
+            f"four coins in a row scored {seen}")
+
+    def test_the_row_is_capped(self, qapp):
+        """The eighth coin would be worth 200 and the ninth 225, so the
+        cap bites there and never lets go."""
+        scene = self._scene()
+        self._take(scene, 8)
+        was = scene._score
+        self._take(scene, 1)
+        assert scene._score - was == 200, (
+            f"the ninth coin paid {scene._score - was}")
+
+    def test_missing_one_puts_the_row_back_to_nothing(self, qapp):
+        """The whole reason a trail is worth holding a lane for."""
+        scene = self._scene()
+        self._take(scene, 3)
+        assert scene.report()["coin_run"] == 3
+        self._take(scene, 1, on_it=False)
+        assert scene.report()["coin_run"] == 0, (
+            "missing a coin left the row running")
+        was = scene._score
+        self._take(scene, 1)
+        assert scene._score - was == 25, (
+            f"the coin after a missed one paid {scene._score - was} "
+            f"rather than starting again at 25")
+
+    def test_a_missed_coin_is_not_a_hit(self, qapp):
+        """It costs the row and nothing else: coins are a bonus, not a
+        second way to lose."""
+        scene = self._scene()
+        self._take(scene, 2, on_it=False)
+        got = scene.report()
+        assert got["hits"] == 0 and got["clean"] is True, got
+        assert got["score"] == 0
+
+    def test_being_hit_ends_the_row(self, qapp):
+        scene = self._scene()
+        self._take(scene, 3)
+        scene._lane_here = scene._lane_at(1)
+        scene._blocks = [[20.0, 1, "block", False, True]]
+        scene._collide()
+        assert scene.report()["hits"] == 1
+        assert scene.report()["coin_run"] == 0, (
+            "the coin row survived a hit")
+
+    def test_the_best_row_is_remembered(self, qapp):
+        scene = self._scene()
+        self._take(scene, 4)
+        self._take(scene, 1, on_it=False)
+        self._take(scene, 2)
+        got = scene.report()
+        assert got["coin_best"] == 4 and got["coin_run"] == 2, got
+        assert got["coins"] == 6, f"{got['coins']} coins were counted"
+
+    def test_a_coin_never_goes_into_the_puzzle_grid(self, qapp):
+        """The grid is the puzzle game's pressure - it overfills and
+        locks - and coins would be free blocks in it. They pay straight
+        into the score in both games instead."""
+        scene = self._scene(mode="Puzzle")
+        self._take(scene, 3)
+        got = scene.report()
+        assert got["cells"] == [[], [], []], (
+            f"coins landed in the grid: {got['cells']}")
+        assert got["score"] == 150, f"coins scored {got['score']} in Puzzle"
+
+    # -- what they look like -----------------------------------------------
+    def test_a_coin_reads_against_the_road_it_is_on(self, qapp):
+        """The road runs from purple at its quietest to red at its
+        loudest and a coin has to read against every part of that - at a
+        chorus the road is already gold. Off the drawn frame: read off
+        the constants, this passes with a coin drawn in the road's own
+        colour."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        side = 720
+
+        class Flat(visualizers.Rider):
+            def _road(self, at):
+                return (0.0, 0.0, 0.0)
+
+        worst = None
+        for energy in (0.0, 0.5, 1.0):
+            scene = Flat()
+            scene._last = None
+            state = SpectrumState()
+            state.levels = [0.4] * 27
+            state.bass = state.mid = state.high = energy
+            state.synth = 0.0
+            state.kit = {}
+            state.at = 1.0
+            state.chart = {"Kick": ()}
+            image = QImage(side, side,
+                           QImage.Format.Format_ARGB32_Premultiplied)
+            painter = QPainter(image)
+            was = visualizers.time.monotonic
+            visualizers.time.monotonic = lambda: 500.0
+            try:
+                scene._chart_from = state.chart
+                scene._laid = 99.0
+                scene._blocks = []
+                image.fill(QColor(0, 0, 0))
+                scene.paint(painter, QRectF(0, 0, side, side), state)
+                # A moment that lands the coin half way down the road,
+                # worked out from the scene's own mapping.
+                want = min((abs(scene._where(w / 100.0) - 8.0), w / 100.0)
+                           for w in range(1, 400))[1]
+                scene._blocks = [[want, 1, "coin", False, False]]
+                image.fill(QColor(0, 0, 0))
+                scene.paint(painter, QRectF(0, 0, side, side), state)
+                horizon, focal, _tilt = scene._camera(
+                    QRectF(0, 0, side, side), scene._loudness, state.bass)
+                at = scene._where(want)
+                spot = scene._eye(horizon, focal, scene._lane_at(1),
+                                  -scene.COIN_TALL, at)
+            finally:
+                painter.end()
+                visualizers.time.monotonic = was
+            x, y = int(spot.x()), int(spot.y())
+
+            def light(px, py):
+                colour = image.pixelColor(px, py)
+                return (0.2126 * colour.redF() + 0.7152 * colour.greenF()
+                        + 0.0722 * colour.blueF())
+
+            here = light(x, y)
+            road = statistics.median(
+                [light(x + 40, y), light(x - 40, y), light(x, y + 45)])
+            ratio = (max(here, road) + 0.05) / (min(here, road) + 0.05)
+            worst = ratio if worst is None else min(worst, ratio)
+        assert worst > 3.0, (
+            f"at its worst a coin reads at {worst:.2f} to one against the "
+            f"road around it")
+
+    def test_a_coin_is_smaller_than_the_obstacle_it_sits_beside(self, qapp):
+        """It is a reward for being in a lane rather than something to
+        steer at, and one the size of a block would hide the obstacle."""
+        import visualizers
+
+        assert visualizers.Rider.COIN_SIZE < visualizers.Rider.LANE_WIDE * 0.4
+
+
+class TestTheRoadTurnsOverAtTheBigMoments:
+    """Corkscrews, and the powerups that come with them.
+
+    Audiosurf 2 puts "corkscrew loops and powerups timed perfectly with
+    big moments in your music", and what counts as a big moment is
+    already measured here: the loudness contour the road's hill is cut
+    from. So the road turns over where the track is at its loudest and
+    nowhere else, which on most records means the drops and the last
+    chorus, and the same record turns over in the same places every time
+    it is played.
+
+    A whole turn, still at both ends and quickest through the middle,
+    so the moment a corkscrew ends is not a moment anything jumps: one
+    turn brings the world back to where it started. Nothing to dodge
+    inside one - half way round, left has stopped meaning left, and an
+    obstacle there is not a thing you failed to dodge but a thing nobody
+    could have. The corkscrew is the spectacle; the power block in it is
+    what it pays.
+    """
+
+    @staticmethod
+    def _scene(energy=(), rate=8.0):
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._last = None
+        scene._energy = tuple(energy)
+        scene._every = rate
+        scene._twists = scene._find_twists()
+        return scene
+
+    @staticmethod
+    def _drops(*starts, length=800, rate=8.0, quiet=0.2, loud=0.95):
+        table = [quiet] * length
+        for start in starts:
+            for step in range(int(start * rate), int(start * rate) + 20):
+                if step < length:
+                    table[step] = loud
+        return table
+
+    # -- where they go -----------------------------------------------------
+    def test_the_road_turns_over_at_the_loudest_moments(self, qapp):
+        # Spaced well past TWIST_APART, because two drops closer
+        # together than that are deliberately one corkscrew - which is
+        # what test_they_are_kept_well_apart is for.
+        scene = self._scene(self._drops(10.0, 45.0, 80.0))
+        assert len(scene._twists) == 3, (
+            f"three drops gave {len(scene._twists)} corkscrews: "
+            f"{scene._twists}")
+        for wanted, got in zip((10.0, 45.0, 80.0), scene._twists):
+            assert abs(got - wanted) < 0.5, (
+                f"a drop at {wanted}s gave a corkscrew at {got:.2f}s")
+
+    def test_a_track_with_no_big_moments_never_turns_over(self, qapp):
+        """A share of the peak alone is met by every reading of a track
+        with no dynamics in it, and a wall of noise has no big moments -
+        it is all one moment."""
+        scene = self._scene([0.7] * 400)
+        assert scene._twists == (), (
+            f"a flat track got {len(scene._twists)} corkscrews")
+
+    def test_a_track_nobody_analysed_never_turns_over(self, qapp):
+        assert self._scene(())._twists == ()
+
+    def test_they_are_kept_well_apart(self, qapp):
+        """A corkscrew is an event. Three in a row is a fairground
+        ride."""
+        import visualizers
+
+        # A drop that runs for twenty seconds without a break.
+        scene = self._scene([0.95] * 160 + [0.2] * 240)
+        gaps = [b - a for a, b in zip(scene._twists, scene._twists[1:])]
+        assert all(gap >= visualizers.Rider.TWIST_APART for gap in gaps), (
+            f"corkscrews at {scene._twists} are {gaps} apart")
+
+    def test_the_same_track_turns_over_in_the_same_places(self, qapp):
+        """The whole promise of the scene."""
+        table = self._drops(8.0, 30.0)
+        assert self._scene(table)._twists == self._scene(table)._twists
+
+    # -- what the turn does ------------------------------------------------
+    def test_it_is_exactly_one_whole_turn(self, qapp):
+        import visualizers
+
+        turn = visualizers.Rider._turned
+        assert turn(0.0) == 0.0
+        assert turn(1.0) == 1.0, (
+            "a corkscrew has to come back to where it started, or the "
+            "moment it ends is a moment the world jumps")
+        assert turn(0.5) == pytest.approx(0.5)
+
+    def test_it_starts_and_stops_turning_gently(self, qapp):
+        """A linear sweep starts and stops the world spinning in one
+        frame, which is a cut rather than a corkscrew."""
+        import visualizers
+
+        turn = visualizers.Rider._turned
+        step = 0.01
+        begins = (turn(step) - turn(0.0)) / step
+        middle = (turn(0.5 + step) - turn(0.5)) / step
+        ends = (turn(1.0) - turn(1.0 - step)) / step
+        assert begins < middle * 0.25, (
+            f"it is turning at {begins:.2f} of a turn the moment it "
+            f"starts, against {middle:.2f} in the middle")
+        assert ends < middle * 0.25, (
+            f"it is still turning at {ends:.2f} when it ends")
+
+    def test_the_whole_picture_turns_with_it(self, qapp):
+        """Road, blocks, coins and craft together - one rotation about
+        the horizon, which is what a corkscrew looks like from inside
+        one. Off the camera rather than off the constant."""
+        from PySide6.QtCore import QRectF
+
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._last = None
+        box = QRectF(0, 0, 640, 360)
+        scene._rolled = 0.0
+        _h, _f, flat = scene._camera(box, 0.0, 0.0)
+        scene._rolled = 0.25
+        _h, _f, quarter = scene._camera(box, 0.0, 0.0)
+        assert abs(quarter - flat - 90.0) < 1.0, (
+            f"a quarter of a corkscrew turned the picture "
+            f"{quarter - flat:.1f} degrees rather than 90")
+        assert abs(quarter) > visualizers.Rider.TILT, (
+            "the corkscrew is inside the clamp that stops a *bend* "
+            "tipping the picture, so it can never go all the way round")
+
+    def test_the_horizon_comes_to_the_middle_through_one(self, qapp):
+        """Rotating about a vanishing point that sits above the middle
+        of the frame swings the road out of the picture half way round.
+        """
+        from PySide6.QtCore import QRectF
+
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._last = None
+        box = QRectF(0, 0, 640, 360)
+        scene._twisting = 0.0
+        flat, _f, _t = scene._camera(box, 0.0, 0.0)
+        scene._twisting = 1.0
+        deep, _f, _t = scene._camera(box, 0.0, 0.0)
+        assert abs(deep.y() - box.center().y()) < abs(
+            flat.y() - box.center().y()), (
+            f"half way through a corkscrew the horizon is at "
+            f"{deep.y():.0f} and the middle of the frame is at "
+            f"{box.center().y():.0f}")
+
+    # -- what is in one ----------------------------------------------------
+    def test_nothing_to_dodge_inside_a_corkscrew(self, qapp):
+        scene = self._scene(self._drops(10.0))
+        start = scene._twists[0]
+        scene._beat = 0.5
+        inside = [scene._greyed(start + step * 0.4, 0)
+                  for step in range(6)]
+        assert not any(inside), (
+            f"there are obstacles inside the corkscrew at {start}s")
+        # And they come back afterwards.
+        import visualizers
+
+        after = [scene._greyed(start + visualizers.Rider.TWIST_FOR
+                               + step * 0.5, 0) for step in range(14)]
+        assert any(after), "the obstacles never came back after it"
+
+    def test_a_power_block_is_laid_in_every_corkscrew(self, qapp):
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        scene = self._scene(self._drops(10.0, 45.0))
+        scene._beat = 0.5
+        scene._grid = 0.0
+        state = SpectrumState()
+        state.levels = [0.4] * 27
+        state.chart = {"Kick": tuple(i * 0.5 for i in range(200))}
+        scene._heard = 0.0
+        while scene._heard < 60.0:
+            scene._heard += 0.5
+            scene._lay(state)
+        powers = [b for b in scene._blocks if b[2] == "power"]
+        assert len(powers) == 2, (
+            f"{len(powers)} power blocks for two corkscrews")
+        for when, lane, _kind, _done, grey in powers:
+            assert lane == scene.LANES // 2, (
+                f"a power block is in lane {lane} rather than the middle")
+            assert grey is False
+            # On the beat, like everything else on this road.
+            off = abs(when / scene._beat - round(when / scene._beat))
+            assert off * scene._beat < 0.001, (
+                f"a power block sits {off * scene._beat * 1000:.0f} ms "
+                f"off the beat")
+
+    def test_taking_one_doubles_the_next_prize(self, qapp):
+        """"Xxxxxxxxxx xx xxxxxxxxx xxxxxxx xxx xxxxx xxxxx xx xxxxxxxx
+        xxxxxx xxx xxxxxxxxx xxxx" - the blueprint. Here it doubles the
+        next thing that pays and is spent when it does. Written out:
+        the first prize is worth 1 and the second 5, so doubling the
+        second is 10 and the total is 11."""
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._last = None
+        scene._lane = 1
+        scene._lane_here = scene._lane_at(1)
+        scene._heard = 100.0
+        scene._blocks = [[10.0, 1, "block", False, False]]
+        scene._collide()
+        assert scene._score == 1
+        scene._blocks = [[11.0, 1, "power", False, False]]
+        scene._collide()
+        assert scene.report()["double"] == 2.0, "the power block was not taken"
+        scene._blocks = [[12.0, 1, "block", False, False]]
+        scene._collide()
+        assert scene._score == 11, (
+            f"a doubled second prize made the total {scene._score} "
+            f"rather than 11")
+        # And it is spent.
+        assert scene.report()["double"] == 1.0
+        scene._blocks = [[13.0, 1, "block", False, False]]
+        scene._collide()
+        assert scene._score == 20, (
+            f"the prize after a doubled one scored "
+            f"{scene._score - 11} rather than 9")
+
+    def test_missing_one_costs_nothing(self, qapp):
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._last = None
+        scene._lane = 0
+        scene._lane_here = scene._lane_at(0)
+        scene._heard = 100.0
+        scene._blocks = [[10.0, 2, "power", False, False]]
+        scene._collide()
+        got = scene.report()
+        assert got["double"] == 1.0 and got["hits"] == 0, got
+
+    def test_it_doubles_a_cluster_in_the_puzzle_game(self, qapp):
+        """Which is where it is worth carrying: a cluster of six is
+        worth four times a cluster of three, so a doubled six is the
+        biggest thing in the game."""
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._last = None
+        scene._mode = "Puzzle"
+        plain = visualizers.Rider()
+        plain._last = None
+        plain._mode = "Puzzle"
+        for got, double in ((plain, 1.0), (scene, 2.0)):
+            got._cells = [[2, 2], [2], []]
+            got._double = double
+            # Light the fuse and run it out, which is what clears a
+            # cluster: see FUSE.
+            got._fuse_up()
+            assert got._fuse > 0.0, "three of a colour did not light a fuse"
+            got._burn(got._fuse + 0.01)
+        assert plain._score > 0
+        assert scene._score == plain._score * 2, (
+            f"a doubled cluster paid {scene._score} against "
+            f"{plain._score}")
+        assert scene.report()["double"] == 1.0, "it was not spent"
+
+
+class TestTheRoadActuallyTurns:
+    """It did not. Measured over the whole visible length of road on a
+    real record, it moved eight thousandths of a lane sideways and was
+    straight a hundred per cent of the time.
+
+    The curve is the stereo lean *summed* along the road, because a lean
+    is a direction and a road is where following one gets you. But a mix
+    has a bias - that record averaged -0.0097 - and summing a biased
+    signal gives a ramp: a road that turns constantly in one direction
+    at a near-constant rate. Since the camera is pinned to the road,
+    a constant rate is exactly what straight looks like.
+
+    A mix that sits slightly left for a whole song is not a road that
+    turns left for ever. It is a road that goes straight, because every
+    part of it leans the same way. What turns a road is one part leaning
+    further than the rest.
+    """
+
+    @staticmethod
+    def _road(lean, loud=None, rate=8.0):
+        """A scene with that lean carved into it."""
+        import visualizers
+
+        class State:
+            pass
+
+        scene = visualizers.Rider()
+        scene._last = None
+        state = State()
+        state.contour = {"loud": tuple(loud or [0.5] * len(lean)),
+                         "lean": tuple(lean), "rate": rate}
+        scene._carve(state)
+        return scene
+
+    @classmethod
+    def _swing(cls, scene, over=11):
+        """How far the road moves sideways over its visible length, in
+        lane widths, at every point of the track."""
+        curve = scene._curve
+        if len(curve) <= over:
+            return [0.0]
+        return [abs(curve[i + over] - curve[i]) * scene.TRACK_BEND
+                / scene.LANE_WIDE
+                for i in range(len(curve) - over)]
+
+    @staticmethod
+    def _wobbly(count=1200, bias=-0.0097, spread=0.066, seed=7):
+        """A lean shaped like the one a real record produces."""
+        import random
+
+        shake = random.Random(seed)
+        return [bias + shake.gauss(0.0, spread) for _ in range(count)]
+
+    def test_a_road_built_from_a_real_lean_has_corners_in_it(self, qapp):
+        import statistics
+
+        scene = self._road(self._wobbly())
+        swings = self._swing(scene)
+        middle = statistics.median(swings)
+        assert middle > 0.08, (
+            f"over its whole visible length the road moves {middle:.3f} "
+            f"of a lane sideways at the median, which is straight")
+        assert max(swings) > 0.5, (
+            f"the sharpest bend in the whole track is {max(swings):.2f} "
+            f"of a lane")
+
+    def test_a_mix_that_leans_one_way_for_ever_is_a_straight_road(self, qapp):
+        """The bug, as a test. Every part of it leans the same way, so
+        no part of it leans further than the rest."""
+        scene = self._road([-0.25] * 1200)
+        swings = self._swing(scene)
+        assert max(swings) < 0.01, (
+            f"a mix pinned a quarter of the way left built a road that "
+            f"bends {max(swings):.3f} of a lane")
+
+    def test_the_road_turns_both_ways(self, qapp):
+        """A ramp only ever turns one way. This has to come back."""
+        scene = self._road(self._wobbly())
+        curve = scene._curve
+        steps = [b - a for a, b in zip(curve, curve[1:])]
+        left = sum(1 for step in steps if step > 0.001)
+        right = sum(1 for step in steps if step < -0.001)
+        assert left > len(steps) * 0.2 and right > len(steps) * 0.2, (
+            f"the road turns one way {left} times and the other {right}, "
+            f"out of {len(steps)}")
+
+    def test_a_narrow_mix_turns_as_much_as_a_wide_one(self, qapp):
+        """Otherwise a nearly-mono record gets a road with no corners in
+        it, which is the records most likely to need the help."""
+        import statistics
+
+        wide = self._road(self._wobbly(spread=0.20))
+        narrow = self._road(self._wobbly(spread=0.01))
+        one = statistics.median(self._swing(wide))
+        two = statistics.median(self._swing(narrow))
+        assert one == pytest.approx(two, rel=0.25), (
+            f"a wide mix bends {one:.3f} of a lane and a narrow one "
+            f"{two:.3f}")
+
+    def test_one_freak_reading_cannot_throw_the_road_across(self, qapp):
+        """The lean has a long tail: one reading on a real record sits
+        thirteen spreads out on its own, and unclamped it swung the
+        visible road three and a half lanes, which is a hairpin."""
+        import visualizers
+
+        lean = [0.0] * 1200
+        lean[600] = 40.0
+        scene = self._road(lean)
+        swings = self._swing(scene)
+        most = visualizers.Rider.LEAN_MOST * 11 * scene.TRACK_BEND \
+            / scene.LANE_WIDE
+        assert max(swings) <= most + 1e-6, (
+            f"one reading moved the road {max(swings):.2f} lanes, and the "
+            f"clamp allows {most:.2f} over the same stretch")
+
+    def test_a_track_nobody_analysed_gets_no_curve(self, qapp):
+        scene = self._road([])
+        assert scene._curve == ()
+
+    def test_the_same_track_bends_the_same_way_every_time(self, qapp):
+        lean = self._wobbly()
+        assert self._road(lean)._curve == self._road(lean)._curve

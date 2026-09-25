@@ -808,6 +808,11 @@ class TestNobodyElsesMediaIsPublished:
         "take.aiff", "master.flac", "voice.m4a", "stem.ogg", "cut.opus",
         "reference.jpg", "photo.jpeg", "grab.heic", "sketch.gif",
         "scan.tif", "shot.webp", "clip.mp4", "screen.mov", "take.m4v",
+        # PNG was the hole in this list and in the ignore file both.
+        # It is not only screenshots: ./dev playtest --save writes out a
+        # frame of the scene while somebody's music is playing, which is
+        # a picture of their music.
+        "reference.png", "frame.png", "rider.png",
         # Documents
         "CV.pdf", "offer letter.docx", "notes.rtf", "budget.xlsx",
         "contacts.csv", "deck.pptx", "plan.pages", "figures.numbers",
@@ -830,6 +835,7 @@ class TestNobodyElsesMediaIsPublished:
         # And wherever they land
         "tests/MP3_Section Whatever.mp3",
         "tests/fixtures/sample.mp3",
+        "tools/last frame.png",
         "docs/secret plans.pdf",
         "tools/inbox.mbox",
     ]
