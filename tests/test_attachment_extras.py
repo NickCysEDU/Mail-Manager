@@ -13786,13 +13786,19 @@ class TestTheBeatHitsHardEnoughToFeel:
             f"was the measurement that said the beat was not being felt")
 
     def test_a_track_with_no_kick_in_it_does_not_flash(self, qapp):
-        """It is the beat that hits, not the clock."""
+        """It is the beat that hits, not the clock.
+
+        With the answers to play silenced: taking a prize lights the
+        frame's edge too, on purpose, and has tests of its own. This is
+        about whether the *beat* pulses without a drum under it.
+        """
         import statistics
 
         import visualizers
 
         scene = visualizers.Rider()
         scene._last = None
+        scene._pop = lambda *args, **kwargs: None
         # No kick and the playhead pinned between beats: nothing should
         # be pulsing.
         shots = self._played(scene, kicks=False)
@@ -13967,6 +13973,18 @@ class TestTheRoadIsNeverBare:
         assert len(laid) > 20, (
             f"a track with three drum hits in it laid {len(laid)} figures "
             f"over forty seconds")
+
+    def test_a_track_with_no_drums_found_at_all_still_has_a_road(self, qapp):
+        """Ambient, orchestral, a voice on its own. The fill used to
+        wait for the chart to place something first, and a chart with
+        nothing in it never did - so the road stayed empty for the whole
+        track."""
+        scene = self._laid({})
+        laid = [b for b in scene._blocks
+                if b[2] in ("wall", "block", "run")]
+        assert len(laid) > 15, (
+            f"a track with no drums detected in it laid {len(laid)} "
+            f"figures over forty seconds")
 
     def test_what_fills_a_quiet_passage_is_never_a_hazard(self, qapp):
         """The rule this must not break: an obstacle lands on a beat you
@@ -14488,3 +14506,276 @@ class TestTheCraftLeansIntoWhatItIsDoing:
             f"a craft crossing right leans to {one:.1f} and one crossing "
             f"left to {other:.1f}, against {level:.1f} level - it is "
             f"leaning out of the move rather than into it")
+
+
+class TestTheScreenAnswersWhatYouDo:
+    """"Xxxx xxxxxx xxxxxx xxxxxxxxx xx xxxxxxx xx obstacle and
+    collecting coins, hitting combos."
+
+    Measured against the beat on the same road, the things a player did
+    registered fifteen times weaker than the music. A beat moved 43 per
+    cent of the frame; taking a coin moved 2.7, a prize 2.3, and a chain
+    reaching forty 2.6 - indistinguishable from any other prize. A hit
+    moved 13.5. The flag every collection set so that something could
+    answer it had never been drawn at all.
+
+    Now each thing answers: a ring thrown off the craft, a flash of
+    colour from the frame's edge, and for the moments that deserve it a
+    word - CHAIN 25, CHAIN LOST, DOUBLE. Screen space, outside the bank
+    and the shake, because it is the game talking to the player rather
+    than something in the world.
+    """
+
+    W, H = 320, 180
+
+    @staticmethod
+    def _rider(chain=0):
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._last = None
+        scene._lane = 1
+        scene._lane_here = scene._lane_at(1)
+        scene._heard = 100.0
+        scene._shield = 0.0
+        scene._chain = chain
+        return scene
+
+    @staticmethod
+    def _into(scene, kind="block", grey=False):
+        scene._blocks = [[99.9, 1, kind, False, grey]]
+        scene._collide()
+
+    @staticmethod
+    def _kinds(scene):
+        return [pop[0] for pop in scene._pops]
+
+    # -- what answers what -------------------------------------------------
+    def test_each_thing_gets_its_own_answer(self, qapp):
+        cases = (("coin", False, "coin"), ("block", False, "prize"),
+                 ("block", True, "hit"), ("power", False, "power"))
+        for kind, grey, wanted in cases:
+            scene = self._rider()
+            self._into(scene, kind, grey)
+            assert wanted in self._kinds(scene), (
+                f"taking a {kind}{' (grey)' if grey else ''} answered "
+                f"{self._kinds(scene)}")
+
+    def test_a_shattered_grey_looks_like_being_saved(self, qapp):
+        """Not like a hit: a cold white ring, and a word for it."""
+        scene = self._rider()
+        scene._shield = 1.0
+        self._into(scene, "block", grey=True)
+        assert self._kinds(scene) == ["shatter"], self._kinds(scene)
+        assert scene._pops[0][5] == "SHIELD"
+
+    def test_missing_something_is_not_answered(self, qapp):
+        """The screen answers what you did, not what went past you."""
+        scene = self._rider()
+        scene._lane_here = scene._lane_at(0)
+        self._into(scene, "coin")
+        self._into(scene, "block")
+        assert scene._pops == [], self._kinds(scene)
+
+    def test_a_milestone_is_called_out(self, qapp):
+        """Written out rather than worked out from MILESTONES."""
+        for before, wanted in ((9, "CHAIN 10"), (24, "CHAIN 25"),
+                               (49, "CHAIN 50")):
+            scene = self._rider(chain=before)
+            self._into(scene)
+            words = [pop[5] for pop in scene._pops if pop[5]]
+            assert words == [wanted], (
+                f"the chain going from {before} to {before + 1} said "
+                f"{words}")
+
+    def test_an_ordinary_prize_says_nothing(self, qapp):
+        for before in (0, 3, 11, 30):
+            scene = self._rider(chain=before)
+            self._into(scene)
+            words = [pop[5] for pop in scene._pops if pop[5]]
+            assert words == [], (
+                f"the chain going from {before} to {before + 1} said "
+                f"{words}")
+
+    def test_losing_a_long_chain_says_what_it_cost(self, qapp):
+        """A chain of forty going is the worst thing that can happen on
+        this road, and it used to look exactly like a chain of two."""
+        scene = self._rider(chain=30)
+        self._into(scene, "block", grey=True)
+        words = [pop[5] for pop in scene._pops if pop[5]]
+        assert words == ["CHAIN LOST  30"], words
+
+    def test_losing_a_short_one_does_not_make_a_speech_of_it(self, qapp):
+        scene = self._rider(chain=4)
+        self._into(scene, "block", grey=True)
+        assert [pop[5] for pop in scene._pops if pop[5]] == []
+
+    def test_a_hotter_run_answers_bigger(self, qapp):
+        """The run is felt in every prize, not only at the milestones."""
+        cold, hot = self._rider(chain=1), self._rider(chain=36)
+        self._into(cold)
+        self._into(hot)
+        assert hot._pops[0][2] > cold._pops[0][2] * 1.4, (
+            f"a prize on a run of 37 answers {hot._pops[0][2]:.2f} and "
+            f"one on a run of 2 answers {cold._pops[0][2]:.2f}")
+
+    def test_a_coin_row_answers_bigger_as_it_goes(self, qapp):
+        scene = self._rider()
+        strengths = []
+        for step in range(4):
+            scene._blocks = [[99.0 + step * 0.1, 1, "coin", False, False]]
+            scene._collide()
+            strengths.append(scene._pops[-1][2])
+        assert strengths == sorted(strengths) and \
+            strengths[-1] > strengths[0], strengths
+
+    # -- how they live -----------------------------------------------------
+    def test_they_go_away(self, qapp):
+        scene = self._rider()
+        self._into(scene, "coin")
+        for _ in range(120):
+            scene._age_pops(1 / 60.0)
+        assert scene._pops == [], "an answer outlived two seconds"
+
+    def test_they_never_pile_up(self, qapp):
+        scene = self._rider()
+        for step in range(60):
+            scene._blocks = [[90.0 + step * 0.1, 1, "coin", False, False]]
+            scene._collide()
+        assert len(scene._pops) <= 12, (
+            f"{len(scene._pops)} answers are on screen at once")
+
+    def test_a_stopped_track_holds_them_where_they_are(self, qapp):
+        """On the track's own clock, like everything else here."""
+        scene = self._rider()
+        self._into(scene, "coin")
+        scene._age_pops(0.1)
+        age = scene._pops[0][1]
+        for _ in range(60):
+            scene._age_pops(0.0)
+        assert scene._pops[0][1] == age
+
+    # -- how big they are --------------------------------------------------
+    @classmethod
+    def _share(cls, event):
+        """How much of the frame one event moves at its peak, against
+        the same run with nothing happening."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        def play(fire):
+            scene = visualizers.Rider()
+            scene._last = None
+            scene._lane = 1
+            scene._lane_here = scene._lane_at(1)
+            image = QImage(cls.W, cls.H,
+                           QImage.Format.Format_ARGB32_Premultiplied)
+            painter = QPainter(image)
+            clock = [500.0]
+            was = visualizers.time.monotonic
+            visualizers.time.monotonic = lambda: clock[0]
+            shots = []
+            try:
+                for step in range(40):
+                    clock[0] += 1 / 60.0
+                    state = SpectrumState()
+                    state.levels = [0.4] * 27
+                    state.bass = state.mid = state.high = 0.35
+                    state.synth = 0.2
+                    state.kit = {}
+                    state.at = 2.0 + step / 60.0
+                    state.tempo = 0.0
+                    state.chart = {"Kick": ()}
+                    state.settle()
+                    if step == 30 and fire:
+                        scene._shield = 0.0
+                        fire(scene)
+                    image.fill(QColor(0, 0, 0))
+                    scene.paint(painter, QRectF(0, 0, cls.W, cls.H), state)
+                    if step >= 30:
+                        shots.append(image.copy())
+            finally:
+                painter.end()
+                visualizers.time.monotonic = was
+            return shots
+
+        quiet, loud = play(None), play(event)
+        best = 0.0
+        for a, b in zip(loud, quiet):
+            moved = sum(1 for y in range(0, cls.H, 3)
+                        for x in range(0, cls.W, 3)
+                        if abs(a.pixelColor(x, y).lightnessF()
+                               - b.pixelColor(x, y).lightnessF()) > 0.04)
+            best = max(best, moved / ((cls.W // 3) * (cls.H // 3)))
+        return best
+
+    @staticmethod
+    def _event(kind, grey=False, chain=0):
+        def fire(scene):
+            scene._chain = chain
+            scene._blocks = [[scene._heard - 0.001, 1, kind, False, grey]]
+            scene._collide()
+        return fire
+
+    def test_a_hit_is_the_biggest_thing_on_the_road(self, qapp):
+        """It measured 13.6 per cent of the frame, less than a coin: the
+        damage wash multiplies, and black multiplied by red is still
+        black, so on this road it barely showed."""
+        share = self._share(self._event("block", grey=True))
+        assert share > 0.35, f"a hit moves {share:.1%} of the frame"
+
+    def test_a_coin_is_felt(self, qapp):
+        share = self._share(self._event("coin"))
+        assert share > 0.25, f"a coin moves {share:.1%} of the frame"
+
+    def test_a_prize_is_felt(self, qapp):
+        share = self._share(self._event("block"))
+        assert share > 0.12, f"a prize moves {share:.1%} of the frame"
+
+    def test_a_milestone_is_a_moment(self, qapp):
+        """A chain reaching twenty-five moved 2.6 per cent of the frame,
+        the same as any prize, which is the moment a run becomes worth
+        protecting going by unremarked."""
+        share = self._share(self._event("block", chain=24))
+        plain = self._share(self._event("block", chain=4))
+        assert share > 0.40, f"a milestone moves {share:.1%} of the frame"
+        assert share > plain * 1.6, (
+            f"a milestone moves {share:.1%} and an ordinary prize "
+            f"{plain:.1%}")
+
+    # -- and they never break the frame ------------------------------------
+    def test_a_callout_leaves_the_painter_as_it_found_it(self, qapp):
+        """The first version raised inside a saved painter - QFont was
+        never imported - and a painter ended with a saved state takes
+        the pane down with it at the end of the frame."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QFont, QImage, QPainter
+
+        scene = self._rider(chain=24)
+        self._into(scene)
+        assert any(pop[5] for pop in scene._pops)
+        image = QImage(self.W, self.H,
+                       QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0))
+        painter = QPainter(image)
+        # What a leaked save actually leaks: the callout's own font and
+        # pen, into whatever the pane draws next. Ending the painter is
+        # no test of it - end() returns True with saved states left and
+        # only prints a warning about them.
+        font = QFont(painter.font())
+        font.setPointSizeF(9.0)
+        font.setBold(False)
+        painter.setFont(font)
+        painter.setPen(QColor(1, 2, 3))
+        before = (painter.font().pointSizeF(), painter.font().bold(),
+                  painter.pen().color().name())
+        scene._pops_now(painter, QRectF(0, 0, self.W, self.H))
+        after = (painter.font().pointSizeF(), painter.font().bold(),
+                 painter.pen().color().name())
+        painter.end()
+        assert after == before, (
+            f"the callout left the painter with {after} where it found "
+            f"{before}")

@@ -942,6 +942,34 @@ and three in a row is a fairground ride. Fourteen was tried first and
 gave one every fifteen seconds on a loud dance record, which ate a
 sixth of the track.
 
+**The screen answers what you do.** Measured against the beat on the
+same road, the things a player did registered fifteen times weaker than
+the music. A beat moved 43 per cent of the frame; taking a coin moved
+2.7, a prize 2.3, and a chain reaching forty 2.6 - indistinguishable
+from any other prize, so the moment a run became worth protecting was
+not a moment at all. A hit moved 13.5. There was a flag set on every
+collection so that something could answer it, and nothing had ever
+drawn it.
+
+Now each thing answers with a ring thrown off the craft, a flash of
+colour from the frame's edge, and for the moments that deserve it a
+word across the upper middle of the frame: **CHAIN 10, 25, 50** and on,
+**CHAIN LOST** when a hit ends a run of ten or more, **SHIELD** when the
+bumper saves you, **DOUBLE** for a power block, **AIR** for a jump off a
+real crest, and **CLEAR** for a cluster of five or more. A coin is gold
+and grows with the row; a prize grows with the run; a hit is red, has
+the heaviest ring and a flash of its own. Measured on the same road: a
+hit now moves 53 per cent of the frame and 61 when it costs a chain, a
+coin 45, a milestone 61.
+
+The hit had no edge flash at first, on the grounds that the damage wash
+already reddens the edges - and it still measured less than a coin. The
+wash *multiplies*, and black multiplied by red is still black, so on a
+road this dark it barely showed. All of it is in screen space, outside
+the bank and the shake, because it is the game talking to the player
+rather than something in the world; it is gone inside a second, and it
+runs on the track's clock, so a pause holds an answer mid-flight.
+
 **The craft leans into what it is doing.** It used to slide between
 lanes perfectly flat, which reads as a shape being moved rather than a
 thing being ridden - and the one thing on this road that never banked
@@ -992,7 +1020,10 @@ anyway: prizes, on the beat like everything else. Prizes rather than
 hazards, because a quiet passage is a place to collect, and putting a
 hazard where the music played nothing would break the rule that puts
 obstacles on the beats you can hear coming. The same eight records are
-now bare between 0 and 3.4 per cent of the time.
+now bare between 0 and 3.4 per cent of the time. It starts on its own,
+too: a track the detector found no drums in at all - ambient, orchestral,
+a voice on its own - used to have an empty road for its whole length,
+because the fill waited for the chart to place something first.
 
 A quarter of the slots carry an obstacle rather than a prize, and only
 where the heaviest thing in the slot was the kick - so the hazards land
@@ -1312,7 +1343,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,889 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,907 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1695,7 +1726,7 @@ corkscrews the track earned, and what a frame costs. No song, path or
 frame of one is ever written into the repository.
 
 ```bash
-./dev test        # 3,889 tests, about three minutes
+./dev test        # 3,907 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

@@ -21,9 +21,9 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt
-from PySide6.QtGui import (QBrush, QColor, QImage, QLinearGradient, QPainter,
-                           QPainterPath,
-                           QPen, QRadialGradient)
+from PySide6.QtGui import (QBrush, QColor, QFont, QImage, QLinearGradient,
+                           QPainter, QPainterPath,
+                           QPen, QRadialGradient, QTransform)
 
 
 log = logging.getLogger(__name__)
@@ -4338,6 +4338,13 @@ class Rider(Scene):
         self._beat_lit = 0.0
         #: How fast the craft is crossing lanes, for the bank.
         self._swerve = 0.0
+        #: What the screen is still answering, and where the craft is on
+        #: the glass for the answers to come from. See POPS.
+        self._pops = []
+        self._craft_glass = None
+        self._craft_spot = None
+        #: The road's colour this frame, for anything that answers in it.
+        self._hue_now = 0.0
         #: The last frame's worth of the track's clock. See ``_advance``.
         self._went = 0.0
         self._bend = 0.0
@@ -4498,13 +4505,20 @@ class Rider(Scene):
         # caught out by something the music never played, and the rule
         # that puts hazards on the beats you can hear coming would have
         # to be broken to put one here.
-        if self._beat > 0.0 and self._placed > -90.0:
+        #
+        # From the start of the window when nothing has been placed yet,
+        # rather than waiting for the chart to place something first:
+        # waiting meant a track the detector found no drums in at all -
+        # ambient, orchestral, a voice - had an empty road for its whole
+        # length.
+        if self._beat > 0.0:
             every = self._beat * self.QUIET_BEATS
-            while self._placed + every <= ahead:
-                when = self._snap(max(self._placed + every, low + 1e-6))
-                if when <= self._placed:
+            last = max(self._placed, low - every)
+            while last + every <= ahead:
+                when = self._snap(max(last + every, low + 1e-6))
+                if when <= last:
                     break
-                self._placed = when
+                last = self._placed = when
                 self._shape(self._varied("block", when), when, grey=False)
         # And the powerup at the mouth of each corkscrew. Audiosurf 2
         # puts "corkscrew loops and powerups timed perfectly with big
@@ -4750,6 +4764,9 @@ class Rider(Scene):
             self._double = 1.0
             self._got = 1.0
             self._burst(self._lane_here, prize=True)
+            self._pop("air", hue=0.50, sat=0.55,
+                      strength=0.6 + self._air_from * 0.8,
+                      text=(f"AIR +{paid}" if self._air_from > 0.6 else ""))
         self._air_from = 0.0
 
     #: What a power block multiplies, and how long it waits to be spent.
@@ -5445,6 +5462,7 @@ class Rider(Scene):
         self._shield = min(1.0, self._shield + step / self.SHIELD_BACK)
         self._coin_spin += step * self.COIN_TURN
         self._fly(step)
+        self._age_pops(step)
         # How close the track is to a beat, 1 on it and falling away -
         # held while the track is stopped rather than recomputed.
         #
@@ -5544,6 +5562,7 @@ class Rider(Scene):
                     self._double = self.POWER_DOUBLE
                     self._got = 1.0
                     self._burst(self._lane_at(lane), prize=True)
+                    self._pop("power", hue=0.14, sat=0.08, text="DOUBLE")
                 continue
             if kind == "coin":
                 # Taken, or missed. A coin is worth more than the one
@@ -5559,6 +5578,11 @@ class Rider(Scene):
                         self.COIN_WORTH + (self._coin_run - 1) * self.COIN_STEP)
                     self._got = 1.0
                     self._burst(self._lane_at(lane), prize=True)
+                    # Gold, and bigger the longer the row: a trail taken
+                    # whole should feel like more than three of one.
+                    self._pop("coin", hue=0.13, sat=0.60,
+                              strength=0.75 + min(0.75,
+                                                  self._coin_run * 0.12))
                 else:
                     self._coin_run = 0
                 continue
@@ -5573,7 +5597,12 @@ class Rider(Scene):
                     self._sore = self.SORE
                     self._shake = min(1.0, self._shake + 0.35)
                     self._burst(self._lane_at(lane), prize=True)
+                    # Saved, and it should look like being saved: a
+                    # cold white ring rather than the red of a hit.
+                    self._pop("shatter", hue=0.55, sat=0.30,
+                              text="SHIELD")
                     continue
+                lost = self._chain
                 self._hits += 1
                 self._streak = 0
                 self._chain = 0
@@ -5586,6 +5615,14 @@ class Rider(Scene):
                 # Not the block, not the ship: the picture.
                 self._hurt = 1.0
                 self._burst(self._lane_at(lane))
+                # And say what it cost, when it cost something. A chain
+                # of forty going is the worst thing that can happen on
+                # this road and it used to look exactly like a chain of
+                # two going.
+                self._pop("hit", hue=0.0, sat=0.95,
+                          strength=1.0 + min(0.5, lost / 80.0),
+                          text=(f"CHAIN LOST  {lost}"
+                                if lost >= self.LOST_WORTH else ""))
             elif grey:
                 self._streak += 1
                 self._best = max(self._best, self._streak)
@@ -5597,8 +5634,10 @@ class Rider(Scene):
                         self._drop(self._tier_of(when), lane)
                         self._got = 1.0
                         self._burst(self._lane_at(lane), prize=True)
+                        self._pop("prize", strength=0.8)
                 else:
                     # A prize. See CHAIN_FIRST.
+                    before = self._chain
                     self._chain += 1
                     self._score += int(min(
                         self.CHAIN_MOST,
@@ -5607,6 +5646,10 @@ class Rider(Scene):
                     self._double = 1.0
                     self._got = 1.0
                     self._burst(self._lane_at(lane), prize=True)
+                    # Bigger as the run gets hotter, so the run is felt
+                    # in every prize and not only at the milestones.
+                    self._pop("prize", strength=0.7 + self._heat() * 0.6)
+                    self._milestone(before, self._chain)
 
     # -- the grid ---------------------------------------------------------
     #: Audiosurf's matrix, and the half of the game the road is the other
@@ -5731,6 +5774,13 @@ class Rider(Scene):
             self._score += int(self.WORTH[colour] * len(group) * len(group)
                                * self._double)
             self._cleared += len(group)
+        # A cluster going is the puzzle game's payout, and a big one is
+        # the biggest thing that game does - quadratic in the size - so
+        # it gets the biggest answer, and a word when it is worth one.
+        biggest = max(len(group) for _colour, group in going)
+        self._pop("clear", hue=self.TIERS[going[0][0]], sat=0.85,
+                  strength=0.7 + min(0.8, (biggest - 3) * 0.2),
+                  text=(f"CLEAR {biggest}" if biggest >= 5 else ""))
         self._double = 1.0
         going_cells = {at for _colour, group in going for at in group}
         for column in range(self.CELLS_WIDE):
@@ -5907,6 +5957,7 @@ class Rider(Scene):
 
         horizon, focal, tilt = self._camera(rect, surge, bass)
         hue = self._tier(surge, state.synth)
+        self._hue_now = hue
         # How close the track is to a beat, 1 on it and falling away.
         # Worked out on the track's clock: see ``_advance``.
         beat = self._beat_lit
@@ -5936,6 +5987,15 @@ class Rider(Scene):
         self._bits(painter, horizon, focal, hue)
         self._ship(painter, rect, horizon, focal, hue, flash,
                    max(beat, kit.get("Kick", 0.0)))
+        # Where the craft landed on the glass, through the bank and the
+        # throw that everything above was drawn inside, for the answers
+        # below to come from.
+        if self._craft_spot is not None:
+            self._craft_glass = QTransform().translate(
+                horizon.x(), horizon.y()).rotate(
+                tilt + math.sin(self._wobble * 2.3) * self._hurt
+                * self.HURT_THROW).translate(
+                -horizon.x(), -horizon.y()).map(self._craft_spot)
         painter.restore()
         # The beat, where nothing is read against anything. On the grid
         # and on the drum both: the grid keeps it in time through a bar
@@ -5943,6 +6003,7 @@ class Rider(Scene):
         # actually played.
         self._rim(painter, rect, hue,
                   max(beat, kit.get("Kick", 0.0)))
+        self._pops_now(painter, rect)
         self._wash(painter, rect)
         if self._mode == "Puzzle":
             self._matrix(painter, rect)
@@ -6423,6 +6484,173 @@ class Rider(Scene):
     #: of the picture out altogether.
     GLOW_MOST = 0.26
 
+    # -- what the things you do look like ---------------------------------
+    #: How the screen answers a run: a ring spreading from the craft, a
+    #: flash of colour from the frame's edge, and for the moments that
+    #: deserve one, a callout.
+    #:
+    #: Measured against the beat on the same road, the things a player
+    #: did registered fifteen times weaker than the music did. A beat
+    #: moved 43 per cent of the frame; taking a coin moved 2.7, a prize
+    #: 2.3, and reaching a chain of forty 2.6 - indistinguishable from
+    #: any other prize, so the moment a run became worth protecting was
+    #: not a moment at all. A hit moved 13.5. The flag every collection
+    #: set so that something could answer it had never been drawn.
+    #:
+    #: Screen space, outside the bank and the shake, because these are
+    #: the game talking to the player rather than things in the world.
+    #: Rings and flashes are gone inside half a second and mostly at the
+    #: edges or around the craft, which is never what a block down the
+    #: road is read against.
+    #:
+    #: Per kind: how long it lives, how far a ring spreads as a share of
+    #: the frame, how strong the edge flash is, how bright the ring, and
+    #: how thick.
+    #:
+    #: A hit had no edge flash of its own at first, on the grounds that
+    #: the damage wash already reddens the edges - and measured, it
+    #: moved 13.6 per cent of the frame, less than a coin. The wash
+    #: *multiplies*, and a black frame multiplied by red is still black,
+    #: so on this road it barely showed. The worst thing that can happen
+    #: on the road now has the heaviest ring and a red flash of its own.
+    POPS = {
+        "coin":      (0.40, 0.30, 0.30, 0.85, 1.0),
+        "prize":     (0.38, 0.24, 0.18, 0.60, 0.8),
+        "power":     (0.70, 0.75, 0.75, 1.00, 1.6),
+        "shatter":   (0.45, 0.40, 0.35, 0.90, 1.2),
+        "air":       (0.50, 0.45, 0.40, 0.90, 1.2),
+        "clear":     (0.55, 0.50, 0.45, 0.95, 1.4),
+        "hit":       (0.55, 0.60, 0.65, 1.00, 2.4),
+        "milestone": (0.95, 0.95, 0.80, 1.00, 1.8),
+    }
+    #: Chains worth stopping the world for. Ten is the first that means
+    #: anything, and past a hundred the chain is paying its cap, so the
+    #: moments thin out rather than go on counting.
+    MILESTONES = (10, 25, 50, 75, 100, 150, 200, 300, 500)
+    #: A chain at least this long is worth telling somebody they lost.
+    LOST_WORTH = 10
+
+    def _pop(self, kind: str, hue: float = None, sat: float = 0.85,
+             strength: float = 1.0, text: str = "") -> None:
+        """Answer something the player did. See POPS."""
+        if hue is None:
+            hue = self._hue_now
+        self._pops.append([kind, 0.0, max(0.0, min(1.5, strength)),
+                           hue % 1.0, sat, text])
+        # Never a queue of them: the newest few are all anybody sees.
+        if len(self._pops) > 12:
+            del self._pops[:len(self._pops) - 12]
+
+    def _age_pops(self, step: float) -> None:
+        """On the track's clock, like everything else."""
+        if not self._pops or step <= 0.0:
+            return
+        for pop in self._pops:
+            pop[1] += step
+        self._pops = [pop for pop in self._pops
+                      if pop[1] < self.POPS[pop[0]][0]]
+
+    def _milestone(self, before: int, after: int) -> None:
+        """A callout, if the chain has just crossed one of MILESTONES."""
+        for mark in self.MILESTONES:
+            if before < mark <= after:
+                self._pop("milestone", sat=0.55,
+                          strength=1.0 + min(0.5, mark / 400.0),
+                          text=f"CHAIN {mark}")
+                return
+
+    def _pops_now(self, painter, rect) -> None:
+        """Every answer still on screen, over the top of the picture."""
+        if not self._pops:
+            return
+        span = min(rect.width(), rect.height())
+        origin = self._craft_glass
+        if origin is None:
+            origin = QPointF(rect.center().x(), rect.bottom() - span * 0.2)
+        painter.save()
+        try:
+            flash = self._pop_rings(painter, rect, span, origin)
+            if flash is not None and flash[0] > 0.01:
+                self._pop_flash(painter, rect, *flash)
+        finally:
+            # Always, and after the flash as well as the rings: a
+            # painter left with a saved state takes the whole pane down
+            # at the end of the frame, and one left with this pen and
+            # brush draws whatever comes next in them.
+            painter.restore()
+
+    def _pop_rings(self, painter, rect, span, origin):
+        """The rings and the words; the strongest edge flash, returned."""
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        flash = None
+        for kind, age, strength, hue, sat, text in self._pops:
+            life, spread, edge, bright, thick = self.POPS[kind]
+            through = min(1.0, age / life)
+            fade = (1.0 - through) ** 2
+            # The edge flash is one fill for the lot of them: the
+            # strongest wins, rather than every pop paying for a
+            # gradient across the whole frame.
+            if edge > 0.0:
+                amount = edge * strength * fade
+                if flash is None or amount > flash[0]:
+                    flash = (amount, hue, sat)
+            # The ring. Fast out and slowing, so it reads as something
+            # thrown off the craft rather than something drawn round it.
+            if spread > 0.0 and bright > 0.0:
+                out = 1.0 - (1.0 - through) ** 3
+                radius = max(1.0, span * spread * strength * out)
+                width = max(1.0, span * 0.018 * (1.0 - through) * strength
+                            * thick)
+                pen = QPen(QColor.fromHsvF(
+                    hue, sat if kind != "hit" else 0.95, 1.0,
+                    min(1.0, bright * fade)), width)
+                painter.setPen(pen)
+                painter.drawEllipse(origin, radius, radius * 0.62)
+            if text:
+                self._callout(painter, rect, text, hue, through, strength)
+        return flash
+
+    def _pop_flash(self, painter, rect, amount, hue, sat) -> None:
+        """One edge flash, in the colour of whatever earned it."""
+        centre = rect.center()
+        reach = max(1.0, math.hypot(rect.width(), rect.height()) / 2.0)
+        glow = QRadialGradient(centre, reach)
+        glow.setColorAt(0.45, QColor(0, 0, 0, 0))
+        glow.setColorAt(1.0, QColor.fromHsvF(hue, sat, 1.0,
+                                             min(1.0, amount)))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(glow)
+        painter.drawRect(rect)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+    def _callout(self, painter, rect, text, hue, through, strength) -> None:
+        """A word across the upper middle of the frame, for a moment.
+
+        Up fast and held, then gone: the size lands in the first tenth
+        and the fade takes the last half, so it is read rather than
+        glimpsed. Above the road's far end, where nothing is read.
+        """
+        grow = min(1.0, through / 0.10)
+        size = max(10.0, rect.height() * 0.075 * (0.7 + 0.3 * grow)
+                   * min(1.3, strength))
+        fade = 1.0 if through < 0.5 else max(0.0, 1.0 - (through - 0.5) / 0.5)
+        font = QFont(painter.font())
+        font.setPointSizeF(size)
+        font.setBold(True)
+        painter.setFont(font)
+        box = QRectF(rect.left(), rect.top() + rect.height() * 0.18,
+                     rect.width(), size * 2.0)
+        # A dark stroke under the word so it reads over anything the
+        # music has put behind it.
+        painter.setPen(QColor(0, 0, 0, int(200 * fade)))
+        for dx, dy in ((-2, 0), (2, 0), (0, -2), (0, 2)):
+            painter.drawText(box.translated(dx, dy),
+                             int(Qt.AlignmentFlag.AlignHCenter
+                                 | Qt.AlignmentFlag.AlignTop), text)
+        painter.setPen(QColor.fromHsvF(hue, 0.45, 1.0, fade))
+        painter.drawText(box, int(Qt.AlignmentFlag.AlignHCenter
+                                  | Qt.AlignmentFlag.AlignTop), text)
+
     #: How hard the frame's own edge lights on the beat, and how far in
     #: from the edge it reaches.
     #:
@@ -6673,6 +6901,8 @@ class Rider(Scene):
         # Heights are drawn larger downwards, so being off the road
         # is a height taken away.
         lift = self._air
+        self._craft_spot = self._eye(horizon, focal, across, -0.14 - lift,
+                                     at + 0.4)
         nose = self._eye(horizon, focal, across, -0.26 - lift, at + 1.4)
         left = self._eye(horizon, focal, across - wide, -0.02 - lift, at)
         right = self._eye(horizon, focal, across + wide, -0.02 - lift, at)
