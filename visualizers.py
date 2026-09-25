@@ -4336,6 +4336,8 @@ class Rider(Scene):
         self._twisting = 0.0
         #: How close to a beat the track is, held while it is stopped.
         self._beat_lit = 0.0
+        #: How fast the craft is crossing lanes, for the bank.
+        self._swerve = 0.0
         #: The last frame's worth of the track's clock. See ``_advance``.
         self._went = 0.0
         self._bend = 0.0
@@ -5876,7 +5878,15 @@ class Rider(Scene):
         step = self._advance(state)
         self._lay(state)
         wanted = self._lane_at(self._lane)
+        was_across = self._lane_here
         self._lane_here += (wanted - self._lane_here) * self._slide(step)
+        # How hard the craft is moving sideways, for the bank. Against
+        # the track's own clock so it means the same on every machine,
+        # and eased so the craft rolls out of a move rather than
+        # snapping flat the instant it arrives.
+        if step > 0.0:
+            self._swerve += ((self._lane_here - was_across) / step
+                             - self._swerve) * self.SWERVE_EASE
         self._collide()
 
         flash = self.flash(state)
@@ -6624,6 +6634,28 @@ class Rider(Scene):
                                 / max(1.0, self.CELLS_WIDE * self.CELLS_DEEP)))
         return max(0.0, min(1.0, self._chain / self.CHAIN_HOT))
 
+    #: How far the craft rolls into a lane change, and how quickly the
+    #: roll follows the move.
+    #:
+    #: The craft slid between lanes perfectly flat, which reads as a
+    #: shape being moved rather than a thing being ridden. The whole
+    #: road banks into its own turns already - the blueprint asks for it
+    #: twice - and the one thing on the road that never did was the
+    #: thing you are steering.
+    #:
+    #: The slide is nine tenths done in 50 ms, so the roll has to be
+    #: quicker than that to be a bank rather than a wobble arriving
+    #: after the move: a third of the way there each frame settles
+    #: inside three.
+    #: Measured: one lane peaks the swerve at 16 units a second and two
+    #: at 32, so 1.0 puts a single change at 16 degrees and leaves the
+    #: ceiling for a dash across the road. At 3.4 every move of any size
+    #: hit the ceiling, which is a bank that reads as a switch rather
+    #: than as the craft leaning into what it is doing.
+    SWERVE_BANK = 1.0
+    SWERVE_MOST = 26.0
+    SWERVE_EASE = 0.34
+
     #: How big the craft's own halo is on a kick, and how strong.
     HALO_REACH = 0.085
     HALO_MOST = 0.55
@@ -6685,6 +6717,20 @@ class Rider(Scene):
         path.lineTo(left)
         path.lineTo(right)
         path.closeSubpath()
+        # Banked into the move, around the craft's own middle, so the
+        # nose comes up on the side it is heading for. Everything from
+        # here to the end of the craft is drawn inside it; the bumpers
+        # go with it, because they are bolted to the thing.
+        bank = max(-self.SWERVE_MOST,
+                   min(self.SWERVE_MOST, -self._swerve * self.SWERVE_BANK))
+        rolled = abs(bank) > 0.05
+        if rolled:
+            painter.save()
+            painter.translate(left.x() + (right.x() - left.x()) * 0.5,
+                              left.y() + (right.y() - left.y()) * 0.5)
+            painter.rotate(bank)
+            painter.translate(-(left.x() + (right.x() - left.x()) * 0.5),
+                              -(left.y() + (right.y() - left.y()) * 0.5))
         hurt = self._sore > 0.0 and int(self._sore * 14) % 2 == 0
         shade = 0.0 if hurt else (hue + 0.5) % 1.0
         painter.setPen(Qt.PenStyle.NoPen)
@@ -6709,6 +6755,8 @@ class Rider(Scene):
                 (0.95 if ready else 0.30 + 0.25 * self._shield)),
                 (2.4 if ready else 1.2)
                 * max(0.75, min(1.3, rect.height() / 700.0)))
+        if rolled:
+            painter.restore()
 
     def _card(self, painter, rect, hue) -> None:
         painter.save()

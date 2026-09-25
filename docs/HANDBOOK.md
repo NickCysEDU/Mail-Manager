@@ -942,6 +942,18 @@ and three in a row is a fairground ride. Fourteen was tried first and
 gave one every fifteen seconds on a loud dance record, which ate a
 sixth of the track.
 
+**The craft leans into what it is doing.** It used to slide between
+lanes perfectly flat, which reads as a shape being moved rather than a
+thing being ridden - and the one thing on this road that never banked
+was the thing you steer. It rolls into the move now, into it rather than
+out of it, the way anything that corners does: about sixteen degrees for
+a single lane change and twenty-six, the ceiling, for a dash across the
+road. The roll has to be quicker than the slide or it is a wobble
+arriving after the move, so it settles in three frames against the
+slide's fifty milliseconds, and it runs on the track's clock like
+everything else - a craft caught mid-swerve by a pause stays caught
+mid-swerve.
+
 **A run is something you can see.** A chain of forty is worth far more
 than four of ten, and it looked exactly like a chain of one: a number in
 small text at the top of the frame. What a run is worth is the whole of
@@ -1300,7 +1312,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,881 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,889 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1683,7 +1695,7 @@ corkscrews the track earned, and what a frame costs. No song, path or
 frame of one is ever written into the repository.
 
 ```bash
-./dev test        # 3,881 tests, about three minutes
+./dev test        # 3,889 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

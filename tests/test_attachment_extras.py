@@ -14238,3 +14238,253 @@ class TestARunIsSomethingYouCanSee:
         assert lit["hot"] > lit["cold"] * 1.25, (
             f"a run of forty lights {lit['hot']} of the frame and a run "
             f"of nothing lights {lit['cold']}")
+
+
+class TestTheCraftLeansIntoWhatItIsDoing:
+    """It used to slide between lanes perfectly flat.
+
+    Which reads as a shape being moved rather than as a thing being
+    ridden. The whole road banks into its own turns already - the
+    blueprint asks for it twice - and the one thing on it that never did
+    was the thing you are steering.
+
+    The roll has to be quicker than the slide or it is a wobble
+    arriving after the move: the slide is nine tenths done in 50 ms and
+    the roll settles inside three frames.
+    """
+
+    W, H = 520, 340
+
+    @classmethod
+    def _flown(cls, start=1, moves=0, frames=50, at_frame=30, stop_at=None):
+        """Fly the craft, steering part way through, and keep the last
+        frame and the swerve it ended on."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        scene = visualizers.Rider()
+        scene._last = None
+        scene._lane = start
+        scene._lane_here = scene._lane_at(start)
+        image = QImage(cls.W, cls.H,
+                       QImage.Format.Format_ARGB32_Premultiplied)
+        painter = QPainter(image)
+        clock = [500.0]
+        was = visualizers.time.monotonic
+        visualizers.time.monotonic = lambda: clock[0]
+        peak = 0.0
+        try:
+            for step in range(frames):
+                clock[0] += 1 / 60.0
+                state = SpectrumState()
+                state.levels = [0.4] * 27
+                state.bass = 0.4
+                state.mid = 0.3
+                state.high = 0.3
+                state.synth = 0.2
+                state.kit = {}
+                # A stopped track reports the same position every frame.
+                state.at = (2.0 if stop_at is not None and step >= stop_at
+                            else 2.0 + step / 60.0)
+                state.tempo = 128.0
+                state.beat_at = 0.5
+                state.chart = {"Kick": ()}
+                state.settle()
+                if step == at_frame:
+                    for _ in range(abs(moves)):
+                        scene.steer(1 if moves > 0 else -1)
+                image.fill(QColor(0, 0, 0))
+                scene.paint(painter, QRectF(0, 0, cls.W, cls.H), state)
+                peak = max(peak, abs(scene._swerve))
+        finally:
+            painter.end()
+            visualizers.time.monotonic = was
+        return scene, image.copy(), peak
+
+    def test_it_is_flat_when_it_is_not_moving(self, qapp):
+        scene, _shot, peak = self._flown(moves=0)
+        assert abs(scene._swerve) < 0.01 and peak < 0.01, (
+            f"a craft holding its lane is banked {scene._swerve:.2f}")
+
+    def test_it_banks_into_a_lane_change(self, qapp):
+        scene, _shot, peak = self._flown(moves=1, frames=34, at_frame=30)
+        assert peak > 5.0, (
+            f"a lane change banked the craft by a swerve of {peak:.1f}")
+
+    def test_it_banks_the_other_way_going_the_other_way(self, qapp):
+        right, _s, _p = self._flown(start=0, moves=1, frames=34, at_frame=30)
+        left, _shot, _peak = self._flown(start=2, moves=-1, frames=34,
+                                         at_frame=30)
+        assert right._swerve * left._swerve < 0.0, (
+            f"going one way banks {right._swerve:+.2f} and the other "
+            f"{left._swerve:+.2f}, which is the same way")
+        assert abs(right._swerve) == pytest.approx(abs(left._swerve),
+                                                   rel=0.05), (
+            "the craft leans harder one way than the other")
+
+    def test_a_dash_across_the_road_banks_harder_than_a_nudge(self, qapp):
+        """Otherwise every move of any size looks the same, which is a
+        bank that reads as a switch. Measured as the angle drawn rather
+        than as the swerve behind it: read off the swerve, this passes
+        with the bank pinned at its ceiling for every move there is."""
+        import visualizers
+
+        def bank(start, moves):
+            _scene, _shot, peak = self._flown(start=start, moves=moves,
+                                              frames=40)
+            return min(visualizers.Rider.SWERVE_MOST,
+                       peak * visualizers.Rider.SWERVE_BANK)
+
+        nudge, dash = bank(1, 1), bank(0, 2)
+        assert dash > nudge * 1.3, (
+            f"one lane draws {nudge:.0f} degrees and two draws {dash:.0f}")
+        assert nudge < visualizers.Rider.SWERVE_MOST * 0.85, (
+            f"a single lane change already draws {nudge:.0f} degrees of a "
+            f"{visualizers.Rider.SWERVE_MOST:.0f} degree ceiling, so every "
+            f"move of any size looks the same")
+
+    def test_the_bank_has_a_ceiling(self, qapp):
+        """A craft past its ceiling is a craft on its side."""
+        import visualizers
+
+        _two, _shot, dash = self._flown(start=0, moves=2, frames=40)
+        bank = min(visualizers.Rider.SWERVE_MOST,
+                   dash * visualizers.Rider.SWERVE_BANK)
+        assert bank <= visualizers.Rider.SWERVE_MOST
+        assert visualizers.Rider.SWERVE_MOST <= 35.0, (
+            "the craft is allowed to roll further than a craft should")
+
+    def test_a_stopped_track_holds_the_bank_where_it_was(self, qapp):
+        """Everything on this road runs on the track's own clock, so a
+        craft caught mid-swerve stays caught mid-swerve."""
+        # Stopped while the craft is still crossing: a track stopped
+        # after it has arrived holds a bank of nothing, which would
+        # pass this without testing anything. A dash across the whole
+        # road, for the same reason.
+        early, _s, _p = self._flown(start=0, moves=2, frames=60,
+                                    at_frame=20, stop_at=21)
+        late, _s2, _p2 = self._flown(start=0, moves=2, frames=110,
+                                     at_frame=20, stop_at=21)
+        assert abs(early._swerve) > 1.0, (
+            f"the craft was not banking when the track stopped "
+            f"({early._swerve:.2f}), so this tests nothing")
+        assert abs(late._swerve - early._swerve) < 0.01, (
+            f"the bank eased from {early._swerve:.3f} to "
+            f"{late._swerve:.3f} with the track stopped")
+
+    # -- off the frame -----------------------------------------------------
+    @classmethod
+    def _held(cls, swerve):
+        """One frame of a craft standing still, banked by hand.
+
+        The craft is left in its lane and only the bank is changed, so
+        two frames differ by the roll and by nothing else. Comparing a
+        still craft with a *moving* one compares two positions, which is
+        a test that passes with the roll deleted - and did.
+        """
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        scene = visualizers.Rider()
+        scene._last = None
+        image = QImage(cls.W, cls.H,
+                       QImage.Format.Format_ARGB32_Premultiplied)
+        painter = QPainter(image)
+        clock = [500.0]
+        was = visualizers.time.monotonic
+        visualizers.time.monotonic = lambda: clock[0]
+        try:
+            for step in range(20):
+                clock[0] += 1 / 60.0
+                state = SpectrumState()
+                state.levels = [0.4] * 27
+                state.bass = 0.4
+                state.mid = 0.3
+                state.high = 0.3
+                state.synth = 0.2
+                state.kit = {}
+                state.at = 2.0 + step / 60.0
+                state.tempo = 128.0
+                state.beat_at = 0.5
+                state.chart = {"Kick": ()}
+                state.settle()
+                # Held every frame, so the ease cannot take it back.
+                scene._swerve = swerve
+                image.fill(QColor(0, 0, 0))
+                scene.paint(painter, QRectF(0, 0, cls.W, cls.H), state)
+        finally:
+            painter.end()
+            visualizers.time.monotonic = was
+        return image.copy()
+
+    @classmethod
+    def _tilt(cls, shot):
+        """Which way the craft leans, as how far its nose sits to one
+        side of its tail.
+
+        A roll about the craft's middle swings the nose one way and the
+        tail the other, so the difference between the two is the lean
+        and its sign is the direction. Reading how high the lit pixels
+        reach on each side was tried and is far too blunt on a shape
+        this small: it gave 1 and 3 for a craft banked 18 degrees each
+        way.
+        """
+        lit = [(x, y) for y in range(cls.H // 2, cls.H)
+               for x in range(cls.W)
+               if shot.pixelColor(x, y).greenF() > 0.55
+               and shot.pixelColor(x, y).redF() < 0.8]
+        if len(lit) < 30:
+            return None
+        rows = sorted({y for _x, y in lit})
+        top = rows[:max(2, len(rows) // 4)]
+        bottom = rows[-max(2, len(rows) // 4):]
+        nose = [x for x, y in lit if y in set(top)]
+        tail = [x for x, y in lit if y in set(bottom)]
+        if not nose or not tail:
+            return None
+        return sum(nose) / len(nose) - sum(tail) / len(tail)
+
+    def test_the_craft_is_drawn_rolled(self, qapp):
+        """The bank itself, off the frame, with the craft held in one
+        lane so the roll is the only thing that differs."""
+        level = self._held(0.0)
+        banked = self._held(18.0)
+        changed = sum(1 for y in range(self.H // 2, self.H)
+                      for x in range(self.W)
+                      if level.pixelColor(x, y) != banked.pixelColor(x, y))
+        assert changed > 60, (
+            f"a banked craft and a level one drew {changed} pixels apart "
+            f"in the same lane")
+
+    def test_it_rolls_the_way_it_is_going(self, qapp):
+        """Nose up on the side it is heading for. Read off the drawn
+        shape: read off the swerve, this passes with the sign the wrong
+        way round."""
+        one = self._tilt(self._held(18.0))
+        other = self._tilt(self._held(-18.0))
+        level = self._tilt(self._held(0.0))
+        assert None not in (one, other, level), (one, other, level)
+        # Against the level craft rather than against zero: the craft
+        # is drawn nose-forward, so in perspective its nose already sits
+        # to one side of its tail before anything banks at all.
+        assert (one - level) * (other - level) < 0, (
+            f"banking one way puts the nose at {one:.1f} and the other "
+            f"way at {other:.1f}, against {level:.1f} level - the same "
+            f"side both times")
+        assert abs(one - level) > 4.0 and abs(other - level) > 4.0, (
+            f"the craft barely leans at all: {one:.1f} and {other:.1f} "
+            f"against {level:.1f}")
+        # And into the move rather than away from it: crossing to the
+        # right puts the nose to the right of the tail, the way anything
+        # that corners leans. Symmetry alone passes with the whole thing
+        # mirrored, which is a craft heeling out of every turn it takes.
+        assert one > level > other, (
+            f"a craft crossing right leans to {one:.1f} and one crossing "
+            f"left to {other:.1f}, against {level:.1f} level - it is "
+            f"leaning out of the move rather than into it")
