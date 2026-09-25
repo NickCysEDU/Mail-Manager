@@ -478,6 +478,31 @@ class TestSigningCannotShipAnAppThatWillNotStart:
         assert "--self-test" in self._build_script()
         assert "Re-signing ad-hoc" in self._build_script()
 
+    def test_no_variable_runs_into_a_curly_quote(self):
+        """``"as “$IDENTITY”"`` is not the name in quotes. macOS's bash
+        reads the closing quote's bytes as more of the variable's name,
+        so under ``set -u`` it stopped the build after the bundle was
+        made and before it was signed or started - on exactly the
+        machines that have a signing identity, because ad-hoc signing
+        takes the other branch. Without ``set -u`` it prints nothing
+        where the name should be. ``${IDENTITY}`` says where it ends."""
+        import re
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[1]
+        scripts = sorted(root.glob("*.sh")) + sorted(root.glob("tools/*.sh"))
+        scripts.append(root / "dev")
+        assert any(p.name == "build_app.sh" for p in scripts)
+        runs_on = re.compile(rb"\$[A-Za-z_][A-Za-z_0-9]*[\x80-\xff]")
+        found = [f"{path.name}:{number}"
+                 for path in scripts if path.exists()
+                 for number, line in enumerate(
+                     path.read_bytes().splitlines(), 1)
+                 if runs_on.search(line)]
+        assert not found, (
+            f"a variable runs straight into a non-ASCII character at "
+            f"{found}: brace it")
+
     def test_the_environment_matches_the_interpreter(self):
         """Reusing whichever .venv exists is how a universal interpreter
         still produces a single-architecture app."""

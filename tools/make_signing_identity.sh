@@ -29,7 +29,7 @@ warn() { printf '%swarning:%s %s\n' "$Y" "$N" "$*" >&2; }
 die()  { printf '%serror:%s %s\n' "$R" "$N" "$*" >&2; exit 1; }
 
 if [[ "${1:-}" == "--remove" ]]; then
-  say "Removing “$NAME”"
+  say "Removing “${NAME}”"
   security delete-identity -c "$NAME" "$KEYCHAIN" 2>/dev/null || true
   security delete-certificate -c "$NAME" "$KEYCHAIN" 2>/dev/null || true
   echo "Removed. Builds will go back to ad-hoc signing."
@@ -90,7 +90,7 @@ security import "$WORK/identity.p12" -k "$KEYCHAIN" -P "$PASS" \
 say "Marking it as trusted for signing code (your keychain only)"
 if ! security add-trusted-cert -p codeSign -k "$KEYCHAIN" "$WORK/cert.pem" 2>/dev/null; then
   warn "Could not set the trust flag automatically."
-  warn "Open Keychain Access, find “$NAME”, Get Info, and set"
+  warn "Open Keychain Access, find “${NAME}”, Get Info, and set"
   warn "Code Signing to Always Trust. Then run this again to check."
 fi
 

@@ -169,7 +169,7 @@ if [[ "$IDENTITY" == "-" ]]; then
   echo "    ask permission again. To stop that:"
   echo "      ./tools/make_signing_identity.sh"
 else
-  echo "==> Signing as “$IDENTITY”"
+  echo "==> Signing as “${IDENTITY}”"
 fi
 # Deliberately without --options runtime. The hardened runtime turns on
 # library validation, which requires everything the process loads to carry the

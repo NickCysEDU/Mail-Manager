@@ -301,12 +301,18 @@ That first figure is the one that matters and it must stay at zero.
 
 **Speed.** Rules engine 10.1 ms per message. Lexicon opens in 38 ms using
 1.95 MB, down from 70 ms and 10.5 MB, and neither number now grows with the
-table. Test suite 3,934 tests (with the evaluation sets present) in about three minutes on four workers.
+table. Test suite 3,935 tests (with the evaluation sets present) in about three minutes on four workers.
 
 ---
 
 ## Things a future session should know
 
+- **Brace a shell variable that touches a curly quote.** `"as “$IDENTITY”"`
+  is read by macOS's bash as a variable whose name includes the quote's
+  bytes; under `set -u` it stopped `build_app.sh` after the bundle was
+  made and before it was signed or started - only on machines with a
+  signing identity, which is why it went unseen. `${IDENTITY}`.
+  `tests/test_abuse.py` checks every script for it.
 - **`./dev test` runs `-n 4 --dist loadfile`.** Whole files per worker, because
   the Qt tests share one `QApplication` per process. A single file is about two
   seconds; the whole suite is about three minutes. Serial was six.
