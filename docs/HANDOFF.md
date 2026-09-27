@@ -302,7 +302,7 @@ That first figure is the one that matters and it must stay at zero.
 
 **Speed.** Rules engine 10.1 ms per message. Lexicon opens in 38 ms using
 1.95 MB, down from 70 ms and 10.5 MB, and neither number now grows with the
-table. Test suite 4,082 tests (with the evaluation sets present) in about three minutes on four workers.
+table. Test suite 4,091 tests (with the evaluation sets present) in about three minutes on four workers.
 
 ---
 
@@ -378,6 +378,13 @@ table. Test suite 4,082 tests (with the evaluation sets present) in about three 
   different depth, so no pair of roads agrees at all of their anchors; the
   craft's is (`test_the_craft_turns_over_in_one_piece`). The flat picture
   turns only `_glow` and `_pillars`, drawn first.
+- **A seek is `Rider._jumped`,** set in `_advance` for a jump of the playhead
+  after at least one earlier frame (the first frame is never one - tests that
+  lay blocks by hand and paint at 1.0 s depend on that). A seek re-lays the
+  road in `_lay` (and drops anything the beat grid put behind the craft);
+  `_finish` turns one back to the start into a new run and any other into a
+  run that is not `_whole`, which `AudioPane._keep_best` does not keep. A run
+  whose first frame is past `START_AGAIN` is not whole either.
 - **Brace a shell variable that touches a curly quote.** `"as “$IDENTITY”"`
   is read by macOS's bash as a variable whose name includes the quote's
   bytes; under `set -u` it stopped `build_app.sh` after the bundle was

@@ -4181,6 +4181,12 @@ class Rider(Scene):
         self._saves = 0
         self._finished = False
         self._result = None
+        #: Whether this run is the whole track, ridden from the start with
+        #: no seek in it - the only kind a best is kept for. See _finish.
+        self._whole = True
+        #: Whether the playhead jumped this frame, and from where.
+        self._jumped = False
+        self._jumped_from = 0.0
         #: Set from outside, where the bests are kept: the best this
         #: track has been played to before, and whether this run beat it.
         self.best_before = None
@@ -4389,11 +4395,20 @@ class Rider(Scene):
         # yet does not look like a new chart on every frame and throw the
         # road away sixty times a second.
         chart = getattr(state, "chart", None) or _NO_CHART
-        if chart is not self._chart_from:
+        # And across a seek, from where it landed. Left laid from where it
+        # was, a jump forward met every block in the stretch it skipped in
+        # a single frame and took the ones in the craft's lane - five
+        # thousand points for skipping to the end - and a jump back found
+        # the stretch it went back over already laid and gone, so empty.
+        fresh = chart is not self._chart_from or self._jumped
+        if fresh:
             self._chart_from = chart
             self._blocks = []
             self._laid = self._heard
             self._placed = -99.0
+            # The corkscrews' power blocks with the rest: one already in
+            # view when the road was laid again was never laid again.
+            self._twisted = set()
         ahead = self._heard + self.READ
         if ahead <= self._laid:
             return
@@ -4477,6 +4492,12 @@ class Rider(Scene):
                 self._blocks.append(
                     [self._snap(start + self.TWIST_FOR * 0.5),
                      self.LANES // 2, "power", False, False])
+        if fresh:
+            # Laid from right where the craft is, a hit just after it can
+            # be put on the beat just before it, and was met straight
+            # away: a prize nobody could have reached, counted as missed.
+            self._blocks = [block for block in self._blocks
+                            if block[0] > self._heard]
         self._blocks = self._blocks[-200:]
 
     #: How long the road may have nothing on it before something is
@@ -5255,7 +5276,8 @@ class Rider(Scene):
         # Whether the track is actually playing. A paused player reports
         # the same position every frame, and the road went on rolling
         # under a stopped song: "xxxxxx xxxxxx xxxxxx xxxx xxxx xxxxxx".
-        moving = self._was_at is None or abs(said - self._was_at) > 1e-4
+        first = self._was_at is None
+        moving = first or abs(said - self._was_at) > 1e-4
         self._was_at = said
         self._rolling += ((1.0 if moving or said <= 0.0 else 0.0)
                           - self._rolling) * 0.25
@@ -5272,10 +5294,18 @@ class Rider(Scene):
         if said <= 0.0:
             self._heard += step
         elif abs(said - self._heard) > 0.35:
+            self._jumped_from = self._heard
             self._heard = said       # a seek, or the first frame
             jumped = True
         elif moving:
             self._heard += step * self._rolling + (said - self._heard) * 0.06
+        # A seek is a jump from somewhere the run has been. The first
+        # frame is not one - there is nothing behind it to skip or to go
+        # back over - but a run that starts part way in is not the whole
+        # track either. See _finish.
+        self._jumped = jumped and not first
+        if first and self._heard >= self.START_AGAIN:
+            self._whole = False
 
         # Truthiness is not a tempo test: a nan is true, and a nan beat
         # is a nan road position, a nan block distance and finally an
@@ -5948,9 +5978,27 @@ class Rider(Scene):
         rate = float(shape.get("rate") or 0.0)
         return len(loud) / rate if loud and rate > 0.0 else 0.0
 
+    #: How near the start a seek has to land to be a new run.
+    START_AGAIN = 2.0
+
     def _finish(self, state) -> None:
         """The end of the track is the end of the run, and the start of
-        the track after it is a new one."""
+        the track after it is a new one.
+
+        So is going back to the start part way through. Any other seek -
+        or starting part way in - leaves a run that is not the whole
+        track: it plays on and is judged, but no best is kept for it, or
+        a ride of the last minute would stand as the track's best.
+        """
+        if self._jumped:
+            if (self._heard < self.START_AGAIN
+                    and self._jumped_from >= self.START_AGAIN):
+                mode = self._mode
+                self.reset()
+                self._mode = mode
+                return
+            if self._heard >= self.START_AGAIN:
+                self._whole = False
         length = self._length(state)
         if length <= 0.0:
             return
@@ -5978,6 +6026,7 @@ class Rider(Scene):
             "hits": self._hits, "saves": self._saves,
             "clean": self._clean, "mode": self._mode,
             "airs": self._airs, "cleared": self._cleared,
+            "whole": self._whole,
         }
 
     #: The grades, best first: the share of the prizes taken, and the
@@ -7210,7 +7259,9 @@ class Rider(Scene):
                  QFont.Weight.Black)
             line(f"{result['worth']:,}", top + unit * 6.3, unit * 1.6,
                  QColor(255, 255, 255), QFont.Weight.Black)
-            if self.new_best:
+            if not result.get("whole", True):
+                best = "SKIPPED THROUGH · NO BEST KEPT"
+            elif self.new_best:
                 best = "NEW BEST"
             elif self.best_before:
                 best = f"BEST {self.best_before:,}"

@@ -1031,6 +1031,10 @@ class AudioPane(QWidget):
                 or self._track_key is None):
             return
         self._kept_result = result
+        if not result.get("whole", True):
+            # Skipped through, or started part way in: not the track.
+            scene.best_before, scene.new_best = None, False
+            return
         if self._best_keeper is None:
             import config
             import rider_bests

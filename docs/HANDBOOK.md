@@ -1522,8 +1522,18 @@ an S is 95 per cent of the prizes with nothing hit, and taking everything
 while hitting everything is not an S. Playing the track again from the
 start is a new run in the same game.
 
-Each track's best is kept per game, and the card says when it has been
-beaten. It is kept on this Mac, in `rider-bests.json` beside the settings,
+A seek is not riding. Jumping ahead lays the road again from where you
+land, and nothing in the stretch you skipped is met: it used to be met all
+at once, in the frame of the jump, and whatever was in the craft's lane was
+taken - five thousand points and a new best for skipping to the last three
+seconds of a track. Jumping back lays the stretch again rather than leaving
+it empty, and going back to the start part way through is a new run, as it
+is after the end.
+
+Each track's best is kept per game, for a whole ride only - from the start,
+with no seek in it. A run begun part way in, or skipped through, is still
+judged, and the card says **SKIPPED THROUGH · NO BEST KEPT** instead. The
+card says when a best has been beaten. It is kept on this Mac, in `rider-bests.json` beside the settings,
 by a fingerprint of the track's analysis rather than by its name or where
 it is: what is written down is a string of hex and a number per game,
 nothing that says what the music was.
@@ -1583,7 +1593,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 4,082 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 4,091 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1966,7 +1976,7 @@ corkscrews the track earned, and what a frame costs. No song, path or
 frame of one is ever written into the repository.
 
 ```bash
-./dev test        # 4,082 tests, about three minutes
+./dev test        # 4,091 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

@@ -164,7 +164,8 @@ class TestTheCard:
         import visualizers
 
         scene = visualizers.Rider()
-        _ride(scene, clock, 9.8, 1.0)
+        # The whole track: a best is only kept for one.
+        _ride(scene, clock, 0.2, 10.6)
         said = []
         real = QPainter.drawText
 
@@ -531,3 +532,175 @@ class TestTheCleanBonusIsPaidAtTheEnd:
         painter.end()
         assert f"{result['worth']:,}" in said
         assert f"{result['score']:,}" in said and "+30%" in said, said
+
+
+class TestASeekIsNotARide:
+    """A jump of the playhead is not riding. Forward, the game met every
+    block in the stretch it skipped in one frame and took the ones in the
+    craft's lane - five thousand points and a new best for skipping to the
+    last three seconds. Back, the stretch it went back over was empty."""
+
+    LENGTH = 120.0
+
+    @classmethod
+    def _track(cls):
+        # One chart and one shape for the whole ride, as the pane gives
+        # them: a new chart is a new road by itself, and would hide
+        # whether a seek is one.
+        # On the beat every half second - and one hit just off it, at
+        # 90.33, which the road puts on the beat at 90.25.
+        made = _state(0.0, length=cls.LENGTH,
+                      chart=tuple(sorted([0.25 + i * 0.5 for i in range(240)]
+                                         + [90.33])))
+        return made.chart, made.contour
+
+    @classmethod
+    def _play(cls, scene, clock, track, start, seconds):
+        chart, contour = track
+        for index in range(max(1, int(seconds * 60))):
+            clock[0] += 1.0 / 60.0
+            made = _state(start + index / 60.0, length=cls.LENGTH)
+            made.chart, made.contour = chart, contour
+            scene._step(made)
+
+    def test_forward_takes_nothing_it_skipped(self, qapp, clock):
+        import visualizers
+
+        scene = visualizers.Rider()
+        track = self._track()
+        self._play(scene, clock, track, 5.0, 1.0)
+        before = (scene._score, scene._taken, scene._offered, scene._hits,
+                  scene._coins)
+        # Landing just after that beat and just before that hit: the hit
+        # is put on the beat, behind the craft.
+        self._play(scene, clock, track, 90.28, 1 / 60)
+        assert (scene._score, scene._taken, scene._offered, scene._hits,
+                scene._coins) == before, "the skipped stretch was scored"
+        assert all(block[0] > scene._heard - 0.05 for block in scene._blocks), (
+            "blocks from before the seek are still on the road")
+        self._play(scene, clock, track, 90.3, 0.5)
+        assert any(block[0] > scene._heard for block in scene._blocks), (
+            "and nothing is laid after it")
+
+    def test_back_lays_the_stretch_again(self, qapp, clock):
+        import visualizers
+
+        scene = visualizers.Rider()
+        track = self._track()
+        self._play(scene, clock, track, 60.0, 1.0)
+        self._play(scene, clock, track, 30.0, 1 / 60)
+        ahead = [block for block in scene._blocks
+                 if 30.0 < block[0] < 30.0 + scene.READ]
+        assert ahead, "the road back over is empty"
+
+    def test_a_skipped_run_is_judged_but_kept_as_no_best(self, qapp, clock,
+                                                         tmp_path,
+                                                         monkeypatch):
+        import visualizers
+
+        scene = visualizers.Rider()
+        track = self._track()
+        self._play(scene, clock, track, 0.2, 2.0)
+        assert scene._whole
+        self._play(scene, clock, track, self.LENGTH - 1.0, 1.0)
+        assert scene._finished and scene._result["whole"] is False
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        try:
+            pane._track_key = "0123456789abcdef0123"
+            pane._keep_best(scene)
+            assert not (tmp_path / "rider-bests.json").exists(), (
+                "a skipped ride was kept as the track's best")
+            assert scene.new_best is False and scene.best_before is None
+        finally:
+            pane.deleteLater()
+
+    def test_a_run_started_part_way_in_is_not_whole(self, qapp, clock):
+        import visualizers
+
+        scene = visualizers.Rider()
+        self._play(scene, clock, self._track(), 40.0, 0.5)
+        assert scene._whole is False
+
+    def test_a_run_from_the_top_is_whole_and_left_alone(self, qapp, clock):
+        """And the first two seconds of one are not taken for a seek back
+        to the start over and over."""
+        import visualizers
+
+        scene = visualizers.Rider()
+        track = self._track()
+        self._play(scene, clock, track, 0.4, 3.0)
+        assert scene._whole
+        assert scene._heard > 3.0, f"the run stuck at {scene._heard:.2f}"
+
+    def test_a_nudge_near_the_start_is_not_a_new_run(self, qapp, clock):
+        """Back to the start is a new run when it comes from further on,
+        not a jump of a fraction of a second inside the first two."""
+        import visualizers
+
+        scene = visualizers.Rider()
+        track = self._track()
+        self._play(scene, clock, track, 0.2, 0.8)
+        scene._score = 50
+        self._play(scene, clock, track, 1.6, 0.2)
+        assert scene._score == 50, "a nudge threw the run away"
+
+    def test_back_to_the_start_part_way_through_is_a_new_run(self, qapp,
+                                                             clock):
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene.set_mode("Ninja")
+        track = self._track()
+        self._play(scene, clock, track, 0.2, 1.0)
+        self._play(scene, clock, track, 50.0, 1.0)
+        assert scene._whole is False
+        scene._score = 500
+        self._play(scene, clock, track, 0.6, 1.0)
+        assert scene._score == 0 and scene._whole, "the skipped run went on"
+        assert scene._mode == "Ninja"
+
+    def test_the_card_says_so(self, qapp, clock):
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+
+        scene = visualizers.Rider()
+        track = self._track()
+        self._play(scene, clock, track, self.LENGTH - 1.0, 1.0)
+        said = []
+        real = QPainter.drawText
+
+        class Recording(QPainter):
+            def drawText(self, *args):      # noqa: N802 - Qt's name
+                said.append(args[-1])
+                return real(self, *args)
+
+        image = QImage(640, 400, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0))
+        painter = Recording(image)
+        scene._results(painter, QRectF(0, 0, 640, 400))
+        painter.end()
+        assert any("NO BEST" in words for words in said), said
+
+    def test_a_corkscrew_keeps_its_power_block_when_the_road_is_laid_again(
+            self, qapp, clock):
+        """The drums arrive a few seconds after the picture and the road
+        is laid again for them. A corkscrew already in view had had its
+        power block, and never got it back."""
+        import visualizers
+
+        scene = visualizers.Rider()
+        chart, contour = self._track()
+        self._play(scene, clock, (chart, contour), 10.0, 0.2)
+        # Just past what is laid, so that it comes into view.
+        scene._twists = (scene._heard + scene.READ + 0.1,)
+        self._play(scene, clock, (chart, contour), 10.2, 0.4)
+        assert any(block[2] == "power" for block in scene._blocks)
+        again = dict(chart)
+        self._play(scene, clock, (again, contour), 10.6, 0.2)
+        assert any(block[2] == "power" for block in scene._blocks), (
+            "the power block went with the road it was laid on")
