@@ -48,6 +48,8 @@ log = logging.getLogger(__name__)
 #: machine draws the same dial.
 FONT_FILE = "Michroma-Regular.ttf"
 FONT_FAMILY = "Michroma"
+#: Its licence, which has to travel with it.
+FONT_LICENCE = "Michroma-OFL.txt"
 
 _LOADED: Optional[str] = None
 

@@ -1593,7 +1593,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 4,091 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 4,095 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1976,7 +1976,7 @@ corkscrews the track earned, and what a frame costs. No song, path or
 frame of one is ever written into the repository.
 
 ```bash
-./dev test        # 4,091 tests, about three minutes
+./dev test        # 4,095 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```
@@ -2240,6 +2240,16 @@ network timeout expires.
 "dist/Mail Manager.app/Contents/MacOS/Mail Manager" --self-test
 ```
 runs inside the bundle and reports which dependency failed to resolve.
+
+The build runs the same self test on the bundle it has just made and will not
+ship one that fails it. What it checks has to be a failure rather than a
+remark to count: the dials' lettering (Michroma, under the SIL Open Font
+License) was reported "NOT bundled" by every build from the one that chose it,
+above "All checks passed", because the spec only copied the icons. A missing
+face or a missing licence for it now fails the check, and the spec ships
+everything in `assets/fonts`. The same check keeps, reads back and beats a
+Music rider best in a folder of its own, since the module that keeps them is
+only imported when a ride ends.
 
 ## Building for both architectures
 

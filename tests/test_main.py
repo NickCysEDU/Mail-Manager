@@ -103,6 +103,37 @@ class TestSelfTest:
         assert "Some checks FAILED." in output
 
 
+class TestTheSelfTestHasTeeth:
+    """Checks that fail, rather than remarks. The dial face was reported
+    "NOT bundled" by every shipped build's self test, above "All checks
+    passed" - which is what the build reads to decide whether to ship."""
+
+    @pytest.mark.parametrize("missing", ["Michroma-Regular.ttf",
+                                         "Michroma-OFL.txt"])
+    def test_a_bundle_without_the_dial_face_or_its_licence_fails(
+            self, tmp_path, monkeypatch, capsys, missing):
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        real = main_module._bundled_path
+        monkeypatch.setattr(
+            main_module, "_bundled_path",
+            lambda name: None if name.endswith(missing) else real(name))
+        assert self_test() == 1
+        output = capsys.readouterr().out
+        line = next(row for row in output.splitlines() if "dial lettering" in row)
+        assert "FAILED" in line and missing in line, line
+
+    def test_bests_that_are_not_kept_fail(self, tmp_path, monkeypatch, capsys):
+        import rider_bests
+
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        monkeypatch.setattr(rider_bests.Bests, "offer",
+                            lambda self, track, mode, worth: (None, False))
+        assert self_test() == 1
+        line = next(row for row in capsys.readouterr().out.splitlines()
+                    if "attachment viewer" in row)
+        assert "FAILED" in line and "bests" in line, line
+
+
 class TestBundledPath:
     def test_finds_a_resource_next_to_the_source(self):
         assert _bundled_path("assets/icon.png") is not None

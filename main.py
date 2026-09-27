@@ -321,6 +321,20 @@ def self_test(offline: bool = False) -> int:
         if len(rider_sound.coin(0)) < 1000:
             raise RuntimeError("the rider's sounds are not in this build")
         working.append("the rider's sounds")
+        # Kept, read back and beaten, in a folder of its own that is then
+        # removed. Imported only when a ride ends, so a bundle without it
+        # fails there - inside the listener that plays the sounds, which
+        # is let go when it fails, so they would stop too.
+        import tempfile
+
+        import rider_bests
+        with tempfile.TemporaryDirectory() as folder:
+            place = Path(folder) / "bests.json"
+            track = rider_bests.fingerprint([b"self test"])
+            rider_bests.Bests(place).offer(track, "Mono", 10)
+            if rider_bests.Bests(place).offer(track, "Mono", 20) != (10, True):
+                raise RuntimeError("the rider's bests are not kept")
+        working.append("the rider's bests")
         return ", ".join(working)
 
     check("attachment viewer", _attachment_viewer)
@@ -588,17 +602,28 @@ def _dial_face() -> str:
     """
     import visualizers
 
+    # The file in the bundle first, whatever else is true: what goes wrong
+    # in a build is the file not being in it at all.
+    #
+    # A failure, not a remark. It was a remark, and every build since the
+    # face was chosen shipped without it - the spec only copied the icons -
+    # under a self test that said "All checks passed".
+    where = _bundled_path(f"assets/fonts/{visualizers.FONT_FILE}")
+    if not where:
+        raise FileNotFoundError(
+            f"{visualizers.FONT_FILE} is not in the bundle, so the dials "
+            f"would be lettered in whatever Qt substitutes")
+    # The Open Font License goes wherever the font does.
+    if not _bundled_path(f"assets/fonts/{visualizers.FONT_LICENCE}"):
+        raise FileNotFoundError(
+            f"{visualizers.FONT_LICENCE} is not in the bundle, and the font "
+            f"may not ship without it")
+    # Qt will not register a font before there is an application, and the
+    # self test usually runs before there is one.
     family = visualizers.dial_face()
     if family:
         return f"{family}, shipped with the app"
-    # Qt will not register a font before there is an application, and this
-    # check runs before there is one. What can be checked here is the part
-    # that actually goes wrong in a build: the file not being in the
-    # bundle at all.
-    where = _bundled_path(f"assets/fonts/{visualizers.FONT_FILE}")
-    if where:
-        return f"{where.name} bundled ({where.stat().st_size:,} bytes)"
-    return f"{visualizers.FONT_FILE} is NOT bundled; Qt will substitute"
+    return f"{where.name} bundled ({where.stat().st_size:,} bytes)"
 
 
 def _bundled_path(relative: str) -> Optional[Path]:

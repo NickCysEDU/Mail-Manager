@@ -991,6 +991,15 @@ class TestTheBuildKeepsWhatTheViewerNeeds:
         """They are imported inside methods, where analysis cannot see them."""
         assert f'"{module}"' in self._spec()
 
+    def test_the_dial_face_and_its_licence_are_bundled(self):
+        """Every file beside the dial face, into the same place in the
+        bundle that visualizers.dial_face looks in. What stops a build
+        without them is the bundle's self test (main._dial_face); this is
+        the recipe's half."""
+        spec = self._spec()
+        assert 'ROOT / "assets" / "fonts"' in spec
+        assert '"assets/fonts"' in spec
+
     def test_the_self_test_runs_an_analysis_in_a_worker(self):
         """In the built app a worker process is the app started again and
         told to be one - the kind of thing that works from source and not

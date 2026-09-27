@@ -107,6 +107,13 @@ for asset in ("icon.png", "icon.icns"):
     path = ROOT / "assets" / asset
     if path.exists():
         datas.append((str(path), "assets"))
+# The face the meter dials are lettered in, and its licence with it: the
+# SIL Open Font License asks that the licence go wherever the font does.
+# Every build shipped without these until the self test was made to fail
+# on it.
+for _font in sorted((ROOT / "assets" / "fonts").glob("*")):
+    if _font.is_file():
+        datas.append((str(_font), "assets/fonts"))
 
 # Imported lazily inside the window, so static analysis misses it; `--demo`
 # must work in the shipped bundle too.

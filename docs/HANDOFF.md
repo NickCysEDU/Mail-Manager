@@ -302,7 +302,7 @@ That first figure is the one that matters and it must stay at zero.
 
 **Speed.** Rules engine 10.1 ms per message. Lexicon opens in 38 ms using
 1.95 MB, down from 70 ms and 10.5 MB, and neither number now grows with the
-table. Test suite 4,091 tests (with the evaluation sets present) in about three minutes on four workers.
+table. Test suite 4,095 tests (with the evaluation sets present) in about three minutes on four workers.
 
 ---
 
@@ -385,6 +385,12 @@ table. Test suite 4,091 tests (with the evaluation sets present) in about three 
   `_finish` turns one back to the start into a new run and any other into a
   run that is not `_whole`, which `AudioPane._keep_best` does not keep. A run
   whose first frame is past `START_AGAIN` is not whole either.
+- **A self-test line that says something is missing must raise, not
+  return.** `check()` only fails on an exception, and `build_app.sh` only
+  refuses to ship on a failed check. `_dial_face` returned "NOT bundled" for
+  every release until it was made to raise; anything added to the self test
+  should be checked with a test that breaks it and expects `self_test() == 1`
+  (see `TestTheSelfTestHasTeeth`).
 - **Brace a shell variable that touches a curly quote.** `"as “$IDENTITY”"`
   is read by macOS's bash as a variable whose name includes the quote's
   bytes; under `set -u` it stopped `build_app.sh` after the bundle was
