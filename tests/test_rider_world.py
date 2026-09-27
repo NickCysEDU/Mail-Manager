@@ -321,28 +321,26 @@ class TestTheWorldOnTheCard:
                 shots[lane] = shot
             a, b = shots[0], shots[2]
             w, h = a.width(), a.height()
+            # The two runs are the same run but for the lane, so the
+            # difference between them is the block and nothing else:
+            # where the left-lane shot is brighter, and where the
+            # right-lane one is.
             left = right = 0.0
             for y in range(0, h, 4):
                 for x in range(0, w, 4):
-                    d = abs(a.pixelColor(x, y).valueF()
-                            - b.pixelColor(x, y).valueF())
+                    d = (a.pixelColor(x, y).valueF()
+                         - b.pixelColor(x, y).valueF())
                     if x < w * 0.5:
                         left += d
                     else:
-                        right += d
-            # Where the lane-0 block is: brighter on the left in shot a.
-            lit_left = sum(a.pixelColor(x, y).valueF()
-                           for y in range(h // 3, h * 2 // 3, 4)
-                           for x in range(0, w // 2, 4))
-            lit_right = sum(a.pixelColor(x, y).valueF()
-                            for y in range(h // 3, h * 2 // 3, 4)
-                            for x in range(w // 2, w, 4))
-            print(json.dumps({"left": left, "right": right,
-                              "lit_left": lit_left, "lit_right": lit_right}))
+                        right -= d
+            print(json.dumps({"left": left, "right": right}))
         """))
-        assert got["left"] > 1.0 and got["right"] > 1.0, got
-        assert got["lit_left"] > got["lit_right"], (
-            "a block in the left lane lit the right of the picture more")
+        assert got["left"] > 1.0, (
+            f"the block in the left lane did not light the left of the "
+            f"picture: {got}")
+        assert got["right"] > 1.0, (
+            f"the block in the right lane did not light the right: {got}")
 
     def test_a_hit_is_something_you_see(self):
         """"Xxxxx xx xx xxxxxxx xxxxxxxx xx xxxxxxx obstacles that the

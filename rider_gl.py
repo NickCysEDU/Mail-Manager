@@ -276,12 +276,29 @@ void main() {
     vec3 band = hsv(uHue, 0.95, 0.22 + uLoud * 0.22 + uKick * 0.25);
     vec3 colour = mix(band, deep, smoothstep(0.0, 0.16, up));
     colour = mix(colour, deep * 0.6, smoothstep(0.0, -0.12, up));
+    // Mountains along the horizon, dark, their ridges and a few contour
+    // lines lit in the passage's colour: the range every synthwave road
+    // runs towards. In the sky itself, so it costs nothing and turns with
+    // the view.
+    float x = q.x * 2.2;
+    float ridge = 0.055 * (0.55 * sin(x * 3.1 + 1.3) + 0.3 * sin(x * 7.7 + 0.4)
+                           + 0.15 * sin(x * 17.3 + 2.1))
+                  + 0.07 * abs(sin(x * 1.3 + 0.8));
+    ridge = max(ridge, 0.0) * smoothstep(0.02, 0.35, abs(q.x));
+    float inside = step(up, ridge) * step(-0.005, up);
+    float line = (1.0 - smoothstep(0.0, 0.0025, abs(up - ridge)))
+                 * step(-0.005, up);
+    float contour = (1.0 - smoothstep(0.0, 0.08, abs(fract(up / max(ridge, 0.0001)
+                    * 4.0) - 0.5) * 2.0 - 0.9)) * inside;
+    colour = mix(colour, hsv(uHue + 0.55, 0.6, 0.02), inside * 0.95);
+    colour += hsv(uHue, 0.9, 1.0) * (line * (1.2 + uKick * 1.5)
+                                     + contour * 0.12);
     // Stars, still - a sky that moves reads as the camera moving.
     vec2 cell = floor(vUv * vec2(uAspect, 1.0) * 180.0);
     float star = step(0.9965, hash(cell));
     float twinkle = 0.55 + 0.45 * sin(uTime * 3.0 + hash(cell + 7.0) * 40.0);
     colour += vec3(0.9, 0.95, 1.0) * star * twinkle * smoothstep(0.02, 0.2, up)
-              * (1.2 + uKick);
+              * (1.2 + uKick) * (1.0 - inside);
     // The sun the road runs into: a disc on the horizon, lit harder on
     // the kick, with the bands a synthwave sun is cut into.
     vec2 d = (vUv - uSun) * vec2(uAspect, 1.0);
@@ -511,7 +528,14 @@ void main() {
 }
 """
 
-TOWER_VERTEX = ROAD_GLSL + """
+TOWER_GLSL = """
+float towerTall(float level, float reach, float kick) {
+    return (1.8 + level * 8.0 + kick * level * 2.5)
+           * (0.55 + clamp(reach / 18.0, 0.0, 0.9));
+}
+"""
+
+TOWER_VERTEX = ROAD_GLSL + TOWER_GLSL + """
 attribute vec3 aCorner;     // a unit box, 0..1 up
 attribute vec4 aTower;      // across, along its loop, width, band
 uniform mat4 uView;
@@ -524,11 +548,11 @@ varying vec3 vCorner;
 varying float vDepth;
 varying float vLevel;
 varying float vTall;
+varying float vStyle;
 void main() {
     float level = uLevels[int(aTower.w)];
-    float reach = abs(aTower.x);
-    float tall = (1.8 + level * 8.0 + uKick * level * 2.5)
-                 * (0.55 + clamp(reach / 18.0, 0.0, 0.9));
+    vStyle = fract(aTower.y * 0.618 + aTower.z * 3.1);
+    float tall = towerTall(level, abs(aTower.x), uKick);
     float along = mod(aTower.y - uTravel, uLoop) + uFrom;
     vec3 local = vec3(aCorner.x * aTower.z, aCorner.y * tall,
                       aCorner.z * aTower.z);
@@ -547,25 +571,129 @@ varying vec3 vCorner;
 varying float vDepth;
 varying float vLevel;
 varying float vTall;
+varying float vStyle;
 uniform float uHue;
 uniform float uBeat;
 void main() {
     vec3 hue = hsv(uHue + 0.5 + (hash(vec2(floor(vTall), 3.0)) - 0.5) * 0.12,
                    0.85, 1.0);
     vec3 colour = vec3(0.012, 0.012, 0.03);
-    // Windows: a grid of lit cells up the face, more of them lit the
-    // louder the band.
+    // Three kinds of tower, by a number of its own: a grid of windows,
+    // strips of neon up its corners, or bands of light round it.
+    float style = floor(vStyle * 3.0);
     vec2 cell = vec2(vCorner.x + vCorner.z, vCorner.y * vTall * 1.6);
     vec2 f = fract(cell * vec2(4.0, 1.0));
-    float window = step(0.25, f.x) * step(f.x, 0.75) * step(0.3, f.y)
-                   * step(f.y, 0.7);
-    float on = step(hash(floor(cell * vec2(4.0, 1.0)) + floor(vLevel * 6.0)),
-                    0.25 + vLevel * 0.6);
-    colour += hue * window * on * (0.25 + vLevel * 0.9);
+    if (style < 0.5) {
+        // Windows, more of them lit the louder the band.
+        float window = step(0.25, f.x) * step(f.x, 0.75) * step(0.3, f.y)
+                       * step(f.y, 0.7);
+        float on = step(hash(floor(cell * vec2(4.0, 1.0)) + floor(vLevel * 6.0)),
+                        0.25 + vLevel * 0.6);
+        colour += hue * window * on * (0.25 + vLevel * 0.9);
+    } else if (style < 1.5) {
+        // Neon up the corners, climbing with the band.
+        // A corner is where both coordinates reach the edge; on a face
+        // one of them always has.
+        float edge = 1.0 - smoothstep(0.0, 0.04, 0.5 - min(abs(vCorner.x),
+                                                            abs(vCorner.z)));
+        float lit = step(vCorner.y, 0.15 + vLevel * 0.95);
+        colour += hue * edge * lit * (0.9 + vLevel * 2.0);
+    } else {
+        // Bands of light round it, one every few floors.
+        float band = 1.0 - smoothstep(0.0, 0.06,
+                                      abs(fract(vCorner.y * vTall * 0.45) - 0.5));
+        colour += hue * band * (0.25 + vLevel * 1.2);
+    }
     // The roof line, the brightest thing on it.
     float roof = smoothstep(0.96, 1.0, vCorner.y);
     colour += hue * roof * (0.8 + vLevel * 3.0 + uBeat * 1.5);
     gl_FragColor = vec4(fogged(colour, vDepth), 1.0);
+}
+"""
+
+BEACON_VERTEX = ROAD_GLSL + TOWER_GLSL + """
+attribute vec4 aTower;      // across, along its loop, width, band
+uniform mat4 uView;
+uniform float uLevels[%(bands)d];
+uniform float uTravel;
+uniform float uLoop;
+uniform float uFrom;
+uniform float uKick;
+uniform float uScreen;
+uniform float uBeat;
+varying float vDepth;
+varying float vOn;
+void main() {
+    float level = uLevels[int(aTower.w)];
+    float tall = towerTall(level, abs(aTower.x), uKick);
+    float along = mod(aTower.y - uTravel, uLoop) + uFrom;
+    vec3 p = onRoad(aTower.x, tall - 1.2 + 0.25, along);
+    vec4 eye = uView * vec4(p, 1.0);
+    vDepth = eye.w;
+    // One tower in three carries a beacon, and they flash on the beat.
+    float has = step(0.66, fract(aTower.y * 1.37 + aTower.z));
+    vOn = has * (0.25 + uBeat * 1.8);
+    gl_PointSize = has * 0.35 * uScreen / max(vDepth, 0.5);
+    gl_Position = eye;
+}
+""" % {"bands": BANDS}
+
+BEACON_FRAGMENT = FOG_GLSL + """
+varying float vDepth;
+varying float vOn;
+void main() {
+    vec2 d = gl_PointCoord - 0.5;
+    float glow = exp(-dot(d, d) * 16.0);
+    float far = 1.0 - clamp((vDepth - 20.0) / 60.0, 0.0, 1.0);
+    gl_FragColor = vec4(vec3(3.0, 0.35, 0.25) * glow * vOn * far, 1.0);
+}
+"""
+
+BARRIER_VERTEX = ROAD_GLSL + """
+attribute vec3 aBar;        // which side, how high (0..1), along
+uniform mat4 uView;
+uniform float uHalf;
+varying float vUp;
+varying float vZ;
+varying float vDepth;
+void main() {
+    vec3 p = onRoad(aBar.x * (uHalf + 0.26), aBar.y * 0.34, aBar.z);
+    vec4 eye = uView * vec4(p, 1.0);
+    vUp = aBar.y;
+    vZ = aBar.z;
+    vDepth = eye.w;
+    gl_Position = eye;
+}
+"""
+
+BARRIER_FRAGMENT = HUES_GLSL + FOG_GLSL + """
+varying float vUp;
+varying float vZ;
+varying float vDepth;
+uniform float uHue;
+uniform float uBeat;
+uniform float uTravel;
+uniform float uPerBeat;
+uniform float uWave;
+uniform float uWaveLit;
+uniform float uRider;
+void main() {
+    vec3 hue = hsv(uHue, 0.85, 1.0);
+    // Glass: barely there, a little brighter towards its top edge, and
+    // the edge itself a line of light.
+    float glass = 0.04 + vUp * 0.10;
+    float top = 1.0 - smoothstep(0.0, 0.06, 1.0 - vUp);
+    // Posts every half beat, lit on the beat.
+    float along = (vZ + uTravel) / (uPerBeat * 0.5);
+    float post = 1.0 - smoothstep(0.0, 0.03, abs(fract(along) - 0.5));
+    // The kick's wave running along it with the one on the road.
+    float wave = exp(-pow((vZ - uWave) * 0.9, 2.0)) * uWaveLit;
+    float near = exp(-abs(vZ - uRider) * 0.08);
+    vec3 colour = hue * (glass + top * (0.9 + uBeat * 1.2)
+                         + post * (0.25 + uBeat * 1.0) * near
+                         + wave * (1.0 + top * 2.0));
+    float far = 1.0 - clamp((vDepth - 14.0) / 58.0, 0.0, 1.0);
+    gl_FragColor = vec4(colour * far, 1.0);
 }
 """
 
@@ -982,6 +1110,31 @@ def tower_floats(half: float, count=150, loop=80.0, seed=11) -> list:
     return out
 
 
+def barrier_floats() -> list:
+    """Both sides of the road: a strip, (side, up, along) per corner."""
+    along = []
+    z = ROAD_FROM + 0.5
+    while z < ROAD_TO - 0.5:
+        along.append(z)
+        z += 0.25 if z < 12 else 0.5 if z < 30 else 1.0
+    out = []
+    for side in (-1.0, 1.0):
+        for z0, z1 in zip(along, along[1:]):
+            out.extend((side, 0.0, z0, side, 1.0, z0, side, 1.0, z1,
+                        side, 0.0, z0, side, 1.0, z1, side, 0.0, z1))
+    return out
+
+
+def beacon_floats(half: float) -> list:
+    """One point per tower, at its roof: the towers' own numbers."""
+    towers = tower_floats(half)
+    stride = 7 * 36
+    out = []
+    for index in range(0, len(towers), stride):
+        out.extend(towers[index + 3:index + 7])
+    return out
+
+
 def streak_floats(half: float, count=420, loop=70.0, seed=5) -> list:
     rng = random.Random(seed)
     out = []
@@ -1035,6 +1188,8 @@ class RiderWorld:
         self.points = _program(POINT_VERTEX, POINT_FRAGMENT)
         self.towers = _program(TOWER_VERTEX, TOWER_FRAGMENT)
         self.streak = _program(STREAK_VERTEX, STREAK_FRAGMENT)
+        self.beacon = _program(BEACON_VERTEX, BEACON_FRAGMENT)
+        self.barrier = _program(BARRIER_VERTEX, BARRIER_FRAGMENT)
         self.bright = _program(QUAD_VERTEX, BRIGHT_FRAGMENT)
         self.down = _program(QUAD_VERTEX, DOWN_FRAGMENT)
         self.up = _program(QUAD_VERTEX, UP_FRAGMENT)
@@ -1094,6 +1249,8 @@ class RiderWorld:
         self.arch = _Mesh(_flat_normals(arch_triangles(half)),
                           [(b"aPos", 3), (b"aNormal", 3)])
         self.city = _Mesh(tower_floats(half), [(b"aCorner", 3), (b"aTower", 4)])
+        self.beacons = _Mesh(beacon_floats(half), [(b"aTower", 4)], GL_POINTS)
+        self.barriers = _Mesh(barrier_floats(), [(b"aBar", 3)])
         self.streaks = _Mesh(streak_floats(half), [(b"aStreak", 4)], GL_LINES)
 
     # -- framebuffers ------------------------------------------------------
@@ -1210,6 +1367,8 @@ class RiderWorld:
         gl.glEnable(GL_BLEND)
         gl.glBlendFunc(GL_ONE, GL_ONE)
         gl.glDepthMask(0)
+        self._draw_barriers(frame)
+        self._draw_beacons(frame)
         self._draw_gates(frame)
         self._draw_streaks(frame)
         self._draw_trim(frame)
@@ -1494,14 +1653,17 @@ class RiderWorld:
                           0.0, 2.2 + beat * 3.0, 1.0)
             else:
                 colour = self._colour_of(scene, block)
-                glow = 1.3 + beat * 1.2
+                # Colour in the faces and the light in the edges: lit
+                # too brightly all over, tone mapping takes a colour
+                # towards white and the blocks came out milky.
+                glow = 0.85 + beat * 0.55
                 if done:
                     # Gone past: going dark as it leaves, so a miss
                     # does not smear light across the edge of the frame.
                     glow *= max(0.0, 1.0 + gap / 1.5)
                 self._put(p, (across, tall * 0.5 + 0.02, z),
                           (wide, tall, wide * 0.8), (0.0, 0.0, 0.0),
-                          tuple(c * glow for c in colour), 0.75, 2.6, 0.0)
+                          tuple(c * glow for c in colour), 0.7, 3.6, 0.0)
             self.cube.draw(self.gl, p)
         p.release()
 
@@ -1611,6 +1773,42 @@ class RiderWorld:
             self._put(p, (0.0, 0.0, z), (bar, bar, 1.0), (0.0, 0.0, 0.0),
                       tuple(c * lit for c in colour), 1.0, 0.0, 0.0)
             self.arch.draw(self.gl, p)
+        p.release()
+
+    def _draw_barriers(self, frame) -> None:
+        scene = frame["scene"]
+        p = self.barrier
+        p.bind()
+        self._road_uniforms(p, frame)
+        self._fog_uniforms(p, frame)
+        p.set("uHalf", float(frame["half"]))
+        p.set("uHue", float(frame["hue"]))
+        p.set("uBeat", float(frame["beat"]))
+        p.set("uTravel", float(frame["travel"] - scene.RIDER_AT))
+        p.set("uPerBeat", float(frame["per_beat"]))
+        p.set("uWave", float(self._wave))
+        p.set("uWaveLit", float(self._wave_lit))
+        p.set("uRider", float(scene.RIDER_AT))
+        self.barriers.draw(self.gl, p)
+        p.release()
+
+    def _draw_beacons(self, frame) -> None:
+        p = self.beacon
+        p.bind()
+        self._road_uniforms(p, frame)
+        self._fog_uniforms(p, frame)
+        p.array("uLevels", frame["bands"], BANDS, 1)
+        p.set("uTravel", float(frame["travel"]))
+        p.set("uLoop", 80.0)
+        p.set("uFrom", float(ROAD_FROM))
+        p.set("uKick", float(self._kick_punch))
+        p.set("uBeat", float(frame["beat"]))
+        p.set("uScreen", float(self._fbo_size[1] * 0.05))
+        self.gl.glEnable(GL_PROGRAM_POINT_SIZE)
+        self.gl.glEnable(GL_POINT_SPRITE)
+        self.beacons.draw(self.gl, p)
+        self.gl.glDisable(GL_POINT_SPRITE)
+        self.gl.glDisable(GL_PROGRAM_POINT_SIZE)
         p.release()
 
     def _draw_streaks(self, frame) -> None:

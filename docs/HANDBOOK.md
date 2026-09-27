@@ -1431,9 +1431,13 @@ On a card it is now drawn in three dimensions (`rider_gl.py`). The track
 is dark glass with neon rails and a grid that scrolls under you, a line
 across it on every beat that reaches the craft exactly on the beat, and
 a gate over the road on every beat that flares as you pass through it -
-a metronome you can see coming. A city of towers lines the road, their
-windows lit from the music's bands and their roofs jumping on the kick,
-under a banded sun on the horizon and a sky full of stars. The blocks are
+a metronome you can see coming. A city of towers lines the road - windows,
+neon up their corners or bands of light round them, lit from the music's
+bands and jumping on the kick, with beacons on their roofs that flash on
+the beat - under a banded sun sitting on a range of mountains whose
+ridges are lit in the passage's colour, and a sky full of stars. Low
+glass barriers run along both edges of the track, with a post every half
+beat that lights on the beat and the kick's wave running along them. The blocks are
 solid and pulse on the beat; a prize is lit from inside in its passage's
 colour, an obstacle is dark metal with a red warning in its edges, a coin
 is struck gold with a rim, and a block you take is drawn into the ship
