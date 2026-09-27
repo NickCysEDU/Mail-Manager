@@ -1441,7 +1441,10 @@ beat that lights on the beat and the kick's wave running along them. The blocks 
 solid and pulse on the beat; a prize is lit from inside in its passage's
 colour, an obstacle is dark metal with a red warning in its edges, a coin
 is struck gold with a rim, and a block you take is drawn into the ship
-while one you miss sails past it. The craft is a racer with a hull, a
+while one you miss sails past it. They are drawn from far down the road,
+coming out of the fog: the game lays them five seconds ahead, and on a
+road that runs to the horizon a block that appeared a few beats away was
+one you got no warning of. The craft is a racer with a hull, a
 glass canopy, two engines and their exhaust, and it banks into a lane
 change. Everything is drawn in floating point, so a neon rail can be far
 brighter than white and bloom on its own while the colours around it

@@ -82,6 +82,14 @@ ROAD_STEP = (ROAD_TO - ROAD_FROM) / (ROAD_SAMPLES - 1)
 #: The levels the towers are lit from.
 BANDS = 24
 
+#: How far down the road blocks are drawn. The game lays them five
+#: seconds ahead, which on most records is sixty units of road, and the
+#: flat drawing shows the first twenty. On a road that runs on to the
+#: horizon, a block appearing out of nowhere a few beats away is a block
+#: you get no warning of; drawn from here it comes out of the fog, and
+#: what is coming can be read the way Audiosurf's can.
+SEEN_AHEAD = 56.0
+
 HEADER = """
 #version 120
 """
@@ -1598,7 +1606,7 @@ class RiderWorld:
         p = self._solid(frame)
         beat = frame["beat"]
         spin = float(getattr(scene, "_coin_spin", 0.0))
-        far = float(scene.FAR)
+        far = SEEN_AHEAD
         for block in scene._blocks:
             when, lane, kind, done, grey = block
             z = scene._where(when)
@@ -1609,8 +1617,9 @@ class RiderWorld:
                 continue
             if z < scene.RIDER_AT - 4.0 or z > far + 0.5:
                 continue
-            # Grown in over the last few units rather than appearing.
-            grow = max(0.0, min(1.0, (far + 0.5 - z) / 3.0))
+            # Grown in over the last stretch, out of the fog, rather than
+            # appearing.
+            grow = max(0.0, min(1.0, (far + 0.5 - z) / 6.0))
             grow = grow * grow * (3.0 - 2.0 * grow)
             across = scene._lane_at(lane)
             # The last stretch before the craft, in its lane: drawn in
@@ -1755,7 +1764,7 @@ class RiderWorld:
         first = math.ceil((base + scene.RIDER_AT - 3.0) / per)
         for n in range(first, first + 10):
             z = scene.RIDER_AT + n * per - scene._at
-            if z > 46.0:
+            if z > SEEN_AHEAD:
                 break
             if z < scene.RIDER_AT - 2.5:
                 continue

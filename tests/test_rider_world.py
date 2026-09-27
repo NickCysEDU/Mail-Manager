@@ -342,6 +342,34 @@ class TestTheWorldOnTheCard:
         assert got["right"] > 1.0, (
             f"the block in the right lane did not light the right: {got}")
 
+    def test_what_is_coming_is_seen_from_far_off(self):
+        """The game lays blocks five seconds ahead - sixty units of road
+        on most records - and the flat drawing shows the first twenty.
+        On a road that runs to the horizon a block appearing a few beats
+        away is one you get no warning of, so the world draws them from
+        much further out."""
+        got = on_the_card(RIDER + textwrap.dedent("""
+            shots = {}
+            for far in (False, True):
+                made, scene = rider_pane(size=(800, 500))
+                def one_far_off(i, scene=scene, far=far):
+                    scene._placed = scene._laid = 1e9
+                    # Forty units ahead of the craft.
+                    ahead = 40.0 / scene._cruise()
+                    scene._blocks = ([[scene._heard + ahead, 1, "block",
+                                       False, False]] if far else [])
+                shots[far] = play(made, 0.6, each=one_far_off)
+            a, b = shots[True], shots[False]
+            w, h = a.width(), a.height()
+            lit = sum(max(0.0, a.pixelColor(x, y).valueF()
+                          - b.pixelColor(x, y).valueF())
+                      for y in range(0, h, 2) for x in range(0, w, 2))
+            print(json.dumps({"lit": lit}))
+        """))
+        assert got["lit"] > 2.0, (
+            f"a block forty units down the road lit {got['lit']:.2f}: it "
+            f"is not drawn")
+
     def test_a_hit_is_something_you_see(self):
         """"Xxxxx xx xx xxxxxxx xxxxxxxx xx xxxxxxx obstacles that the
         user can feel." Run into an obstacle for real: the picture goes
