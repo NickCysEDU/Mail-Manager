@@ -314,6 +314,13 @@ def self_test(offline: bool = False) -> int:
 
     check("attachment viewer", _attachment_viewer)
 
+    def _analysis_worker() -> str:
+        import attachment_audio
+
+        return attachment_audio.worker_check()
+
+    check("audio analysis", _analysis_worker)
+
     def _tls_probe() -> str:
         """A real handshake, because a path that exists is not proof."""
         import socket
@@ -597,4 +604,11 @@ def _bundled_path(relative: str) -> Optional[Path]:
 
 
 if __name__ == "__main__":
+    # First, before anything else runs. The audio analysis works in
+    # processes of its own, and in the built app a new process is this
+    # same program started again - this is what tells it to be a worker
+    # rather than open a second window.
+    import multiprocessing
+
+    multiprocessing.freeze_support()
     sys.exit(main())

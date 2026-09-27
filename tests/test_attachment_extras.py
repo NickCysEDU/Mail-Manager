@@ -991,6 +991,24 @@ class TestTheBuildKeepsWhatTheViewerNeeds:
         """They are imported inside methods, where analysis cannot see them."""
         assert f'"{module}"' in self._spec()
 
+    def test_the_self_test_runs_an_analysis_in_a_worker(self):
+        """In the built app a worker process is the app started again and
+        told to be one - the kind of thing that works from source and not
+        from a bundle - so the self-test that runs inside every build
+        does it for real."""
+        import inspect
+
+        import attachment_audio
+        import main
+
+        assert "worker_check()" in inspect.getsource(main.self_test)
+        assert "freeze_support()" in inspect.getsource(main), (
+            "without it a worker in the built app opens a second window")
+        said = attachment_audio.worker_check()
+        assert "process of its own" in said
+        with pytest.raises(RuntimeError):
+            attachment_audio.worker_check(timeout=0.0)
+
     def test_the_self_test_builds_them_rather_than_importing_them(self):
         import inspect
 
@@ -5589,6 +5607,246 @@ class TestTheScenesSitOnTheBeat:
         assert rave._z > before, "the room stopped when the tempo did"
 
 
+def _drum_track(seconds: float, lean: float = 0.0, rate: int = 48000):
+    """Stereo 16-bit PCM: a kick every half second over a quiet tone.
+
+    ``lean`` puts it towards one side, -1 hard left to +1 hard right.
+    """
+    import math
+    from array import array
+
+    left_gain = min(1.0, 1.0 - lean)
+    right_gain = min(1.0, 1.0 + lean)
+    pcm = array("h")
+    for index in range(int(seconds * rate)):
+        t = index / rate
+        since = t % 0.5
+        kick = math.exp(-since * 30.0) * math.sin(2 * math.pi * 55 * since)
+        value = 0.6 * kick + 0.08 * math.sin(2 * math.pi * 440 * t)
+        pcm.append(int(20000 * value * left_gain))
+        pcm.append(int(20000 * value * right_gain))
+    return pcm
+
+
+def _analysed(qapp, pcm, cancel_after=None, workers=None, timeout=90.0,
+              while_waiting=None):
+    """Run the real analysis on ``pcm`` and collect what it says, in order.
+
+    ``while_waiting`` is called on the GUI thread every pass of the wait,
+    which is how a test watches what the GUI thread could do meanwhile.
+    """
+    import time
+
+    import attachment_audio
+
+    said = []
+    handle = attachment_audio._Analysis(
+        None, lambda r: said.append(("done", r)),
+        lambda d: said.append(("failed", d)),
+        on_progress=lambda f: None,
+        on_elements=lambda k: said.append(("elements", k)),
+        on_bands=lambda r: said.append(("bands", r)))
+    was = attachment_audio.WORKERS
+    if workers is not None:
+        attachment_audio.WORKERS = workers
+    try:
+        handle.start_analysis(pcm, attachment_audio.DECODE_RATE, 2)
+        thread = handle._thread
+        started = time.monotonic()
+        seen_workers = []
+        while time.monotonic() - started < timeout:
+            qapp.processEvents()
+            seen_workers[:] = list(thread._processes) or seen_workers
+            if while_waiting is not None:
+                while_waiting()
+            if cancel_after is not None and (
+                    time.monotonic() - started > cancel_after):
+                handle.cancel()
+                break
+            if any(k == "failed" for k, _ in said) or (
+                    any(k == "done" for k, _ in said)
+                    and any(k == "elements" for k, _ in said)):
+                break
+            time.sleep(0.002)
+        thread.wait(10_000)
+        qapp.processEvents()
+    finally:
+        attachment_audio.WORKERS = was
+        handle.cancel()
+    found = {kind: payload for kind, payload in said}
+    found["said"] = [(kind, None) for kind, _ in said]
+    found["workers"] = seen_workers
+    return found
+
+
+class TestTheAnalysisTakesNothingFromThePicture:
+    """"If I click play once the xxxxxxxxxx xx xxxxxxxx xxxxxxx, xx xxxxx
+    xxxx xxxx xxxxx xxxxxxxxx xxx."
+
+    The analysis was Python arithmetic on a thread, and Python runs one
+    thread's arithmetic at a time. After the picture came up the rest of
+    it - the scope's traces, then the drums - went on for half a minute
+    on a long track, taking turns with the thread drawing the picture:
+    21 to 26 frames a second with a hitch every second, against 60 and
+    none once it had finished. Worse, the card's governor read those
+    frames as the card being slow and gave up the resolution for the
+    rest of the session. It runs in processes of its own now.
+    """
+
+    @staticmethod
+    def _off_the_gui_thread(qapp, workers):
+        """CPU this process spent off the GUI thread during an analysis.
+
+        Which is exactly what takes turns with the picture: Python runs
+        one thread's arithmetic at a time, so every second of it spent on
+        another thread of this process is a second the thread drawing the
+        picture has to share. Counted in CPU time rather than timed
+        frames, because a frame's wall-clock cost also measures whatever
+        else the machine is doing - four test processes, in the suite -
+        and CPU time does not.
+        """
+        import resource
+        import time
+
+        def process_cpu():
+            used = resource.getrusage(resource.RUSAGE_SELF)
+            return used.ru_utime + used.ru_stime
+
+        before = process_cpu(), time.thread_time()
+        _analysed(qapp, _drum_track(40.0), workers=workers)
+        after = process_cpu(), time.thread_time()
+        return (after[0] - before[0]) - (after[1] - before[1])
+
+    def test_the_arithmetic_is_not_done_in_this_process(self, qapp):
+        """Measured on the thread the analysis used to run on, a frame of
+        the rider cost 2.9 times its own cost while a track was analysed,
+        and 8 times at the ninetieth percentile; in workers, 1.2 and 1.3.
+        What made the difference is where the arithmetic is done."""
+        here = self._off_the_gui_thread(qapp, workers=False)
+        away = self._off_the_gui_thread(qapp, workers=True)
+        assert away < here * 0.15, (
+            f"with workers this process still spent {away:.2f} s of CPU "
+            f"off the GUI thread analysing forty seconds of audio, against "
+            f"{here:.2f} s doing all of it on a thread")
+
+    def test_it_gives_the_same_answer_as_working_it_out_here(self, qapp):
+        """A worker that returned something else would be a faster way
+        to be wrong."""
+        import attachment_audio
+        import beatmap
+
+        pcm = _drum_track(6.0)
+        got = _analysed(qapp, pcm)
+        frames, calibration, _shape = got["bands"]
+        mine = {}
+        expected = attachment_audio.analyse(
+            pcm, attachment_audio.DECODE_RATE, 2, calibration=mine)
+        assert [list(f) for f in frames] == [list(f) for f in expected]
+        assert calibration == mine
+        _f, shapes, vectors, _c, beats = got["done"]
+        assert [list(r) for r in shapes] == [
+            list(r) for r in attachment_audio.traces(
+                pcm, attachment_audio.DECODE_RATE, 2)]
+        assert len(vectors) == len(attachment_audio.vector_traces(
+            pcm, attachment_audio.DECODE_RATE, 2))
+        assert beats == beatmap.build(expected, attachment_audio.RATE)
+        fine = attachment_audio.onset_frames(
+            pcm, attachment_audio.DECODE_RATE, 2)
+        assert got["elements"] == beatmap.elements(
+            fine, attachment_audio.ONSET_RATE)
+
+    def test_the_drums_are_never_handed_over_before_the_bands(self, qapp):
+        """They run side by side now, and can finish first - but the pane
+        has nothing to hang them on until it has the frames."""
+        got = _analysed(qapp, _drum_track(6.0))
+        order = [kind for kind, _ in got["said"]]
+        assert "elements" in order, order
+        assert order.index("bands") < order.index("elements"), order
+
+    def test_the_drums_are_kept_whichever_arrives_first(self, qapp):
+        """The beat maps used to replace the table the kit lives in, which
+        was only safe while the kit always came last."""
+        from attachment_widgets import Spectrum
+
+        pane = Spectrum()
+        try:
+            pane.set_elements({"Kick": [1.0, 2.0]})
+            pane.set_beats({"Bass": [0.5]})
+            assert "Kick" in pane._beats and "Bass" in pane._beats
+        finally:
+            pane.deleteLater()
+
+    def test_with_no_workers_it_still_arrives(self, qapp):
+        """A machine that will not start a process - a sandbox, a broken
+        install - analyses on a thread, as it always used to."""
+        got = _analysed(qapp, _drum_track(4.0), workers=False)
+        order = [kind for kind, _ in got["said"]]
+        assert "bands" in order and "done" in order, order
+
+    def test_a_worker_that_cannot_start_falls_back(self, qapp, monkeypatch):
+        import multiprocessing
+
+        def refuse(*_args, **_kwargs):
+            raise OSError("no processes here")
+
+        monkeypatch.setattr(multiprocessing, "get_context", refuse)
+        got = _analysed(qapp, _drum_track(4.0))
+        order = [kind for kind, _ in got["said"]]
+        assert order.count("bands") == 1 and "done" in order, order
+
+
+class TestTheRoadIsWholeWhenThePictureIs:
+    """The road's bends came from the scope's traces, which arrive
+    seconds after the picture - so a road that had been dead straight
+    began to bend under the rider mid-song when they did. The lean is
+    read off the samples with the bands now, and the shape is final."""
+
+    def test_a_mix_to_one_side_leans_that_way_from_the_start(self, qapp):
+        got = _analysed(qapp, _drum_track(6.0, lean=-0.8))
+        lean = got["bands"][2]["lean"]
+        assert sum(lean) / len(lean) < -0.5, (
+            f"a mix hard to the left leans {sum(lean) / len(lean):.2f}")
+
+    def test_the_traces_arriving_do_not_change_the_road(self, qapp):
+        from array import array
+
+        from attachment_widgets import Spectrum
+
+        pane = Spectrum()
+        try:
+            frames = [array("f", [0.3] * 27) for _ in range(90)]
+            pane.set_frames(frames, 15)
+            shape = {"loud": [0.5] * 48, "lean": [0.4] * 48, "rate": 8.0}
+            pane.set_contour(shape)
+            pane.set_traces([array("f", [0.0] * 8)] * 90,
+                            [array("h", [0, 0])] * 90)
+            pane.set_frames(frames, 15)
+            # What the pane does every frame: build the state the scene
+            # reads, rebuilding the shape if it thinks it has to.
+            pane._clock(pane._state)
+            assert pane._state.contour is shape, (
+                "the road's shape was thrown away when the traces came")
+        finally:
+            pane.deleteLater()
+
+    def test_the_same_frames_again_do_not_empty_the_picture(self, qapp):
+        """The rest of the analysis hands the same frames over a second
+        time. Starting over zeroed every level mid-song."""
+        from array import array
+
+        from attachment_widgets import Spectrum
+
+        pane = Spectrum()
+        try:
+            frames = [array("f", [0.3] * 27) for _ in range(90)]
+            pane.set_frames(frames, 15)
+            pane._level = [0.7] * 27
+            pane.set_frames(frames, 15)
+            assert pane._level == [0.7] * 27
+        finally:
+            pane.deleteLater()
+
+
 class TestThePictureArrivesBeforeTheAnalysisFinishes:
     """"Xxxxxxx xxxxxxxxxx xxxxxxxxxxx xx xxxxxx xxxxx xxx xxxxx."
 
@@ -5598,19 +5856,15 @@ class TestThePictureArrivesBeforeTheAnalysisFinishes:
     traces for the figures - take another two thirds as long again.
     """
 
-    def test_the_bands_go_out_as_soon_as_they_exist(self):
-        """Before the waveform and the X-Y traces are worked out."""
-        import inspect
-
-        import attachment_audio
-
-        source = inspect.getsource(attachment_audio._AnalysisThread.run)
-        at_bands = source.index("self.bands.emit")
-        at_traces = source.index("shapes = traces(")
-        at_vectors = source.index("vectors = vector_traces(")
-        assert at_bands < at_traces < at_vectors, (
-            "the bands are handed over after the passes that were the "
-            "reason for handing them over early")
+    def test_the_bands_go_out_as_soon_as_they_exist(self, qapp):
+        """Before the waveform and the X-Y traces are worked out - and
+        with the road's whole shape, so nothing about the road changes
+        when the rest arrives. Run for real, through the workers."""
+        got = _analysed(qapp, _drum_track(6.0))
+        order = [kind for kind, _ in got["said"]]
+        assert order.index("bands") < order.index("done"), order
+        frames, _calibration, shape = got["bands"]
+        assert frames and shape and len(shape["lean"]) == len(shape["loud"])
 
     def test_the_pane_draws_from_them(self, qtbot):
         """And stops saying it is working."""
@@ -5640,20 +5894,14 @@ class TestThePictureArrivesBeforeTheAnalysisFinishes:
         assert spectrum._working is None
         assert spectrum.ready
 
-    def test_a_cancelled_analysis_hands_nothing_over(self, qtbot):
+    def test_a_cancelled_analysis_hands_nothing_over(self, qapp):
         """The early signal is one more thing that can arrive after the
-        caller has gone away."""
-        import inspect
-
-        import attachment_audio
-
-        source = inspect.getsource(attachment_audio._AnalysisThread.run)
-        before = source[:source.index("self.bands.emit")]
-        assert "if self._stop:" in before.rsplit("\n\n", 1)[-1], (
-            "nothing checks whether the analysis was cancelled before the "
-            "bands are sent")
-        guard = inspect.getsource(attachment_audio._Analysis._early)
-        assert "self._stop" in guard
+        caller has gone away. Cancelled the moment it starts, nothing at
+        all is handed over, and no worker is left running."""
+        got = _analysed(qapp, _drum_track(20.0), cancel_after=0.05)
+        assert got["said"] == [], [kind for kind, _ in got["said"]]
+        assert not any(p.is_alive() for p in got["workers"]), (
+            "a worker outlived the analysis it was working on")
 
 
 class TestTheHandStrobeSaysWhichKey:
@@ -6112,31 +6360,81 @@ class TestTheAirIsAsVividAtFullScreenAsInAWindow:
             f"the outer thirds hold {window:.3f} of colour in a 640x360 "
             f"window and {full:.3f} at 1920x1080")
 
-    def test_a_window_is_left_alone(self):
-        """None of this applies to a frame the lamp is not shrunk on.
+    # -- against the strip the window actually shows --------------------
+    #: The pane as it sits in a 1300 wide viewer, and a 16:10 full screen.
+    STRIP = (906, 270)
+    SCREEN = (1440, 900)
 
-        A window was the one that looked right, so the light that fills a
-        big frame has to be keyed to the shrinking and to nothing else -
-        which means it has to be exactly nothing until the frame is taller
-        than the lamp shrinks for.
+    @staticmethod
+    def _hue_spread(image) -> float:
+        """How far the hues in the coloured part of the frame range.
+
+        The circular standard deviation, as a share of the wheel, over
+        every pixel with enough colour in it to have a hue worth naming.
         """
-        from PySide6.QtCore import QRectF
+        import cmath
+        import math
+
+        hues = []
+        for y in range(0, image.height(), 6):
+            for x in range(0, image.width(), 6):
+                one = image.pixelColor(x, y)
+                if one.hsvSaturationF() > 0.3 and one.valueF() > 0.2:
+                    hues.append(one.hsvHueF())
+        pull = abs(sum(cmath.exp(2j * math.pi * h) for h in hues)
+                   / max(1, len(hues)))
+        return math.sqrt(-2.0 * math.log(max(1e-9, pull))) / (2 * math.pi)
+
+    @staticmethod
+    def _brightness(image) -> float:
+        import statistics
+
+        return statistics.mean(
+            image.pixelColor(x, y).valueF()
+            for y in range(0, image.height(), 6)
+            for x in range(0, image.width(), 6))
+
+    def test_a_full_screen_has_the_strip_s_variety(self):
+        """"Xxxx xxxxx xxxxxxx xxx xxxxxxxxx xx xxxxxxxx xxxx xxx xxxxx
+        xxxx xxxxxxxx xx xxxx xxxxxx." The earlier rounds measured full
+        screen against a 640x360 window; the window anybody sees is a
+        strip. Laid out for a 16:10 frame the lamp covered most of it in
+        one gradient: 0.104 of hue spread against the strip's 0.176."""
+        strip = self._hue_spread(self._frame(*self.STRIP))
+        screen = self._hue_spread(self._frame(*self.SCREEN))
+        assert screen > strip * 0.85, (
+            f"the hues in a full screen spread {screen:.3f} of the wheel "
+            f"against the strip's {strip:.3f}")
+
+    def test_a_full_screen_is_no_paler_than_the_strip(self):
+        """The light added to a big frame's bare air carried the colour
+        towards white, which is a pastel: brighter and less saturated at
+        once. Measured on a real track, 0.746 of brightness against the
+        window's 0.633."""
+        strip = self._frame(*self.STRIP)
+        screen = self._frame(*self.SCREEN)
+        # The scene on its own, before the polish: 0.411 against 0.365
+        # with the extra light, 0.362 without it.
+        assert self._brightness(screen) < self._brightness(strip) + 0.02, (
+            f"full screen is {self._brightness(screen):.3f} bright against "
+            f"the strip's {self._brightness(strip):.3f}")
+        assert self._colour(screen) > self._colour(strip) * self.SLACK, (
+            f"and holds {self._colour(screen):.3f} of colour against "
+            f"{self._colour(strip):.3f}")
+
+    def test_the_strip_itself_is_left_alone(self):
+        """The strip was the one that looked right, so its air is laid out
+        exactly as it always was: stretching only ever happens to a frame
+        taller than it."""
+        from PySide6.QtCore import QPointF, QRectF
 
         import visualizers
 
-        assert visualizers.Rave._lamp(QRectF(0, 0, 640, 360)) == 1.0, (
-            "the lamp is already shrunk at 640x360, so a window does not "
-            "get the look this was measured against")
-        was = visualizers.Rave.WASH_FILL
-        first = self._colour(self._frame(640, 360))
-        visualizers.Rave.WASH_FILL = was * 4.0
-        try:
-            again = self._colour(self._frame(640, 360))
-        finally:
-            visualizers.Rave.WASH_FILL = was
-        assert abs(first - again) < 1e-9, (
-            f"quadrupling the fill moved a window from {first:.4f} to "
-            f"{again:.4f} of colour, so it is not keyed to the shrinking")
+        scene = visualizers.Rave()
+        wide, tall = self.STRIP
+        tile = scene._haze_tile(QRectF(0, 0, wide, tall),
+                                QPointF(wide / 2, tall / 2), 0.5, 0.3, 0.0)
+        assert abs(tile.height() / tile.width() - tall / wide) < 0.02
 
 
 class TestTheBufferGoesUpByWholePixels:
@@ -9627,6 +9925,120 @@ class TestTheWaveformWidget:
                 Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
                 Qt.KeyboardModifier.NoModifier))
         assert seen == [0, 200_000], f"seeked to {seen}"
+
+
+class TestSeekingOnTheWaveform:
+    """"Xxxxxxx xxxx xxx xxxx, xxx xxxxxxxx xxxx xxx xxxxx xx xxx audio
+    progresses xxx xxxxxxxx xx xx xxxx xxxxxxx."
+
+    Clearing the shape - which every analysis does as it starts - also
+    zeroed how long the track was. The player says that once, when the
+    track loads, so switching the visualiser on after a track had loaded
+    left a waveform with no length: nothing ever shaded, and every click
+    was turned into a seek to nowhere and dropped. Every existing test of
+    the bar built one and handed it a length directly, which is the one
+    thing the real sequence never does again.
+    """
+
+    def test_it_keeps_the_track_when_it_loses_the_shape(self, qapp):
+        from attachment_widgets import Waveform
+
+        bar = Waveform()
+        bar.resize(300, bar.TALL)
+        bar.set_span(60_000)
+        bar.set_position(30_000)
+        bar.set_shape([0.5] * 100)
+        bar.clear()
+        bar.set_shape([0.5] * 100)
+        said = []
+        bar.seeked.connect(said.append)
+        bar._seek_to(150.0)
+        assert said == [30_000], (
+            f"a click half way along a one minute track after a new shape "
+            f"arrived sought to {said}")
+
+    def test_a_new_track_starts_from_nothing(self, qapp):
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        try:
+            pane.wave.set_span(60_000)
+            pane.wave.set_position(30_000)
+            pane.stop()
+            assert (pane.wave._span, pane.wave._at) == (0, 0), (
+                "the last track's length outlived it")
+        finally:
+            pane.deleteLater()
+
+    def test_a_click_moves_the_track_with_the_visualiser_switched_on_late(
+            self, qapp, tmp_path):
+        """The real dialog and the real player, in the order a person
+        does it: open the track, then switch the visualiser on."""
+        import math
+        import struct
+        import time
+        import wave
+
+        from PySide6.QtCore import QPoint, Qt
+        from PySide6.QtTest import QTest
+
+        import attachments
+        from attachment_view import AttachmentViewer, AudioPane
+
+        path = tmp_path / "tone.wav"
+        rate = 11025
+        with wave.open(str(path), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(rate)
+            handle.writeframes(b"".join(
+                struct.pack("<h", int(8000 * math.sin(i * 0.05)))
+                for i in range(rate * 8)))
+        data = path.read_bytes()
+        item = attachments.Attachment(part="1", name="tone.wav",
+                                      content_type="audio/wav",
+                                      size=len(data), data=data)
+        dialog = AttachmentViewer([item], "Test")
+        dialog.resize(1100, 820)
+        dialog.show()
+
+        def wait(ready, seconds):
+            end = time.monotonic() + seconds
+            while time.monotonic() < end and not ready():
+                qapp.processEvents()
+                time.sleep(0.01)
+            return ready()
+
+        try:
+            qapp.processEvents()
+            dialog.list.setCurrentRow(0)
+            qapp.processEvents()
+            pane = dialog.findChild(AudioPane)
+            if not wait(lambda: pane._player is not None
+                        and pane._player.duration() > 0, 10):
+                pytest.skip("no audio backend could open a WAV here")
+            assert not pane.enable_box.isChecked()
+            pane.enable_box.setChecked(True)
+            assert wait(lambda: bool(pane.wave._shape), 60), (
+                "the analysis never produced a shape")
+            qapp.processEvents()
+            assert pane.wave.isVisible()
+            assert pane.wave._span == pane._player.duration(), (
+                f"the waveform thinks the track is {pane.wave._span} ms "
+                f"long; the player says {pane._player.duration()}")
+            QTest.mouseClick(pane.wave, Qt.MouseButton.LeftButton,
+                             Qt.KeyboardModifier.NoModifier,
+                             QPoint(int(pane.wave.width() * 0.75),
+                                    pane.wave.height() // 2))
+            assert wait(lambda: pane._player.position() > 5000, 3), (
+                f"a click three quarters of the way along an eight second "
+                f"track left it at {pane._player.position()} ms")
+            assert pane.wave._at > 5000, (
+                "the waveform did not shade up to where the click sent it")
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+            qapp.processEvents()
 
 
 class TestTheWaveformIsInTheWindowedPane:

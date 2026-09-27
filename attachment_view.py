@@ -747,9 +747,13 @@ class AudioPane(QWidget):
             self.spectrum.set_traces(shapes, vectors)
             # Set again, because the position the pane is at has to be
             # read against the finished list rather than the one that
-            # arrived early. It is the same list on an uninterrupted run.
-            self.spectrum.set_frames(frames, attachment_audio.RATE)
-            self.wave.set_shape(attachment_audio.outline(frames, calibration))
+            # arrived early. It is the same list on an uninterrupted run,
+            # and then there is nothing to do: the pane knows, and the
+            # waveform is not worked out a second time.
+            if frames is not self.spectrum.frames_list():
+                self.spectrum.set_frames(frames, attachment_audio.RATE)
+                self.wave.set_shape(
+                    attachment_audio.outline(frames, calibration))
             self._decoder = None
 
         def bands(result) -> None:
@@ -763,10 +767,11 @@ class AudioPane(QWidget):
             """
             if not alive():
                 return
-            frames, calibration = result
+            frames, calibration, shape = result
             self.spectrum.set_calibration(calibration)
             self.spectrum.set_working(None)
             self.spectrum.set_frames(frames, attachment_audio.RATE)
+            self.spectrum.set_contour(shape)
             self.wave.set_shape(attachment_audio.outline(frames, calibration))
 
         def failed(_detail: str) -> None:
@@ -1369,6 +1374,9 @@ class AudioPane(QWidget):
         self.spectrum.set_playing(False)
         self.spectrum.set_working(None)
         self.spectrum.clear()
+        # The old track's length and place, which the player will not
+        # say again for a track it no longer has.
+        self.wave.forget_track()
         # cancel(), not just forget: the analysis runs on a QThread, and Qt
         # calls qFatal if one is destroyed while it is still running.
         self._cancel_analysis()

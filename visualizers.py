@@ -2970,63 +2970,36 @@ class Rave(Scene):
     #: How far the wash reaches, as a share of the frame.
     HAZE_REACH = 1.9
 
-    #: How much of the light a shrunken lamp hands back to the wash, as a
-    #: share of the way to full light. 1.0 would take the bare air all the
-    #: way there on the widest frame the lamp shrinks for.
+    #: The tallest the air is laid out, as height over width. A frame
+    #: taller than this gets the air of a frame this shape, stretched.
     #:
-    #: Two things were tried before this and are worth not trying again.
-    #: Lamps down the two sides, in two more hues, to light the edges that
-    #: had gone dark: they *cost* colour, 0.245 down to 0.234, because a
-    #: hue laid over a different hue at part alpha mixes towards grey - so
-    #: adding coloured light to a region took the colour out of it. And
-    #: simply shrinking the lamp less, which does work (0.245 shrunk
-    #: against 0.296 at full size) but is the change that flattened the
-    #: air in the first place - and is held off by
-    #: ``test_the_air_keeps_its_colour_at_full_screen``, which fails on it.
+    #: "Xxxx xxxxx xxxxxxx xxx xxxxxxxxx xx xxxxxxxx xxxx xxx xxxxx xxxx
+    #: xxxxxxxx xx xxxx xxxxxx." The pane in the window is a strip - 906
+    #: by 270 points in a 1300 wide viewer - and in a strip the lamp at
+    #: the end of the room lights the middle while the sides keep the
+    #: wash: orange and magenta on one side, deep blue on the other, dark
+    #: in the corners. Laid out for a 16:10 screen the same lamp covers
+    #: most of the frame in one smooth gradient, and the variety goes.
     #:
-    #: The wash has neither problem: it is already the colour that is
-    #: there, so more of it raises the light without touching the hue, and
-    #: the lamp is drawn over the top of it so the middle of the frame -
-    #: which was never the part that went grey - hardly changes.
+    #: Two rounds were spent making up for that on a big frame - a lamp
+    #: shrunk as the frame grew, and the bare air it left filled with
+    #: extra light - and both were measured against a 640x360 window
+    #: rather than against the strip anybody actually sees. The extra
+    #: light is what washed the colour out: it carried the wash towards
+    #: full brightness, and a colour carried towards white is a pastel.
+    #: Measured on a real track at the same moment, windowed and full
+    #: screen, before this: brightness 0.633 against 0.746, saturation
+    #: 0.622 against 0.608. Across frames of the same synthetic music,
+    #: the spread of hues in a full screen was 0.104 against the strip's
+    #: 0.176.
     #:
-    #: Swept at 1920x1080 against a 640x360 window's 0.288 of colour, and
-    #: 0.207 over the outer thirds: 0.257/0.198 at 0.8, 0.277/0.231 at
-    #: 1.8, 0.293/0.257 at 2.4, 0.305/0.276 at 2.8.
-    #:
-    #: 2.4 matched the window for colour and lost its dark. Filling the
-    #: bare air that far lifts the darkest tenth of the frame to 0.247
-    #: against a window's 0.216, so the corners the room used to sit in
-    #: were lit: "X xxxx xxx xxxxx xx xxxxx xxxx xxxxx xxxxxxx xx xxx
-    #: xxxxxxxxxx xx xxxx xx xxxxxxxx xxxx, X xxxx xxxx xx xxxxxxxxxx xx
-    #: xxxx." At 1.6 the darkest tenth is 0.224, which is the window's
-    #: dark, and the colour is 0.206 against the window's 0.190 - still
-    #: the more colourful of the two. Most of the vibrancy was never this
-    #: knob anyway; it was the crisp blit (see blit_scene).
-    WASH_FILL = 1.6
-
-    #: Making up the difference with saturation instead was tried: a
-    #: factor on ``deep`` keyed to the same edge. It does put the colour
-    #: back, and it flattens the one thing the air is supposed to do -
-    #: with the floor that high the bass moved the saturation from 0.62 to
-    #: 0.68 where it needs half again, so the room stopped answering the
-    #: music. The dark is worth more than the last hundredth of colour.
-
-    #: How much smaller the lamps get as the frame grows, and the least
-    #: they are allowed to shrink to.
-    #:
-    #: The room has a fixed number of lines in it, so a big frame has more
-    #: bare air between them - and a lamp that keeps the same share of the
-    #: frame then fills that air with one smooth gradient and flattens the
-    #: colour out. A smaller lamp leaves the wash showing, which is where
-    #: the variety lives: "X xxxx xxx xxx xxxx xxxxxxxxxx xxx xxxx xxxxxxx
-    #: xx xxxxxxxx xxxx."
-    LAMP_SHRINK = 0.62
-
-    @classmethod
-    def _lamp(cls, rect) -> float:
-        """How much to shrink the lamps by, for a frame this size."""
-        return max(cls.LAMP_SHRINK,
-                   min(1.0, cls.DRAWN_FOR / max(1.0, rect.height())))
+    #: Air is soft, so it stretches without anything to show it has been
+    #: stretched, and laid out as the strip's the full screen is the
+    #: strip's picture: hue spread 0.170 against 0.176, colourfulness 84.8
+    #: against 82.6, saturation of the lit 0.605 against 0.583, brightness
+    #: 0.541 against 0.539. The lamp becomes a column of light down the
+    #: middle, which is what a lamp at the end of a room full of haze is.
+    HAZE_TALLEST = 0.3
 
     def _haze_tile(self, rect, horizon, bass, synth, flash):
         """The air in the room, painted small and stretched.
@@ -3066,9 +3039,7 @@ class Rave(Scene):
         if rect.width() < 2 or rect.height() < 2:
             return None
         hue = (0.62 + synth * 0.3) % 1.0
-        lamp = self._lamp(rect)
-        key = (round(lamp, 2),
-               round(hue, 2),
+        key = (round(hue, 2),
                # Brightness, over a narrower range than it had.
                #
                # It used to run from 0.34 to 1.24 and clamp: quiet
@@ -3092,47 +3063,15 @@ class Rave(Scene):
                round(min(1.30, 0.80 + bass * 0.50), 2))
         if self._haze_key == key and self._haze_image is not None:
             return self._haze_image
-        (lamp, shade, value, alpha, spread, across, down, second,
-         deep) = key
-        spread *= lamp
-        # How much of the frame the shrunken lamp left bare.
-        #
-        # Shrinking the lamp on a big frame is what put the variety back
-        # into the air, and it is also what took the colour out of it.
-        # Measured in sixths across the frame, at a full bass, as
-        # saturation times brightness - which is how much colour is
-        # actually *in* a region rather than how bright or how deep it is
-        # on its own - a 1920x1080 frame holds more colour than a 640x360
-        # window down the middle two columns (0.40 against 0.35) and much
-        # less down the outer four (0.13 against 0.22 at the far left).
-        # So the room is not uniformly grey at full screen, as it looked:
-        # it is lit in the middle and bare at the edges, and the edges are
-        # most of a wide frame.
-        #
-        # ``edge`` is how much of it is bare, and it is 0 for any frame
-        # the lamp is not shrunk on. Everything below keyed to it is
-        # therefore something a window never draws, which is the point:
-        # "xxx xxxxxxxxxx xx xxxx xxxxx xxxxxxx xx xxxxxxxx xxx xx xxxxx
-        # xxxx xxx xxxxxxxxxxx full screen" - so the window keeps exactly
-        # the look it has and the light goes where it is missing.
-        edge = 1.0 - lamp
-
-        def lit(share: float) -> float:
-            """A share of the light, carried towards full by ``edge``.
-
-            Towards, rather than multiplied by: the wash's brightest stop
-            is already at 0.86 of the light and its alpha at 0.86 of
-            opaque, so a factor clamps almost at once - which is why
-            multiplying stopped helping at all past about a third more
-            light, well short of what the window has.
-            """
-            return share + (1.0 - share) * min(1.0, edge * self.WASH_FILL)
+        (shade, value, alpha, spread, across, down, second, deep) = key
 
         def rich(base: float) -> float:
             """A saturation, taken as deep as the bass asks."""
             return max(0.0, min(1.0, base * deep))
-        size = QSize(self.HAZE, max(2, int(self.HAZE * rect.height()
-                                           / max(1.0, rect.width()))))
+        # Never taller than a strip. See HAZE_TALLEST.
+        size = QSize(self.HAZE, max(2, int(self.HAZE * min(
+            rect.height() / max(1.0, rect.width()),
+            self.HAZE_TALLEST))))
         image = QImage(size, QImage.Format.Format_ARGB32_Premultiplied)
         image.fill(Qt.GlobalColor.transparent)
         wide, tall = size.width(), size.height()
@@ -3144,27 +3083,19 @@ class Rave(Scene):
             into.setPen(Qt.PenStyle.NoPen)
 
             # The room's own light: dim at the ceiling, warmer at the
-            # floor. On a big frame ``lit`` carries all three stops most
-            # of the way to full and that shape largely goes - which was
-            # worth checking rather than assuming, because it sounds like
-            # a loss. Holding the shape by carrying each stop only as far
-            # as its own ceiling costs the vibrancy this was for, 0.276
-            # against 0.293 where the window is 0.288; and the spread of
-            # brightness down the bare left sixth of a full frame is 0.024
-            # even with the shape gone, against 0.019 in the window that
-            # was the one that looked right. There is more of the room
-            # left in it than there is in the picture it is copying.
+            # floor, which is what an actual room does - the light lands
+            # on the floor.
             wash = QLinearGradient(0.0, 0.0, 0.0, tall)
             wash.setColorAt(0.0, QColor.fromHsvF(other, rich(0.92),
-                                                 value * lit(0.52),
-                                                 alpha * lit(0.80)))
+                                                 value * 0.52,
+                                                 alpha * 0.80))
             wash.setColorAt(down, QColor.fromHsvF(shade, rich(0.80),
-                                                  value * lit(0.34),
-                                                  alpha * lit(0.34)))
+                                                  value * 0.34,
+                                                  alpha * 0.34))
             wash.setColorAt(1.0, QColor.fromHsvF((shade + 0.12) % 1.0,
                                                  rich(0.88),
-                                                 value * lit(0.86),
-                                                 alpha * lit(0.86)))
+                                                 value * 0.86,
+                                                 alpha * 0.86))
             into.setBrush(wash)
             into.drawRect(box)
 

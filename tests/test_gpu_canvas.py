@@ -452,17 +452,78 @@ class TestABigScreenOnASmallCard:
         self._judge(card, 9.0)
         assert card.choice(5120 * 2880, 2.0, "rider") == (4, 1.0)
 
-    def test_it_never_goes_back_to_a_rung_that_did_not_fit(self):
-        """Or the picture would go soft and sharp by turns, for as long
-        as the frame sat between two rungs."""
+    def _down_once(self, card, ratio=2.0):
+        """Past the warm-up, then one rung measured over the budget."""
+        self._past_the_warmup(card, ratio)
+        self._judge(card, 20.0, ratio=ratio)
+        for _ in range(card.SETTLE):
+            card.record(4.0, ratio)
+
+    def test_a_rung_that_did_not_fit_is_not_tried_again_for_a_while(self):
+        """Or the picture would go soft and sharp by turns."""
+        card = self._card()
+        self._down_once(card)
+        frames = 0
+        while frames + card.WINDOW < card.RETRY - card.SETTLE:
+            self._judge(card, 4.0)
+            frames += card.WINDOW
+        assert card.choice(5120 * 2880, 2.0, "rider") == (2, 1.0)
+
+    def test_it_climbs_back_when_the_frames_say_there_is_room(self):
+        """Whatever drove it down may have been something else on the
+        machine - an analysis, a sync, another app. Without this, one busy
+        moment kept a full screen soft for the rest of the session."""
+        card = self._card()
+        self._down_once(card)
+        for _ in range(card.RETRY // card.WINDOW + 2):
+            self._judge(card, 4.0)
+        assert card.choice(5120 * 2880, 2.0, "rider") == (4, 1.0)
+
+    def test_it_does_not_climb_when_the_frames_say_there_is_not(self):
+        """10 ms at two samples is 15 at four, over the budget: trying it
+        would only be a stutter."""
+        card = self._card()
+        self._down_once(card)
+        for _ in range(3 * card.RETRY // card.WINDOW):
+            self._judge(card, 10.0)
+        assert card.choice(5120 * 2880, 2.0, "rider") == (2, 1.0)
+
+    def test_every_failed_climb_doubles_the_wait(self):
+        """A frame that fits below and not above is tried again, but
+        less and less often: five seconds, then ten, then twenty."""
+        card = self._card()
+        self._down_once(card)
+        climbs = []
+        for window in range(int(8 * card.RETRY / card.WINDOW)):
+            before = card.choice(5120 * 2880, 2.0, "rider")
+            # Cheap below, too dear above: every climb fails.
+            self._judge(card, 4.0 if before == (2, 1.0) else 20.0)
+            if card.choice(5120 * 2880, 2.0, "rider") != before \
+                    and before == (2, 1.0):
+                climbs.append(window)
+            for _ in range(card.SETTLE if card._settle else 0):
+                card.record(4.0, 2.0)
+        gaps = [b - a for a, b in zip(climbs, climbs[1:])]
+        assert len(climbs) >= 3, (
+            f"it only tried to climb at windows {climbs}")
+        assert all(later > earlier * 1.5 for earlier, later
+                   in zip(gaps, gaps[1:])), (
+            f"it tried to climb at windows {climbs}: the waits between "
+            f"tries are not growing")
+
+    def test_a_new_scene_starts_where_this_size_fitted(self):
+        """Not at the top every time, stepping down through a second of
+        slow frames at every change of scene on a big display."""
         card = self._card()
         self._past_the_warmup(card)
-        self._judge(card, 20.0)
+        self._judge(card, 30.0)
         for _ in range(card.SETTLE):
-            card.record(4.0, 2.0)
-        for _ in range(10):
-            self._judge(card, 4.0)
+            card.record(30.0, 2.0)
+        self._judge(card, 9.0)
         assert card.choice(5120 * 2880, 2.0, "rider") == (2, 1.0)
+        assert card.choice(5120 * 2880, 2.0, "tunnel") == (2, 1.0)
+        assert card.choice(2560 * 1600, 2.0, "tunnel") == (4, 1.0), (
+            "a size nothing has been measured at starts at the top")
 
     def test_a_new_scene_or_a_new_size_starts_sharp_again(self):
         card = self._card()
@@ -518,6 +579,41 @@ class TestABigScreenOnASmallCard:
             f"middle of the screen")
         assert min(lit.values()) > 0.8, (
             f"and at full brightness, not smoothed into grey: {lit}")
+
+    def test_each_tick_is_drawn_once(self):
+        """Asking the pane to repaint as well as the canvas drew every
+        frame twice - the pane's own paint asks the canvas again a frame
+        later - which is 120 frames a second off a timer asking for 60,
+        and twice the card's work for nothing."""
+        got = on_the_card("""
+            import time
+            made = pane(size=(640, 400))
+            made._timer.stop()
+            made.show()
+            drawn = []
+            real = made._paint_on_gpu
+            made._paint_on_gpu = lambda canvas: (drawn.append(1),
+                                                 real(canvas))
+
+            def settle():
+                end = time.monotonic() + 0.05
+                while time.monotonic() < end:
+                    app.processEvents()
+                    time.sleep(0.002)
+
+            for i in range(10):
+                made._tick()
+                settle()
+            drawn.clear()
+            for i in range(30):
+                made._tick()
+                settle()
+            print(json.dumps({"drawn": len(drawn)}))
+        """)
+        assert got["drawn"] <= 33, (
+            f"thirty ticks drew {got['drawn']} frames")
+        assert got["drawn"] >= 27, (
+            f"thirty ticks drew only {got['drawn']} frames")
 
     def test_a_card_too_slow_for_its_screen_draws_less(self):
         """A frame the card cannot finish in its budget is measured as

@@ -494,8 +494,35 @@ def analyse(samples: array, sample_rate: int, channels: int = 1,
 CONTOUR_RATE = 8
 
 
+def balance(samples: Sequence, sample_rate: int, channels: int = 2,
+            columns: int = 0) -> List[float]:
+    """How far the mix sits to one side, -1 to +1, ``columns`` times a track.
+
+    Read straight off the samples, one frame in sixteen, which is two
+    thousand readings a column at the contour's rate - the same answer
+    ``contour`` reads off the scope's traces, available with the bands
+    rather than seconds after them. See ``contour``.
+    """
+    if channels < 2 or columns <= 0 or not samples:
+        return [0.0] * max(0, columns)
+    pairs = len(samples) // channels
+    lean = [0.0] * columns
+    for index in range(columns):
+        start = index * pairs // columns
+        end = max(start + 1, (index + 1) * pairs // columns)
+        left = right = 0
+        for frame in range(start, end, 16):
+            at = frame * channels
+            left += abs(samples[at])
+            right += abs(samples[at + 1])
+        total = left + right
+        lean[index] = 0.0 if total <= 0 else (right - left) / total
+    return lean
+
+
 def contour(frames: Sequence, vectors: Optional[Sequence] = None,
-            calibration: Optional[dict] = None) -> dict:
+            calibration: Optional[dict] = None,
+            lean: Optional[Sequence] = None) -> dict:
     """The shape of the track, as the thing that drives a road.
 
     Audiosurf builds its track in a pre-pass rather than as the song
@@ -517,6 +544,11 @@ def contour(frames: Sequence, vectors: Optional[Sequence] = None,
     """
     loud = outline(frames, calibration, columns=max(
         1, int(len(frames) / max(1, RATE) * CONTOUR_RATE)))
+    if lean is not None and loud:
+        # Worked out from the samples already. See ``balance``.
+        given = list(lean)[:len(loud)]
+        given += [0.0] * (len(loud) - len(given))
+        return {"loud": loud, "lean": given, "rate": float(CONTOUR_RATE)}
     lean = [0.0] * len(loud)
     if vectors and loud:
         span = len(vectors) / max(1e-6, RATE)
@@ -583,8 +615,148 @@ def _arm_shutdown() -> None:
 _ARMED = False
 
 
+#: Whether the analysis runs in processes of its own. See _worker.
+WORKERS = True
+
+#: How many traces go back from a worker at a time. See _worker.
+SLICE = 400
+
+
+def _whole_contour(frames, samples, rate: int, channels: int,
+                   calibration) -> Optional[dict]:
+    """The road's whole shape, sent with the bands.
+
+    Whole the moment the picture is: the bends used to come from the
+    scope's traces, which land seconds later, so a road that had been
+    dead straight began to bend under the rider mid-song when they did.
+    """
+    if not frames:
+        return None
+    columns = max(1, int(len(frames) / max(1, RATE) * CONTOUR_RATE))
+    return contour(frames, None, calibration,
+                   lean=balance(samples, rate, channels, columns))
+
+
+def _worker(connection, rate: int, channels: int, part: str) -> None:
+    """One part of the analysis, in a process of its own.
+
+    Not a thread, because a thread was not enough. The analysis is
+    Python arithmetic, and Python runs one thread's arithmetic at a time,
+    so a thread doing it takes turns with the one drawing the picture.
+    Measured on a seven and a half minute track: the picture took 11 s
+    to come up rather than the 8.7 s of work it is, and for the half
+    minute the rest took after that - the scope's traces and the drums,
+    while the track was playing - the pane drew 21 to 26 frames a second
+    with a hundred millisecond hitch every second, against 60 and never
+    more than 25 ms once it had finished. That is "xx xxxxx xxxx xxxx
+    xxxxx xxxxxxxxx xxx". A process has an interpreter of its own and
+    takes nothing from the one drawing.
+
+    ``part`` is ``"picture"`` - the bands, then the traces and the beat
+    maps - or ``"drums"``, the finer pass for the kit. They run side by
+    side, so the drums the rider builds its road from arrive about when
+    the picture does rather than a quarter of a minute after it.
+    """
+    import os
+
+    try:
+        # Below the app, so a busy machine takes its time from this
+        # rather than from the picture or the music.
+        os.nice(10)
+    except (AttributeError, OSError):
+        pass
+    try:
+        samples = array("h")
+        samples.frombytes(connection.recv_bytes())
+        import beatmap
+
+        if part == "picture":
+            calibration: dict = {}
+            said = [-1.0]
+
+            def progress(fraction: float) -> None:
+                if fraction - said[0] >= 0.01:
+                    said[0] = fraction
+                    connection.send(("progress", fraction))
+
+            frames = analyse(samples, rate, channels, on_progress=progress,
+                             calibration=calibration)
+            connection.send(("bands", (frames, calibration,
+                                       _whole_contour(frames, samples, rate,
+                                                      channels, calibration))))
+            # In slices. Taking twenty-seven megabytes of traces apart in
+            # one piece held the other process's interpreter for 18 ms,
+            # which is a frame the pane did not draw.
+            for kind, rows in (("shapes", traces(samples, rate, channels)),
+                               ("vectors", vector_traces(samples, rate,
+                                                         channels))):
+                for start in range(0, len(rows), SLICE):
+                    connection.send((kind, rows[start:start + SLICE]))
+            beats = beatmap.build(frames, RATE)
+            connection.send(("done", beats))
+        else:
+            fine = onset_frames(samples, rate, channels)
+            kit = beatmap.elements(fine, ONSET_RATE) if fine else None
+            connection.send(("elements", kit))
+    except Exception as exc:      # noqa: BLE001 - reported, not raised
+        try:
+            connection.send(("failed", f"{type(exc).__name__}: {exc}"))
+        except Exception:      # noqa: BLE001 - nobody left to tell
+            pass
+    finally:
+        connection.close()
+
+
+def worker_check(timeout: float = 30.0) -> str:
+    """Run a second of audio through a worker process, for the self-test.
+
+    In the built app a worker is the app itself started again and told
+    to be one, which is the kind of thing that works from source and not
+    from the bundle. So it is demonstrated rather than assumed.
+    """
+    import math
+    import multiprocessing
+    import time
+
+    rate = DECODE_RATE
+    pcm = array("h")
+    for index in range(rate):
+        value = int(12000 * math.sin(2 * math.pi * 220 * index / rate))
+        pcm.append(value)
+        pcm.append(value)
+    context = multiprocessing.get_context("spawn")
+    ours, theirs = context.Pipe()
+    started = time.monotonic()
+    process = context.Process(target=_worker,
+                              args=(theirs, rate, 2, "picture"), daemon=True)
+    process.start()
+    theirs.close()
+    try:
+        ours.send_bytes(pcm)
+        while time.monotonic() - started < timeout:
+            if not ours.poll(0.1):
+                if not process.is_alive():
+                    raise RuntimeError("the worker died before it answered")
+                continue
+            kind, payload = ours.recv()
+            if kind == "bands":
+                frames = payload[0]
+                if not frames:
+                    raise RuntimeError("the worker sent no frames")
+                return (f"in a process of its own, "
+                        f"{time.monotonic() - started:.1f} s for a second "
+                        f"of audio")
+            if kind == "failed":
+                raise RuntimeError(payload)
+        raise RuntimeError("the worker did not answer")
+    finally:
+        if process.is_alive():
+            process.terminate()
+        process.join(2.0)
+
+
 class _AnalysisThread(_QThread_base):
-    """analyse() on its own thread, reporting through signals.
+    """The analysis, off the UI thread, reporting through signals.
 
     Signals rather than a posted callback: a QThread runs no event loop of
     its own once run() returns, so a QTimer created there never fires and
@@ -621,11 +793,124 @@ class _AnalysisThread(_QThread_base):
         self._channels = channels
         self._stop = False
         self._wants_elements = wants_elements
+        #: The worker processes, while there are any. See _worker.
+        self._processes: list = []
 
     def stop(self) -> None:
         self._stop = True
 
     def run(self) -> None:
+        if WORKERS:
+            try:
+                if self._run_in_workers():
+                    return
+            except Exception as exc:      # noqa: BLE001 - there is a fallback
+                log.info("Analysing on a thread instead (%s).", exc)
+            finally:
+                self._end_workers()
+            if self._stop:
+                return
+        self._run_here()
+
+    def _end_workers(self) -> None:
+        """Every worker gone, whatever state it was in."""
+        processes, self._processes = self._processes, []
+        for process in processes:
+            try:
+                if process.is_alive():
+                    process.terminate()
+                process.join(2.0)
+                if process.is_alive():
+                    process.kill()
+                    process.join(1.0)
+            except Exception:      # noqa: BLE001 - already gone
+                pass
+
+    def _run_in_workers(self) -> bool:
+        """The analysis in worker processes, relayed to the signals.
+
+        False when no worker could be started and nothing has been sent,
+        so the caller can do it here instead. Once anything has been
+        handed over, a worker that dies is reported as a failure rather
+        than started again, so nothing is ever handed over twice.
+        """
+        import multiprocessing
+        from multiprocessing.connection import wait
+
+        context = multiprocessing.get_context("spawn")
+        parts = ["picture"] + (["drums"] if self._wants_elements else [])
+        running: dict = {}
+        for part in parts:
+            ours, theirs = context.Pipe()
+            process = context.Process(
+                target=_worker, args=(theirs, self._rate, self._channels, part),
+                name=f"mail-manager-{part}", daemon=True)
+            process.start()
+            theirs.close()
+            self._processes.append(process)
+            running[ours] = part
+        for ours in running:
+            # The samples' own buffer, not a copy of it: a long track is
+            # tens of megabytes.
+            ours.send_bytes(self._samples)
+        frames = calibration = None
+        shapes: list = []
+        vectors: list = []
+        held = None
+        sent_bands = False
+        while running:
+            if self._stop:
+                return True
+            for ours in wait(list(running), timeout=0.1):
+                part = running[ours]
+                try:
+                    kind, payload = ours.recv()
+                except (EOFError, OSError):
+                    kind, payload = "failed", f"the {part} worker stopped"
+                if self._stop:
+                    return True
+                if kind == "progress":
+                    self.progress.emit(float(payload) * 0.85)
+                    continue
+                if kind in ("shapes", "vectors"):
+                    (shapes if kind == "shapes" else vectors).extend(payload)
+                    continue
+                if kind == "bands":
+                    frames, calibration, _shape = payload
+                    self.bands.emit(payload)
+                    sent_bands = True
+                    if held is not None:
+                        self.elements.emit(held)
+                        held = None
+                    continue
+                if kind == "done":
+                    self.done.emit((frames, shapes, vectors, calibration,
+                                    payload))
+                elif kind == "elements":
+                    if payload is not None:
+                        # Not before the bands: the pane has nothing to
+                        # hang the kit on until it has the frames.
+                        if sent_bands:
+                            self.elements.emit(payload)
+                        else:
+                            held = payload
+                elif kind == "failed":
+                    if part != "picture":
+                        log.info("Could not pick the drums out (%s).", payload)
+                    elif not sent_bands:
+                        # Nothing has gone out: do it here instead.
+                        log.info("The analysis worker failed (%s).", payload)
+                        return False
+                    else:
+                        self.failed.emit(str(payload))
+                        return True
+                del running[ours]
+                ours.close()
+        return True
+
+    def _run_here(self) -> None:
+        """The whole analysis on this thread. What there was before
+        workers, and what there is when none will start."""
         try:
             calibration: dict = {}
             frames = analyse(self._samples, self._rate, self._channels,
@@ -637,7 +922,9 @@ class _AnalysisThread(_QThread_base):
             # Out with it. Every scene but the oscilloscope can draw from
             # here, and the two passes below take another two thirds as
             # long again.
-            self.bands.emit((frames, calibration))
+            self.bands.emit((frames, calibration, _whole_contour(
+                frames, self._samples, self._rate, self._channels,
+                calibration)))
             # The waveform the oscilloscope draws, on the same schedule as
             # the bands so one index reads both.
             shapes = traces(self._samples, self._rate, self._channels,

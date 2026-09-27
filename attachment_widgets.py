@@ -623,6 +623,7 @@ class Spectrum(QWidget):
         #: both in. See ``set_traces``.
         self._contour = None
         self._contour_from = None
+        self._contour_whole = False
         self._moved_at = None
         #: How far through each element's list the playhead has got.
         self._kit_at: dict = {}
@@ -702,16 +703,22 @@ class Spectrum(QWidget):
         return self._canvas is not None
 
     def update(self, *args) -> None:      # noqa: D401 - Qt's name
-        super().update(*args)
-        if self._canvas is not None:
-            # Kept the pane's size here as well as in resizeEvent: Qt
-            # holds a hidden widget's resize events back until it is
-            # shown, and a canvas that missed one draws at whatever size
-            # it last heard about - which, for a pane built hidden, is a
-            # strip with no height at all.
-            if self._canvas.geometry() != self.rect():
-                self._canvas.setGeometry(self.rect())
-            self._canvas.update()
+        if self._canvas is None:
+            super().update(*args)
+            return
+        # Only the canvas. It covers the pane and draws all of it, and
+        # asking the pane as well painted every frame twice: the pane's
+        # own paint asks the canvas again, one frame later. Measured, 120
+        # frames a second off a 60 a second timer.
+        #
+        # Kept the pane's size here as well as in resizeEvent: Qt holds a
+        # hidden widget's resize events back until it is shown, and a
+        # canvas that missed one draws at whatever size it last heard
+        # about - which, for a pane built hidden, is a strip with no
+        # height at all.
+        if self._canvas.geometry() != self.rect():
+            self._canvas.setGeometry(self.rect())
+        self._canvas.update()
 
     def _paint_on_gpu(self, canvas) -> None:
         """One frame, drawn on the card at the screen's own resolution.
@@ -1105,8 +1112,14 @@ class Spectrum(QWidget):
         return name
 
     def set_beats(self, maps) -> None:
-        """The beat maps the analysis found, one per thing to listen to."""
+        """The beat maps the analysis found, one per thing to listen to.
+
+        With the kit kept, if it is already here: the drums are worked out
+        alongside the rest now rather than after it, so they can arrive
+        first - and replacing the table outright threw them away.
+        """
         self._beats = dict(maps or {})
+        self._beats.update(self._elements)
         self._beat_at = 0
         self._beat_seen = -1.0
 
@@ -1293,16 +1306,36 @@ class Spectrum(QWidget):
         self._traces = list(shapes or [])
         self._vectors = list(vectors or [])
         # The shape of the track, for a scene that builds a world out of
-        # it. Worked out here because it needs the traces and the frames
-        # together, and once because it never changes.
-        self._contour = None
-        self._contour_from = None
+        # it - worked out again with the traces in it, unless the analysis
+        # already sent the whole of it with the bands. Then it is final,
+        # and a road does not change shape under the rider because the
+        # scope's traces turned up. See set_contour.
+        if not self._contour_whole:
+            self._contour = None
+            self._contour_from = None
+
+    def set_contour(self, contour) -> None:
+        """The track's whole shape, sent with the bands. Final."""
+        if contour is None:
+            return
+        self._contour = contour
+        self._contour_from = self._frames
+        self._contour_whole = True
+
+    def frames_list(self):
+        """The frames the pane is drawing from, as it was handed them."""
+        return self._frames
 
     def set_frames(self, frames: List, rate: int) -> None:
         """The analysis, which lands a moment after playback starts."""
         import attachment_audio
 
+        if frames and frames is self._frames and max(1, rate) == self._rate:
+            # The same analysis again. Starting over would zero every
+            # level mid-song, which is a dip in the picture for nothing.
+            return
         self._frames = frames or []
+        self._contour_whole = False
         self._rate = max(1, rate)
         width = len(self._frames[0]) if self._frames else 0
         self._level = [0.0] * width
@@ -3267,6 +3300,16 @@ class CardSharpness:
     #: resolution for a frame that was 10.5 ms nine times in ten.
     WINDOW = 30
 
+    #: What the rung above is expected to cost against this one, until
+    #: it has been drawn at: half the samples measured 1.2 to 1.5 times
+    #: cheaper, half the pixels about twice.
+    DEARER_SAMPLES = 1.5
+    DEARER_PIXELS = 2.0
+
+    #: Frames before a rung that did not fit is tried again - five
+    #: seconds at sixty - and it doubles each time it still does not.
+    RETRY = 300
+
     def __init__(self) -> None:
         self._rung = None
         self._cost = 0.0
@@ -3274,8 +3317,16 @@ class CardSharpness:
         self._warm = self.WARMUP
         self._key = None
         self._window: list = []
+        self._count = 0
         #: What each rung measured, once it has been drawn at.
         self._seen: dict = {}
+        #: When each rung that did not fit may be tried again, and how
+        #: long the wait after the next failure will be.
+        self._retry_at: dict = {}
+        self._backoff: dict = {}
+        #: The best rung that has fitted at each size this session,
+        #: whatever was being drawn. See choice.
+        self._fits: dict = {}
 
     @staticmethod
     def rungs(ratio: float) -> tuple:
@@ -3286,20 +3337,34 @@ class CardSharpness:
         return ((4, 1.0), (2, 1.0), (0, 1.0))
 
     def choice(self, pixels: float, ratio: float, scene) -> tuple:
-        """What to draw this frame at. A new scene or size starts sharp."""
-        key = (id(scene), int(pixels / 100_000.0), round(ratio, 3))
+        """What to draw this frame at.
+
+        A new scene or size starts at the best rung anything has fitted
+        at on a screen this size, rather than at the top. Starting at the
+        top and stepping down cost a second of slow frames at every scene
+        change on a big display - "it runs slow until smoothing out" -
+        and a scene with room to spare climbs from there anyway.
+        """
+        size = (int(pixels / 100_000.0), round(ratio, 3))
+        key = (id(scene),) + size
         if key != self._key:
             self._key = key
             self._cost = 0.0
             self._settle = 0
             self._warm = self.WARMUP
             self._window = []
+            self._count = 0
             self._seen = {}
-            self._rung = self.rungs(ratio)[0]
+            self._retry_at = {}
+            self._backoff = {}
+            rungs = self.rungs(ratio)
+            start = self._fits.get(size, rungs[0])
+            self._rung = start if start in rungs else rungs[0]
         return self._rung
 
     def record(self, taken_ms: float, ratio: float) -> None:
         """One finished frame, and a rung moved when the median asks."""
+        self._count += 1
         if self._warm > 0:
             self._warm -= 1
             return
@@ -3316,16 +3381,41 @@ class CardSharpness:
         if self._rung not in rungs:
             return
         at = rungs.index(self._rung)
-        if self._cost > self.BUDGET_MS and at < len(rungs) - 1:
-            # Down only. Every scene starts at the top rung, so a rung
-            # below it is only ever reached by measuring the one above
-            # over the budget - and a rung measured over is not tried
-            # again until the scene or the size changes, so a frame that
-            # sits between two does not go back and forth between them,
-            # which would be the picture going soft and sharp by turns.
-            self._rung = rungs[at + 1]
-            self._settle = self.SETTLE
-            self._window = []
+        size = self._key[1:]
+        if self._cost > self.BUDGET_MS:
+            if at < len(rungs) - 1:
+                # Not tried again for a while, and for twice as long
+                # each time it still does not fit, so a frame that sits
+                # between two rungs cannot turn the picture soft and
+                # sharp by turns.
+                wait = self._backoff.get(self._rung, self.RETRY)
+                self._retry_at[self._rung] = self._count + wait
+                self._backoff[self._rung] = wait * 2
+                if self._fits.get(size) == self._rung:
+                    del self._fits[size]
+                self._move(rungs[at + 1])
+            return
+        best = self._fits.get(size)
+        if best is None or best not in rungs or rungs.index(best) > at:
+            self._fits[size] = self._rung
+        if at == 0:
+            return
+        # Up, when the frames say the rung above would fit. What drove
+        # it down may have been something else on the machine rather
+        # than the card - an analysis, a sync, another app - and without
+        # this one busy moment kept the picture soft for the session.
+        up = rungs[at - 1]
+        if self._count < self._retry_at.get(up, 0):
+            return
+        dearer = (self.DEARER_SAMPLES if up[1] == self._rung[1]
+                  else self.DEARER_PIXELS)
+        if self._cost * dearer < self.BUDGET_MS * 0.9:
+            self._move(up)
+
+    def _move(self, to: tuple) -> None:
+        self._rung = to
+        self._settle = self.SETTLE
+        self._window = []
 
     def interval_ms(self, frame_ms: int) -> int:
         """How often to ask for a frame, given what one is costing.
@@ -3700,8 +3790,23 @@ class Waveform(QWidget):
         self.update()
 
     def clear(self) -> None:
+        """Forget the shape, and only the shape.
+
+        How long the track is and where it has got to belong to the
+        player, which says so once and then not again until they change.
+        This used to zero them as well, and a shape is cleared whenever
+        an analysis starts - so switching the visualiser on after a track
+        had loaded left a waveform with no length: nothing shaded as the
+        track played, and every click on it landed nowhere. A new track
+        resets them itself. See forget_track.
+        """
+        self.set_shape(())
+
+    def forget_track(self) -> None:
+        """Everything, for a track that is going away."""
         self.set_shape(())
         self._span = self._at = 0
+        self.update()
 
     # -- seeking -----------------------------------------------------------
     def _seek_to(self, x: float) -> None:

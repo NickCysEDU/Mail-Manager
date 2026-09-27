@@ -301,12 +301,26 @@ That first figure is the one that matters and it must stay at zero.
 
 **Speed.** Rules engine 10.1 ms per message. Lexicon opens in 38 ms using
 1.95 MB, down from 70 ms and 10.5 MB, and neither number now grows with the
-table. Test suite 3,935 tests (with the evaluation sets present) in about three minutes on four workers.
+table. Test suite 3,956 tests (with the evaluation sets present) in about three minutes on four workers.
 
 ---
 
 ## Things a future session should know
 
+- **The audio analysis runs in worker processes** (`attachment_audio._worker`,
+  spawned). Three consequences. Any script that constructs the viewer and
+  analyses a track must put its body under `if __name__ == "__main__":` -
+  a spawned worker imports the main module again, and an unguarded script
+  runs itself once per worker. `main.py` calls `multiprocessing.freeze_support()`
+  first, which is what stops a worker in the built app opening a second
+  window; the self-test runs a worker to prove it. And a test that
+  monkeypatches `analyse` or `onset_frames` does not reach the workers - set
+  `attachment_audio.WORKERS = False` to test the thread path.
+- **The kit, the traces and the bands arrive in any order now.** The drums run
+  alongside the picture, so they can land first; `set_beats` merges the kit
+  back in rather than replacing the table, and the relay holds the kit until
+  the bands have gone out. The road's contour comes with the bands and is
+  final (`set_contour`); `set_traces` leaves it alone.
 - **Brace a shell variable that touches a curly quote.** `"as “$IDENTITY”"`
   is read by macOS's bash as a variable whose name includes the quote's
   bytes; under `set -u` it stopped `build_app.sh` after the bundle was

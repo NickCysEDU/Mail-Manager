@@ -823,6 +823,12 @@ amplitude first. Loudest moment in a column rather than the average, since
 what makes a waveform readable is the transients; and every track is drawn
 to its own loudest moment, so a quiet recording fills the bar too.
 
+It used to stop working if the visualiser was switched on after a track
+had loaded: nothing shaded as the track played, and a click did nothing.
+Clearing the shape - which every analysis does as it starts - also
+cleared how long the track was, and the player only says that once. The
+waveform now forgets only its shape; a new track resets the rest.
+
 ### Playing the visualiser
 
 The attachment viewer's visualiser has its own keys, and they work in the
@@ -1370,6 +1376,50 @@ again that session. `MAIL_MANAGER_GPU=0` forces the CPU everywhere, for
 anybody chasing a drawing problem who wants to know whether the card is
 part of it.
 
+**The analysis takes nothing from the picture.** The picture comes up as
+soon as the bands are worked out, and the rest of the analysis carries on
+behind it: the scope's traces, the beat maps and a finer pass for the
+drums. That work is Python arithmetic, and Python runs one thread's
+arithmetic at a time - so on a thread it took turns with the one drawing
+the picture. On a seven and a half minute track the pane drew 21 to 26
+frames a second, with a hundred millisecond hitch every second, for the
+half minute that took: "if I click play once the xxxxxxxxxx xx xxxxxxxx
+xxxxxxx, xx xxxxx xxxx xxxx xxxxx xxxxxxxxx xxx". Worse, the card's
+governor read those frames as the card being slow and gave up the
+resolution for the rest of the session.
+
+It runs in two processes of its own now, one for the picture and one for
+the drums, side by side. From the first second after play the same track
+draws sixty frames a second at full resolution with no frame late by more
+than a timer tick, and the drums the rider builds its road from arrive
+with the picture rather than a quarter of a minute after it. The road's
+bends are worked out with the bands as well, from the samples themselves,
+so the road no longer starts straight and begins to bend mid-song when
+the scope's traces land; and the rest of the analysis landing no longer
+drops every level to nothing for a frame. Where no process will start,
+it runs on a thread as it always did.
+
+The card's governor also climbs back now. It tries the rung above when
+the frames say it would fit, waits five seconds before trying a rung
+that did not, twice as long each time it still does not, and starts a
+new scene at the best rung anything has fitted at on that screen rather
+than at the top - which was a second of slow frames at every change of
+scene on a big display. And each frame is drawn once: the pane was
+painting every frame twice, 120 a second off a timer asking for 60.
+
+**Rave is as vivid full screen as in the window.** The pane in the
+window is a strip, and in a strip the lamp at the end of the room lights
+the middle while the sides keep their own colours and the corners their
+dark. Laid out for a 16:10 screen the same lamp covered most of the frame
+in one gradient, and two earlier rounds made up for it with a smaller
+lamp and extra light in the bare air - measured against a 640x360 window
+rather than the strip anybody sees. The extra light is what washed it
+out: a colour carried towards white is a pastel. On a real track, full
+screen was 0.746 bright and 0.608 saturated against the window's 0.633
+and 0.622. The air is now always laid out as a strip's and stretched,
+which a haze does without showing it, and full screen measures 0.630 and
+0.638 - the window's picture, bigger.
+
 **A coin is round.** It was ten points joined by straight lines, which
 was round enough while the frame was drawn at half the screen's
 resolution. At all of it, a coin passing the craft is ninety pixels
@@ -1410,7 +1460,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,935 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,956 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1793,7 +1843,7 @@ corkscrews the track earned, and what a frame costs. No song, path or
 frame of one is ever written into the repository.
 
 ```bash
-./dev test        # 3,935 tests, about three minutes
+./dev test        # 3,956 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```
