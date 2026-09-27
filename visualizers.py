@@ -4282,8 +4282,6 @@ class Rider(Scene):
         self._wobble = 0.0
         #: How far through a whole turn the road is. See ``_find_twists``.
         self._rolled = 0.0
-        #: And how deep into a corkscrew, 0 at both ends and 1 half way.
-        self._twisting = 0.0
         #: How close to a beat the track is, held while it is stopped.
         self._beat_lit = 0.0
         #: How fast the craft is crossing lanes, for the bank.
@@ -5181,22 +5179,15 @@ class Rider(Scene):
         horizon = QPointF(
             centre.x() - self._aimed * focal * self.AIM_PULL
             + math.sin(self._wobble * 1.9) * shake,
-            centre.y() - rect.height() * (self.HORIZON_UP * (1.0 - self._twisting)
-                                          + lift)
+            centre.y() - rect.height() * (self.HORIZON_UP + lift)
             + math.sin(self._wobble * 2.7) * shake)
         # Negative on a right-hand bend, which is the way round it has to
         # be: leaning right tips the camera's up-vector right, so the
         # world turns the other way and the right-hand end of the horizon
         # comes *up*. Qt's positive rotation takes it down.
         tilt = max(-self.TILT, min(self.TILT, -self._banked * self.TILT))
-        # And the corkscrew, outside that clamp. The clamp is there to
-        # stop a bend tipping the picture over; this is not a bend, it
-        # is the road turning over on purpose, and it goes all the way
-        # round. Everything is drawn inside one rotation about the
-        # horizon, so the road, the blocks, the coins and the craft all
-        # turn together - which is what riding a corkscrew looks like
-        # from inside one.
-        tilt += self._rolled * 360.0
+        # Not the corkscrew, which turns the world round the road rather
+        # than the road: see ``paint``.
         return horizon, focal, tilt
 
     def _from_track(self, at: float, push: float) -> tuple:
@@ -5441,11 +5432,6 @@ class Rider(Scene):
         # is asked for an answer more than once a frame.
         through = self._twist_at(self._heard)
         self._rolled = 0.0 if through is None else self._turned(through)
-        # And how deep into one it is, which is a different shape: nought
-        # at both ends and one in the middle. The horizon rides up to the
-        # centre of the frame on it - see ``_camera``.
-        self._twisting = (0.0 if through is None
-                          else 1.0 - abs(2.0 * through - 1.0))
         #: How much of a sixtieth of a second this frame was worth on the
         #: track's clock. The rig reads it: a shake counted in frames is
         #: a different shake on every machine. See ``_slide``.
@@ -6111,19 +6097,36 @@ class Rider(Scene):
         # as long as the hit lasts, on top of the lean: the blueprint's
         # stun shake, which uncouples the camera from its own smoothing
         # so that a failure is felt rather than noticed.
+        lean = tilt + (math.sin(self._wobble * 2.3) * self._hurt
+                       * self.HURT_THROW)
+        # A corkscrew turns the world round the road, all the way, and
+        # not the road: the glow and the gates either side go round, and
+        # the road, what is on it and the craft stay where they are on
+        # the glass. It used to turn all of it together about the
+        # horizon, and the craft went round the frame with it - at the
+        # top of the picture halfway through, which is the one thing a
+        # player steering it needs never to move. The lit world does the
+        # same with the road itself wound round (see rider_gl._twist);
+        # flat, the world going round behind a steady road is the part
+        # that can be drawn. The world is drawn first so that the road
+        # passes in front of it as it turns.
         painter.save()
         painter.translate(horizon)
-        painter.rotate(tilt + (math.sin(self._wobble * 2.3)
-                               * self._hurt * self.HURT_THROW))
+        painter.rotate(lean + self._rolled * 360.0)
         painter.translate(-horizon)
-
         self._glow(painter, rect, horizon, hue, surge, bass, beat, flash)
+        self._pillars(painter, horizon, focal, hue, kit, beat, flash)
+        painter.restore()
+
+        painter.save()
+        painter.translate(horizon)
+        painter.rotate(lean)
+        painter.translate(-horizon)
         self._surface(painter, rect, horizon, focal, hue, surge,
                       flash + beat * 0.35)
         self._lanes(painter, horizon, focal, hue, beat, flash)
         self._markings(painter, horizon, focal, hue, kit,
                        flash + beat * 0.45)
-        self._pillars(painter, horizon, focal, hue, kit, beat, flash)
         self._edges(painter, rect, horizon, focal, hue, kit,
                     flash + beat * 0.30)
         self._walls(painter, rect, horizon, focal, hue, flash)
@@ -6135,9 +6138,7 @@ class Rider(Scene):
         # below to come from.
         if self._craft_spot is not None:
             self._craft_glass = QTransform().translate(
-                horizon.x(), horizon.y()).rotate(
-                tilt + math.sin(self._wobble * 2.3) * self._hurt
-                * self.HURT_THROW).translate(
+                horizon.x(), horizon.y()).rotate(lean).translate(
                 -horizon.x(), -horizon.y()).map(self._craft_spot)
         painter.restore()
         # The beat, where nothing is read against anything. On the grid

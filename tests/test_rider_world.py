@@ -363,6 +363,57 @@ class TestAnObstacleIsSeenHit:
             assert abs(place[2] - (scene.RIDER_AT + gap)) < 1e-9
 
 
+class TestTheRoadTurnsOver:
+    """A corkscrew winds the road itself round, and the camera rides it:
+    the craft stays put on the glass and the world goes round. It used to
+    turn the whole picture, and the craft went round the frame."""
+
+    @staticmethod
+    def _twisting(heard):
+        scene = _rider()
+        scene._twists = (10.0,)
+        scene._heard = heard
+        scene._at = scene._flat(heard) if scene._beat > 0.0 else heard * scene.FREE_RUN
+        return scene
+
+    def test_the_road_never_folds(self, qapp):
+        """Neighbouring samples never differ by more than the corkscrew's
+        own turn between them - in particular not at its end, where going
+        back to nothing wrung the road round backwards in one step."""
+        import rider_gl
+
+        world = _bare_world()
+        worst = 0.0
+        for tenth in range(0, 200):
+            scene = self._twisting(6.0 + tenth * 0.05)
+            road = world._read_road(scene)
+            rolls = road[2::4]
+            worst = max(worst, max(abs(b - a) for a, b in zip(rolls, rolls[1:])))
+        assert worst < 0.6, f"the road turns {worst:.2f} between two samples"
+        assert rider_gl.ROAD_SAMPLES == len(road) // 4
+
+    def test_the_turn_is_recorded_apart_from_the_bend(self, qapp):
+        """The camera leans into a bend by a share of it and rides a
+        corkscrew all the way, so the two are kept apart in the road."""
+        world = _bare_world()
+        scene = self._twisting(11.25)
+        road = world._read_road(scene)
+        for index in range(0, len(road), 4):
+            z = -6.0 + index // 4 * (82.0 / 95.0)
+            across, lift, roll = scene._road(z)
+            assert abs(road[index + 2] - road[index + 3]
+                       - roll * world.ROLL_SHARE) < 1e-9
+        turn = world._turn_at(road, scene.RIDER_AT)
+        assert 1.0 < turn < 5.0, f"half way through, the road is at {turn:.2f}"
+        # The camera's turn about the road's line at the craft is the
+        # one that keeps a point on the road where it was.
+        centre = world._on_road(road, 0.0, 0.0, scene.RIDER_AT)
+        plain = world._on_road(road, 0.6, 0.4, scene.RIDER_AT, plain=True)
+        turned = world._about(plain, centre, turn)
+        wound = world._on_road(road, 0.6, 0.4, scene.RIDER_AT)
+        assert max(abs(a - b) for a, b in zip(turned, wound)) < 1e-9
+
+
 class TestWhatTheGameDidBecomesWhatTheWorldDoes:
     def _happened(self, kind, taken=None, hue=None):
         scene = _rider()
@@ -658,6 +709,106 @@ class TestTheWorldOnTheCard:
         assert got["near"] >= got["far"] * 0.8, (
             f"just before the hit the obstacle covers {got['near']} points "
             f"against {got['far']} three units out: it is not seen hitting")
+
+    def test_a_corkscrew_turns_the_world_round_the_craft(self):
+        """Through a whole corkscrew, the craft is where it is on a road
+        that is not turning over - where the card is told to draw it -
+        and half way round, the foot of the frame is the same road while
+        the top of it has gone round."""
+        got = on_the_card(RIDER + textwrap.dedent("""
+            runs = {}
+            for twisted in (False, True):
+                made, scene = rider_pane(size=(800, 500))
+                ships, rolled, shots = [], [], []
+                with Clock() as clock:
+                    for i in range(int(3.6 * 60)):
+                        clock.step(1 / 60)
+                        made.set_position(int((10 + i / 60) * 1000))
+                        scene._placed = scene._laid = 1e9
+                        scene._blocks = []
+                        scene._twists = (10.6,) if twisted else ()
+                        made._tick()
+                        shots.append(made._canvas.grabFramebuffer())
+                        ships.append(made._canvas.world.seen["ship"])
+                        rolled.append(scene._rolled)
+                runs[twisted] = (ships, rolled, shots)
+            plain, turned = runs[False], runs[True]
+            mid = min(range(len(turned[1])),
+                      key=lambda i: abs(turned[1][i] - 0.5))
+            def changed(a, b, top, bottom, left=0.0, right=1.0):
+                h, w = a.height(), a.width()
+                points = [(x, y) for y in range(int(h * top), int(h * bottom), 4)
+                          for x in range(int(w * left), int(w * right), 4)]
+                return sum(1 for x, y in points
+                           if abs(a.pixelColor(x, y).valueF()
+                                  - b.pixelColor(x, y).valueF()) > 0.15
+                           ) / len(points)
+            a, b = plain[2][mid], turned[2][mid]
+            print(json.dumps({
+                "most": max(turned[1]), "mid": turned[1][mid],
+                "drift": max(abs(p[0] - t[0]) + abs(p[1] - t[1])
+                             for p, t in zip(plain[0], turned[0])),
+                # The road straight below the craft, which is under it
+                # whichever way the world has gone. Its edges a few units
+                # on are already winding up the sides of the frame, which
+                # is the corkscrew and not a fault.
+                "foot": changed(a, b, 0.80, 1.0, 0.30, 0.70),
+                "top": changed(a, b, 0.0, 0.45)}))
+        """))
+        assert got["most"] > 0.9 and abs(got["mid"] - 0.5) < 0.05, got
+        assert got["drift"] < 0.03, (
+            f"the craft moved {got['drift']:.3f} of the frame through the "
+            f"corkscrew")
+        assert got["foot"] < 0.15 and got["top"] > got["foot"] * 2.0, (
+            f"half way round, {got['foot']:.0%} of the foot of the frame and "
+            f"{got['top']:.0%} of the top changed")
+
+    def test_the_craft_turns_over_in_one_piece(self):
+        """The craft alone, from the same camera, on a road turned over
+        by the same amount where it is: once turned that much all along,
+        once turning steeply on ahead of it. One piece, it is the same
+        picture either way. Placed point by point, each point was turned
+        by the road's roll where that point was - and through a corkscrew
+        that changes by a turn in a few dozen units, so the craft was
+        wrung along its length like a cloth."""
+        got = on_the_card(RIDER + textwrap.dedent("""
+            ALONE = ("_draw_sky", "_draw_city", "_draw_road", "_draw_blocks",
+                     "_draw_barriers", "_draw_beacons", "_draw_gates",
+                     "_draw_streaks", "_draw_trim", "_draw_particles")
+            def craft_only(steep):
+                made, scene = rider_pane(size=(800, 500))
+                with Clock() as clock:
+                    for i in range(40):
+                        clock.step(1 / 60)
+                        made.set_position(int((10 + i / 60) * 1000))
+                        scene._placed = scene._laid = 1e9
+                        scene._blocks = []
+                        world = made._canvas.world
+                        if world is not None:
+                            for name in ALONE:
+                                setattr(world, name, lambda frame: None)
+                            at = scene.RIDER_AT
+                            world._twist = (
+                                (lambda scene, z: 2.0 + 0.8 * max(0.0, z - at))
+                                if steep else (lambda scene, z: 2.0))
+                        made._tick()
+                        shot = made._canvas.grabFramebuffer()
+                return shot
+            a, b = craft_only(False), craft_only(True)
+            lit = [(x, y) for y in range(0, a.height(), 2)
+                   for x in range(0, a.width(), 2)
+                   if max(a.pixelColor(x, y).valueF(),
+                          b.pixelColor(x, y).valueF()) > 0.1]
+            moved = sum(1 for x, y in lit
+                        if abs(a.pixelColor(x, y).valueF()
+                               - b.pixelColor(x, y).valueF()) > 0.1)
+            print(json.dumps({"lit": len(lit),
+                              "moved": moved / max(1, len(lit))}))
+        """))
+        assert got["lit"] > 300, f"the craft was not drawn: {got}"
+        assert got["moved"] < 0.05, (
+            f"{got['moved']:.0%} of the craft moved when only the road "
+            f"ahead of it turned: it is not turned in one piece")
 
     def test_it_survives_being_moved_into_full_screen(self):
         """Full screen takes the pane out of the window and puts it in

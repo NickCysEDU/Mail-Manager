@@ -13558,48 +13558,96 @@ class TestTheRoadTurnsOverAtTheBigMoments:
         assert ends < middle * 0.25, (
             f"it is still turning at {ends:.2f} when it ends")
 
-    def test_the_whole_picture_turns_with_it(self, qapp):
-        """Road, blocks, coins and craft together - one rotation about
-        the horizon, which is what a corkscrew looks like from inside
-        one. Off the camera rather than off the constant."""
+    @staticmethod
+    def _flat_frame(twisted, monkeypatch):
+        """One flat frame, a second and a quarter into a corkscrew (half
+        way round) or with none, from the same state either way, on a
+        stopped clock so that the two differ by the corkscrew alone."""
+        import time as real_time
+
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        monkeypatch.setattr(visualizers.time, "monotonic", lambda: 500.0)
+        monkeypatch.setattr(real_time, "monotonic", lambda: 500.0)
+        scene = visualizers.Rider()
+        state = SpectrumState()
+        state.levels = [0.5] * 27
+        state.bass = state.mid = state.high = 0.5
+        state.kit = {}
+        state.at = 20.0
+        state.tempo = 120.0
+        state.beat_at = 0.0
+        image = QImage(640, 400, QImage.Format.Format_ARGB32_Premultiplied)
+        for _ in range(2):
+            scene._twists = ((20.0 - 1.25,) if twisted else ())
+            image.fill(QColor(0, 0, 0))
+            painter = QPainter(image)
+            scene.paint(painter, QRectF(0, 0, 640, 400), state)
+            painter.end()
+        return scene, image
+
+    def test_the_world_turns_round_the_road_not_the_road(self, qapp,
+                                                         monkeypatch):
+        """The craft went round the frame with everything else and was
+        at the top of it halfway through. Half way round now, the world
+        behind the road is upside down and the craft is where it always
+        is."""
+        plain, before = self._flat_frame(False, monkeypatch)
+        _again, repeat = self._flat_frame(False, monkeypatch)
+        turned, after = self._flat_frame(True, monkeypatch)
+        assert plain._rolled == 0.0
+        assert abs(turned._rolled - 0.5) < 0.02, turned._rolled
+        a, b = plain._craft_glass, turned._craft_glass
+        assert a is not None and b is not None
+        assert abs(a.x() - b.x()) < 0.5 and abs(a.y() - b.y()) < 0.5, (
+            f"the craft moved on the glass from {a} to {b}")
+        # And the world did turn: the frame is not the same frame, where
+        # the same frame again is exactly the same.
+        def changed(one, other):
+            return sum(1 for y in range(0, 400, 2) for x in range(0, 640, 2)
+                       if abs(one.pixelColor(x, y).valueF()
+                              - other.pixelColor(x, y).valueF()) > 0.1)
+
+        assert changed(before, repeat) == 0, "the frame is not repeatable"
+        assert changed(before, after) > 100, (
+            f"only {changed(before, after)} points changed half way round")
+        # And the craft is drawn where it was - read off the picture, not
+        # off the sum that says where it should be.
+        box = [(x, y) for y in range(int(a.y()) - 40, int(a.y()) + 30, 2)
+               for x in range(int(a.x()) - 60, int(a.x()) + 60, 2)
+               if 0 <= x < 640 and 0 <= y < 400]
+        craft = [(x, y) for x, y in box
+                 if before.pixelColor(x, y).valueF() > 0.3]
+        kept = sum(1 for x, y in craft
+                   if abs(before.pixelColor(x, y).valueF()
+                          - after.pixelColor(x, y).valueF()) < 0.1)
+        assert len(craft) > 100 and kept / len(craft) > 0.9, (
+            f"{kept} of the {len(craft)} lit points of the craft are where "
+            f"they were half way round")
+
+    def test_the_road_is_not_moved_to_make_room_for_it(self, qapp):
+        """Turning the road about a horizon above the middle of the frame
+        swung it out of the picture, so the horizon used to ride down to
+        the middle through one. With the road left where it is, the
+        horizon is too."""
         from PySide6.QtCore import QRectF
 
         import visualizers
 
-        scene = visualizers.Rider()
-        scene._last = None
         box = QRectF(0, 0, 640, 360)
-        scene._rolled = 0.0
-        _h, _f, flat = scene._camera(box, 0.0, 0.0)
-        scene._rolled = 0.25
-        _h, _f, quarter = scene._camera(box, 0.0, 0.0)
-        assert abs(quarter - flat - 90.0) < 1.0, (
-            f"a quarter of a corkscrew turned the picture "
-            f"{quarter - flat:.1f} degrees rather than 90")
-        assert abs(quarter) > visualizers.Rider.TILT, (
-            "the corkscrew is inside the clamp that stops a *bend* "
-            "tipping the picture, so it can never go all the way round")
-
-    def test_the_horizon_comes_to_the_middle_through_one(self, qapp):
-        """Rotating about a vanishing point that sits above the middle
-        of the frame swings the road out of the picture half way round.
-        """
-        from PySide6.QtCore import QRectF
-
-        import visualizers
-
-        scene = visualizers.Rider()
-        scene._last = None
-        box = QRectF(0, 0, 640, 360)
-        scene._twisting = 0.0
-        flat, _f, _t = scene._camera(box, 0.0, 0.0)
-        scene._twisting = 1.0
-        deep, _f, _t = scene._camera(box, 0.0, 0.0)
-        assert abs(deep.y() - box.center().y()) < abs(
-            flat.y() - box.center().y()), (
-            f"half way through a corkscrew the horizon is at "
-            f"{deep.y():.0f} and the middle of the frame is at "
-            f"{box.center().y():.0f}")
+        seen = []
+        for rolled in (0.0, 0.5):
+            # A fresh one each: asking moves the camera.
+            scene = visualizers.Rider()
+            scene._last = None
+            scene._rolled = rolled
+            seen.append(scene._camera(box, 0.0, 0.0))
+        (flat, _f, tilt), (deep, _g, turned) = seen
+        assert abs(deep.y() - flat.y()) < 0.5 and abs(turned - tilt) < 1e-6
 
     # -- what is in one ----------------------------------------------------
     def test_nothing_to_dodge_inside_a_corkscrew(self, qapp):

@@ -116,6 +116,19 @@ vec3 onRoad(float u, float h, float z) {
     float s = sin(r.z);
     return vec3(r.x + u * c - h * s, r.y + u * s + h * c, -z);
 }
+
+// The same for a thing that is one piece: every point of it follows the
+// road's line, but turned by the road's roll where the thing stands, not
+// where the point is. Through a corkscrew the roll changes by a turn in
+// a few dozen units, and a craft turned point by point was wrung along
+// its length like a cloth.
+vec3 onRoadAs(float u, float h, float z, float anchor) {
+    vec4 r = roadAt(z);
+    float roll = roadAt(anchor).z;
+    float c = cos(roll);
+    float s = sin(roll);
+    return vec3(r.x + u * c - h * s, r.y + u * s + h * c, -z);
+}
 """ % {"samples": ROAD_SAMPLES, "last": ROAD_SAMPLES - 1}
 
 #: Shared by everything that fades into the distance.
@@ -437,8 +450,8 @@ mat3 turned(vec3 a) {
 void main() {
     mat3 uTurn = turned(uAngles);
     vec3 local = uTurn * (aPos * uScale);
-    vec3 p = onRoad(uPlace.x + local.x, uPlace.y + local.y,
-                    uPlace.z - local.z);
+    vec3 p = onRoadAs(uPlace.x + local.x, uPlace.y + local.y,
+                      uPlace.z - local.z, uPlace.z);
     vec4 r = roadAt(uPlace.z);
     float c = cos(r.z), s = sin(r.z);
     vec3 n = uTurn * aNormal;
@@ -564,7 +577,8 @@ void main() {
     float along = mod(aTower.y - uTravel, uLoop) + uFrom;
     vec3 local = vec3(aCorner.x * aTower.z, aCorner.y * tall,
                       aCorner.z * aTower.z);
-    vec3 p = onRoad(aTower.x + local.x, local.y - 1.2, along + local.z);
+    vec3 p = onRoadAs(aTower.x + local.x, local.y - 1.2, along + local.z,
+                      along);
     vec4 eye = uView * vec4(p, 1.0);
     vDepth = eye.w;
     vCorner = aCorner;
@@ -1318,27 +1332,80 @@ class RiderWorld:
     ROLL_SHARE = -0.5
 
     def _read_road(self, scene) -> list:
+        """The road's line as the shaders read it: per sample, across, up,
+        roll, and how much of the roll is a corkscrew (see _turn_at)."""
         side, under = scene._side, scene._under
         out = []
         for index in range(ROAD_SAMPLES):
             z = ROAD_FROM + index * ROAD_STEP
             across, lift, roll = scene._road(z)
+            turn = self._twist(scene, z)
             out.extend((across - side, -(lift - under),
-                        roll * self.ROLL_SHARE, 0.0))
+                        roll * self.ROLL_SHARE + turn, turn))
         return out
 
     @staticmethod
-    def _on_road(road, u: float, h: float, z: float) -> tuple:
-        """The shader's onRoad, in Python, for the camera and the HUD."""
+    def _twist(scene, z: float) -> float:
+        """How far over a corkscrew has turned the road at ``z``, in
+        radians: the turn due at the moment of the track that point of
+        the road belongs to. Behind the craft, what it is at the craft,
+        as the rest of the road behind it is.
+
+        The road itself turns over, so the corkscrew is seen coming - a
+        ribbon wound round ahead - and the craft rides it round. It used
+        to be the picture that turned instead, craft and all: the craft
+        went round the frame and was at the top of it halfway through,
+        which is the one thing that must stay put.
+        """
+        twist_at = getattr(scene, "_twist_at", None)
+        if twist_at is None or not getattr(scene, "_twists", None):
+            return 0.0
+        when = scene._when(max(z, scene.RIDER_AT))
+        # Counted on through the ones already ridden rather than back to
+        # nothing at the end of each: a whole turn is level, and the
+        # samples either side of the end of one must not differ by a
+        # turn, or the road between them is wrung round backwards in a
+        # single step - a fold standing up across it.
+        done = sum(1 for start in scene._twists
+                   if start + scene.TWIST_FOR <= when)
+        through = twist_at(when)
+        part = 0.0 if through is None else scene._turned(through)
+        return (done + part) * math.tau
+
+    @staticmethod
+    def _sample(road, z: float, part: int) -> float:
         f = max(0.0, min((z - ROAD_FROM) / ROAD_STEP, ROAD_SAMPLES - 1.001))
         i = int(f)
         t = f - i
-        a = road[i * 4:i * 4 + 4]
-        b = road[i * 4 + 4:i * 4 + 8]
-        x, y, r = (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t,
-                   a[2] + (b[2] - a[2]) * t)
+        a, b = road[i * 4 + part], road[i * 4 + 4 + part]
+        return a + (b - a) * t
+
+    @classmethod
+    def _turn_at(cls, road, z: float) -> float:
+        """The corkscrew's share of the road's roll at ``z``."""
+        return cls._sample(road, z, 3)
+
+    @classmethod
+    def _on_road(cls, road, u: float, h: float, z: float,
+                 plain: bool = False) -> tuple:
+        """The shader's onRoad, in Python, for the camera and the HUD.
+        ``plain`` leaves out any corkscrew: the road as if it were not
+        turning over."""
+        x, y = cls._sample(road, z, 0), cls._sample(road, z, 1)
+        r = cls._sample(road, z, 2)
+        if plain:
+            r -= cls._turn_at(road, z)
         c, s = math.cos(r), math.sin(r)
         return (x + u * c - h * s, y + u * s + h * c, -z)
+
+    @staticmethod
+    def _about(point, centre, angle: float) -> tuple:
+        """``point`` turned by ``angle`` about the road's line through
+        ``centre``, the way onRoad turns a point with the road's roll."""
+        dx, dy = point[0] - centre[0], point[1] - centre[1]
+        c, s = math.cos(angle), math.sin(angle)
+        return (centre[0] + dx * c - dy * s, centre[1] + dx * s + dy * c,
+                point[2])
 
     # -- one frame -----------------------------------------------------------
     def draw(self, scene, state, target: int, viewport: QRect,
@@ -1437,13 +1504,16 @@ class RiderWorld:
         air = float(getattr(scene, "_air", 0.0))
         across = float(scene._lane_here)
 
-        # The camera, on a spring, following the craft down the road.
+        # The camera, on a spring, following the craft down the road -
+        # placed as if the road were not turning over, and then turned
+        # with it below.
         ship_z = scene.RIDER_AT
         eye = self._on_road(road, across * 0.35,
                             self.CAM_UP + air * 0.4 + self._knock * 0.5,
-                            ship_z - self.CAM_BACK - self._knock * 0.8)
+                            ship_z - self.CAM_BACK - self._knock * 0.8,
+                            plain=True)
         look = self._on_road(road, across * 0.55, self.CAM_LOOK_UP + air * 0.3,
-                             ship_z + self.CAM_AHEAD)
+                             ship_z + self.CAM_AHEAD, plain=True)
         follow = 1.0 - math.exp(-self.CAM_FOLLOW * dt)
         if self._cam_eye is None:
             self._cam_eye, self._cam_look = eye, look
@@ -1457,9 +1527,18 @@ class RiderWorld:
         jolt = (math.sin(t * 31.0) * wobble, math.sin(t * 27.0 + 1.3) * wobble,
                 0.0)
         eye_at = tuple(c + j for c, j in zip(self._cam_eye, jolt))
-        bank = road[int((ship_z - ROAD_FROM) / ROAD_STEP) * 4 + 2]
-        roll = (bank * self.CAM_BANK
-                + float(getattr(scene, "_rolled", 0.0)) * math.tau
+        # Through a corkscrew the whole rig - eye, aim and up - turns
+        # about the road's line at the craft, by as much as the road has
+        # turned there. The craft and the road under it stay where they
+        # always are on the glass, and the world goes round them: that is
+        # what riding one looks like from inside it.
+        turn = self._turn_at(road, ship_z)
+        centre = self._on_road(road, 0.0, 0.0, ship_z)
+        eye_at = self._about(eye_at, centre, turn)
+        look_at = self._about(self._cam_look, centre, turn)
+        index = int((ship_z - ROAD_FROM) / ROAD_STEP) * 4
+        bank = road[index + 2] - road[index + 3]
+        roll = (bank * self.CAM_BANK - turn
                 + math.sin(float(getattr(scene, "_wobble", 0.0)) * 2.3)
                 * hurt * 0.10)
         fov = (self.FOV_CALM + (self.FOV_FAST - self.FOV_CALM) * rush
@@ -1467,7 +1546,7 @@ class RiderWorld:
         view = QMatrix4x4()
         view.perspective(fov / max(1.0, aspect / 1.6) ** 0.35, aspect,
                          0.05, 400.0)
-        view.lookAt(QVector3D(*eye_at), QVector3D(*self._cam_look),
+        view.lookAt(QVector3D(*eye_at), QVector3D(*look_at),
                     QVector3D(math.sin(roll), math.cos(roll), 0.0))
 
         def screen(point):
@@ -1477,7 +1556,9 @@ class RiderWorld:
         ship_at = self._on_road(road, across, self.HOVER + air, ship_z)
         self._screen_ship = screen(ship_at)
         horizon = screen(self._on_road(road, 0.0, 0.0, ROAD_TO - 2.0))
-        sun = screen(self._on_road(road, 0.0, 6.0, ROAD_TO - 2.0))
+        # Where the sky is, not the road: it stays put as the road turns
+        # over under it.
+        sun = screen(self._on_road(road, 0.0, 6.0, ROAD_TO - 2.0, plain=True))
         # The colour of the horizon, so the road runs into the sky rather
         # than stopping short of it.
         fog = colorsys.hsv_to_rgb(hue % 1.0, 0.95, 0.20 + loud * 0.18)

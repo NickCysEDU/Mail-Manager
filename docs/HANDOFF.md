@@ -45,8 +45,9 @@ frame of the scene while somebody's music is playing.
 
 Coins sit where you have to be brave to take them - beside a single
 obstacle, or in a lane a wall is *about to close*, ending 0.3 s before it
-arrives. Corkscrews turn the whole world over at the song's loudest
-moments, with a power block at the mouth of each.
+arrives. Corkscrews turn the world over round the craft at the song's
+loudest moments - the craft stays put on the glass - with a power block at
+the mouth of each.
 
 ### Invariants. Break these and the scene breaks
 
@@ -301,7 +302,7 @@ That first figure is the one that matters and it must stay at zero.
 
 **Speed.** Rules engine 10.1 ms per message. Lexicon opens in 38 ms using
 1.95 MB, down from 70 ms and 10.5 MB, and neither number now grows with the
-table. Test suite 4,078 tests (with the evaluation sets present) in about three minutes on four workers.
+table. Test suite 4,082 tests (with the evaluation sets present) in about three minutes on four workers.
 
 ---
 
@@ -365,6 +366,18 @@ table. Test suite 4,078 tests (with the evaluation sets present) in about three 
   in `_draw_blocks`.
 - **The running score is `_score`; `_worth()` has the clean bonus in** and is
   for the card and the bests only. `Rider.bonus(mode)` is the share.
+- **A corkscrew is in the road samples, not the camera.** `RiderWorld._twist`
+  puts the turn due at each point into that sample's roll and records it
+  in the sample's fourth float (unused by the shaders); `_turn_at` reads it
+  back. The camera is placed on the road with the turn left out
+  (`_on_road(..., plain=True)`) and then turned rigidly about the road's
+  line at the craft (`_about`). The turn counts on through finished
+  corkscrews rather than resetting, which is what stops the fold. Solids and
+  towers are placed with `onRoadAs` (the roll at their anchor). The towers'
+  one-piece turn is not pinned by a pixel test - every tower stands at a
+  different depth, so no pair of roads agrees at all of their anchors; the
+  craft's is (`test_the_craft_turns_over_in_one_piece`). The flat picture
+  turns only `_glow` and `_pillars`, drawn first.
 - **Brace a shell variable that touches a curly quote.** `"as “$IDENTITY”"`
   is read by macOS's bash as a variable whose name includes the quote's
   bytes; under `set -u` it stopped `build_app.sh` after the bundle was

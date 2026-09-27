@@ -936,11 +936,25 @@ for no reason.
 
 One whole turn, still at both ends and quickest through the middle, so
 the moment it ends is not a moment anything jumps - a turn brings the
-world back to where it started. Everything is drawn inside one rotation
-about the horizon, so the road, the blocks, the coins and the craft
-turn together, and the horizon rides up to the middle of the frame
-through one, because rotating about a vanishing point that sits above
-centre swings the road out of the picture half way round.
+world back to where it started.
+
+The world goes round the craft, not the craft round the frame. It used
+to turn the whole picture - road, blocks and craft together - so the
+craft went round the frame with it and was at the top of the picture
+half way through, which is the one thing a player steering it needs
+never to move. In the lit world the road itself now winds round: the
+corkscrew is seen coming as a ribbon turning over ahead, and the camera
+rides it, turned about the road's line at the craft by exactly as much
+as the road has turned there. The craft and the road under it stay
+where they always are on the glass, and the city, the sky and the road
+ahead wheel round them. Everything that is one piece - the craft, the
+blocks, each tower - is turned as one piece by the road's roll where it
+stands; turned point by point, the craft was wrung along its length.
+Each corkscrew leaves the road a whole turn over, which is level, and
+the count carries on from there: going back to nothing at the end of
+one wrung the road round backwards in a single step, a fold standing
+up across it. The flat picture cannot wind its road, so there the glow
+and the gates either side go round behind a road that stays still.
 
 There is nothing to dodge inside a corkscrew. Half way round, left has
 stopped meaning left, and an obstacle there is not a thing you failed
@@ -1569,7 +1583,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 4,078 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 4,082 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1952,7 +1966,7 @@ corkscrews the track earned, and what a frame costs. No song, path or
 frame of one is ever written into the repository.
 
 ```bash
-./dev test        # 4,078 tests, about three minutes
+./dev test        # 4,082 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```
