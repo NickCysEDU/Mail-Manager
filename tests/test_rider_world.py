@@ -139,40 +139,228 @@ class TestTheCraft:
 
 
 class TestWhatWasTaken:
-    """The game marks a block done when its moment passes, taken or not.
-    The world draws a taken one going into the ship and a missed one
-    going on past it, so it has to tell them apart."""
+    """The game marks a block done when its moment passes, taken or not,
+    and says what it did with it. The world draws one taken or hit as
+    gone and one missed going on past - from what the game said, never
+    worked out again from where the craft was: that drew a prize jumped
+    over going into the ship, for nothing."""
 
-    def test_one_in_the_craft_s_lane_was_taken(self, qapp):
+    @staticmethod
+    def _met(scene, blocks, lane=1, **state):
+        scene._lane = lane
+        scene._lane_here = scene._lane_at(lane)
+        scene._heard = 5.0
+        for name, value in state.items():
+            setattr(scene, name, value)
+        scene._blocks = [list(block) for block in blocks]
+        scene._collide()
+        return scene._blocks
+
+    def test_one_the_craft_took_is_drawn_taken(self, qapp):
         scene = _rider()
-        scene._lane_here = scene._lane_at(1)
-        taken = [5.0, 1, "block", True, False]
-        missed = [5.0, 2, "block", True, False]
-        scene._blocks = [taken, missed]
+        taken, missed = self._met(scene, [(4.0, 1, "block", False, False),
+                                          (4.0, 2, "block", False, False)])
         world = _bare_world()
         world._notice(scene)
         assert id(taken) in world._taken
         assert id(missed) not in world._taken
         assert len(world._taken_now) == 1
 
-    def test_it_is_noticed_once(self, qapp):
+    def test_a_prize_jumped_over_goes_on_past(self, qapp):
         scene = _rider()
-        scene._lane_here = scene._lane_at(1)
-        scene._blocks = [[5.0, 1, "block", True, False]]
+        (under,) = self._met(scene, [(4.0, 1, "block", False, False)],
+                             _air=0.5)
+        assert under[3], "the game did not let it go by"
         world = _bare_world()
         world._notice(scene)
+        assert id(under) not in world._taken, (
+            "a prize the craft jumped over was drawn going into it")
+        assert world._taken_now == []
+
+    def test_a_grey_hit_is_gone_and_one_met_unhurt_goes_through(self, qapp):
+        scene = _rider()
+        (hit,) = self._met(scene, [(4.0, 1, "block", False, True)],
+                           _shield=0.0)
+        assert scene._hits == 1
+        world = _bare_world()
+        world._notice(scene)
+        assert id(hit) in world._taken
+        assert world._taken_now == [], "a hit lit the lane like a pickup"
+        # Straight after a hit the craft cannot be hurt, and the next one
+        # passes through it rather than vanishing as if it had hit.
+        (through,) = self._met(scene, [(4.0, 1, "block", False, True)])
+        assert scene._hits == 1
+        world._notice(scene)
+        assert id(through) not in world._taken
+
+    @pytest.mark.parametrize("kind, grey, mode, shield, how", [
+        ("block", False, "Mono", 0.0, "taken"),
+        ("coin", False, "Mono", 0.0, "taken"),
+        ("power", False, "Mono", 0.0, "taken"),
+        ("block", False, "Puzzle", 0.0, "taken"),
+        ("block", True, "Mono", 1.0, "shatter"),
+        ("block", True, "Mono", 0.0, "hit"),
+    ])
+    def test_the_game_says_what_it_did_with_each(self, qapp, kind, grey,
+                                                  mode, shield, how):
+        scene = _rider()
+        scene.set_mode(mode)
+        (block,) = self._met(scene, [(4.0, 1, kind, False, grey)],
+                             _shield=shield)
+        assert scene.struck(block) == how
+        # And a lane away, nothing.
+        (away,) = self._met(scene, [(4.0, 0, kind, False, grey)],
+                            _shield=shield, _sore=0.0)
+        assert scene.struck(away) is None
+
+    def test_the_record_goes_with_the_block(self, qapp):
+        scene = _rider()
+        (taken,) = self._met(scene, [(4.0, 1, "block", False, False)])
+        assert scene.struck(taken) == "taken"
+        scene._blocks = []
+        scene._collide()
+        assert scene._struck == {}, "blocks off the road are still recorded"
+        # An id is only unique while its thing is alive: a new block
+        # given an old one's id is not told the old one's outcome.
+        stranger = [4.0, 1, "block", True, False]
+        scene._struck[id(stranger)] = ([4.0, 1, "block", True, True], "hit")
+        assert scene.struck(stranger) is None
+
+    def test_it_is_noticed_once(self, qapp):
+        scene = _rider()
+        self._met(scene, [(4.0, 1, "block", False, False)])
+        world = _bare_world()
+        world._notice(scene)
+        assert len(world._taken_now) == 1
         world._notice(scene)
         assert world._taken_now == []
 
     def test_what_the_game_drops_is_forgotten(self, qapp):
         scene = _rider()
-        scene._lane_here = scene._lane_at(1)
-        scene._blocks = [[5.0, 1, "block", True, False]]
+        self._met(scene, [(4.0, 1, "block", False, False)])
         world = _bare_world()
         world._notice(scene)
+        assert world._taken and world._done_seen
         scene._blocks = []
         world._notice(scene)
         assert not world._taken and not world._done_seen
+
+
+class TestAnObstacleIsSeenHit:
+    """Judged at the middle of the craft, reached first by its nose. It
+    used to be drawn shrinking into the ship like a prize, so the one
+    thing a player most needs to see - what hit them - was the one thing
+    they could not."""
+
+    @staticmethod
+    def _approach(beside=0.0):
+        scene = _rider()
+        world = _bare_world()
+        wide = scene.LANE_WIDE * 0.5
+        size = (wide * 0.95, 0.46 * 1.15, wide * 0.95)
+        out = []
+        for step in range(61):
+            gap = 2.0 - step * (2.0 / 60.0)
+            place, scale, yaw = world._rammed(
+                (beside, 0.46 * 0.62, scene.RIDER_AT + gap), size, 0.785,
+                gap, beside, scene)
+            depth = 0.5 * (abs(math.sin(yaw)) * scale[0]
+                           + abs(math.cos(yaw)) * scale[2])
+            out.append((gap, place, scale, yaw, place[2] - depth))
+        return scene, world, size, out
+
+    def test_it_is_never_inside_the_hull(self):
+        scene, world, size, out = self._approach()
+        for gap, _place, _scale, _yaw, near in out:
+            assert near >= scene.RIDER_AT + world.NOSE - 1e-6, (
+                f"{gap:.2f} out, its near face is inside the craft")
+
+    def test_it_is_never_shrunk_and_is_flat_on_the_nose_at_the_hit(self):
+        scene, world, size, out = self._approach()
+        for gap, place, scale, _yaw, _near in out:
+            assert scale[0] >= size[0] - 1e-9 and scale[1] >= size[1] - 1e-9, (
+                f"{gap:.2f} out it is drawn smaller, as a prize is")
+            assert place[1] >= 0.46 * 0.62 - 1e-9, "it sank into the road"
+        _gap, _place, scale, yaw, _near = out[-1]
+        assert scale[2] < size[2] * 0.3 and abs(yaw) < 1e-6, (
+            "at the hit it is not flattened square against the nose")
+
+    @staticmethod
+    def _drawn(scene, gap, air=0.0):
+        """What _draw_blocks sends to the card for the one block on the
+        road, ``gap`` ahead of the craft: its place, scale and turn."""
+        world = _bare_world()
+        sent = []
+
+        class Program:
+            now = {}
+
+            def set(self, name, value):
+                self.now[name] = value
+
+            def release(self):
+                pass
+
+        class Shape:
+            def draw(self, gl, program):
+                sent.append(dict(program.now))
+
+        world.gl = None
+        world.cube = world.coin = Shape()
+        world._solid = lambda frame: Program()
+        scene._where = lambda when: scene.RIDER_AT + gap
+        world._draw_blocks({"scene": scene, "beat": 0.0,
+                            "across": scene._lane_here, "air": air})
+        if not sent:
+            return None
+        got = sent[-1]
+        return (tuple(got["uPlace"].toTuple()), tuple(got["uScale"].toTuple()),
+                got["uAngles"].x())
+
+    def test_what_is_sent_to_the_card_is_never_inside_the_hull(self, qapp):
+        scene = _rider()
+        world = _bare_world()
+        scene._lane_here = scene._lane_at(1)
+        full = None
+        for step in range(40):
+            gap = 1.9 - step * 0.048
+            scene._blocks = [[5.0, 1, "block", False, True]]
+            place, scale, yaw = self._drawn(scene, gap)
+            full = full or scale
+            near = place[2] - 0.5 * (abs(math.sin(yaw)) * scale[0]
+                                     + abs(math.cos(yaw)) * scale[2])
+            assert near >= scene.RIDER_AT + world.NOSE - 1e-4, (
+                f"{gap:.2f} out, the obstacle is drawn inside the craft")
+            assert scale[0] >= full[0] - 1e-4, (
+                f"{gap:.2f} out, the obstacle is drawn shrinking")
+
+    def test_a_prize_still_goes_into_the_ship_unless_jumped(self, qapp):
+        scene = _rider()
+        scene._lane_here = scene._lane_at(1)
+        scene._blocks = [[5.0, 1, "block", False, False]]
+        _place, whole, _yaw = self._drawn(scene, 2.0)
+        _place, taking, _yaw = self._drawn(scene, 0.2)
+        assert taking[0] < whole[0] * 0.5, "a prize is not drawn going in"
+        _place, over, _yaw = self._drawn(scene, 0.2, air=0.6)
+        assert over[0] > whole[0] * 0.9, (
+            "a prize under a jumping craft is drawn going into it")
+
+    def test_one_met_unhurt_passes_through_whole(self, qapp):
+        scene = _rider()
+        scene._lane_here = scene._lane_at(1)
+        scene._blocks = [[5.0, 1, "block", False, True]]
+        _place, whole, yaw = self._drawn(scene, 2.0)
+        scene._sore = 0.5
+        _place, scale, turn = self._drawn(scene, 0.2)
+        assert (scale, turn) == (whole, yaw), (
+            "an obstacle the craft cannot be hurt by is squashed on it")
+
+    def test_one_a_lane_over_is_left_alone(self, qapp):
+        scene = _rider()
+        _scene, world, size, out = self._approach(beside=scene.LANE_WIDE)
+        for gap, place, scale, yaw, _near in out:
+            assert scale == size and yaw == 0.785
+            assert abs(place[2] - (scene.RIDER_AT + gap)) < 1e-9
 
 
 class TestWhatTheGameDidBecomesWhatTheWorldDoes:
@@ -199,6 +387,21 @@ class TestWhatTheGameDidBecomesWhatTheWorldDoes:
         assert world._flash == 1.0
         assert world._flash_colour == green
         assert world._trim_colour == green
+
+    @pytest.mark.parametrize("kind", ["hit", "shatter"])
+    def test_what_was_hit_breaks_up_where_it_met_the_nose(self, qapp, kind):
+        """The obstacle is drawn flat on the nose up to the hit, and is
+        gone after it: what is left of it flies from there, red."""
+        world = self._happened(kind)
+        scene = _rider()
+        nose = scene.RIDER_AT + world.NOSE + float(scene._at)
+        count = world.PARTICLES
+        data = world._particles
+        red = [i for i in range(count)
+               if abs(data[i * 12 + 2] - nose) < 1e-4
+               and data[i * 12 + 8] > 2.0 * max(data[i * 12 + 9],
+                                                data[i * 12 + 10])]
+        assert len(red) >= 20, f"{len(red)} pieces of it"
 
     def test_a_shield_saves_you_without_throwing_you(self, qapp):
         world = self._happened("shatter")
@@ -405,6 +608,56 @@ class TestTheWorldOnTheCard:
         assert after > before + 0.12, (
             f"the picture's share of red went from {before:.2f} to "
             f"{after:.2f} at the hit")
+
+    def test_what_hits_you_is_seen_hitting_you(self):
+        """Just before the hit, the obstacle fills at least as much of the
+        picture as it did three units out: squashed on the nose, not
+        shrunk into the hull as it was."""
+        got = on_the_card(RIDER + textwrap.dedent("""
+            runs = {}
+            for there in (True, False):
+                made, scene = rider_pane(size=(800, 500))
+                shots, gaps = [], []
+                with Clock() as clock:
+                    for i in range(90):
+                        clock.step(1 / 60)
+                        made.set_position(int((10 + i / 60) * 1000))
+                        scene._placed = scene._laid = 1e9
+                        if i < 60:
+                            scene._blocks = []
+                        elif i == 60 and there:
+                            scene._blocks = [[scene._heard + 0.35,
+                                              scene._lane, "block", False,
+                                              True]]
+                        scene._shield = 0.0
+                        made._tick()
+                        shots.append(made._canvas.grabFramebuffer())
+                        # Only this one: the game lays a road of its own
+                        # on the first frame, before it is cleared.
+                        block = (scene._blocks[0]
+                                 if i >= 60 and scene._blocks else None)
+                        gaps.append(None if block is None or block[3] else
+                                    scene._where(block[0]) - scene.RIDER_AT)
+                runs[there] = (shots, gaps)
+            shots, gaps = runs[True]
+            empty = runs[False][0]
+            far = next(i for i, g in enumerate(gaps)
+                       if g is not None and g < 3.0)
+            assert far >= 60, far
+            near = max(i for i, g in enumerate(gaps) if g is not None)
+            def covered(i):
+                a, b = shots[i], empty[i]
+                return sum(1 for y in range(0, a.height(), 2)
+                           for x in range(0, a.width(), 2)
+                           if abs(a.pixelColor(x, y).valueF()
+                                  - b.pixelColor(x, y).valueF()) > 0.12)
+            print(json.dumps({"far": covered(far), "near": covered(near),
+                              "gap": gaps[near]}))
+        """))
+        assert got["gap"] < 0.6, f"never got close: {got}"
+        assert got["near"] >= got["far"] * 0.8, (
+            f"just before the hit the obstacle covers {got['near']} points "
+            f"against {got['far']} three units out: it is not seen hitting")
 
     def test_it_survives_being_moved_into_full_screen(self):
         """Full screen takes the pane out of the window and puts it in

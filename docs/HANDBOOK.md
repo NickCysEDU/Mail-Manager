@@ -861,9 +861,17 @@ change lane.
 The scoring is a chain rather than a tally. The first coloured block is
 worth one and every one after it four more, 1, 5, 9, 13, up to two
 hundred; touching a grey breaks the chain and the next colour starts at
-one again. Finishing without touching one is worth a third again. So a
-run of forty clean blocks is worth far more than four runs of ten, and a
-grey costs much more than the points it does not give you.
+one again. Finishing without touching one is worth 30 per cent more,
+paid when the track ends. So a run of forty clean blocks is worth far
+more than four runs of ten, and a grey costs much more than the points it
+does not give you.
+
+The running score is what has been earned, and **CLEAN +30%** under it
+says what keeping it clean will add. It used to show the bonus already
+in, which meant the number fell by a quarter the moment a grey was
+touched - including the moment the bumper saved you, the one time the
+game says you did well. Now it only ever goes up, and the bonus is paid
+on the card at the end, as its own line.
 
 A bumper either side of the craft shatters the first grey you touch
 rather than letting it hit you - Audiosurf's Mono ships with side-lane
@@ -1506,6 +1514,21 @@ by a fingerprint of the track's analysis rather than by its name or where
 it is: what is written down is a string of hex and a number per game,
 nothing that says what the music was.
 
+**What hits you is seen hitting you.** A hit is judged at the middle
+of the craft, on the beat, and the nose gets there first. An obstacle was
+drawn shrinking into the ship over the last stretch, the way a prize is
+taken - so what hit you was the one thing on the road you could not see.
+It now stops at the nose and is squashed flat against it, square on and
+spreading, and breaks up on the beat: red pieces of it carry on past the
+craft with the road. One met while the craft cannot be hurt, just after a
+hit, passes through it whole.
+
+What the picture shows being taken is what the game scored as taken. It
+used to work that out again from where the craft was, and drew a prize
+the craft jumped over going into it, for nothing. The game keeps a record
+of what it did with each block - taken, hit, or saved by the bumper - and
+the picture, like the sounds, answers that.
+
 **A coin is round.** It was ten points joined by straight lines, which
 was round enough while the frame was drawn at half the screen's
 resolution. At all of it, a coin passing the craft is ninety pixels
@@ -1546,7 +1569,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 4,055 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 4,078 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1929,7 +1952,7 @@ corkscrews the track earned, and what a frame costs. No song, path or
 frame of one is ever written into the repository.
 
 ```bash
-./dev test        # 4,055 tests, about three minutes
+./dev test        # 4,078 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

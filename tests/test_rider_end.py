@@ -411,3 +411,123 @@ class TestTheLiveNumbersMakeWay:
         assert top_middle(scene) > 3.0, "no score to take away"
         scene._finished = True
         assert top_middle(scene) == 0.0, "the running score is still up"
+
+
+class TestTheCleanBonusIsPaidAtTheEnd:
+    """The running score showed the clean bonus in, so it fell by a
+    quarter the moment a grey was touched - including when the shield
+    saved you, the one time the game says you did well. It is what has
+    been earned; the bonus is said beside it and paid on the card."""
+
+    @staticmethod
+    def _saved(scene):
+        scene._lane = 1
+        scene._lane_here = scene._lane_at(1)
+        scene._heard = 5.0
+        scene._shield = 1.0
+        scene._blocks = [[4.0, 1, "block", False, True]]
+        scene._collide()
+        assert scene._saves == 1 and not scene._clean
+
+    def test_the_lit_score_does_not_fall_when_the_shield_saves_you(
+            self, qapp, monkeypatch):
+        from PySide6 import QtGui
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import rider_gl
+        import visualizers
+
+        drawn = []
+
+        class Path(QtGui.QPainterPath):
+            def addText(self, *args):      # noqa: N802 - Qt's name
+                drawn.append(args[-1])
+                return super().addText(*args)
+
+        monkeypatch.setattr(QtGui, "QPainterPath", Path)
+        now = [100.0]
+
+        def later():
+            now[0] += 0.5
+            return now[0]
+
+        monkeypatch.setattr(visualizers.time, "monotonic", later)
+        import time as real_time
+        monkeypatch.setattr(real_time, "monotonic", later)
+        scene = visualizers.Rider()
+        scene._score = 400
+        hud = rider_gl.Hud()
+
+        def frame():
+            drawn.clear()
+            image = QImage(640, 400, QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(QColor(0, 0, 0))
+            painter = QPainter(image)
+            hud.draw(painter, QRectF(0, 0, 640, 400), scene, _state(3.0))
+            painter.end()
+            return list(drawn)
+
+        for _ in range(10):
+            said = frame()
+        assert "400" in said, said
+        assert "CLEAN +30%" in said, "what a clean run adds is not said"
+        self._saved(scene)
+        for _ in range(10):
+            said = frame()
+        assert "400" in said, f"the score changed when the shield saved: {said}"
+        assert not any(word.startswith("CLEAN") for word in said)
+
+    def test_the_flat_score_is_what_was_earned(self, qapp):
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+
+        said = []
+        real = QPainter.drawText
+
+        class Recording(QPainter):
+            def drawText(self, *args):      # noqa: N802 - Qt's name
+                said.append(args[-1])
+                return real(self, *args)
+
+        scene = visualizers.Rider()
+        scene.set_mode("Ninja")
+        scene._score = 400
+        image = QImage(640, 400, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0))
+        painter = Recording(image)
+        scene._card(painter, QRectF(0, 0, 640, 400), 0.5)
+        painter.end()
+        line = said[-1]
+        assert line.startswith("400 "), line
+        assert "clean +60%" in line, line
+
+    def test_the_card_pays_it(self, qapp, clock):
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._score = 400
+        _ride(scene, clock, 9.8, 1.0)
+        result = scene._result
+        assert result["clean"] and result["worth"] == int(
+            result["score"] * 1.3)
+        said = []
+        real = QPainter.drawText
+
+        class Recording(QPainter):
+            def drawText(self, *args):      # noqa: N802 - Qt's name
+                said.append(args[-1])
+                return real(self, *args)
+
+        image = QImage(640, 400, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0))
+        painter = Recording(image)
+        scene._results(painter, QRectF(0, 0, 640, 400))
+        painter.end()
+        assert f"{result['worth']:,}" in said
+        assert f"{result['score']:,}" in said and "+30%" in said, said

@@ -4231,6 +4231,9 @@ class Rider(Scene):
         self._best = 0
         self._hits = 0
         self._blocks: list = []
+        #: What became of each block the craft met, as the game decided
+        #: it: see struck.
+        self._struck: dict = {}
         self._laid = 0.0
         self._chart_from = None
         #: When the last figure was put down, so the next one can be held
@@ -5503,6 +5506,8 @@ class Rider(Scene):
         # Over the lot of it. A jump clears whatever is in the lane and
         # collects none of it either: it is not a way past the hard
         # parts, it is a trade. See JUMP_UP.
+        if self._struck:
+            self._forget_struck()
         if self._air > 0.0:
             for block in self._blocks:
                 if not block[3] and self._heard >= block[0]:
@@ -5516,6 +5521,7 @@ class Rider(Scene):
             on_it = abs(self._lane_at(lane) - self._lane_here) < self.FORGIVE
             if kind == "power":
                 if on_it:
+                    self._record(block, "taken")
                     self._double = self.POWER_DOUBLE
                     self._got = 1.0
                     self._burst(self._lane_at(lane), prize=True)
@@ -5527,6 +5533,7 @@ class Rider(Scene):
                 # which is what makes a trail worth holding the lane for
                 # rather than clipping the end of.
                 if on_it:
+                    self._record(block, "taken")
                     self._coins += 1
                     self._coin_run += 1
                     self._coin_best = max(self._coin_best, self._coin_run)
@@ -5553,6 +5560,7 @@ class Rider(Scene):
                     # having touched one, so the clean run is over.
                     self._shield = 0.0
                     self._saves += 1
+                    self._record(block, "shatter")
                     self._clean = False
                     self._sore = self.SORE
                     self._shake = min(1.0, self._shake + 0.35)
@@ -5563,6 +5571,7 @@ class Rider(Scene):
                               text="SHIELD")
                     continue
                 lost = self._chain
+                self._record(block, "hit")
                 self._hits += 1
                 self._streak = 0
                 self._chain = 0
@@ -5591,6 +5600,7 @@ class Rider(Scene):
                     # Worth nothing on its own: it goes in the grid, and
                     # three of a colour touching is what pays.
                     if self._stunned <= 0.0:
+                        self._record(block, "taken")
                         self._taken += 1
                         self._drop(self._tier_of(when), lane)
                         self._got = 1.0
@@ -5599,6 +5609,7 @@ class Rider(Scene):
                 else:
                     # A prize. See CHAIN_FIRST.
                     before = self._chain
+                    self._record(block, "taken")
                     self._chain += 1
                     self._taken += 1
                     self._chain_most = max(self._chain_most, self._chain)
@@ -5761,18 +5772,25 @@ class Rider(Scene):
         return min(len(self.WORTH) - 1, int(energy * len(self.WORTH)))
 
     def _worth(self) -> int:
-        """The score as it would be totted up now.
+        """The score with the clean-finish bonus in, if it is still kept:
+        what the run is worth if it ends now. The end of the track pays it
+        (see _results) and the bests keep it.
 
-        Audiosurf pays the clean-finish bonus at the end of the track.
-        There is no end here - somebody can stop a song anywhere - so it
-        is shown as it stands, which also means it is showing what a
-        clean run is *worth* while there is still one to keep.
+        It is not what the running score shows. That showed this, and so
+        dropped by a quarter the moment a grey was touched - including
+        the moment the shield saved you, which is the one time the game
+        says you did well. The running score is what has been earned;
+        what a clean run would add is said beside it (see bonus), and
+        paid at the end, as Audiosurf pays it.
         """
         if not self._clean:
             return self._score
-        kept = (self.STEALTH_BONUS if self._mode == "Ninja"
+        return int(self._score * (1.0 + self.bonus()))
+
+    def bonus(self, mode: Optional[str] = None) -> float:
+        """The share a clean finish adds, in ``mode`` or this one."""
+        return (self.STEALTH_BONUS if (mode or self._mode) == "Ninja"
                 else self.CLEAN_BONUS)
-        return int(self._score * (1.0 + kept))
 
     def _burst(self, across: float, prize: bool = False) -> None:
         """Throw pieces off the block that was just taken or hit.
@@ -5905,6 +5923,32 @@ class Rider(Scene):
         self._collide()
         self._finish(state)
         return step
+
+    def _record(self, block, how: str) -> None:
+        # The block itself is kept with its outcome, not only its id: an
+        # id is only unique while the thing is alive, and a block laid
+        # after one was dropped can be given the same one.
+        self._struck[id(block)] = (block, how)
+
+    def _forget_struck(self) -> None:
+        # Held here, a block keeps its id to itself, so a block on the
+        # road with that id is this one.
+        alive = {id(block) for block in self._blocks}
+        self._struck = {key: kept for key, kept in self._struck.items()
+                        if key in alive}
+
+    def struck(self, block) -> Optional[str]:
+        """What the craft did to ``block``, as the game scored it: "taken",
+        "hit", "shatter" (the shield took it), or None - it went by, was
+        jumped over, or came while the craft could not be hurt.
+
+        The picture asks this rather than working it out from where the
+        craft was, so that what is drawn, what is heard and what is scored
+        cannot disagree: a prize jumped over was drawn going into the ship
+        and scored nothing.
+        """
+        kept = self._struck.get(id(block))
+        return kept[1] if kept is not None and kept[0] is block else None
 
     #: How close to the end of the track counts as the end: a player
     #: stops a few frames short, and waits for nothing after the last.
@@ -7101,14 +7145,15 @@ class Rider(Scene):
         painter.drawText(
             rect.adjusted(14, 10, -14, 0),
             int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop),
-            f"{self._worth()}"
+            f"{self._score}"
             + (f"   cleared {self._cleared}" if self._mode == "Puzzle"
                else f"   chain {self._chain}")
             + (f"   air {self._airs}" if self._airs else "")
             + ("   x2" if self._double > 1.0 else "")
             + (f"   coins {self._coins}" if self._coins else "")
             + (f" x{self._coin_run}" if self._coin_run > 1 else "")
-            + ("   clean" if self._clean and self._score else "")
+            + (f"   clean +{self.bonus():.0%}"
+               if self._clean and self._score else "")
             + ("" if self._shield >= 1.0 else "   shield "
                + f"{self._shield:.0%}")
             + f"   best {self._best}")
@@ -7191,9 +7236,11 @@ class Rider(Scene):
             if result["saves"]:
                 rows.append(("Saved by the shield", f"{result['saves']}"))
             if result["clean"] and result["score"]:
-                kept = (self.STEALTH_BONUS if result["mode"] == "Ninja"
-                        else self.CLEAN_BONUS)
-                rows.append(("Clean finish", f"+{kept:.0%}"))
+                # What was earned, then what keeping it clean adds: the
+                # big number above is the two together.
+                rows.append(("Score", f"{result['score']:,}"))
+                rows.append(("Clean finish",
+                             f"+{self.bonus(result['mode']):.0%}"))
             y = top + unit * 10.9
             for name, value in rows:
                 line(name, y, unit * 0.62, QColor(190, 190, 215),

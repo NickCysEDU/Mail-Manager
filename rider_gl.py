@@ -1625,9 +1625,14 @@ class RiderWorld:
             # The last stretch before the craft, in its lane: drawn in
             # to it and shrinking, so a block being taken is seen going
             # into the ship rather than the ship vanishing inside it.
+            # Not an obstacle, which is hit rather than taken (see
+            # _rammed), and not under a craft in the air, which takes
+            # nothing.
             gap = z - scene.RIDER_AT
-            if (not done and gap < 0.9
-                    and abs(across - frame["across"]) < scene.LANE_WIDE * 0.5):
+            beside = abs(across - frame["across"])
+            flying = frame["air"] > 0.05
+            if (not done and not grey and not flying and gap < 0.9
+                    and beside < scene.LANE_WIDE * 0.5):
                 pull = max(0.0, min(1.0, 1.0 - gap / 0.9))
                 grow *= 1.0 - pull * 0.85
                 across += (frame["across"] - across) * pull
@@ -1656,9 +1661,14 @@ class RiderWorld:
             wide = scene.LANE_WIDE * 0.50 * grow * pulse
             tall = 0.46 * grow * pulse
             if grey:
-                self._put(p, (across, tall * 0.62, z),
-                          (wide * 0.95, tall * 1.15, wide * 0.95),
-                          (0.785, 0.0, 0.0), (0.9, 0.2, 0.15),
+                place = (across, tall * 0.62, z)
+                size = (wide * 0.95, tall * 1.15, wide * 0.95)
+                yaw = 0.785
+                if (not done and not flying
+                        and float(getattr(scene, "_sore", 0.0)) <= 0.0):
+                    place, size, yaw = self._rammed(
+                        place, size, yaw, gap, beside, scene)
+                self._put(p, place, size, (yaw, 0.0, 0.0), (0.9, 0.2, 0.15),
                           0.0, 2.2 + beat * 3.0, 1.0)
             else:
                 colour = self._colour_of(scene, block)
@@ -1675,6 +1685,51 @@ class RiderWorld:
                           tuple(c * glow for c in colour), 0.7, 3.6, 0.0)
             self.cube.draw(self.gl, p)
         p.release()
+
+    #: How far the craft's nose reaches ahead of the point it is judged
+    #: at: the front of the hull, at the size it is drawn.
+    NOSE = 1.10 * SHIP
+
+    def _rammed(self, place, size, yaw, gap, beside, scene):
+        """An obstacle the craft is about to hit, flattened on its nose.
+
+        A hit is judged at the middle of the craft, on the beat, and the
+        nose gets there first. Drawn whole, the block sat inside the hull
+        for the last few frames before the hit; drawn shrinking into the
+        ship, as a prize is, it looked taken, and the player never saw
+        what hit them. Here it stops at the nose and is squashed flat
+        against it - turned square on, spread wider and taller - so the
+        hit is seen landing, and the burst comes on the beat.
+
+        ``place`` is (across, up, along), ``size`` the cube's scale before
+        it is turned, ``yaw`` its turn; the three are returned changed.
+        """
+        # How squarely it is in the way: all of it in the craft's path,
+        # none of it a lane over, and in between as the craft slides.
+        half_lane = scene.LANE_WIDE * 0.5
+        square = max(0.0, min(1.0, (half_lane - beside) / (half_lane * 0.3)))
+        if square <= 0.0:
+            return place, size, yaw
+
+        def reach(turn, scale):
+            return 0.5 * (abs(math.sin(turn)) * scale[0]
+                          + abs(math.cos(turn)) * scale[2])
+
+        contact = self.NOSE + reach(yaw, size)
+        if gap >= contact:
+            return place, size, yaw
+        crush = max(0.0, min(1.0, 1.0 - gap / contact)) * square
+        turn = yaw * (1.0 - crush)
+        scale = (size[0] * (1.0 + 0.30 * crush),
+                 size[1] * (1.0 + 0.15 * crush),
+                 size[2] * (1.0 - 0.80 * crush))
+        # Its near face held at the nose, however far the road has run
+        # on under it.
+        pinned = max(place[2], scene.RIDER_AT + self.NOSE + reach(turn, scale))
+        along = place[2] + (pinned - place[2]) * square
+        # Standing on the road still as it grows taller.
+        up = place[1] * scale[1] / max(1e-6, size[1])
+        return (place[0], up, along), scale, turn
 
     @staticmethod
     def _colour_of(scene, block) -> tuple:
@@ -1891,21 +1946,28 @@ class RiderWorld:
 
     # -- what the game did this frame ------------------------------------------
     def _notice(self, scene) -> None:
-        """Which blocks finished this frame, and which the craft took.
+        """Which blocks finished this frame, and which the craft met.
 
         The game marks a block done when its moment passes, taken or
-        not. One in the craft's lane when it went was taken.
+        not, and says what it did with it: see Rider.struck. A block the
+        craft took or hit is gone from the picture from then on; one it
+        did not - jumped over, a lane away, or come while it could not be
+        hurt - goes on past, as anything missed would. Working this out
+        here from where the craft was drew a prize jumped over going into
+        the ship, for nothing.
         """
         self._taken_now = []
-        here = float(scene._lane_here)
         alive = set()
         for block in scene._blocks:
             alive.add(id(block))
             if not block[3] or id(block) in self._done_seen:
                 continue
             self._done_seen.add(id(block))
-            if abs(scene._lane_at(block[1]) - here) < scene.FORGIVE:
-                self._taken.add(id(block))
+            how = scene.struck(block)
+            if how is None:
+                continue
+            self._taken.add(id(block))
+            if how == "taken":
                 self._taken_now.append(
                     (block[2], block[4], self._colour_of(scene, block)))
         self._done_seen &= alive
@@ -1928,6 +1990,10 @@ class RiderWorld:
             hue = pop[3] if pop[3] is not None else scene._hue_now
             colour = colorsys.hsv_to_rgb(hue % 1.0, min(1.0, pop[4]), 1.0)
             strength = float(pop[2])
+            # Where the obstacle met the nose. What is left of it is
+            # thrown up and carried on down the road the way it was
+            # going, past the craft, rather than vanishing with the hit.
+            nose = (at[0], 0.35, scene.RIDER_AT + self.NOSE + travel)
             if kind == "hit":
                 self._shock, self._shock_hard = 0.0, 1.0
                 self._shock_at = self._screen_ship
@@ -1935,11 +2001,15 @@ class RiderWorld:
                 self._split = 1.0
                 self._spawn(110, at, 10.0, (5.0, 0.6, 0.2), 0.45, 0.7)
                 self._spawn(40, at, 6.0, (0.9, 0.9, 1.0), 0.6, 0.9)
+                self._spawn(34, nose, 5.5, (3.2, 0.35, 0.22), 1.0, 1.1,
+                            spread=1.3, up=1.1)
             elif kind == "shatter":
                 self._shock, self._shock_hard = 0.0, 0.6
                 self._shock_at = self._screen_ship
                 self._split = 0.5
                 self._spawn(140, at, 8.0, (1.8, 2.8, 4.0), 0.5, 0.8)
+                self._spawn(24, nose, 5.0, (2.6, 0.3, 0.2), 0.9, 1.0,
+                            spread=1.3, up=1.1)
             elif kind == "finish":
                 # The end of the track: fireworks down the road.
                 self._bloom_bump = 1.0
@@ -2085,7 +2155,9 @@ class Hud:
         now = _time.monotonic()
         dt = 1.0 / 60.0 if self._now is None else max(0.0, min(0.1, now - self._now))
         self._now = now
-        worth = int(scene._worth())
+        # What has been earned, not what it would be with the clean bonus:
+        # see Rider._worth.
+        worth = int(scene._score)
         if worth > self._was:
             self._bump = 1.0
         elif worth < self._was:
@@ -2219,9 +2291,10 @@ class Hud:
              QColor(200, 235, 255, 220 if full else 150), "right", None,
              weight=700)
         if scene._clean and scene._score:
+            # What keeping it clean is worth, paid at the end.
             text(QPointF(rect.center().x(), rect.top() + tall * 0.15),
-                 "CLEAN", tall * 0.018, QColor(220, 255, 230, 190), "centre",
-                 None, weight=700)
+                 f"CLEAN +{scene.bonus():.0%}", tall * 0.018,
+                 QColor(220, 255, 230, 190), "centre", None, weight=700)
         painter.restore()
 
     def callout(self, painter, rect, words, hue, through, strength) -> None:

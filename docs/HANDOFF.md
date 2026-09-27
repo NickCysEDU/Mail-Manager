@@ -301,7 +301,7 @@ That first figure is the one that matters and it must stay at zero.
 
 **Speed.** Rules engine 10.1 ms per message. Lexicon opens in 38 ms using
 1.95 MB, down from 70 ms and 10.5 MB, and neither number now grows with the
-table. Test suite 4,055 tests (with the evaluation sets present) in about three minutes on four workers.
+table. Test suite 4,078 tests (with the evaluation sets present) in about three minutes on four workers.
 
 ---
 
@@ -355,6 +355,16 @@ table. Test suite 4,055 tests (with the evaluation sets present) in about three 
   listener (`AudioPane._keep_best`) and keyed by `rider_bests.fingerprint`.
   The "finish" pop is never trimmed from the scene's twelve: the card fades
   in from it.
+- **What became of a block is `Rider.struck(block)`,** recorded by `_collide`
+  as it decides ("taken", "hit", "shatter", or None). The record holds the
+  block itself, not only its id, so a block laid after one was dropped can
+  never inherit its outcome; it is pruned to the blocks still on the road
+  each frame. rider_gl's `_notice` reads it and nothing else - do not go back
+  to working out "taken" from the craft's lane. An obstacle's last stretch is
+  `RiderWorld._rammed` (pinned to `NOSE`, squashed); a prize's is the pull-in
+  in `_draw_blocks`.
+- **The running score is `_score`; `_worth()` has the clean bonus in** and is
+  for the card and the bests only. `Rider.bonus(mode)` is the share.
 - **Brace a shell variable that touches a curly quote.** `"as “$IDENTITY”"`
   is read by macOS's bash as a variable whose name includes the quote's
   bytes; under `set -u` it stopped `build_app.sh` after the bundle was
