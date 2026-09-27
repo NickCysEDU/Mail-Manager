@@ -1022,6 +1022,11 @@ class TestTheBuildKeepsWhatTheViewerNeeds:
         assert "visualizers" in body
         assert "QOpenGLFramebufferObjectFormat()" in body, (
             "it does not build anything from the card's library")
+        assert "rider_gl.ship_triangles()" in body, (
+            "it does not check the rider's world is in the build")
+        assert '"rider_gl"' in self._spec(), (
+            "the rider's world is imported inside a method and is not named "
+            "as a hidden import")
 
 
 class _FakeClock:

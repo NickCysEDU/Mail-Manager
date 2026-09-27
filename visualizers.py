@@ -5854,7 +5854,9 @@ class Rider(Scene):
             return 0.0
         return 1.0 - (1.0 - self.SNAP) ** (step * 60.0)
 
-    def paint(self, painter, rect, state) -> None:
+    def _step(self, state) -> float:
+        """The game, one frame on: everything that happens before any of
+        it is drawn, whichever way it is drawn."""
         self._carve(state)
         step = self._advance(state)
         self._lay(state)
@@ -5869,6 +5871,81 @@ class Rider(Scene):
             self._swerve += ((self._lane_here - was_across) / step
                              - self._swerve) * self.SWERVE_EASE
         self._collide()
+        return step
+
+    def paint_on_card(self, painter, rect, state, world) -> None:
+        """The same game, drawn as a lit world on the graphics card.
+
+        See rider_gl. The game moves on exactly as it does in ``paint``;
+        only the drawing differs, and the words and numbers over the top
+        are still drawn with the painter, which is what draws type well.
+        """
+        import time as _time
+
+        from PySide6.QtCore import QRect
+        from PySide6.QtGui import QOpenGLContext
+
+        self._step(state)
+        kit = state.kit or {}
+        bass = max(state.bass, kit.get("Bass", 0.0))
+        surge = self._loudness
+        # Kept moving, because the eye's springs and the wobble a hit
+        # throws are read by the world too.
+        self._camera(rect, surge, bass)
+        self._hue_now = self._tier(surge, state.synth)
+        device = painter.device()
+        ratio = device.devicePixelRatioF() or 1.0
+        box = painter.worldTransform().mapRect(rect)
+        # The target's height in its own pixels, which is what a GL
+        # viewport counts from the bottom of. A GL paint device reports
+        # its size in pixels already; anything else reports points.
+        size = getattr(device, "size", None)
+        tall = (int(size().height()) if callable(size)
+                else int(round(device.height() * ratio)))
+        x = int(round(box.x() * ratio))
+        y = int(round(box.y() * ratio))
+        w = max(1, int(round(box.width() * ratio)))
+        h = max(1, int(round(box.height() * ratio)))
+        painter.beginNativePainting()
+        try:
+            gl = QOpenGLContext.currentContext().functions()
+            target = gl.glGetIntegerv(0x8CA6)
+            if isinstance(target, (list, tuple)):
+                target = target[0]
+            world.draw(self, state, int(target), QRect(x, tall - y - h, w, h),
+                       painter.opacity(), _time.monotonic(),
+                       samples=int(getattr(world, "samples", 4)))
+        finally:
+            painter.endNativePainting()
+        self._hud_on_card(painter, rect, state, world)
+
+    def _hud_on_card(self, painter, rect, state, world) -> None:
+        """What is read rather than seen, over the world."""
+        import rider_gl
+
+        hud = getattr(world, "hud", None)
+        if hud is None:
+            hud = world.hud = rider_gl.Hud()
+        painter.save()
+        try:
+            for kind, age, strength, hue, sat, text in self._pops:
+                if not text:
+                    continue
+                spec = self.POPS.get(kind)
+                if spec is None:
+                    continue
+                through = min(1.0, age / max(1e-6, spec[0]))
+                hud.callout(painter, rect, text,
+                            self._hue_now if hue is None else hue,
+                            through, strength)
+        finally:
+            painter.restore()
+        if self._mode == "Puzzle":
+            self._matrix(painter, rect)
+        hud.draw(painter, rect, self, state)
+
+    def paint(self, painter, rect, state) -> None:
+        self._step(state)
 
         flash = self.flash(state)
         surge = self._loudness

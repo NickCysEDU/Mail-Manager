@@ -301,7 +301,7 @@ That first figure is the one that matters and it must stay at zero.
 
 **Speed.** Rules engine 10.1 ms per message. Lexicon opens in 38 ms using
 1.95 MB, down from 70 ms and 10.5 MB, and neither number now grows with the
-table. Test suite 3,956 tests (with the evaluation sets present) in about three minutes on four workers.
+table. Test suite 3,976 tests (with the evaluation sets present) in about three minutes on four workers.
 
 ---
 
@@ -321,6 +321,26 @@ table. Test suite 3,956 tests (with the evaluation sets present) in about three 
   back in rather than replacing the table, and the relay holds the kit until
   the bands have gone out. The road's contour comes with the bands and is
   final (`set_contour`); `set_traces` leaves it alone.
+- **The rider's world is `rider_gl.py`, and `Rider.paint_on_card` calls it.**
+  `Rider._step` is the game's frame; `paint` is `_step` plus the flat
+  drawing, `paint_on_card` is `_step` plus the world plus the HUD. Change
+  the game in `_step` and both follow. The world reads the scene and never
+  writes to it. Its tests are `tests/test_rider_world.py`; the ones that
+  draw run through the card harness in `test_gpu_canvas.py`.
+- **Traps in the world, each found the hard way.** A GL paint device reports
+  its height in *pixels*: multiplying by the pixel ratio put the world off
+  the top of the frame, and only at full resolution, which is exactly where
+  the governor was not when it was looked at - so check the world at rung
+  (4, 1.0) as well as whatever the governor settles on. PySide resolves no
+  overload for a uniform set by name to a float, so uniforms go by location
+  (`_Program.set`). `out` is a reserved word in GLSL 1.20. A pane and its
+  canvas must not be a reference cycle, and paintGL holds the collector off:
+  a GL widget freed by the collector in the middle of another widget's frame
+  leaves no context current and the painter crashes (twice as likely with the
+  world, which allocates enough to set the collector off). And the release Qt
+  recommends in `aboutToBeDestroyed` cannot be done from PySide - the
+  context's wrapper is already gone - so everything the world makes is a Qt
+  object that frees its GL names with its context.
 - **Brace a shell variable that touches a curly quote.** `"as “$IDENTITY”"`
   is read by macOS's bash as a variable whose name includes the quote's
   bytes; under `set -u` it stopped `build_app.sh` after the bundle was

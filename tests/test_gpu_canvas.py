@@ -38,6 +38,11 @@ HEAD = textwrap.dedent("""
                                QOpenGLContext, QOffscreenSurface)
     from PySide6.QtCore import QPointF, QRect, QRectF, QSize, Qt
     app = QApplication.instance() or QApplication([])
+    # Named, so anything these put on the screen says what it is rather
+    # than "python", which is what an unnamed application's windows are
+    # called.
+    app.setApplicationName("Mail Manager")
+    app.setApplicationDisplayName("Mail Manager - test of the graphics card")
     probe_surface = QOffscreenSurface()
     probe_surface.create()
     probe = QOpenGLContext()
@@ -51,6 +56,7 @@ HEAD = textwrap.dedent("""
 
     def pane(scene=None, size=(640, 400)):
         made = Spectrum()
+        made.setWindowTitle("Visualiser - test of the graphics card")
         made.set_unbounded(True)
         made.set_frames([array("f", [0.4] * 27)] * 900, 15)
         made.set_labels([str(i) for i in range(27)])
@@ -645,6 +651,54 @@ class TestABigScreenOnASmallCard:
             f"a card taking over 20 ms a frame is still at {got['rung']}")
         assert got["timer"] > 20, (
             f"and the timer is still asking every {got['timer']} ms")
+
+
+class TestNothingIsTakenApartMidFrame:
+    """A pane's canvas held the pane back, which made the two a cycle;
+    a cycle is freed by Python's collector whenever it next runs, and it
+    runs when enough has been allocated - at no particular moment. Taking
+    a GL widget apart makes its context current and then none at all, so
+    when that happened in the middle of another pane's frame the painter
+    dereferenced a context that was no longer there and the process
+    crashed: a second pane drawing while the first was dropped, which is
+    a viewer reopened, crashed three runs in three."""
+
+    def test_a_pane_let_go_of_is_gone_at_once(self):
+        got = on_the_card("""
+            import weakref
+            made = pane()
+            for i in range(3):
+                made._tick()
+                made._canvas.grabFramebuffer()
+            gone = weakref.ref(made)
+            del made
+            print(json.dumps({"alive": gone() is not None}))
+        """)
+        assert got["alive"] is False, (
+            "a pane nothing refers to is still alive, waiting for the "
+            "collector - which can come in the middle of another frame")
+
+    def test_the_collector_waits_for_the_frame_to_finish(self):
+        got = on_the_card("""
+            import gc
+            seen = []
+            class Watching:
+                name = "Watching"
+                blurb = "test"
+                sharp_pixels = 0
+                def reset(self):
+                    pass
+                def paint(self, painter, rect, state):
+                    seen.append(gc.isenabled())
+            made = pane(scene=Watching())
+            for i in range(3):
+                made._tick()
+                made._canvas.grabFramebuffer()
+            print(json.dumps({"during": seen, "after": gc.isenabled()}))
+        """)
+        assert got["during"] and not any(got["during"]), (
+            "the collector could run in the middle of a frame")
+        assert got["after"] is True, "and was left off afterwards"
 
 
 class TestTheSuiteStaysOnTheCpu:

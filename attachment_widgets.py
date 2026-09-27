@@ -374,13 +374,24 @@ class _GpuCanvas(QOpenGLWidget):
 
     def __init__(self, pane) -> None:
         super().__init__(pane)
-        self._pane = pane
+        # Weakly. The pane holds the canvas; a canvas that held the pane
+        # back made the two a cycle, and a cycle is freed by Python's
+        # collector whenever it next runs - which can be in the middle of
+        # another pane's frame. See paintGL.
+        import weakref
+
+        self._pane = weakref.ref(pane)
         #: The framebuffers, built for one size on one context.
         self._buffers = None
         self._halves = {}
         self._blitter = None
         #: The small copy of the last frame the bloom was made from.
         self.last_halo = None
+        #: The rider's lit world, for this context. See Spectrum._world.
+        self.world = None
+        self.world_failed = False
+        #: The samples the governor asked for this frame, for the world.
+        self.world_samples = 4
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents,
                           True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -390,8 +401,15 @@ class _GpuCanvas(QOpenGLWidget):
         # whatever was built on the old one is gone with it.
         self._buffers = None
         self._halves = {}
+        self.world = None
         self._blitter = QOpenGLTextureBlitter()
         self._blitter.create()
+        # Everything the rider's world makes on a context is a Qt object
+        # that frees its GL names with that context, so letting go of the
+        # old world here is enough: what Python collects later is only
+        # the shells. (Releasing it explicitly as the context goes is Qt's
+        # advice in C++, and cannot be done from Python: by the time a
+        # context says it is going, PySide has already let go of it.)
 
     def buffers(self, width: int, height: int, halo: QSize,
                 samples: int = 4):
@@ -430,7 +448,30 @@ class _GpuCanvas(QOpenGLWidget):
         return found
 
     def paintGL(self) -> None:      # noqa: N802 - Qt's name
-        self._pane._paint_on_gpu(self)
+        """One frame, with Python's collector held off until it is done.
+
+        The collector runs when enough has been allocated, which is at no
+        particular moment - and if what it frees is a Qt widget with a GL
+        context of its own, taking that apart makes its context current
+        and then none at all, in the middle of this frame. The next thing
+        the painter did dereferenced the current context and crashed the
+        process. Measured on the rider's world, which allocates enough in
+        a frame to set the collector off: a second pane drawing while the
+        first was dropped crashed three runs in three. Collection waits
+        for the end of the frame instead, which is a few milliseconds.
+        """
+        import gc
+
+        pane = self._pane()
+        if pane is None:
+            return
+        was = gc.isenabled()
+        gc.disable()
+        try:
+            pane._paint_on_gpu(self)
+        finally:
+            if was:
+                gc.enable()
 
 
 class Spectrum(QWidget):
@@ -697,6 +738,37 @@ class Spectrum(QWidget):
             canvas.deleteLater()
         super().update()
 
+    def _world(self):
+        """The rider's world for the canvas's context, made on first use.
+
+        None where there is no canvas, where ``MAIL_MANAGER_WORLD=0`` says
+        to draw the rider flat, or where this card would not build it -
+        which is logged once and then the flat drawing is used for the
+        rest of the session.
+        """
+        import os
+
+        canvas = self._canvas
+        if canvas is None or canvas.world_failed:
+            return None
+        if os.environ.get("MAIL_MANAGER_WORLD", "1").strip() == "0":
+            return None
+        if canvas.world is None:
+            try:
+                import rider_gl
+
+                canvas.world = rider_gl.RiderWorld(
+                    canvas.context().functions())
+            except Exception:      # noqa: BLE001 - the flat one is there
+                import logging
+
+                logging.getLogger(__name__).exception(
+                    "the rider's world could not be built on this card; "
+                    "drawing it flat")
+                canvas.world_failed = True
+                return None
+        return canvas.world
+
     @property
     def on_gpu(self) -> bool:
         """Whether the pane is drawing on the graphics card."""
@@ -754,8 +826,15 @@ class Spectrum(QWidget):
             halo = QSize(
                 max(PostProcess.BLOOM_MIN, width // PostProcess.BLOOM_DIVISOR),
                 max(PostProcess.BLOOM_MIN, height // PostProcess.BLOOM_DIVISOR))
+            # A scene that draws a world of its own antialiases it there,
+            # at the samples asked for here; the canvas's own would be the
+            # same work twice - five milliseconds of it at a MacBook Pro's
+            # full screen - for a picture that arrives already smooth.
+            world = (self._world()
+                     if hasattr(self._scene, "paint_on_card") else None)
+            canvas.world_samples = samples
             multi, flat, small, device = canvas.buffers(
-                width, height, halo, samples)
+                width, height, halo, 0 if world is not None else samples)
             device.setDevicePixelRatio(ratio * share)
             self._gpu_scene = None
             multi.bind()
@@ -2284,6 +2363,23 @@ class Spectrum(QWidget):
         # looks smooth. How much smaller is measured rather than fixed -
         # see Sharpness, and the note on SHARP_PIXELS.
         if self._on_gpu:
+            # A scene with a world of its own to draw on the card draws
+            # that, polish and all. See rider_gl.
+            on_card = getattr(self._scene, "paint_on_card", None)
+            world = self._world() if on_card is not None else None
+            if world is not None:
+                try:
+                    world.samples = self._canvas.world_samples
+                    on_card(painter, rect, self._state, world)
+                    return
+                except Exception:      # noqa: BLE001 - the flat one is there
+                    import logging
+
+                    logging.getLogger(__name__).exception(
+                        "the rider's world failed on this card; drawing it "
+                        "flat from here on")
+                    self._canvas.world = None
+                    self._canvas.world_failed = True
             # Straight in, at every pixel the screen has. There is no
             # buffer to shrink into and no stretching back out: the
             # card draws the full resolution inside the frame, which is

@@ -310,6 +310,13 @@ def self_test(offline: bool = False) -> int:
         if not hasattr(attachment_widgets, "_GpuCanvas"):
             raise RuntimeError("the audio pane cannot draw on the card in this build")
         working.append("drawing on the card")
+        # The rider's lit world, imported from inside a method and so the
+        # kind of module a bundle can lose; its models are built here, which
+        # needs no card.
+        import rider_gl
+        if not rider_gl.ship_triangles() or "onRoad" not in rider_gl.ROAD_GLSL:
+            raise RuntimeError("the rider's world is not in this build")
+        working.append("the rider's world")
         return ", ".join(working)
 
     check("attachment viewer", _attachment_viewer)

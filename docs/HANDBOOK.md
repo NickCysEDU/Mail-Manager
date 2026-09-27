@@ -1420,6 +1420,50 @@ and 0.622. The air is now always laid out as a strip's and stretched,
 which a haze does without showing it, and full screen measures 0.630 and
 0.638 - the window's picture, bigger.
 
+**Music rider is a lit world on the graphics card.** "Xxxxx xx xxxxxx xx
+xxxxxxxxxxxxx, xxx xxxxx xx xx xxxxxxx xxxxxxxx xx xxxxxxx obstacles xxxx
+xxx xxxx xxx xxxx." Xxx rider was drawn with a painter: a road of lines
+projected by hand onto a flat picture, nothing brighter than white, and a
+bloom made from a small copy of the frame. That is a ceiling, and the
+scene was at it.
+
+On a card it is now drawn in three dimensions (`rider_gl.py`). The track
+is dark glass with neon rails and a grid that scrolls under you, a line
+across it on every beat that reaches the craft exactly on the beat, and
+a gate over the road on every beat that flares as you pass through it -
+a metronome you can see coming. A city of towers lines the road, their
+windows lit from the music's bands and their roofs jumping on the kick,
+under a banded sun on the horizon and a sky full of stars. The blocks are
+solid and pulse on the beat; a prize is lit from inside in its passage's
+colour, an obstacle is dark metal with a red warning in its edges, a coin
+is struck gold with a rim, and a block you take is drawn into the ship
+while one you miss sails past it. The craft is a racer with a hull, a
+glass canopy, two engines and their exhaust, and it banks into a lane
+change. Everything is drawn in floating point, so a neon rail can be far
+brighter than white and bloom on its own while the colours around it
+stay deep, and the bloom is made on the card.
+
+What happens to you is felt. A hit drains the colour out of the world
+and leaves it red, throws the camera back and up, bends the picture with
+a shockwave out from the ship, splits its colours and scatters sparks. A
+pickup lights your lane and the ship's trim in the colour of what you
+took and bursts in it. A kick sends a wave of light down the road and
+punches the view wider.
+
+Nothing in it decides anything. Every vertex is placed through the
+scene's own road function, sampled once a frame into the shader, so a
+block drawn here is where the game says it is on the frame it says so,
+and the game moves on through one `_step` whichever way it is drawn. The
+flat drawing stays, as the picture on a machine without a card and as
+what the game's tests look at. `MAIL_MANAGER_WORLD=0` draws the rider
+flat on a card as well.
+
+It costs 10.5 ms a frame at a 14-inch MacBook Pro's full resolution with
+four samples a pixel, on an M1. The first version cost twice that; half
+of the difference was the canvas multisampling a frame the world had
+already made smooth, and a floating-point format packed into eleven,
+eleven and ten bits rather than four half floats did the rest.
+
 **A coin is round.** It was ten points joined by straight lines, which
 was round enough while the frame was drawn at half the screen's
 resolution. At all of it, a coin passing the craft is ninety pixels
@@ -1460,7 +1504,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,956 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 3,976 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1843,7 +1887,7 @@ corkscrews the track earned, and what a frame costs. No song, path or
 frame of one is ever written into the repository.
 
 ```bash
-./dev test        # 3,956 tests, about three minutes
+./dev test        # 3,976 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```
