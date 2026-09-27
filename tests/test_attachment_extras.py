@@ -8327,13 +8327,48 @@ class TestTheRiderIsPlayable:
         assert visualizers.Rider.EYE_UP >= 1.5
         assert visualizers.Rider.EYE_BACK > 0.0
 
+    def test_the_road_does_not_jump_when_the_music_comes_in(self):
+        """The first note after a silence always reads as the loudest
+        yet, and the road's bends were scaled by the loudness directly:
+        a second into a song the whole road jumped sideways in one frame.
+        Measured on the frames either side of the music coming in."""
+        from attachment_widgets import SpectrumState
+        import visualizers
+
+        clock = [100.0]
+        was = visualizers.time.monotonic
+        visualizers.time.monotonic = lambda: clock[0]
+        try:
+            scene = visualizers.Rider()
+            scene._bend = scene._climb = 1.0
+            ahead = []
+            for frame in range(180):
+                clock[0] += 1.0 / 60.0
+                state = SpectrumState()
+                loud = 0.0 if frame < 60 else 0.9
+                state.bass = state.mid = state.high = loud
+                state.kit = {}
+                state.at = frame / 60.0
+                scene._advance(state)
+                ahead.append(scene._road(10.0)[0] - scene._road(
+                    scene.RIDER_AT)[0])
+        finally:
+            visualizers.time.monotonic = was
+        jumps = [abs(b - a) for a, b in zip(ahead, ahead[1:])]
+        # 0.785 of a unit in one frame when the bends followed the
+        # loudness itself; 0.043 following it slowly, which is the road's
+        # own movement picking up speed with the passage.
+        assert max(jumps) < 0.1, (
+            f"the road ten units ahead moved {max(jumps):.3f} of a unit in "
+            f"one frame when the music came in")
+
     def test_the_road_bends_and_climbs_a_long_way(self):
         """"Xxxx xxx xxxxx xxxxx xxx xx xx xxx xxxx xxxxxx xxxx
         xxxxxxxxxxxx." """
         import visualizers
 
         scene = visualizers.Rider()
-        scene._loudness = 1.0
+        scene._loudness = scene._pushing = 1.0
         across = [scene._road(at)[0] for at in range(0, 40)]
         up = [scene._road(at)[1] for at in range(0, 40)]
         assert max(across) - min(across) > 3.0, (
@@ -9230,7 +9265,7 @@ class TestTheRoadIsAlwaysARoad:
 
         scene = visualizers.Rider()
         scene._last = None
-        scene._loudness = loud
+        scene._loudness = scene._pushing = loud
         scene._bend = scene._climb = scene._spin = phase
         scene._under = scene._road(scene.RIDER_AT)[1]
         return scene
@@ -9475,7 +9510,7 @@ class TestTheShakeIsAKnockNotADrop:
 
         scene = visualizers.Rider()
         scene._last = None
-        scene._loudness = 1.0
+        scene._loudness = scene._pushing = 1.0
         scene._bend = scene._climb = scene._spin = 1.0
         scene._under = scene._road(scene.RIDER_AT)[1]
         box = QRectF(0, 0, cls.W, cls.H)
@@ -11268,7 +11303,7 @@ class TestTheRiderCameraIsOnABoom:
 
         scene = visualizers.Rider()
         scene._last = None
-        scene._loudness = loud
+        scene._loudness = scene._pushing = loud
         scene._bend = scene._climb = phase
         scene._under = scene._road(scene.RIDER_AT)[1]
         scene._side = scene._road(scene.RIDER_AT)[0]

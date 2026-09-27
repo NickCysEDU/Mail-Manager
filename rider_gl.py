@@ -1315,6 +1315,12 @@ class RiderWorld:
         # than stopping short of it.
         fog = colorsys.hsv_to_rgb(hue % 1.0, 0.95, 0.20 + loud * 0.18)
 
+        #: What the camera did this frame, for anybody measuring it: the
+        #: roll in radians, the field of view in degrees, and where the
+        #: horizon and the craft landed on the glass, 0 to 1.
+        self.seen = {"roll": roll, "fov": fov, "horizon": horizon,
+                     "ship": self._screen_ship, "eye": eye_at,
+                     "road": screen(self._on_road(road, 0.0, 0.0, 12.0))}
         levels = list(getattr(state, "levels", ()) or ())
         if levels:
             bands = [max(0.0, min(1.0, float(levels[min(

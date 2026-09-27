@@ -4034,6 +4034,8 @@ class Rider(Scene):
     #: twelve degrees, and the energy is carried by the rig instead.
     PUSH_REST = 0.45
     PUSH_GAIN = 0.35
+    #: How slowly the road's bends follow the loudness, in seconds.
+    PUSH_EASE = 0.9
 
     #: How hard the track's own lean bends the road, and how far any
     #: single reading of it may push. See ``_carve``.
@@ -4222,6 +4224,7 @@ class Rider(Scene):
         #: off until there is room for it.
         self._placed = -99.0
         self._loudness = 0.0
+        self._pushing = 0.0
         self._speed = self.FREE_RUN
         #: How hard the road is lunging into the beat, and the beat it
         #: was chosen on. See LUNGE.
@@ -5032,7 +5035,7 @@ class Rider(Scene):
         turn, which is both what makes it readable and what makes it a
         track: "it's hard to see obstacle patterns in some angles".
         """
-        push = self.PUSH_REST + self._loudness * self.PUSH_GAIN
+        push = self.PUSH_REST + self._pushing * self.PUSH_GAIN
         if self._curve:
             return self._from_track(at, push)
         # Behind the rider the road runs straight.
@@ -5331,6 +5334,16 @@ class Rider(Scene):
             self._loudness = self._surge()
         elif self._quiet is None:
             self._quiet = loud
+        # What the road's bends are scaled by: the loudness, followed
+        # slowly. The loudness itself answers an attack at once, which is
+        # right for a flash and wrong for the shape of the road - scaled
+        # by it, every bend in view moved at once when the music hit, and
+        # the first note after a silence always reads as the loudest yet,
+        # so a second into a song the whole road jumped sideways by a
+        # fiftieth of the screen in one frame. Most of the way there in
+        # about a second, on the track's clock like everything else.
+        self._pushing += ((self._loudness - self._pushing)
+                          * (1.0 - math.exp(-step / self.PUSH_EASE)))
         self._slow = min(1.0, self._slow + self.SLOW_BACK * self._rolling)
         # The lunge is chosen once a beat and held for the whole of it.
         #

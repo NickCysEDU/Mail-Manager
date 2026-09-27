@@ -413,6 +413,21 @@ table. Test suite 4,020 tests (with the evaluation sets present) in about three 
   8.9, 11.2, 13.8, 22.7 and 32.3 ms at full quality. `CardSharpness`
   governs it - samples first, then the logical resolution - and a 5K
   display settles at 10 ms, a 6K at 9.6. The numbers are on the class.
+- [ ] **Frame pacing: about one refresh in ten does not get exactly one new
+  frame.** The pane's 16 ms timer runs at 62.5 Hz against a 60 Hz display and
+  the two drift past each other: measured with Core Video's own refresh
+  times, 87-91 refreshes in a hundred get exactly one new frame, a hitch
+  1.2-2.2 times a second. Tried and measured, and each was worse, so none
+  shipped: driving frames straight off a CVDisplayLink (60-75 in a hundred -
+  a frame begun at the refresh finishes near the next one); an exact 60 Hz
+  schedule (99, 96 and 57 in three runs - it depends where it starts); and
+  that schedule phase-locked towards mid-refresh (70-79 - Qt's own repaint
+  scheduling between the request and the paint spreads completion evenly
+  across the interval, so steering the request does not steer the frame).
+  Qt only enforces a minimum 8.3 ms between a widget's repaints; it does not
+  lock them to the display. The next thing worth trying is presenting from a
+  layer that reports its own presentation times (a CAMetalLayer), which
+  would be the instrument this needed.
 - [ ] **Bigger spectacle now has a budget to spend.** The card draws the
   scene at 2880x1800 in under 5 ms, so real particle counts, a denser
   road and a proper bloom are affordable on a MacBook's own screen.
