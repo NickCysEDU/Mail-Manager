@@ -317,6 +317,10 @@ def self_test(offline: bool = False) -> int:
         if not rider_gl.ship_triangles() or "onRoad" not in rider_gl.ROAD_GLSL:
             raise RuntimeError("the rider's world is not in this build")
         working.append("the rider's world")
+        import rider_sound
+        if len(rider_sound.coin(0)) < 1000:
+            raise RuntimeError("the rider's sounds are not in this build")
+        working.append("the rider's sounds")
         return ", ".join(working)
 
     check("attachment viewer", _attachment_viewer)

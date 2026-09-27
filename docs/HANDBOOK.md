@@ -1464,6 +1464,26 @@ of the difference was the canvas multisampling a frame the world had
 already made smooth, and a floating-point format packed into eleven,
 eleven and ten bits rather than four half floats did the rest.
 
+**Music rider makes sounds of its own.** A note for every block you
+take, a bell struck under the music, one step up a pentatonic scale each
+time - so a run is something you hear climbing, and it stays in tune with
+itself against any record, because a pentatonic scale has no wrong note in
+it. A long run carries on round the top octave rather than falling back to
+the bottom, which would sound like the run had broken. In the puzzle game
+the note climbs as the grid fills, which is what Audiosurf does. A coin is
+a brighter ting that climbs along a row; a power block is a rising sweep;
+a milestone is an arpeggio; a shield going is glass.
+
+A hit is not a note. It is a thump under the music, a crunch over it and
+a stab in no key at all - and the music itself ducks for a moment and
+comes back, which is the part you feel rather than hear.
+
+Nothing is recorded and nothing ships: each sound is a few hundred
+milliseconds of arithmetic, made once in a process of its own and kept as
+a short WAV in `~/Library/Caches/Mail Manager/sounds`. They play at a
+share of the player's own volume. **Sounds** beside the game box turns
+them off, and so does **X** while the game is on screen.
+
 **A coin is round.** It was ten points joined by straight lines, which
 was round enough while the frame was drawn at half the screen's
 resolution. At all of it, a coin passing the craft is ninety pixels
@@ -1504,7 +1524,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 3,976 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 4,020 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1887,7 +1907,7 @@ corkscrews the track earned, and what a frame costs. No song, path or
 frame of one is ever written into the repository.
 
 ```bash
-./dev test        # 3,976 tests, about three minutes
+./dev test        # 4,020 tests, about three minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

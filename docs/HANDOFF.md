@@ -301,7 +301,7 @@ That first figure is the one that matters and it must stay at zero.
 
 **Speed.** Rules engine 10.1 ms per message. Lexicon opens in 38 ms using
 1.95 MB, down from 70 ms and 10.5 MB, and neither number now grows with the
-table. Test suite 3,976 tests (with the evaluation sets present) in about three minutes on four workers.
+table. Test suite 4,020 tests (with the evaluation sets present) in about three minutes on four workers.
 
 ---
 
@@ -341,6 +341,13 @@ table. Test suite 3,976 tests (with the evaluation sets present) in about three 
   recommends in `aboutToBeDestroyed` cannot be done from PySide - the
   context's wrapper is already gone - so everything the world makes is a Qt
   object that frees its GL names with its context.
+- **The rider's sounds are `rider_sound.py`, and they listen rather than being
+  called.** The pane hands the scene to a listener after every frame
+  (`Spectrum.set_listener`); the sound board reads the scene's pops, the
+  same record the world answers, so a sound and a flash cannot disagree.
+  A sound is changed by editing its function and bumping `VERSION`, or the
+  cached WAV from the last build is played instead. The files are made in a
+  spawned process the first time the rider is chosen (`make_elsewhere`).
 - **Brace a shell variable that touches a curly quote.** `"as “$IDENTITY”"`
   is read by macOS's bash as a variable whose name includes the quote's
   bytes; under `set -u` it stopped `build_app.sh` after the bundle was

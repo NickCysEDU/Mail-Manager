@@ -494,6 +494,18 @@ class AudioPane(QWidget):
         self.game_box.hide()
         self.game_box_holder = _labelled("game", self.game_box)
         self.game_box_holder.hide()
+        # The rider's own sounds: a note for every block taken, climbing
+        # as a run goes on, and a thump with the music ducking under it
+        # when one is hit. On unless somebody says otherwise. See
+        # rider_sound.
+        self.sound_box = QCheckBox("Sounds")
+        self.sound_box.setChecked(True)
+        self.sound_box.setToolTip(
+            "The game's own sounds: a note for each block you take, rising "
+            "as the chain grows, and a thump for a hit. Key X.")
+        self.sound_box.toggled.connect(self._sounds_changed)
+        self.sound_box.hide()
+        self._board = None
         # The tick box and the two sliders that shape it, as one block: on
         # their own the sliders said "Sensitivity" and "Rate" with nothing
         # to say what of.
@@ -543,7 +555,7 @@ class AudioPane(QWidget):
         # Grouped: what to draw, how it reacts, then what to do with it.
         groups = ((self.enable_box, self.busy, self.scene_box, self.shape_box,
                    self.colour_button, self.mode_box, self.game_box_holder,
-                   self.decay_box, self.full_button),
+                   self.sound_box, self.decay_box, self.full_button),
                   (self.strobe_group,))
         for index, group in enumerate(groups):
             if index:
@@ -558,7 +570,8 @@ class AudioPane(QWidget):
         self._visual_controls = (self.scene_box, self.shape_box,
                                  self.strobe_group, self.decay_box,
                                  self.mode_box, self.game_box_holder,
-                                 self.full_button, self.colour_button)
+                                 self.sound_box, self.full_button,
+                                 self.colour_button)
         # Everything except the tick box starts unavailable, because the
         # visualiser starts off.
         self._grey_visual_controls(False)
@@ -863,7 +876,7 @@ class AudioPane(QWidget):
                 widget.setVisible(on and scene == "VU meters")
             elif widget in (self.decay_box, self.mode_box):
                 widget.setVisible(on and scene == "Oscilloscope")
-            elif widget is self.game_box_holder:
+            elif widget in (self.game_box_holder, self.sound_box):
                 widget.setVisible(on and scene == "Music rider")
             else:
                 widget.setVisible(on)
@@ -961,6 +974,7 @@ class AudioPane(QWidget):
 
         scene = visualizers.by_name(name)
         self.spectrum.set_scene(scene)
+        self._sounds_changed()
         # Only the meters have colours to set, so the button only appears
         # when there is something for it to do.
         self._show_visual_controls(self.enable_box.isChecked())
@@ -970,6 +984,51 @@ class AudioPane(QWidget):
         # of the pane has to be worked out again. Without this the extra
         # line pushed the transport up into the picture.
         self._apply_budget()
+
+    # -- the rider's sounds -------------------------------------------------
+    def _sound_board(self):
+        """The rider's sounds, made the first time they are wanted."""
+        if self._board is None:
+            import config
+            import rider_sound
+
+            self._board = rider_sound.SoundBoard(
+                config.cache_dir() / "sounds",
+                volume=lambda: self.volume.value() / 100.0,
+                duck=self._duck)
+            rider_sound.make_elsewhere(self._board.folder)
+        return self._board
+
+    @Slot()
+    def _sounds_changed(self, *_args) -> None:
+        """Listen to the game while it is on screen and the box says so."""
+        wanted = (self.sound_box.isChecked()
+                  and self.scene_box.currentText() == "Music rider")
+        board = self._sound_board() if wanted else None
+        self.spectrum.set_listener(board.listen if board is not None else None)
+        if board is not None:
+            # Once the worker has had time to write them.
+            QTimer.singleShot(1500, board.prepare)
+
+    def _duck(self, depth: float, seconds: float) -> None:
+        """The music, down by ``depth`` and back over ``seconds``."""
+        if self._audio is None:
+            return
+        from PySide6.QtCore import QVariantAnimation
+
+        animation = getattr(self, "_ducking", None)
+        if animation is None:
+            animation = self._ducking = QVariantAnimation(self)
+            # Against the slider on every step, so moving it mid-duck is
+            # honoured, and the last step is the slider exactly.
+            animation.valueChanged.connect(
+                lambda share: self._audio is not None and self._audio.setVolume(
+                    self.volume.value() / 100.0 * float(share)))
+        animation.stop()
+        animation.setStartValue(max(0.0, 1.0 - depth))
+        animation.setEndValue(1.0)
+        animation.setDuration(max(1, int(seconds * 1000)))
+        animation.start()
 
     @Slot()
     def _choose_colours(self) -> None:
@@ -1059,6 +1118,8 @@ class AudioPane(QWidget):
         Qt.Key.Key_Right: ("lane", 1),
         # And up, for the one game that is not locked to the road.
         Qt.Key.Key_Up: ("jump", 1),
+        # The game's sounds, on and off.
+        Qt.Key.Key_X: ("sounds", 0),
     }
 
     @staticmethod
@@ -1090,6 +1151,11 @@ class AudioPane(QWidget):
             return self._steer(value)
         if action == "jump":
             return self._jump()
+        if action == "sounds":
+            if self._steering() is None:
+                return False
+            self.sound_box.setChecked(not self.sound_box.isChecked())
+            return True
         if action == "reaction" and self._steering() is not None:
             # A and D drive the game while the game is on screen. They step
             # through what the strobe listens to the rest of the time.

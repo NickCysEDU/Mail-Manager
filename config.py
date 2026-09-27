@@ -131,6 +131,20 @@ def migrate_legacy_support_files() -> list:
     return moved
 
 
+def cache_dir() -> Path:
+    """Files the app can always make again, such as the rider's sounds.
+
+    Kept out of Application Support, which is for what cannot be made
+    again, and in the place macOS clears when it needs the room.
+    """
+    override = os.environ.get("ICLOUD_TRIAGE_HOME")
+    if override:
+        return Path(override).expanduser() / "Caches"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches" / APP_NAME
+    return app_support_dir() / "cache"
+
+
 def log_dir() -> Path:
     override = os.environ.get("ICLOUD_TRIAGE_HOME")
     if override:

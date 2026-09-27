@@ -2336,6 +2336,26 @@ class Spectrum(QWidget):
                              "the spectrum appears when something is playing")
             return
         self._paint_scene(painter, rect)
+        self._tell_listener()
+
+    def set_listener(self, listener) -> None:
+        """Something to be handed the scene after every frame is drawn -
+        the rider's sounds, which answer what the game just did. None to
+        stop."""
+        self._listener = listener
+
+    def _tell_listener(self) -> None:
+        listener = getattr(self, "_listener", None)
+        if listener is None:
+            return
+        try:
+            listener(self._scene)
+        except Exception:      # noqa: BLE001 - the picture goes on without it
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "a listener on the pane failed; it will not be asked again")
+            self._listener = None
 
     def _paint_scene(self, painter, rect) -> None:
         """The scene, then whatever polish it asks for.
@@ -2455,6 +2475,7 @@ class _KeysCard(QWidget):
     KEYS = (
         ("1 – 9", "the scenes, in the order the menu lists them"),
         ("← →", "change lane, in Music rider"),
+        ("X", "the game's sounds on or off"),
         ("S", "strobe on or off"),
         ("A / D", "step through what the strobe listens to"),
         ("M", "listen to nobody: nothing fires but G and H"),
