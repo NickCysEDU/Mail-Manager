@@ -1,0 +1,413 @@
+"""The end of a ride: the finish, the results, and the best kept.
+
+A song that finished used to leave the road running on with nothing to
+say it was over. Audiosurf ends a ride with how it went, and a score
+means more against the last one.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+
+import pytest
+
+
+def _state(at, length=10.0, chart=()):
+    from attachment_widgets import SpectrumState
+
+    state = SpectrumState()
+    state.levels = [0.5] * 27
+    state.bass = state.mid = state.high = 0.5
+    state.kit = {}
+    state.at = at
+    state.tempo = 120.0
+    state.beat_at = ((at - 0.25) / 0.5) % 1.0
+    state.chart = {"Kick": tuple(chart)}
+    state.contour = {"loud": [0.5] * int(length * 8), "lean": [0.0] * int(
+        length * 8), "rate": 8.0}
+    return state
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    import visualizers
+
+    now = [100.0]
+    monkeypatch.setattr(visualizers.time, "monotonic", lambda: now[0])
+    return now
+
+
+def _ride(scene, clock, start, seconds, **state):
+    first = None
+    for index in range(int(seconds * 60)):
+        clock[0] += 1.0 / 60.0
+        made = _state(start + index / 60.0, **state)
+        if first is None:
+            first = made
+        # The same shape and the same chart every frame, as the pane
+        # gives them: a new chart is a new road, laid again from here.
+        made.contour, made.chart = first.contour, first.chart
+        scene._step(made)
+
+
+class TestTheFinish:
+    def test_the_end_of_the_track_ends_the_run_once(self, qapp, clock):
+        import visualizers
+
+        scene = visualizers.Rider()
+        _ride(scene, clock, 8.5, 1.5)
+        assert scene._finished and scene._result is not None
+        finishes = [pop for pop in scene._pops if pop[0] == "finish"]
+        assert len(finishes) == 1
+        _ride(scene, clock, 9.9, 0.3)
+        assert [pop for pop in scene._pops if pop[0] == "finish"] == finishes
+
+    def test_not_before_the_end(self, qapp, clock):
+        import visualizers
+
+        scene = visualizers.Rider()
+        _ride(scene, clock, 2.0, 3.0)
+        assert not scene._finished
+
+    def test_back_to_the_start_is_a_new_run(self, qapp, clock):
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene.set_mode("Ninja")
+        _ride(scene, clock, 8.5, 1.5)
+        assert scene._finished
+        scene._score = 999
+        _ride(scene, clock, 0.5, 0.2)
+        assert not scene._finished
+        assert scene._score == 0, "the old run's score carried into the new"
+        assert scene._mode == "Ninja", "and it forgot which game it was"
+
+
+class TestWhatARunIsJudgedOn:
+    def _collide(self, scene, blocks, lane=1):
+        scene._lane = lane
+        scene._lane_here = scene._lane_at(lane)
+        scene._heard = 5.0
+        scene._blocks = [list(block) for block in blocks]
+        scene._collide()
+
+    def test_prizes_taken_out_of_those_that_went_by(self, qapp):
+        import visualizers
+
+        scene = visualizers.Rider()
+        self._collide(scene, [(4.0, 1, "block", False, False),
+                              (4.1, 0, "block", False, False),
+                              (4.2, 2, "block", False, False),
+                              (4.3, 0, "block", False, True)])
+        # The grey that went by is something dodged, not a prize missed.
+        assert (scene._taken, scene._offered) == (1, 3)
+
+    def test_the_longest_chain_is_kept_when_it_breaks(self, qapp):
+        import visualizers
+
+        scene = visualizers.Rider()
+        for index in range(5):
+            self._collide(scene, [(4.0 + index * 0.01, 1, "block", False,
+                                   False)])
+        scene._shield = 0.0
+        self._collide(scene, [(4.9, 1, "block", False, True)])
+        assert scene._chain == 0 and scene._chain_most == 5
+
+    def test_a_shield_save_is_counted(self, qapp):
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._shield = 1.0
+        self._collide(scene, [(4.0, 1, "block", False, True)])
+        assert scene._saves == 1 and scene._hits == 0
+
+
+class TestTheGrade:
+    @pytest.mark.parametrize("share, hits, letter", [
+        (1.0, 0, "S"), (0.95, 0, "S"), (0.95, 1, "A"), (0.86, 2, "A"),
+        (0.86, 3, "B"), (0.72, 5, "B"), (0.55, 9, "C"), (0.49, 0, "D"),
+        (1.0, 30, "D"),
+    ])
+    def test_both_have_to_be_earned(self, share, hits, letter):
+        import visualizers
+
+        assert visualizers.Rider.grade(share, hits) == letter
+
+
+class TestTheCard:
+    def test_it_comes_up_at_the_end_and_not_before(self, qapp, clock):
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+
+        def centre_light(scene):
+            image = QImage(640, 400, QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(QColor(0, 0, 0))
+            painter = QPainter(image)
+            scene._results(painter, QRectF(0, 0, 640, 400))
+            painter.end()
+            return sum(image.pixelColor(x, y).valueF()
+                       for y in range(120, 280, 4) for x in range(220, 420, 4))
+
+        scene = visualizers.Rider()
+        _ride(scene, clock, 5.0, 0.5)
+        assert centre_light(scene) == 0.0, "the card is up before the end"
+        _ride(scene, clock, 9.8, 1.0)
+        assert centre_light(scene) > 5.0, "the card did not come up"
+
+    def test_a_new_best_says_so(self, qapp, clock):
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+
+        scene = visualizers.Rider()
+        _ride(scene, clock, 9.8, 1.0)
+        said = []
+        real = QPainter.drawText
+
+        class Recording(QPainter):
+            def drawText(self, *args):      # noqa: N802 - Qt's name
+                said.append(args[-1])
+                return real(self, *args)
+
+        image = QImage(640, 400, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0))
+        scene.new_best = True
+        painter = Recording(image)
+        scene._results(painter, QRectF(0, 0, 640, 400))
+        painter.end()
+        assert "NEW BEST" in said and "TRACK COMPLETE" in said
+        assert scene._result["grade"] in said
+
+
+class TestTheBests:
+    def test_a_track_is_known_by_its_analysis_not_its_name(self):
+        from array import array
+
+        import rider_bests
+
+        one = [array("f", [0.1 * i] * 27) for i in range(50)]
+        two = [array("f", [0.2 * i] * 27) for i in range(50)]
+        assert rider_bests.fingerprint(one) == rider_bests.fingerprint(list(one))
+        assert rider_bests.fingerprint(one) != rider_bests.fingerprint(two)
+        assert re.fullmatch(r"[0-9a-f]{20}", rider_bests.fingerprint(one))
+
+    def test_a_best_is_kept_beaten_and_kept_apart_by_game(self, tmp_path):
+        import rider_bests
+
+        path = tmp_path / "bests.json"
+        bests = rider_bests.Bests(path)
+        assert bests.offer("abc", "Mono", 500) == (None, True)
+        assert bests.offer("abc", "Mono", 300) == (500, False)
+        assert bests.offer("abc", "Mono", 500) == (500, False), (
+            "equalling a best is not beating it")
+        assert bests.offer("abc", "Mono", 800) == (500, True)
+        assert bests.offer("abc", "Ninja", 100) == (None, True)
+        again = rider_bests.Bests(path)
+        assert again.best("abc", "Mono") == 800
+        assert again.best("abc", "Ninja") == 100
+
+    def test_the_file_holds_nothing_that_names_the_music(self, tmp_path):
+        """A fingerprint and a number per game, and nothing else."""
+        from array import array
+
+        import rider_bests
+
+        path = tmp_path / "bests.json"
+        track = rider_bests.fingerprint([array("f", [0.3] * 27)] * 20)
+        rider_bests.Bests(path).offer(track, "Wakeboard", 1234)
+        table = json.loads(path.read_text())
+        assert table == {f"{track}:Wakeboard": 1234}
+
+    def test_nothing_scored_is_not_a_best(self, tmp_path):
+        import rider_bests
+
+        bests = rider_bests.Bests(tmp_path / "bests.json")
+        assert bests.offer("abc", "Mono", 0) == (None, False), (
+            "a run that scored nothing said NEW BEST")
+
+    def test_a_damaged_file_starts_afresh(self, tmp_path):
+        import rider_bests
+
+        path = tmp_path / "bests.json"
+        path.write_text("{not json")
+        bests = rider_bests.Bests(path)
+        assert bests.offer("abc", "Mono", 10) == (None, True)
+
+
+class TestThePaneKeepsTheBest:
+    def test_a_finished_run_is_offered_once_and_answered(self, qapp,
+                                                         tmp_path,
+                                                         monkeypatch):
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        import visualizers
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        try:
+            pane._track_key = "0123456789abcdef0123"
+            scene = visualizers.Rider()
+            scene._result = {"mode": "Mono", "worth": 700}
+            pane._keep_best(scene)
+            assert scene.new_best is True and scene.best_before is None
+            # The listener hears the scene every frame the card is up;
+            # offered again, the run would be measured against itself and
+            # the card would go from NEW BEST to "best 700" a frame later.
+            pane._keep_best(scene)
+            assert scene.new_best is True and scene.best_before is None, (
+                "the same run was offered twice")
+            later = visualizers.Rider()
+            later._result = {"mode": "Mono", "worth": 650}
+            pane._keep_best(later)
+            assert later.best_before == 700 and later.new_best is False
+            assert (tmp_path / "rider-bests.json").exists()
+        finally:
+            pane.deleteLater()
+
+    def test_a_track_is_known_as_soon_as_its_picture_arrives(
+            self, qapp, monkeypatch):
+        from array import array
+        from pathlib import Path
+
+        import attachment_audio
+        import rider_bests
+        from attachment_view import AudioPane
+
+        told = {}
+
+        def decode(path, done, failed, progress, kit, bands):
+            told["bands"] = bands
+            return object()
+
+        monkeypatch.setattr(attachment_audio, "decode", decode)
+        pane = AudioPane()
+        try:
+            pane._start_analysis(Path("song"))
+            frames = [array("f", [0.1 + 0.01 * (i % 9)] * attachment_audio.BANDS)
+                      for i in range(200)]
+            told["bands"]((frames, None, attachment_audio.contour(frames)))
+            assert pane._track_key == rider_bests.fingerprint(frames)
+        finally:
+            pane._decoder = None
+            pane.deleteLater()
+
+    def test_a_new_track_forgets_the_last(self, qapp):
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        try:
+            pane._track_key = "0123456789abcdef0123"
+            pane.stop()
+            assert pane._track_key is None
+        finally:
+            pane.deleteLater()
+
+
+class TestTheFinishIsNeverCrowdedOut:
+    def test_a_burst_of_pickups_cannot_push_it_out(self, qapp):
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._pop("finish", strength=1.4)
+        for _ in range(30):
+            scene._pop("prize")
+        kinds = [pop[0] for pop in scene._pops]
+        assert "finish" in kinds and len(kinds) == 12
+
+
+def _light(image, left, top, right, bottom):
+    return sum(image.pixelColor(x, y).valueF()
+               for y in range(top, bottom, 4) for x in range(left, right, 4))
+
+
+class TestBothPicturesShowIt:
+    """The card is drawn by the flat picture and by the lit one: each is
+    checked by what it puts on the screen, with the card and without."""
+
+    @staticmethod
+    def _finished(clock):
+        import visualizers
+
+        scene = visualizers.Rider()
+        _ride(scene, clock, 9.8, 1.0)
+        assert scene._finished
+        return scene
+
+    def test_the_flat_picture(self, qapp, clock):
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        scene = self._finished(clock)
+        real = scene._results
+
+        def drawn(card):
+            scene._results = real if card else (lambda painter, rect: None)
+            image = QImage(640, 400, QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(QColor(0, 0, 0))
+            painter = QPainter(image)
+            scene.paint(painter, QRectF(0, 0, 640, 400), _state(10.5))
+            painter.end()
+            return image
+
+        without, again, card = drawn(False), drawn(False), drawn(True)
+        steady = abs(_light(without, 220, 120, 420, 280)
+                     - _light(again, 220, 120, 420, 280))
+        shown = abs(_light(card, 220, 120, 420, 280)
+                    - _light(without, 220, 120, 420, 280))
+        assert shown > max(5.0, steady * 4), (
+            f"the flat picture never showed the card ({shown:.1f} "
+            f"against {steady:.1f} frame to frame)")
+
+    def test_the_lit_picture(self, qapp, clock):
+        from types import SimpleNamespace
+
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        scene = self._finished(clock)
+        real = scene._results
+
+        def drawn(card):
+            scene._results = real if card else (lambda painter, rect: None)
+            image = QImage(640, 400, QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(QColor(0, 0, 0))
+            painter = QPainter(image)
+            scene._hud_on_card(painter, QRectF(0, 0, 640, 400), _state(10.5),
+                               SimpleNamespace(hud=None))
+            painter.end()
+            return image
+
+        assert (_light(drawn(True), 220, 120, 420, 280)
+                > _light(drawn(False), 220, 120, 420, 280) + 5.0), (
+            "the lit picture never showed the card")
+
+
+class TestTheLiveNumbersMakeWay:
+    def test_the_score_goes_when_the_card_comes(self, qapp, clock):
+        """Two scores on the screen at once, one counting and one final,
+        is one too many: at the end the card says it."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import rider_gl
+        import visualizers
+
+        def top_middle(scene):
+            image = QImage(640, 400, QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(QColor(0, 0, 0))
+            painter = QPainter(image)
+            rider_gl.Hud().draw(painter, QRectF(0, 0, 640, 400), scene,
+                                _state(10.5))
+            painter.end()
+            # Below the progress line, which stays: it says the track is
+            # all the way through.
+            return _light(image, 240, 12, 400, 60)
+
+        scene = visualizers.Rider()
+        scene._score = 4321
+        assert top_middle(scene) > 3.0, "no score to take away"
+        scene._finished = True
+        assert top_middle(scene) == 0.0, "the running score is still up"

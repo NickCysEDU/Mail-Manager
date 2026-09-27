@@ -506,6 +506,11 @@ class AudioPane(QWidget):
         self.sound_box.toggled.connect(self._sounds_changed)
         self.sound_box.hide()
         self._board = None
+        #: The track being played, as the bests know it, and the result
+        #: last offered to them. See _keep_best.
+        self._track_key = None
+        self._kept_result = None
+        self._best_keeper = None
         # The tick box and the two sliders that shape it, as one block: on
         # their own the sliders said "Sensitivity" and "Rate" with nothing
         # to say what of.
@@ -785,6 +790,9 @@ class AudioPane(QWidget):
             self.spectrum.set_working(None)
             self.spectrum.set_frames(frames, attachment_audio.RATE)
             self.spectrum.set_contour(shape)
+            import rider_bests
+
+            self._track_key = rider_bests.fingerprint(frames)
             self.wave.set_shape(attachment_audio.outline(frames, calibration))
 
         def failed(_detail: str) -> None:
@@ -1001,14 +1009,38 @@ class AudioPane(QWidget):
 
     @Slot()
     def _sounds_changed(self, *_args) -> None:
-        """Listen to the game while it is on screen and the box says so."""
-        wanted = (self.sound_box.isChecked()
-                  and self.scene_box.currentText() == "Music rider")
-        board = self._sound_board() if wanted else None
-        self.spectrum.set_listener(board.listen if board is not None else None)
-        if board is not None:
+        """Listen to the game while it is on screen: for its sounds, if
+        the box says so, and for the end of a run, whose best is kept."""
+        rider = self.scene_box.currentText() == "Music rider"
+        self.spectrum.set_listener(self._listen_to_game if rider else None)
+        if rider and self.sound_box.isChecked():
             # Once the worker has had time to write them.
-            QTimer.singleShot(1500, board.prepare)
+            QTimer.singleShot(1500, self._sound_board().prepare)
+
+    def _listen_to_game(self, scene) -> None:
+        """After every frame of the game: its sounds, and its best."""
+        if self.sound_box.isChecked():
+            self._sound_board().listen(scene)
+        self._keep_best(scene)
+
+    def _keep_best(self, scene) -> None:
+        """A run that has just finished, against the best this track has
+        been ridden to in that game; the scene shows the answer."""
+        result = getattr(scene, "_result", None)
+        if (result is None or result is self._kept_result
+                or self._track_key is None):
+            return
+        self._kept_result = result
+        if self._best_keeper is None:
+            import config
+            import rider_bests
+
+            self._best_keeper = rider_bests.Bests(
+                config.app_support_dir() / "rider-bests.json")
+        before, beaten = self._best_keeper.offer(
+            self._track_key, result["mode"], int(result["worth"]))
+        scene.best_before = before
+        scene.new_best = beaten
 
     def _duck(self, depth: float, seconds: float) -> None:
         """The music, down by ``depth`` and back over ``seconds``."""
@@ -1443,6 +1475,8 @@ class AudioPane(QWidget):
         # The old track's length and place, which the player will not
         # say again for a track it no longer has.
         self.wave.forget_track()
+        self._track_key = None
+        self._kept_result = None
         # cancel(), not just forget: the analysis runs on a QThread, and Qt
         # calls qFatal if one is destroyed while it is still running.
         self._cancel_analysis()

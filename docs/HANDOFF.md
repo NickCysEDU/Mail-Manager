@@ -301,7 +301,7 @@ That first figure is the one that matters and it must stay at zero.
 
 **Speed.** Rules engine 10.1 ms per message. Lexicon opens in 38 ms using
 1.95 MB, down from 70 ms and 10.5 MB, and neither number now grows with the
-table. Test suite 4,020 tests (with the evaluation sets present) in about three minutes on four workers.
+table. Test suite 4,055 tests (with the evaluation sets present) in about three minutes on four workers.
 
 ---
 
@@ -348,6 +348,13 @@ table. Test suite 4,020 tests (with the evaluation sets present) in about three 
   A sound is changed by editing its function and bumping `VERSION`, or the
   cached WAV from the last build is played instead. The files are made in a
   spawned process the first time the rider is chosen (`make_elsewhere`).
+- **A run ends in `Rider._finish`,** from the track's own length (its contour),
+  which is why it works the same in the app and in the playtest tool. The
+  result is `Rider.result()`; the card is `Rider._results`, drawn by both the
+  flat and the lit path. Bests are `rider_bests.py`, offered by the viewer's
+  listener (`AudioPane._keep_best`) and keyed by `rider_bests.fingerprint`.
+  The "finish" pop is never trimmed from the scene's twelve: the card fades
+  in from it.
 - **Brace a shell variable that touches a curly quote.** `"as “$IDENTITY”"`
   is read by macOS's bash as a variable whose name includes the quote's
   bytes; under `set -u` it stopped `build_app.sh` after the bundle was

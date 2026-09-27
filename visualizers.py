@@ -4172,6 +4172,19 @@ class Rider(Scene):
     def __init__(self) -> None:
         self._lane = 1
         self._lane_here = 0.0
+        #: What a run is judged on at the end: the prizes that went by and
+        #: the ones taken, the longest chain, and the greys the shield
+        #: took instead of you. See result.
+        self._offered = 0
+        self._taken = 0
+        self._chain_most = 0
+        self._saves = 0
+        self._finished = False
+        self._result = None
+        #: Set from outside, where the bests are kept: the best this
+        #: track has been played to before, and whether this run beat it.
+        self.best_before = None
+        self.new_best = False
         self._at = 0.0
         self._last = None
         self._heard = 0.0
@@ -5530,6 +5543,8 @@ class Rider(Scene):
                 else:
                     self._coin_run = 0
                 continue
+            if not grey:
+                self._offered += 1
             if grey and on_it:
                 if self._sore > 0.0:
                     continue
@@ -5537,6 +5552,7 @@ class Rider(Scene):
                     # Shattered rather than hit. It still counts as
                     # having touched one, so the clean run is over.
                     self._shield = 0.0
+                    self._saves += 1
                     self._clean = False
                     self._sore = self.SORE
                     self._shake = min(1.0, self._shake + 0.35)
@@ -5575,6 +5591,7 @@ class Rider(Scene):
                     # Worth nothing on its own: it goes in the grid, and
                     # three of a colour touching is what pays.
                     if self._stunned <= 0.0:
+                        self._taken += 1
                         self._drop(self._tier_of(when), lane)
                         self._got = 1.0
                         self._burst(self._lane_at(lane), prize=True)
@@ -5583,6 +5600,8 @@ class Rider(Scene):
                     # A prize. See CHAIN_FIRST.
                     before = self._chain
                     self._chain += 1
+                    self._taken += 1
+                    self._chain_most = max(self._chain_most, self._chain)
                     self._score += int(min(
                         self.CHAIN_MOST,
                         self.CHAIN_FIRST
@@ -5884,7 +5903,65 @@ class Rider(Scene):
             self._swerve += ((self._lane_here - was_across) / step
                              - self._swerve) * self.SWERVE_EASE
         self._collide()
+        self._finish(state)
         return step
+
+    #: How close to the end of the track counts as the end: a player
+    #: stops a few frames short, and waits for nothing after the last.
+    FINISH_BEFORE = 0.3
+
+    @staticmethod
+    def _length(state) -> float:
+        """How long the track is, from its contour; 0 until there is one."""
+        shape = getattr(state, "contour", None) or {}
+        loud = shape.get("loud") or ()
+        rate = float(shape.get("rate") or 0.0)
+        return len(loud) / rate if loud and rate > 0.0 else 0.0
+
+    def _finish(self, state) -> None:
+        """The end of the track is the end of the run, and the start of
+        the track after it is a new one."""
+        length = self._length(state)
+        if length <= 0.0:
+            return
+        at = bounded(getattr(state, "at", 0.0), most=self.LONGEST)
+        if self._finished:
+            if at < min(2.0, length * 0.5):
+                # Back to the start: a new run, in the same game.
+                mode = self._mode
+                self.reset()
+                self._mode = mode
+            return
+        if at >= length - self.FINISH_BEFORE:
+            self._finished = True
+            self._result = self.result()
+            self._pop("finish", hue=0.13, sat=0.5, strength=1.4)
+
+    def result(self) -> dict:
+        """How the run went, as it stands: what the end of a track shows."""
+        share = self._taken / self._offered if self._offered else 0.0
+        return {
+            "worth": self._worth(), "score": self._score,
+            "grade": self.grade(share, self._hits), "share": share,
+            "taken": self._taken, "offered": self._offered,
+            "chain": self._chain_most, "coins": self._coins,
+            "hits": self._hits, "saves": self._saves,
+            "clean": self._clean, "mode": self._mode,
+            "airs": self._airs, "cleared": self._cleared,
+        }
+
+    #: The grades, best first: the share of the prizes taken, and the
+    #: most greys hit, to earn each.
+    GRADES = (("S", 0.95, 0), ("A", 0.85, 2), ("B", 0.70, 5), ("C", 0.50, 10))
+
+    @classmethod
+    def grade(cls, share: float, hits: int) -> str:
+        """A letter for a run. Both have to be earned: taking everything
+        while hitting everything is not an S."""
+        for letter, least, most in cls.GRADES:
+            if share >= least and hits <= most:
+                return letter
+        return "D"
 
     def paint_on_card(self, painter, rect, state, world) -> None:
         """The same game, drawn as a lit world on the graphics card.
@@ -5956,6 +6033,7 @@ class Rider(Scene):
         if self._mode == "Puzzle":
             self._matrix(painter, rect)
         hud.draw(painter, rect, self, state)
+        self._results(painter, rect)
 
     def paint(self, painter, rect, state) -> None:
         self._step(state)
@@ -6029,6 +6107,7 @@ class Rider(Scene):
         if self._mode == "Puzzle":
             self._matrix(painter, rect)
         self._card(painter, rect, hue)
+        self._results(painter, rect)
 
     #: Where the grid sits and how big it is, as shares of the frame.
     #: Bottom left, out of the road's way: the road runs up the middle
@@ -6540,6 +6619,7 @@ class Rider(Scene):
         "clear":     (0.55, 0.50, 0.45, 0.95, 1.4),
         "hit":       (0.55, 0.60, 0.65, 1.00, 2.4),
         "milestone": (0.95, 0.95, 0.80, 1.00, 1.8),
+        "finish":    (2.20, 1.10, 0.60, 1.00, 2.0),
     }
     #: Chains worth stopping the world for. Ten is the first that means
     #: anything, and past a hundred the chain is paying its cap, so the
@@ -6557,7 +6637,13 @@ class Rider(Scene):
                            hue % 1.0, sat, text])
         # Never a queue of them: the newest few are all anybody sees.
         if len(self._pops) > 12:
-            del self._pops[:len(self._pops) - 12]
+            # The oldest go, but never the end of the track: it is what
+            # the results card comes up from, and a burst of pickups on
+            # the last beat is exactly when it would otherwise be pushed
+            # out.
+            kept = [pop for pop in self._pops if pop[0] == "finish"]
+            rest = [pop for pop in self._pops if pop[0] != "finish"]
+            self._pops = kept + rest[len(rest) - (12 - len(kept)):]
 
     def _age_pops(self, step: float) -> None:
         """On the track's clock, like everything else."""
@@ -7027,6 +7113,96 @@ class Rider(Scene):
                + f"{self._shield:.0%}")
             + f"   best {self._best}")
         painter.restore()
+
+    def _results(self, painter, rect) -> None:
+        """The end of the track: how the run went, over the stopped road.
+
+        Comes up over the first half second after the finish, and stays
+        until the track is played again from the start.
+        """
+        if not self._finished or self._result is None:
+            return
+        spec = self.POPS["finish"]
+        age = next((pop[1] for pop in self._pops if pop[0] == "finish"),
+                   spec[0])
+        shown = min(1.0, age / 0.5)
+        result = self._result
+        painter.save()
+        try:
+            painter.setOpacity(painter.opacity() * shown)
+            painter.fillRect(rect, QColor(4, 3, 10, 170))
+            wide = min(rect.width() * 0.62, rect.height() * 1.05)
+            tall = rect.height() * 0.62
+            panel = QRectF(rect.center().x() - wide / 2.0,
+                           rect.center().y() - tall / 2.0, wide, tall)
+            painter.setPen(QPen(QColor.fromHsvF(self._hue_now % 1.0, 0.7,
+                                                1.0, 0.8), 2.0))
+            painter.setBrush(QColor(10, 8, 22, 225))
+            painter.drawRoundedRect(panel, 14.0, 14.0)
+
+            def line(text, y, size, colour, weight=QFont.Weight.Bold,
+                     align=Qt.AlignmentFlag.AlignHCenter):
+                font = QFont(painter.font())
+                font.setPointSizeF(max(8.0, size))
+                font.setWeight(weight)
+                painter.setFont(font)
+                painter.setPen(colour)
+                painter.drawText(QRectF(panel.left() + wide * 0.08, y,
+                                        wide * 0.84, size * 1.8),
+                                 int(align | Qt.AlignmentFlag.AlignVCenter),
+                                 text)
+
+            unit = tall / 20.0
+            top = panel.top() + unit * 0.8
+            line("TRACK COMPLETE", top, unit * 0.75,
+                 QColor(220, 220, 240, 210))
+            grade = result["grade"]
+            colour = {"S": QColor(255, 215, 90), "A": QColor(120, 255, 170),
+                      "B": QColor(120, 200, 255), "C": QColor(210, 160, 255)
+                      }.get(grade, QColor(230, 120, 120))
+            line(grade, top + unit * 1.3, unit * 3.2, colour,
+                 QFont.Weight.Black)
+            line(f"{result['worth']:,}", top + unit * 6.3, unit * 1.6,
+                 QColor(255, 255, 255), QFont.Weight.Black)
+            if self.new_best:
+                best = "NEW BEST"
+            elif self.best_before:
+                best = f"BEST {self.best_before:,}"
+            else:
+                best = ""
+            if best:
+                line(best, top + unit * 9.2, unit * 0.8,
+                     QColor(255, 225, 120) if self.new_best
+                     else QColor(200, 200, 220, 200))
+            rows = []
+            if result["mode"] == "Puzzle":
+                rows.append(("Cleared", f"{result['cleared']}"))
+            if result["offered"]:
+                rows.append(("Taken", f"{result['taken']} of "
+                                      f"{result['offered']}  "
+                                      f"{result['share']:.0%}"))
+            if result["mode"] != "Puzzle":
+                rows.append(("Longest chain", f"{result['chain']}"))
+            if result["coins"]:
+                rows.append(("Coins", f"{result['coins']}"))
+            if result["airs"]:
+                rows.append(("Jumps", f"{result['airs']}"))
+            rows.append(("Hits", f"{result['hits']}"))
+            if result["saves"]:
+                rows.append(("Saved by the shield", f"{result['saves']}"))
+            if result["clean"] and result["score"]:
+                kept = (self.STEALTH_BONUS if result["mode"] == "Ninja"
+                        else self.CLEAN_BONUS)
+                rows.append(("Clean finish", f"+{kept:.0%}"))
+            y = top + unit * 10.9
+            for name, value in rows:
+                line(name, y, unit * 0.62, QColor(190, 190, 215),
+                     QFont.Weight.Medium, Qt.AlignmentFlag.AlignLeft)
+                line(value, y, unit * 0.62, QColor(255, 255, 255),
+                     QFont.Weight.Bold, Qt.AlignmentFlag.AlignRight)
+                y += unit * 1.05
+        finally:
+            painter.restore()
 
     @staticmethod
     def _beam(painter, path, colour) -> None:

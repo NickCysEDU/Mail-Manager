@@ -1940,6 +1940,18 @@ class RiderWorld:
                 self._shock_at = self._screen_ship
                 self._split = 0.5
                 self._spawn(140, at, 8.0, (1.8, 2.8, 4.0), 0.5, 0.8)
+            elif kind == "finish":
+                # The end of the track: fireworks down the road.
+                self._bloom_bump = 1.0
+                for burst in range(6):
+                    sky = (self._rng.uniform(-10.0, 10.0),
+                           self._rng.uniform(4.0, 10.0),
+                           scene.RIDER_AT + travel
+                           + self._rng.uniform(16.0, 40.0))
+                    shade = colorsys.hsv_to_rgb((hue + burst * 0.17) % 1.0,
+                                                0.7, 1.0)
+                    self._spawn(160, sky, 8.0, tuple(c * 4.0 for c in shade),
+                                2.2, 1.8)
             else:
                 if self._taken_now:
                     colour = self._taken_now[-1][2]
@@ -2146,6 +2158,11 @@ class Hud:
             painter.setPen(QPen(QColor(0, 0, 0, 150), max(1.0, size * 0.06)))
             painter.setBrush(colour)
             painter.drawPath(path)
+
+        if getattr(scene, "_finished", False):
+            # The results card says all of it now. See Rider._results.
+            painter.restore()
+            return
 
         # The score, top middle.
         size = tall * 0.052 * (1.0 + self._bump * 0.18)

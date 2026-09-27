@@ -191,6 +191,19 @@ def milestone() -> array:
     return _finish(out, 0.55)
 
 
+def finish() -> array:
+    """The end of a track: an arpeggio up two octaves, landing on a chord
+    that rings out."""
+    out = _silence(1.8)
+    for index, step in enumerate((0, 4, 7, 12, 16, 19, 24)):
+        freq = PRIZE_ROOT * 0.5 * 2 ** (step / 12.0)
+        _bell(out, index * 0.07, freq, 0.5, 0.7, bright=1.8)
+    for step in (0, 4, 7, 12):
+        _bell(out, 0.52, PRIZE_ROOT * 2 ** (step / 12.0), 1.2, 0.55,
+              bright=1.4)
+    return _finish(out, 0.6)
+
+
 def landing() -> array:
     """Back on the road after a jump: a soft thump and a hiss."""
     rng = random.Random(3)
@@ -225,6 +238,7 @@ def climb(step: int) -> int:
 SOUNDS: Dict[str, Callable[[], array]] = {
     "hit": hit, "shatter": shatter, "power": power,
     "milestone": milestone, "landing": landing, "clear": clear,
+    "finish": finish,
 }
 for _step in range(len(PENTATONIC)):
     SOUNDS[f"prize{_step}"] = (lambda step=_step: prize(step))
@@ -399,4 +413,4 @@ class SoundBoard:
             return f"coin{min(7, max(0, run - 1))}"
         return {"hit": "hit", "shatter": "shatter", "power": "power",
                 "milestone": "milestone", "air": "landing",
-                "clear": "clear"}.get(kind)
+                "clear": "clear", "finish": "finish"}.get(kind)

@@ -29,7 +29,10 @@ class TestTheSoundsThemselves:
         assert max(abs(v) for v in samples[-10:]) / 32767.0 < 0.01, (
             f"{name} ends on a click")
         assert abs(sum(samples) / len(samples)) / 32767.0 < 0.01
-        assert len(samples) / rider_sound.RATE <= 1.0
+        # The end of a track rings out once; everything else has to be
+        # over before the next one could start.
+        longest = 2.0 if name == "finish" else 1.0
+        assert len(samples) / rider_sound.RATE <= longest
 
     def test_a_run_climbs_and_then_keeps_climbing_round_the_top(self):
         """Up the scale a note a pickup, and then round the top octave
@@ -175,6 +178,13 @@ class TestWhatIsPlayed:
         board.listen(scene)
         assert played == ["shatter"]
 
+    def test_the_end_of_the_track_has_its_fanfare(self, tmp_path):
+        board, played = self._board(tmp_path)
+        scene = self._scene()
+        scene._pops = [["finish", 0.0, 1.4, 0.13, 0.5, ""]]
+        board.listen(scene)
+        assert played == ["finish"]
+
     def test_the_puzzle_climbs_as_the_grid_fills(self, tmp_path):
         board, played = self._board(tmp_path)
         scene = self._scene()
@@ -304,8 +314,22 @@ class TestTheSwitch:
             assert AudioPane.vj_action(Qt.Key.Key_X) == ("sounds", 0)
             assert pane.vj("sounds") is True
             assert not pane.sound_box.isChecked()
-            assert pane.spectrum._listener is None
+            # Off means nothing is played, whatever the game does.
+            played = []
+
+            class Board:
+                def listen(self, scene):
+                    played.append(scene)
+
+                def prepare(self):
+                    pass
+
+            pane._board = Board()
+            pane._listen_to_game(pane.spectrum._scene)
+            assert played == [], "the sounds were asked for while off"
             assert pane.vj("sounds") is True
+            pane._listen_to_game(pane.spectrum._scene)
+            assert played, "and not asked for once back on"
             assert pane.sound_box.isChecked()
             pane.scene_box.setCurrentText("Rave")
             assert pane.vj("sounds") is False, (
