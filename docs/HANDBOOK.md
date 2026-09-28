@@ -1115,7 +1115,7 @@ and gives a road of nothing but obstacles: on four to the floor the kick
 wins every slot.
 
 **Ninja** is Mono with far more to dodge, and it is chosen with the
-**game** box beside the scene like the others. Audiosurf 2 describes it
+**Game** box beside the scene like the others. Audiosurf 2 describes it
 as "a much larger collection of obstacles and a special set of bonuses
 for successfully dodging them", and the bonuses are already on this
 road - a coin trail goes beside every obstacle - so more obstacles is
@@ -1149,7 +1149,7 @@ touches you up there and nothing is collected either, so a jump is a
 trade rather than a way past the hard parts, and whatever you flew over
 is gone rather than waiting for you when you land.
 
-**Puzzle** is the fourth game on the same road, chosen with the **game**
+**Puzzle** is the fourth game on the same road, chosen with the **Game**
 box beside the scene. There a colour is worth nothing on its own: it
 drops into a grid three columns wide and six deep, and three or more of a
 colour touching - edge to edge, never corner to corner - light a fuse.
@@ -1371,9 +1371,9 @@ In **Manual**, the two sliders beside the strobe change what they mean.
 Nothing fires by itself there, so "what counts as a hit" has nothing to
 count and "how soon another may follow" has nothing to follow - the two
 things a hand strobe does have are how fast it repeats and how it comes
-up and goes down, and that is what they set. **rate** runs from about
+up and goes down, and that is what they set. **Rate** runs from about
 five flashes a second to thirty, and its middle is the twelve a second
-**H** has always run at. **shape** runs from a flash on and off with
+**H** has always run at. **Shape** runs from a flash on and off with
 nothing in between, on the left, to a fade up and back down on the right.
 Manual opens at a flash on and off, twelve a second.
 
@@ -1528,9 +1528,17 @@ lamp and extra light in the bare air - measured against a 640x360 window
 rather than the strip anybody sees. The extra light is what washed it
 out: a colour carried towards white is a pastel. On a real track, full
 screen was 0.746 bright and 0.608 saturated against the window's 0.633
-and 0.622. The air is now always laid out as a strip's and stretched,
-which a haze does without showing it, and full screen measures 0.630 and
-0.638 - the window's picture, bigger.
+and 0.622. The air was then laid out as a strip's and stretched, and
+full screen measured 0.630 and 0.638 - but a strip stretched to a 16:10
+screen stretches its lamps with it, and every one came out twice as tall
+as it was wide: "round colour xxxxxxxx xxxx xx xx xx xxxxxxxx xxxx, xxx
+xx xxxx xxxx xx xx xxx". The air is laid out at the frame's own shape
+now, so a lamp is round at any size, and the lamps are kept the size
+they are in a strip - no wider than the strip is tall - so a full screen
+still has the strip's variety of colour. Round lamps in a taller frame
+leave more of it to the wash behind them, and the wash runs up to a
+quarter deeper there (`Rave.HAZE_DEEPER`), which is what keeps the full
+screen as colourful as the window.
 
 **Music rider is a lit world on the graphics card.** "Xxxxx xx xxxxxx xx
 xxxxxxxxxxxxx, xxx xxxxx xx xx xxxxxxx xxxxxxxx xx xxxxxxx obstacles xxxx
@@ -1651,7 +1659,7 @@ milliseconds of arithmetic, made in a process of its own - the notes for a
 tuning the first time a record in it is played, never on the thread drawing
 the picture - and kept as a short WAV in
 `~/Library/Caches/Mail Manager/sounds`, with the notes of the newest few
-tunings kept. **fx**, the
+tunings kept. **Effects**, the
 slider beside **Sounds**, sets how loud they are against the music - a
 share of the player's own volume, so turning the music up or down keeps
 the balance where it was put; half by default, as loud as the music at
@@ -1785,6 +1793,158 @@ ellipse exactly, and three projected points say which one. It is drawn
 as that ellipse now, a true curve at any size, from three projections
 where there were twenty.
 
+**The game's sounds were silent.** "I couldn't xxxx xxx xxxxxx xx xxxx, X
+didn't xxxx xxxx xx xxx xx xxxx." The notes were made and loaded; what
+failed was the timer the pane puts a note off with - the second note of an
+arpeggio, every echo. It was asked for in a form of `QTimer.singleShot`
+that PySide does not have, so the first note that echoed raised, the pane
+let go of the game's listener, and nothing the game did made a sound for
+the rest of the session. Every test of the sounds handed the board a
+stand-in for that timer, which is why they all passed. The pane now keeps
+a single-shot `QTimer` of its own for each note put off, a note whose
+timer will not start is played at once rather than not at all, and the
+tests run the real timer through the real pane - one note now and its
+echoes after - and fail against the old one.
+
+**Every scene is on the beat you hear.** "Xxxxxx xxx xxxxxxxxxxx xxx
+xxxxxxxxx xx xxxx xxx xxx xxxxxxx", and of the rider, "I don't really feel
+the beat". Measured with a click track whose every beat is known to the
+sample, through the real analysis and the real pane, with a player whose
+position moves every 50 ms the way the media player's measurably does
+(`tests/test_on_the_beat.py`), five things were off.
+
+- *The picture read the player's last word.* The player says where it is
+  in 50 ms steps, so a kick lit anything from on time to 33 ms late,
+  depending on where in a step the frame fell - on one record and not the
+  next. Each frame now asks one clock once (`Spectrum._now`), run forward
+  smoothly from the player's reports, and everything drawn reads that one
+  answer. A kick lights in the frame nearest it.
+- *The frame nearest a hit was not always near it.* A hit fires in the
+  frame nearest it, and "nearest" was half the time since the last frame -
+  on a track's first frame, or after a pause, half a second. A kick and
+  the strobe lit for a beat that had not come. It is half a frame at most.
+- *The bars rose before the kick.* The bands come fifteen times a second,
+  each the sound of a 2048-sample window, and each was shown from the start
+  of its window; eased from one to the next, the bars began to rise a frame
+  early and were half way up 25 ms before the kick. Each is shown at the
+  middle of its window now, and a band that rises steps up on its frame -
+  a falling one still eases down. Half way up within 20 ms of the kick,
+  and never before it.
+- *The beat everything pulses on was the tempo detector's*, which came out
+  21 ms early and a fiftieth of a beat a minute adrift - enough to walk off
+  the kick over a long track. It is put on the drums' own hits now: a line
+  fitted through the kicks, or the snares where there are no kicks,
+  against the beat grid gives the tempo exactly and where the beat falls
+  (`trackstyle.on_the_hits`). A beat comes round in the first frame at or
+  after its kick.
+- *The bass came up as slowly as it went down*, and the rider's lunge and
+  the rooms that breathe with the bass read it. It rises faster than it
+  falls now (`BASS_RISE`, `BASS_FALL`), half way up on the frame the bands
+  move.
+
+**The ear and the eye** (`av_sync.py`). What no click track can measure:
+the player's position is the sound it has handed to the machine's audio,
+not the sound anybody is hearing. The output device's latency comes after
+it - 19 ms on built-in speakers, and a sixth of a second or more on
+Bluetooth headphones - and a frame drawn now reaches the glass a refresh or
+two later. So the picture shows the music at the player's position, plus a
+frame and a half of the screen's refresh, less the device's latency: what
+is in your ears at the moment the frame reaches your eyes. The latency is
+read from Core Audio - the device's own, its safety offset, its buffer and
+its stream's, which together are when a sample handed over now comes out -
+and asked again every five seconds, because headphones come and go.
+Anything over half a second is not believed, and where it cannot be asked
+it is taken as nothing.
+
+**Timing…**, beside **Full screen**, is for what neither can know - a
+television's picture processing, a receiver in the way. A slider moves the
+picture from 250 ms later to 250 ms earlier, with what is already allowed
+for written under it, and the setting is remembered.
+
+**A corkscrew is ridden through a tunnel.** "Xxxxxxxxx xxxxx xxxx xxxx xxx
+xxxxx xxxx xxxxxxxxxx xxxxx. Xx xxx can't xxxx xxx xxxxxxxxx xxxx, xxxx xxx
+xxxxxx xxxxx x psychedelic tunnel during corkscrews." The city stands along
+the road, and a corkscrew turns the world round the road, so through one
+the towers went round with the track and hung upside down over the craft.
+A city that stayed where it was while the road rolled under it would be a
+road rolling over empty air, which is what the corkscrew exists to hide. So
+a corkscrew is a tunnel now: its mouth opens a little before the road
+starts to turn (`TUNNEL_LEAD`) and closes a little after it is level again
+(`TUNNEL_TAIL`), and the city is outside it. Inside it is a tube round the
+road that turns with it, in a spiral of the passage's colours and every
+colour after them, woven, with a ring round it on every beat
+(`rider_gl.TUNNEL_FRAGMENT`). The picture drawn without a card has one
+too, from a conical gradient with the same rings (`Rider._flat_tunnel`).
+
+**Levels.** "Xxxx xxxxxxxxx xxxxxxxxxx xxxxxxxx xx xxxx xxx xxxxx xxxxx",
+and "I'm xxx xxxx xxx xxx xxxxx xxxxxxxxx xxxxxxxxxx, xx xxxx xxxx xx."
+**Level**, beside **Game**, is Easy, Normal, Hard or Expert, and it
+changes five things (`rider_layout.DIFFICULTY`):
+
+| | Easy | Normal | Hard | Expert |
+|---|---|---|---|---|
+| Obstacles, against Normal | half | as they were | 1.3 times | 1.6 times |
+| Room between figures | 1.35 times | as it was | 0.85 times | 0.7 times |
+| Beats of road in sight | 4 | 3 | 2.5 | 2 |
+| The shield comes back in | 4 s | 8 s | 12 s | never |
+| Points | 0.75 times | as they were | 1.25 times | 1.5 times |
+
+The road is the same length on the screen at every level, so fewer beats
+of it in sight is less warning *and* the same beat crossing it faster:
+Expert's road runs at one and a half times Normal's. No level takes away
+the room a player needs to get past an obstacle - figures are never closer
+than a beat - and the test that a good player looking ahead is never hit
+runs at Hard and Expert, on four kinds of record, in both games with
+obstacles. Calm music stays calm at every level: how much of it is an
+obstacle falls with how calm it is.
+
+A run at one level is not a run at another, any more than one game is
+another: changing level starts again, and each level keeps its own best.
+Normal's is the best kept before there were levels. The level is
+remembered.
+
+**Each level has its craft.** "Xxx xxxxxxx xxxx xxxxx xx xxxxxxx xxxxxx xx
+xxxx, maybe different ships for different difficulty?" The faster the road
+runs, the longer, thinner and more swept the craft and the longer its
+flame (`rider_gl.CRAFTS`): the **Cruiser** at Easy, broad and short with
+its wings reaching out; the **Arrow** at Normal, which is the craft there
+has always been; the **Interceptor** at Hard, swept back; and the
+**Needle** at Expert, long and narrow on three engines with no fins. A
+longer craft is stretched mostly forwards (`TAIL_SHARE`): stretched both
+ways, its tail came at the camera, and the fastest craft - flown at the
+level with the least warning - hid the most road. On the card, the
+Needle hides no more of the road than the Arrow. The picture drawn without
+a card draws the level's proportions too.
+
+**Every drop has its share of obstacles.** How much of a section is to be
+dodged is carried from one figure to the next, and it was only carried on
+the figures that landed on a kick. A garage drop, most of whose figures are
+on the snare, came out at nineteen per cent obstacles against the forty
+meant; a second drop whose figures all settled on the snare had nothing to
+dodge at all. What is owed is counted on every figure now and paid on the
+next kick, and on a snare once enough is owed - a snare is a hit you can
+hear coming too. It is held under a cap (`Rider.OWED_MOST`), so a run of
+snares cannot bank a row of obstacles for the kicks after it.
+
+**The window's controls are grouped.** "Xxxxx xx xxx xxxxxxxx xxxxxxxxxx
+xxxxxx xx xxxx xx xxxxxxx xxx xxxxxx xx xxxxxxxx." They were loose in one
+wrapping row, captioned in fragments - "on", "sens", "fx" - and what
+belonged to one scene came and went one control at a time in the middle
+of the rest. Now there are two rows. The first is what is drawn: the
+**Visualiser** box, the scene and how tall it is, and one scene's own
+controls together - **Game**, **Level**, **Sounds** and **Effects** for
+Music rider, **Beam** and **Glow** for the oscilloscope, **Colours** for
+the VU meters - there only while that scene is. The second is the strobe: **Strobe**,
+**Listens to**, **Sensitivity** and **Rate**. What is the whole picture's
+rather than one scene's, **Timing…** and **Full screen**, is at the end of
+the transport, after **Volume**. The full-screen bar says **Volume** and
+**Effects** too.
+
+Tidying it turned up a bug from when Puzzle was added: the **Game** box
+and the meters' **Colours** button were hidden on their own inside
+holders that were shown, so the game could not be changed from the window
+at all.
+
 ---
 
 ## Building the `.app`
@@ -1815,7 +1975,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 4,315 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 4,404 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -2198,7 +2358,7 @@ corkscrews the track earned, and what a frame costs. No song, path or
 frame of one is ever written into the repository.
 
 ```bash
-./dev test        # 4,315 tests, about five minutes
+./dev test        # 4,404 tests, about five minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

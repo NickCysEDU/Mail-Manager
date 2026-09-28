@@ -52,6 +52,19 @@ class TestThePartsOfARecord:
         assert 0.2 <= share <= 0.55, share
         assert share > sum(1 for f in build if f[2]) / max(1, len(build))
 
+    @pytest.mark.parametrize("style", ["house", "dnb", "dubstep", "trap",
+                                       "garage", "hiphop"])
+    def test_every_drop_has_its_share_not_just_the_first(self, ridden,
+                                                          style):
+        """Each on its own: the second drop of a garage record had its
+        figures settle on the snares, where no obstacle went, and nothing
+        in it to dodge - which the two drops counted together hid."""
+        _scene, log, truth, _beat = ridden[style]
+        for start, end in [(a, b) for k, a, b in truth if k == "drop"]:
+            figures = [f for f in log.figures if start <= f[0] < end]
+            share = sum(1 for f in figures if f[2]) / max(1, len(figures))
+            assert 0.25 <= share <= 0.55, (style, start, share)
+
     def test_a_build_tightens_as_the_drop_comes(self, ridden):
         _scene, log, truth, _beat = ridden["house"]
         build = [(a, b) for k, a, b in truth if k == "build"][0]
@@ -418,3 +431,69 @@ class TestTheMelodyLeadsThePrizes:
         high = [lane for note, lane in pairs if note >= 69]
         assert low and high
         assert sum(high) / len(high) > sum(low) / len(low) + 0.8
+
+
+class TestTheLevelsRideDifferently:
+    def test_a_level_is_kept_through_a_change_of_game_and_back(self):
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene.set_difficulty("Expert")
+        assert scene.difficulty == "Expert" and scene.LOOK_BEATS == 2.0
+        scene.set_mode("Ninja")
+        assert scene.difficulty == "Expert", "a new game forgot the level"
+        scene.set_difficulty("Easy")
+        assert scene._mode == "Ninja", "a new level forgot the game"
+        assert scene.PER_BEAT == pytest.approx(
+            (scene.FAR - scene.RIDER_AT) / 4.0)
+
+    def test_harder_is_more_to_dodge_and_less_warning(self):
+        counts = {}
+        for level in ("Easy", "Normal", "Expert"):
+            scene, log, truth, _beat = ridekit.ride("house", difficulty=level)
+            drops = [(a, b) for k, a, b in truth if k == "drop"]
+            figures = [f for f in log.figures
+                       if any(a <= f[0] < b for a, b in drops)]
+            counts[level] = (sum(1 for f in figures if f[2]), len(figures),
+                             scene.PER_BEAT)
+        assert counts["Easy"][0] < counts["Normal"][0] < counts["Expert"][0]
+        # As many figures or more: a drop with a kick on every beat is laid
+        # a figure every two beats at any level, because a beat after the
+        # end of one is the least there may be - it is the obstacles, the
+        # warning and the shield that make it harder.
+        assert counts["Easy"][1] <= counts["Normal"][1] <= counts["Expert"][1]
+        # The road is fewer beats long, so it runs faster through them.
+        assert counts["Expert"][2] > counts["Normal"][2] > counts["Easy"][2]
+
+    def test_expert_has_no_shield_and_easy_s_comes_back_sooner(self):
+        import visualizers
+
+        expert = visualizers.Rider()
+        expert.set_difficulty("Expert")
+        assert expert._shield == 0.0 and expert._shield_back is None
+        easy = visualizers.Rider()
+        easy.set_difficulty("Easy")
+        assert easy._shield_back < visualizers.Rider().SHIELD_BACK
+
+    def test_a_point_is_worth_more_the_harder_it_is(self):
+        import visualizers
+
+        worth = {}
+        for level in ("Easy", "Normal", "Expert"):
+            scene = visualizers.Rider()
+            scene.set_difficulty(level)
+            worth[level] = scene._paid(100)
+        assert worth == {"Easy": 75, "Normal": 100, "Expert": 150}
+
+    @pytest.mark.parametrize("level", ["Hard", "Expert"])
+    @pytest.mark.parametrize("style", ["house", "dnb", "dubstep", "garage"])
+    @pytest.mark.parametrize("mode", ["Mono", "Ninja"])
+    def test_a_good_player_is_never_hit_at_any_level(self, level, style,
+                                                     mode):
+        from playtest import steer_well
+
+        scene, log, _truth, _beat = ridekit.ride(style, mode=mode,
+                                                 steer=steer_well, fps=60,
+                                                 difficulty=level)
+        assert scene._hits == 0, f"{scene._hits} hits: {style} {mode} {level}"
+        assert any(f[2] for f in log.figures)

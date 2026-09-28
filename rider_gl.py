@@ -868,6 +868,71 @@ void main() {
 }
 """
 
+#: The tunnel a corkscrew is ridden through: a tube round the road, turning
+#: with it, in the passage's colours and every colour after them. See
+#: World._draw_tunnel.
+TUNNEL_VERTEX = ROAD_GLSL + """
+attribute vec2 aTube;       // angle round the road, and how far along it
+uniform mat4 uView;
+uniform float uTunnel[%(samples)d];
+uniform float uRadius;
+uniform float uCentre;
+varying float vAngle;
+varying float vAlong;
+varying float vHere;
+varying float vDepth;
+float tunnelAt(float z) {
+    float f = clamp((z - uRoadFrom) / uRoadStep, 0.0, %(last)d.0 - 0.001);
+    int i = int(floor(f));
+    return mix(uTunnel[i], uTunnel[i + 1], f - float(i));
+}
+void main() {
+    float z = aTube.y;
+    vHere = tunnelAt(z);
+    // Wider where it is only beginning: a mouth, opening out of the city
+    // ahead, rather than a pipe that is suddenly there.
+    float r = uRadius * (1.0 + (1.0 - vHere) * 1.8);
+    vec3 p = onRoad(r * cos(aTube.x), uCentre + r * sin(aTube.x), z);
+    vec4 eye = uView * vec4(p, 1.0);
+    vDepth = eye.w;
+    vAngle = aTube.x;
+    vAlong = z;
+    gl_Position = eye;
+}
+""" % {"samples": ROAD_SAMPLES, "last": ROAD_SAMPLES - 1}
+
+TUNNEL_FRAGMENT = HUES_GLSL + FOG_GLSL + """
+varying float vAngle;
+varying float vAlong;
+varying float vHere;
+varying float vDepth;
+uniform float uTravel;
+uniform float uTime;
+uniform float uHue;
+uniform float uBeat;
+uniform float uKick;
+uniform float uPerBeat;
+uniform float uRider;
+void main() {
+    if (vHere < 0.01) discard;
+    // Fixed to the road, so it streams past at the road's own speed.
+    float along = vAlong + uTravel;
+    float spiral = sin(6.0 * vAngle + along * 0.35 - uTime * 3.0);
+    float weave = sin(11.0 * vAngle - along * 0.9 + uTime * 1.7);
+    float hue = uHue + vAngle / 6.28318 + along * 0.021 + uTime * 0.07;
+    vec3 colour = hsv(hue, 0.92, 0.18 + 0.30 * (spiral * 0.5 + 0.5));
+    colour += hsv(hue + 0.33, 1.0, 0.30 * max(0.0, weave));
+    // A ring of light at every beat, as the gates are: they pass the
+    // craft on the beat, so the beat is still there to be seen in here.
+    float beat = fract((vAlong - uRider + uTravel) / uPerBeat);
+    float ring = exp(-min(beat, 1.0 - beat) * uPerBeat * 3.0);
+    colour += hsv(hue + 0.5, 0.55, 1.0) * ring * (0.9 + uBeat * 2.2);
+    colour *= 0.85 + uKick * 0.9;
+    float fade = smoothstep(0.0, 1.0, vHere);
+    gl_FragColor = vec4(fogged(colour, vDepth), fade);
+}
+"""
+
 STREAK_VERTEX = ROAD_GLSL + """
 attribute vec4 aStreak;      // across, up, along its loop, which end
 uniform mat4 uView;
@@ -1012,13 +1077,70 @@ def _shifted(triangles, dx, dy, dz=0.0):
     return [(x + dx, y + dy, z + dz) for x, y, z in triangles]
 
 
-def _wing(side: float) -> list:
+#: The craft each level is flown in, and what shapes it: how wide, tall and
+#: long its hull is against the first one, how far its wings reach and how
+#: far back they sweep, where its engines sit and how many there are, and
+#: how long a flame they throw. The faster the road runs - see
+#: rider_layout.DIFFICULTY, where the harder levels have fewer beats of
+#: road in sight and so cover them faster - the longer, thinner and more
+#: swept the craft, and the longer its flame: "xxx xxxxxxx xxxx xxxxx xx
+#: xxxxxxx xxxxxx xx xxxx, maybe different ships for different
+#: difficulty".
+CRAFTS = {
+    "Cruiser": {"wide": 1.30, "tall": 1.10, "long": 0.86, "span": 1.08,
+                "sweep": -0.04, "pods": 0.44, "engines": 2, "fins": True,
+                "canopy": 1.20, "flame": 0.8, "size": 1.0},
+    "Arrow": {"wide": 1.0, "tall": 1.0, "long": 1.0, "span": 1.0,
+              "sweep": 0.0, "pods": NACELLE_X, "engines": 2, "fins": True,
+              "canopy": 1.0, "flame": 1.0, "size": 1.0},
+    "Interceptor": {"wide": 0.84, "tall": 0.90, "long": 1.18, "span": 1.02,
+                    "sweep": 0.14, "pods": 0.31, "engines": 2, "fins": True,
+                    "canopy": 0.92, "flame": 1.35, "size": 0.95},
+    "Needle": {"wide": 0.62, "tall": 0.82, "long": 1.42, "span": 0.70,
+               "sweep": 0.24, "pods": 0.25, "engines": 3, "fins": False,
+               "canopy": 0.78, "flame": 1.5, "size": 0.80},
+}
+#: How much of a longer craft's extra length is behind its middle rather
+#: than in front of it. Stretched both ways, a long craft's tail came at
+#: the camera and the fastest craft - flown at the level with the least
+#: warning - hid the most road.
+TAIL_SHARE = 0.25
+#: Which craft each level flies. See Rider.difficulty.
+CRAFT_FOR = {"Easy": "Cruiser", "Normal": "Arrow", "Hard": "Interceptor",
+             "Expert": "Needle"}
+
+
+def craft(name: str) -> dict:
+    """A craft's shape, or the first one's for a name there is none of."""
+    return CRAFTS.get(name, CRAFTS["Arrow"])
+
+
+def _along(z: float, spec) -> float:
+    """A point's place along a craft: stretched by its length in front of
+    the middle, and by a share of it behind (see TAIL_SHARE)."""
+    if z <= 0.0:
+        return z * spec["long"]
+    return z * (1.0 + (spec["long"] - 1.0) * TAIL_SHARE)
+
+
+def _scaled(sections, spec, width=1.0):
+    """Lofting sections stretched to a craft: across by its width, up by
+    its height, along by its length."""
+    return [(_along(z, spec), [(x * spec["wide"] * width, y * spec["tall"])
+                               for x, y in ring])
+            for z, ring in sections]
+
+
+def _wing(side: float, spec=None) -> list:
     """A swept slab from the hull out past the engine, thin."""
+    spec = spec or CRAFTS["Arrow"]
     t = 0.018
-    root_front = (side * 0.12, 0.05, -0.30)
-    root_back = (side * 0.12, 0.05, 0.40)
-    tip_back = (side * 0.62, 0.02, 0.50)
-    tip_front = (side * 0.58, 0.02, 0.30)
+    span, sweep = spec["span"], spec["sweep"]
+    root = 0.12 * spec["wide"]
+    root_front = (side * root, 0.05, _along(-0.30, spec))
+    root_back = (side * root, 0.05, _along(0.40, spec))
+    tip_back = (side * 0.62 * span, 0.02, _along(0.50 + sweep, spec))
+    tip_front = (side * 0.58 * span, 0.02, _along(0.30 + sweep, spec))
     quad = [root_front, tip_front, tip_back, root_back]
     top = [(x, y + t, z) for x, y, z in quad]
     bottom = [(x, y - t, z) for x, y, z in quad]
@@ -1032,12 +1154,13 @@ def _wing(side: float) -> list:
     return out
 
 
-def _fin(side: float) -> list:
+def _fin(side: float, spec=None) -> list:
     """A small upright fin on each engine."""
-    x = side * NACELLE_X
-    base_front = (x, 0.12, 0.20)
-    base_back = (x, 0.12, 0.60)
-    top_back = (x + side * 0.03, 0.30, 0.62)
+    spec = spec or CRAFTS["Arrow"]
+    x = side * spec["pods"]
+    base_front = (x, 0.12, _along(0.20, spec))
+    base_back = (x, 0.12, _along(0.60, spec))
+    top_back = (x + side * 0.03, 0.30, _along(0.62, spec))
     t = 0.012
     tri = [base_front, base_back, top_back]
     left = [(px - t, py, pz) for px, py, pz in tri]
@@ -1046,43 +1169,72 @@ def _fin(side: float) -> list:
                                  left[1], right[0], right[1]]
 
 
-def ship_triangles():
-    """The craft's body: hull, wings, engines and fins, in its metal."""
-    out = _loft(HULL)
-    for side in (-1.0, 1.0):
-        out += _wing(side)
-        out += _shifted(_loft(NACELLE), side * NACELLE_X, NACELLE_Y)
-        out += _fin(side)
+def _pods(spec) -> list:
+    """Where the engines are, across and up, in the craft's frame: one
+    each side, and the third down the middle under the tail."""
+    out = [(-spec["pods"], NACELLE_Y), (spec["pods"], NACELLE_Y)]
+    if spec["engines"] >= 3:
+        out.append((0.0, NACELLE_Y - 0.02))
     return out
 
 
-def canopy_triangles():
-    return _loft(CANOPY)
+def nozzles(name: str = "Arrow") -> tuple:
+    """Where each engine's flame comes out, in the craft's frame."""
+    spec = craft(name)
+    return tuple((x, y, _along(0.64, spec)) for x, y in _pods(spec))
 
 
-def ship_outline():
-    """The lines the craft's neon trim is drawn along."""
+#: The first craft's, kept for anything that asks for them by name.
+NOZZLES = nozzles("Arrow")
+
+
+def ship_triangles(name: str = "Arrow"):
+    """A craft's body: hull, wings, engines and fins, in its metal."""
+    spec = craft(name)
+    out = _loft(_scaled(HULL, spec))
+    pod = _scaled(NACELLE, dict(spec, wide=1.0, tall=1.0))
+    for across, up in _pods(spec):
+        out += _shifted(_loft(pod), across, up)
+    for side in (-1.0, 1.0):
+        out += _wing(side, spec)
+        if spec["fins"]:
+            out += _fin(side, spec)
+    return out
+
+
+def canopy_triangles(name: str = "Arrow"):
+    spec = craft(name)
+    return _loft(_scaled(CANOPY, spec, spec["canopy"]))
+
+
+def ship_outline(name: str = "Arrow"):
+    """The lines a craft's neon trim is drawn along."""
+    spec = craft(name)
+    hull = _scaled(HULL, spec)
+    span, sweep = spec["span"], spec["sweep"]
     pairs = []
     # Down the spine and along each flank at the waist.
-    for index in range(len(HULL) - 1):
-        z0, ring0 = HULL[index]
-        z1, ring1 = HULL[index + 1]
+    for index in range(len(hull) - 1):
+        z0, ring0 = hull[index]
+        z1, ring1 = hull[index + 1]
         for k in (0, len(ring0) // 2):
             pairs += [(ring0[k][0], ring0[k][1], z0),
                       (ring1[k][0], ring1[k][1], z1)]
+    root = 0.12 * spec["wide"]
     for side in (-1.0, 1.0):
         # The wings' leading and trailing edges.
-        pairs += [(side * 0.12, 0.07, -0.30), (side * 0.58, 0.04, 0.30),
-                  (side * 0.58, 0.04, 0.30), (side * 0.62, 0.04, 0.50),
-                  (side * 0.62, 0.04, 0.50), (side * 0.12, 0.07, 0.40)]
-        # A ring round each intake and each nozzle.
-        for z, ring in (NACELLE[1], NACELLE[-1]):
+        front = (side * 0.58 * span, 0.04, _along(0.30 + sweep, spec))
+        back = (side * 0.62 * span, 0.04, _along(0.50 + sweep, spec))
+        pairs += [(side * root, 0.07, _along(-0.30, spec)), front, front,
+                  back, back, (side * root, 0.07, _along(0.40, spec))]
+    # A ring round each intake and each nozzle.
+    pod = _scaled(NACELLE, dict(spec, wide=1.0, tall=1.0))
+    for across, up in _pods(spec):
+        for z, ring in (pod[1], pod[-1]):
             for i in range(len(ring)):
                 j = (i + 1) % len(ring)
-                pairs += [(side * NACELLE_X + ring[i][0],
-                           NACELLE_Y + ring[i][1], z),
-                          (side * NACELLE_X + ring[j][0],
-                           NACELLE_Y + ring[j][1], z)]
+                pairs += [(across + ring[i][0], up + ring[i][1], z),
+                          (across + ring[j][0], up + ring[j][1], z)]
     out = []
     for corner in pairs:
         out.extend(corner)
@@ -1145,6 +1297,22 @@ def road_floats(half: float) -> list:
         for j in range(len(across) - 1):
             u0, u1 = across[j], across[j + 1]
             out.extend((u0, z0, u1, z0, u1, z1, u0, z0, u1, z1, u0, z1))
+    return out
+
+
+def tube_floats(rings=150, around=36) -> list:
+    """The tunnel as triangles: (angle round, distance along) at every
+    corner, from just behind the craft to as far as is seen."""
+    out = []
+    step = (SEEN_AHEAD - ROAD_FROM) / rings
+    for ring in range(rings):
+        z0 = ROAD_FROM + ring * step
+        z1 = z0 + step
+        for side in range(around):
+            a0 = side / around * math.tau
+            a1 = (side + 1) / around * math.tau
+            out += [a0, z0, a1, z0, a1, z1,
+                    a0, z0, a1, z1, a0, z1]
     return out
 
 
@@ -1248,6 +1416,12 @@ class RiderWorld:
         self.streak = _program(STREAK_VERTEX, STREAK_FRAGMENT)
         self.beacon = _program(BEACON_VERTEX, BEACON_FRAGMENT)
         self.barrier = _program(BARRIER_VERTEX, BARRIER_FRAGMENT)
+        self.tunnel = _program(TUNNEL_VERTEX, TUNNEL_FRAGMENT)
+        self.tube = _Mesh(tube_floats(), [(b"aTube", 2)])
+        #: How much tunnel there is at each sample of the road, and at
+        #: the craft. See _tunnel_at.
+        self.tunnel_line = [0.0] * ROAD_SAMPLES
+        self.inside = 0.0
         self.bright = _program(QUAD_VERTEX, BRIGHT_FRAGMENT)
         self.down = _program(QUAD_VERTEX, DOWN_FRAGMENT)
         self.up = _program(QUAD_VERTEX, UP_FRAGMENT)
@@ -1296,12 +1470,8 @@ class RiderWorld:
         self.road_mesh = _Mesh(road_floats(half), [(b"aRoad", 2)])
         cube = _flat_normals(cube_triangles())
         self.cube = _Mesh(cube, [(b"aPos", 3), (b"aNormal", 3)])
-        self.ship = _Mesh(_flat_normals(ship_triangles()),
-                          [(b"aPos", 3), (b"aNormal", 3)])
-        self.canopy = _Mesh(_flat_normals(canopy_triangles()),
-                            [(b"aPos", 3), (b"aNormal", 3)])
-        self.ship_trim = _Mesh(ship_outline(), [(b"aPos", 3), (b"aNormal", 3)],
-                               GL_LINES)
+        self._crafts = {}
+        self.ship, self.canopy, self.ship_trim = self._craft_meshes("Arrow")
         self.coin = _Mesh(_flat_normals(disc_triangles()),
                           [(b"aPos", 3), (b"aNormal", 3)])
         self.arch = _Mesh(_flat_normals(arch_triangles(half)),
@@ -1372,12 +1542,19 @@ class RiderWorld:
         roll, and how much of the roll is a corkscrew (see _turn_at)."""
         side, under = scene._side, scene._under
         out = []
+        tunnel = []
+        twisted = bool(getattr(scene, "_twists", None))
         for index in range(ROAD_SAMPLES):
             z = ROAD_FROM + index * ROAD_STEP
             across, lift, roll = scene._road(z)
             turn = self._twist(scene, z)
             out.extend((across - side, -(lift - under),
                         roll * self.ROLL_SHARE + turn, turn))
+            tunnel.append(scene._tunnel_at(scene._when(z))
+                          if twisted else 0.0)
+        self.tunnel_line = tunnel
+        self.inside = (scene._tunnel_at(scene._when(scene.RIDER_AT))
+                       if twisted else 0.0)
         return out
 
     @staticmethod
@@ -1474,6 +1651,7 @@ class RiderWorld:
         self._draw_road(frame)
         self._draw_blocks(frame)
         self._draw_ship(frame)
+        self._draw_tunnel(frame)
         # What glows, over the top, adding light and hiding nothing.
         gl.glEnable(GL_BLEND)
         gl.glBlendFunc(GL_ONE, GL_ONE)
@@ -1668,6 +1846,33 @@ class RiderWorld:
         p.set("uHue", float(frame["hue"]))
         p.set("uBeat", float(frame["beat"]))
         self.city.draw(self.gl, p)
+        p.release()
+
+    def _draw_tunnel(self, frame) -> None:
+        """The tunnel round a corkscrew, where there is one. Solid where it
+        is all there, so the city outside is hidden; the mouth faded in."""
+        if max(self.tunnel_line) < 0.01:
+            return
+        scene = frame["scene"]
+        gl = self.gl
+        p = self.tunnel
+        p.bind()
+        self._road_uniforms(p, frame)
+        self._fog_uniforms(p, frame)
+        p.array("uTunnel", self.tunnel_line, ROAD_SAMPLES, 1)
+        p.set("uRadius", float(frame["half"] + scene.TUNNEL_ROOM))
+        p.set("uCentre", float(scene.TUNNEL_MIDDLE))
+        p.set("uTravel", float(frame["travel"]))
+        p.set("uTime", float(self._now % 1000.0))
+        p.set("uHue", float(frame["hue"]))
+        p.set("uBeat", float(frame["beat"]))
+        p.set("uKick", float(self._kick_punch))
+        p.set("uPerBeat", float(frame["per_beat"]))
+        p.set("uRider", float(scene.RIDER_AT))
+        gl.glEnable(GL_BLEND)
+        gl.glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        self.tube.draw(gl, p)
+        gl.glDisable(GL_BLEND)
         p.release()
 
     def _draw_road(self, frame) -> None:
@@ -1876,15 +2081,37 @@ class RiderWorld:
                 (-swerve * 0.004, -0.05 - frame["air"] * 0.1,
                  math.radians(bank)))
 
+    def _craft_meshes(self, name: str) -> tuple:
+        """A craft's body, canopy and trim, made the first time it is
+        flown on this card."""
+        found = self._crafts.get(name)
+        if found is None:
+            found = self._crafts[name] = (
+                _Mesh(_flat_normals(ship_triangles(name)),
+                      [(b"aPos", 3), (b"aNormal", 3)]),
+                _Mesh(_flat_normals(canopy_triangles(name)),
+                      [(b"aPos", 3), (b"aNormal", 3)]),
+                _Mesh(ship_outline(name), [(b"aPos", 3), (b"aNormal", 3)],
+                      GL_LINES))
+        return found
+
+    @staticmethod
+    def craft_of(scene) -> str:
+        """The craft the scene's level is flown in. See CRAFT_FOR."""
+        return CRAFT_FOR.get(getattr(scene, "difficulty", "Normal"), "Arrow")
+
     def _draw_ship(self, frame) -> None:
         import colorsys
 
+        self.ship, self.canopy, self.ship_trim = self._craft_meshes(
+            self.craft_of(frame["scene"]))
         p = self._solid(frame)
         place, angles = self._ship_place(frame)
         hurt = frame["hurt"]
+        size = SHIP * craft(self.craft_of(frame["scene"]))["size"]
         # Gunmetal, lit by the world; red while it is hurt.
         body = (0.16 + hurt * 0.8, 0.17, 0.21)
-        self._put(p, place, (SHIP, SHIP, SHIP), angles, body, 0.0, 0.0, 0.0)
+        self._put(p, place, (size, size, size), angles, body, 0.0, 0.0, 0.0)
         self.ship.draw(self.gl, p)
         # The canopy: glass, reflecting the world it is going through - the
         # sky, the sun on the road and the city's lights sliding back over
@@ -1899,7 +2126,7 @@ class RiderWorld:
         p.set("uSkyLow", QVector3D(*low))
         p.set("uSkyHigh", QVector3D(*high))
         p.set("uCity", QVector3D(*city))
-        self._put(p, place, (SHIP, SHIP, SHIP), angles, glass, 0.0, 0.0, 0.0)
+        self._put(p, place, (size, size, size), angles, glass, 0.0, 0.0, 0.0)
         self.canopy.draw(self.gl, p)
         p.set("uGlass", 0.0)
         p.release()
@@ -1919,18 +2146,21 @@ class RiderWorld:
             colour = (colour[0] + frame["hurt"] * 6.0,
                       colour[1] * (1 - frame["hurt"]),
                       colour[2] * (1 - frame["hurt"]))
-        self._put(p, place, (SHIP, SHIP, SHIP), angles, colour, 1.0, 0.0, 0.0)
+        size = SHIP * craft(self.craft_of(scene))["size"]
+        self._put(p, place, (size, size, size), angles, colour, 1.0, 0.0, 0.0)
         self.ship_trim.draw(self.gl, p)
         # The engine: a hot core at the tail, and a flame that grows on
         # the beat and with the pace of the passage.
-        flame = 0.12 + frame["beat"] * 0.14 + frame["rush"] * 0.20
+        name = self.craft_of(scene)
+        flame = (0.12 + frame["beat"] * 0.14 + frame["rush"] * 0.20) * (
+            craft(name)["flame"])
         engine = colorsys.hsv_to_rgb((frame["hue"] + 0.5) % 1.0, 0.55, 1.0)
         yaw, pitch, roll = angles
-        for nx, ny, nz in NOZZLES:
-            across, up = nx * SHIP, ny * SHIP
+        for nx, ny, nz in nozzles(name):
+            across, up = nx * size, ny * size
             nozzle = (place[0] + across * math.cos(roll) - up * math.sin(roll),
                       place[1] + across * math.sin(roll) + up * math.cos(roll),
-                      place[2] - nz * SHIP)
+                      place[2] - nz * size)
             self._put(p, nozzle, (0.07, 0.07, flame), angles,
                       tuple(c * 2.0 for c in engine), 1.0, 0.0, 0.0)
             self.cube.draw(self.gl, p)

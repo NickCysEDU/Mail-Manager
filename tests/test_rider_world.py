@@ -116,11 +116,13 @@ def _rider():
 
 
 class TestTheCraft:
-    def test_it_is_a_whole_model_facing_down_the_road(self):
+    @pytest.mark.parametrize("name", ["Cruiser", "Arrow", "Interceptor",
+                                      "Needle"])
+    def test_it_is_a_whole_model_facing_down_the_road(self, name):
         import rider_gl
 
-        body = rider_gl.ship_triangles()
-        glass = rider_gl.canopy_triangles()
+        body = rider_gl.ship_triangles(name)
+        glass = rider_gl.canopy_triangles(name)
         assert len(body) % 3 == 0 and len(glass) % 3 == 0
         xs = [x for x, _y, _z in body]
         zs = [z for _x, _y, z in body]
@@ -136,6 +138,97 @@ class TestTheCraft:
         for index in range(0, len(flat), 6):
             n = flat[index + 3:index + 6]
             assert abs(math.sqrt(sum(c * c for c in n)) - 1.0) < 1e-6
+
+
+class TestEachLevelHasItsCraft:
+    """"Xxx xxxxxxx xxxx xxxxx xx xxxxxxx xxxxxx xx xxxx, maybe different
+    ships for different difficulty." The harder levels have fewer beats of
+    road in sight, so the road runs faster through them - and each is
+    flown in a craft that looks it."""
+
+    LEVELS = ("Easy", "Normal", "Hard", "Expert")
+
+    def test_every_level_has_one_and_normal_s_is_the_first(self):
+        import rider_gl
+        import visualizers
+
+        assert set(rider_gl.CRAFT_FOR) == set(visualizers.Rider.DIFFICULTIES)
+        assert len({rider_gl.CRAFT_FOR[level] for level in self.LEVELS}) == 4
+        assert rider_gl.CRAFT_FOR["Normal"] == "Arrow"
+        assert rider_gl.ship_triangles() == rider_gl.ship_triangles("Arrow")
+
+    def test_the_faster_the_road_the_leaner_the_craft(self):
+        import rider_gl
+
+        shapes = []
+        for level in self.LEVELS:
+            name = rider_gl.CRAFT_FOR[level]
+            body = rider_gl.ship_triangles(name)
+            xs = [x for x, _y, _z in body]
+            zs = [z for _x, _y, z in body]
+            shapes.append(((max(zs) - min(zs)) / (max(xs) - min(xs)),
+                           rider_gl.craft(name)["flame"]))
+        leanness = [lean for lean, _flame in shapes]
+        flames = [flame for _lean, flame in shapes]
+        assert leanness == sorted(leanness), leanness
+        assert flames == sorted(flames) and flames[0] < flames[-1]
+
+    @pytest.mark.parametrize("name", ["Cruiser", "Arrow", "Interceptor",
+                                      "Needle"])
+    def test_a_flame_at_every_engine(self, name):
+        import rider_gl
+
+        spec = rider_gl.craft(name)
+        flames = rider_gl.nozzles(name)
+        assert len(flames) == spec["engines"]
+        assert all(z > 0.3 for _x, _y, z in flames), "a flame at the front"
+        assert abs(sum(x for x, _y, _z in flames)) < 1e-9, "lopsided"
+
+    def test_the_flat_craft_follows_the_level_too(self):
+        import visualizers
+
+        broad = [visualizers.Rider.FLAT_CRAFT[level][0]
+                 for level in self.LEVELS]
+        long = [visualizers.Rider.FLAT_CRAFT[level][1]
+                for level in self.LEVELS]
+        assert broad == sorted(broad, reverse=True)
+        assert long == sorted(long)
+
+    def test_the_world_flies_the_level_s_craft_and_it_hides_no_more(self):
+        """The fastest craft is flown at the level with the least warning,
+        so it must not hide more of the road than the first one does:
+        stretched both ways, its tail came at the camera and it did."""
+        got = on_the_card(RIDER + textwrap.dedent("""
+            visualizers.Rider._find_twists = lambda self, *a, **k: []
+            def frame(level, craft=True):
+                made, scene = rider_pane(size=(640, 400))
+                scene.set_difficulty(level)
+                def each(i):
+                    world = made._canvas.world
+                    if world is not None and not craft:
+                        world._draw_ship = lambda frame: None
+                        world._draw_trim = lambda frame: None
+                shot = play(made, 0.6, each=each)
+                return shot, made._canvas.world, scene
+            out = {}
+            for level in ("Normal", "Expert"):
+                shot, world, scene = frame(level)
+                bare, _w, _s = frame(level, craft=False)
+                craft = world.craft_of(scene)
+                # Where the craft is: what changes when it is not drawn -
+                # over the whole frame, at however many pixels a point
+                # this screen has.
+                covered = sum(1 for y in range(0, shot.height(), 3)
+                              for x in range(0, shot.width(), 3)
+                              if abs(shot.pixelColor(x, y).valueF()
+                                     - bare.pixelColor(x, y).valueF()) > 0.08)
+                out[level] = [craft, world.ship is world._crafts[craft][0],
+                              covered]
+            print(json.dumps(out))
+        """))
+        assert got["Normal"][:2] == ["Arrow", True]
+        assert got["Expert"][:2] == ["Needle", True]
+        assert got["Expert"][2] <= got["Normal"][2] * 1.1, got
 
 
 class TestWhatWasTaken:
@@ -774,7 +867,8 @@ class TestTheWorldOnTheCard:
         got = on_the_card(RIDER + textwrap.dedent("""
             ALONE = ("_draw_sky", "_draw_city", "_draw_road", "_draw_blocks",
                      "_draw_barriers", "_draw_beacons", "_draw_gates",
-                     "_draw_streaks", "_draw_trim", "_draw_particles")
+                     "_draw_streaks", "_draw_trim", "_draw_particles",
+                     "_draw_tunnel")
             def craft_only(steep):
                 made, scene = rider_pane(size=(800, 500))
                 with Clock() as clock:
@@ -828,7 +922,8 @@ class TestTheWorldOnTheCard:
             import math
             ALONE = ("_draw_sky", "_draw_city", "_draw_road", "_draw_blocks",
                      "_draw_barriers", "_draw_beacons", "_draw_gates",
-                     "_draw_streaks", "_draw_trim", "_draw_particles")
+                     "_draw_streaks", "_draw_trim", "_draw_particles",
+                     "_draw_tunnel")
             def craft(canopy):
                 made, scene = rider_pane(size=(800, 500))
                 shots = []
@@ -1000,3 +1095,107 @@ class TestTheWorldOnTheCard:
         assert got["median"] < 25.0, (
             f"a frame of the world costs {got['median']:.1f} ms at "
             f"{got['ratio']}x")
+
+
+class TestTheCorkscrewIsATunnel:
+    """"Xxxxxxxxx xxxxx xxxx xxxx xxx xxxxx xxxx xxxxxxxxxx xxxxx. Xx xxx
+    can't xxxx xxx xxxxxxxxx xxxx, xxxx xxx xxxxxx xxxxx x psychedelic
+    tunnel during corkscrews." The city stands along the road and turns
+    with it, so through a corkscrew the towers went round with the track;
+    a corkscrew is ridden through a tunnel now, with the city outside."""
+
+    def test_it_opens_before_the_turn_and_closes_after(self):
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._twists = [20.0]
+        enter = 20.0 - scene.TUNNEL_LEAD
+        leave = 20.0 + scene.TWIST_FOR + scene.TUNNEL_TAIL
+        assert scene._tunnel_at(enter - scene.TUNNEL_RAMP - 0.01) == 0.0
+        assert scene._tunnel_at(enter - scene.TUNNEL_RAMP / 2) == (
+            pytest.approx(0.5))
+        for inside in (enter, 20.0, 21.0, leave):
+            assert scene._tunnel_at(inside) == 1.0, inside
+        assert scene._tunnel_at(leave + scene.TUNNEL_RAMP + 0.01) == 0.0
+        scene._twists = []
+        assert scene._tunnel_at(20.0) == 0.0
+
+    def test_inside_it_the_walls_are_all_there_is(self):
+        """The same moment of a corkscrew with the tunnel and without:
+        with it, the view above the road is the tunnel's, and the city
+        that would be turning round there is behind its walls."""
+        got = on_the_card(RIDER + textwrap.dedent("""
+            visualizers.Rider._find_twists = lambda self, *a, **k: [12.0]
+            def at(when, tunnel=True):
+                made, scene = rider_pane(size=(640, 400))
+                shot = None
+                with Clock() as clock:
+                    for i in range(int((when - 10.0) * 60)):
+                        clock.step(1.0 / 60)
+                        made.set_position(int((10.0 + i / 60) * 1000))
+                        world = made._canvas.world
+                        if world is not None and not tunnel:
+                            world._draw_tunnel = lambda frame: None
+                        made._tick()
+                        shot = made._canvas.grabFramebuffer()
+                world = made._canvas.world
+                return shot, world.inside, max(world.tunnel_line)
+            def differ(a, b):
+                rows = range(0, a.height() // 2, 4)
+                cols = range(0, a.width(), 4)
+                changed = sum(1 for y in rows for x in cols
+                              if abs(a.pixelColor(x, y).valueF()
+                                     - b.pixelColor(x, y).valueF()) > 0.08
+                              or abs(a.pixelColor(x, y).hueF()
+                                     - b.pixelColor(x, y).hueF()) > 0.08)
+                return changed / (len(rows) * len(cols))
+            inside, here, _most = at(12.9)
+            bare, _h, _m = at(12.9, tunnel=False)
+            before, was, seen_ahead = at(10.4)
+            print(json.dumps({"here": here, "was": was,
+                              "seen_ahead": seen_ahead,
+                              "covered": differ(inside, bare)}))
+        """))
+        assert got["here"] == 1.0, got
+        assert got["covered"] > 0.6, (
+            f"the tunnel changed {got['covered']:.0%} of the view above the "
+            f"road: the city is still showing through it")
+        assert got["was"] == 0.0 and got["seen_ahead"] > 0.0, (
+            "the tunnel is not seen coming")
+
+    def test_far_from_a_corkscrew_there_is_none(self):
+        got = on_the_card(RIDER + textwrap.dedent("""
+            visualizers.Rider._find_twists = lambda self, *a, **k: [200.0]
+            made, scene = rider_pane(size=(480, 300))
+            play(made, 0.5)
+            world = made._canvas.world
+            print(json.dumps({"most": max(world.tunnel_line),
+                              "inside": world.inside}))
+        """))
+        assert got == {"most": 0.0, "inside": 0.0}
+
+    def test_the_flat_picture_has_it_too(self, qapp):
+        """Where there is no card: the colours of the tunnel wheeling
+        round the end of the road, instead of nothing at all."""
+        import ridekit
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        def spread_at(seconds):
+            scene, _log, _truth, _beat = ridekit.ride("house", seconds=seconds)
+            image = QImage(320, 180, QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(QColor(0, 0, 0))
+            painter = QPainter(image)
+            scene.paint(painter, QRectF(0, 0, 320, 180), scene._ridden_state)
+            painter.end()
+            hues = {round(image.pixelColor(x, y).hueF(), 1)
+                    for x in range(0, 320, 8) for y in range(0, 90, 8)
+                    if image.pixelColor(x, y).saturationF() > 0.4
+                    and image.pixelColor(x, y).valueF() > 0.25}
+            return scene, len(hues)
+
+        scene, _hues = spread_at(1.0)
+        twist = scene._twists[0]
+        _s, inside = spread_at(twist + 1.0)
+        _s, outside = spread_at(twist - 3.0)
+        assert inside >= 7 and inside > outside + 3, (inside, outside)

@@ -379,6 +379,14 @@ def self_test(offline: bool = False) -> int:
                 scope_gl, "Tube"):
             raise RuntimeError("the scope cannot draw on the card")
         working.append("the scope on the card")
+        # The picture's allowance for the ear and the eye, made the first
+        # time a track is played. Asked here, so a bundle without it - or
+        # without the Core Audio it asks - fails now.
+        import av_sync
+        allowance = av_sync.Allowance()
+        if not -1.0 < allowance.ahead(60.0) < 1.0:
+            raise RuntimeError("the picture cannot keep time with the sound")
+        working.append("the picture on the beat")
         return ", ".join(working)
 
     check("attachment viewer", _attachment_viewer)

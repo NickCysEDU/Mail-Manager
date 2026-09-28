@@ -244,6 +244,8 @@ class TestTheStrobeUsesIt:
         spectrum.set_strobe_source("Bass")
         spectrum.set_strobe_sense(sense)
         spectrum.set_strobe_rate(rate)
+        # Playing, as the pane says it is whenever the player is.
+        spectrum.set_playing(True)
         flashes = []
         for step in range(seconds * 60):
             spectrum.set_position(int(step / 60.0 * 1000))

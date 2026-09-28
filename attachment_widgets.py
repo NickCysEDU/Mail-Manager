@@ -647,6 +647,14 @@ class Spectrum(QWidget):
         #: A clock of our own that leans on the playhead. See ``_heard``.
         self._heard_now = None
         self._heard_at = None
+        #: The moment of the music this frame shows, worked out once a
+        #: frame from the clock (see _heard and _tick) and read by
+        #: everything drawn from the track.
+        self._now = 0.0
+        #: The allowance for the ear and the eye - see av_sync - set by
+        #: whoever is playing the music through the machine's audio. None
+        #: shows the player's position as it is.
+        self.allowance = None
         #: The last position the source reported, and when it landed.
         #: See ``_heard``: a report is a timestamp, not a level.
         self._said_was = None
@@ -1663,7 +1671,11 @@ class Spectrum(QWidget):
     def _row(self) -> Optional[List[float]]:
         if not self._frames:
             return None
-        exact = self._position / 1000.0 * self._rate
+        # A frame is the sound of a window starting at its slot, so what is
+        # in it is half a window later: read at the middle of the window.
+        exact = (self._now - self.FRAME_MIDDLE) * self._rate
+        if exact < 0.0:
+            exact = 0.0
         index = int(exact)
         if index >= len(self._frames):
             return None
@@ -1671,20 +1683,24 @@ class Spectrum(QWidget):
         if index + 1 < len(self._frames):
             second = self._frames[index + 1]
             blend = exact - index
-            return [a + (b - a) * blend for a, b in zip(first, second)]
+            # Falling, eased from one frame to the next. Rising, not until
+            # the next frame's own moment: eased, a kick began to rise a
+            # whole frame before it and was half way up 33 ms early.
+            return [a + (b - a) * blend if b < a else a
+                    for a, b in zip(first, second)]
         return list(first)
 
     def _vector_now(self):
         if not self._vectors:
             return None
-        exact = (self._position / 1000.0) * self._rate
+        exact = self._now * self._rate
         return self._vectors[min(len(self._vectors) - 1, max(0, int(exact)))]
 
     def _trace_now(self):
         """The waveform slice for wherever the track is now."""
         if not self._traces:
             return None
-        exact = (self._position / 1000.0) * self._rate
+        exact = self._now * self._rate
         index = min(len(self._traces) - 1, max(0, int(exact)))
         return self._traces[index]
 
@@ -1763,6 +1779,13 @@ class Spectrum(QWidget):
                 self._position = max(0, int(self._source()))
             except Exception:      # noqa: BLE001 - a dead player is not fatal
                 pass
+        # One moment for the whole frame, from the clock rather than from
+        # the player's last word. The player moves its position every 50
+        # ms; read straight off it, the kick lit up to 33 ms after it was
+        # due and the bars rose up to 25 ms before, depending on where in
+        # the player's step the frame fell - on beat on one record and not
+        # on the next, which is how "on beat" never quite felt it.
+        self._now = max(0.0, self._heard() + self._ahead())
         if (self._fresh < 1.0 and self._level and self._working is None
                 and self._drawn >= self.WARM_FRAMES):
             # Only once there is a scene to fade in. While a track is
@@ -1809,7 +1832,12 @@ class Spectrum(QWidget):
 
         state = self._state
         bass = self._band(row, self.BASS)
-        state.bass = state.bass * 0.70 + bass * 0.30
+        # Eased both ways, and up twice as fast as down. Eased up as
+        # slowly as down, it was half way up to a kick 17 to 50 ms after
+        # it; straight up, every flicker in the bands jumped it, and the
+        # whole road rides on it - the craft shook with the air.
+        rise = self.BASS_RISE if bass > state.bass else self.BASS_FALL
+        state.bass += (bass - state.bass) * rise
         state.mid = state.mid * 0.80 + self._band(row, self.MID) * 0.20
         state.synth = state.synth * 0.88 + self._band(row, self.SYNTH) * 0.12
         high = self._band(row, self.HIGH)
@@ -1882,7 +1910,7 @@ class Spectrum(QWidget):
         state.sparks = self._sparks
 
         if self._dial_frames and not self._idling:
-            exact = self._position / 1000.0 * self._rate
+            exact = self._now * self._rate
             index = min(len(self._dial_frames) - 1, max(0, int(exact)))
             self._swing(self._dial_frames[index])
         elif self._idling and self._dial_level:
@@ -1973,7 +2001,7 @@ class Spectrum(QWidget):
         is the pulse. Falls back to the source the strobe is watching, and
         then to nothing, which scenes read as "free running".
         """
-        state.at = self._heard()
+        state.at = self._now
         # Position, not our own clock: the smoothed one keeps creeping for
         # a moment after a pause by design, and this has to be the truth.
         state.moving = (self._moved_at is None
@@ -2004,6 +2032,19 @@ class Spectrum(QWidget):
             state.flux = {name: (found.flux, found.rate)
                           for name, found in self._elements.items()
                           if getattr(found, "flux", None)}
+        # The drums' own tempo and beat, once they are known: folded over
+        # the whole track at sixty readings a second, where the maps below
+        # are phased from the first thing they heard - a third of a beat
+        # out on some records, and every scene's pulse with them. Measured
+        # against a DJ program's grids, the drums' beat is 7 ms out at the
+        # median.
+        rhythm = self._rhythm
+        if rhythm and float(rhythm.get("tempo") or 0.0) > 0.0:
+            state.tempo = visualizers.folded_tempo(float(rhythm["tempo"]))
+            period = 60.0 / max(1e-6, state.tempo)
+            since = self._now - float(rhythm.get("phase") or 0.0)
+            state.beat_at = (since / period) % 1.0
+            return
         found = None
         for name in ("Kick", "Bass", self._strobe_source, "Mids"):
             candidate = self._beats.get(name)
@@ -2019,11 +2060,10 @@ class Spectrum(QWidget):
         # is the whole point of doing it here. See folded_tempo.
         state.tempo = visualizers.folded_tempo(found.bpm)
         period = 60.0 / max(1e-6, state.tempo)
-        state.at = self._heard()
         # Against the first beat rather than against zero: a grid that
         # starts where the track starts is a grid that is wrong by
         # whatever the intro was.
-        since = self._heard() - found.beats[0].at
+        since = self._now - found.beats[0].at
         state.beat_at = (since / period) % 1.0 if since >= 0 else 0.0
 
     #: How far the playhead has to disagree with our own clock before it
@@ -2031,6 +2071,20 @@ class Spectrum(QWidget):
     #: is corrected each frame.
     SEEK_GAP = 0.30
     PULL = 0.06
+    #: The most a hit may be taken early for being nearer this frame than
+    #: the next: half of a frame at sixty. Half of whatever time had gone
+    #: by since the last frame, it was half a second on the first frame of
+    #: a track and an eighth of one after a pause - a strobe that went off
+    #: on a beat that had not come.
+    NEAREST_MOST = 1.0 / 60.0 / 2.0
+    #: How much of the way to the bass's new level the bass the scenes
+    #: read goes in a frame, rising and falling.
+    BASS_RISE = 0.6
+    BASS_FALL = 0.3
+    #: Where in its slot a frame of the bands is heard, in seconds: its
+    #: window starts at the slot, so what it holds is half a window in -
+    #: attachment_audio's WINDOW over twice its DECODE_RATE.
+    FRAME_MIDDLE = 2048 / 2 / 48000
     #: How far a report may be run forward before it is not trusted.
     #: Comfortably past any sane player's update interval, and well
     #: inside SEEK_GAP so a stalled source cannot fake a seek.
@@ -2115,6 +2169,15 @@ class Spectrum(QWidget):
         self._heard_now += (said - self._heard_now) * self.PULL
         return self._heard_now
 
+    def _ahead(self) -> float:
+        """How far ahead of the player's position the picture is shown:
+        see av_sync. Nothing without an allowance."""
+        if self.allowance is None:
+            return 0.0
+        screen = self.screen()
+        refresh = screen.refreshRate() if screen is not None else 60.0
+        return self.allowance.ahead(refresh)
+
     def _decay_kit(self, state) -> None:
         """Light whichever parts of the kit are due, and fade the rest.
 
@@ -2125,7 +2188,7 @@ class Spectrum(QWidget):
         """
         import beatmap
 
-        now = self._position / 1000.0
+        now = self._now
         step = max(0.0, min(0.25, now - self._kit_seen)) if self._kit_seen >= 0 else 0.0
         seeking = self._kit_seen < 0 or now < self._kit_seen or step >= 0.25
         for name in beatmap.ELEMENTS:
@@ -2141,7 +2204,11 @@ class Spectrum(QWidget):
                 nxt = beatmap.next_after(beats, now)
                 self._kit_at[name] = beats.index(nxt) if nxt is not None else len(beats)
                 continue
-            while cursor < len(beats) and beats[cursor].at <= now:
+            # In the frame nearest the hit, rather than the first frame
+            # after it, which put every hit up to a frame late.
+            while (cursor < len(beats)
+                   and beats[cursor].at <= now + min(self.NEAREST_MOST,
+                                                     step / 2)):
                 state.kit[name] = max(0.35, beats[cursor].strength)
                 cursor += 1
             self._kit_at[name] = cursor
@@ -2166,7 +2233,7 @@ class Spectrum(QWidget):
         beats = getattr(found, "beats", ())
         if not beats:
             return False
-        now = self._position / 1000.0
+        now = self._now
         # A seek, either way, means starting again from where the playhead
         # landed rather than walking there one beat at a time.
         if now < self._beat_seen or now - self._beat_seen > 1.0:
@@ -2186,8 +2253,11 @@ class Spectrum(QWidget):
         # loudest thing the visualiser does and nobody should arrive at
         # it by nudging one slider.
         self._machine_gun(state, beats, now, floor)
+        # In the frame nearest the beat, as the kit is.
+        due = now + min(self.NEAREST_MOST,
+                        max(0.0, now - self._beat_seen) / 2)
         while (self._beat_at < len(beats)
-               and beats[self._beat_at].at <= now):
+               and beats[self._beat_at].at <= due):
             beat = beats[self._beat_at]
             self._beat_at += 1
             if beat.strength < floor:
@@ -2229,7 +2299,7 @@ class Spectrum(QWidget):
                    "Synth": state.synth, "Treble": state.high,
                    "Snare": state.mid, "Hats": state.high}.get(
                        self._strobe_source, state.bass)
-        now = self._position / 1000.0
+        now = self._now
         step = max(0.0, min(0.25, now - self._held_seen))
         self._held_seen = now
         if watched >= self.RAPID_LEVEL:

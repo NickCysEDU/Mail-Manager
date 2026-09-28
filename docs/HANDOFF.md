@@ -302,7 +302,7 @@ That first figure is the one that matters and it must stay at zero.
 
 **Speed.** Rules engine 10.1 ms per message. Lexicon opens in 38 ms using
 1.95 MB, down from 70 ms and 10.5 MB, and neither number now grows with the
-table. Test suite 4,315 tests (with the evaluation sets present) in about five minutes on four workers.
+table. Test suite 4,404 tests (with the evaluation sets present) in about five minutes on four workers.
 
 ---
 
@@ -415,7 +415,8 @@ table. Test suite 4,315 tests (with the evaluation sets present) in about five m
 - **Laying is committed short of what is read** (`commit` in `_lay`), and
   snapping counts from the drums' fixed beat (`_anchor`): both were frame-rate
   dependent, and `test_whatever_the_frame_rate` pins it. Obstacle shares are
-  carried per section in `_owed`, not drawn. Committed to the edge, the
+  carried per section in `_owed`, not drawn, and owed on every figure: see
+  below. Committed to the edge, the
   heaviest-nearby choice never sees the hit after the one it is choosing
   for - at every frame rate alike, so the frame-rate test cannot see that;
   `TestTheHeaviestHitNearby` can. `Rider._weight` ranks the drums, and in
@@ -437,11 +438,69 @@ table. Test suite 4,315 tests (with the evaluation sets present) in about five m
   says which a name is. Each note taken is echoed through the board's
   `later` on the scene's `_beat` (`SoundBoard.ECHOES`), never rendered into
   the file, so one set of notes serves every tempo. The level is
-  `volume() * level()`, `level` being the pane's **fx** slider, kept in
+  `volume() * level()`, `level` being the pane's **Effects** slider, kept in
   `viewer.json` beside the bests - not in the mail settings, which the main
   window saves whole. "Unpitched" is tested as no semitone standing over its
   neighbours (`TestTheSoundsThemselves._line`), not against the range's
   average, which a brightly filtered sound fails for its slope.
+- **A note put off is the pane's own `QTimer`** (`AudioPane._later`, one
+  single-shot timer a note). `QTimer.singleShot(ms, TimerType, callable)` is
+  not an overload PySide has: it raised on the first echo, the pane dropped
+  the game's listener, and the game was silent. Every sound test stubs
+  `later`, so none of them could see it; `TestTheyAreReallyPlayedLater` runs
+  the real one, and `SoundBoard._play_at` plays a note at once if `later`
+  raises.
+- **The pane's moment is `Spectrum._now`, asked once a frame.** `_heard()`
+  runs the player's 50 ms position reports forward smoothly; `_now` adds the
+  allowance (`av_sync`). Everything drawn reads `_now` and nothing asks
+  `_heard()` again inside a frame (`TestOneMomentAFrame`). A band frame is
+  shown at `FRAME_MIDDLE`, the middle of its 2048-sample window; a rising
+  band steps up and a falling one eases. A hit fires at `now +
+  min(NEAREST_MOST, step / 2)` - uncapped, half the step was half a second on
+  a first frame. `tests/test_on_the_beat.py` is the click track a timing
+  change is checked against, frame by frame, through the real pane.
+- **The drums' beat is put on the hits** (`trackstyle.on_the_hits`, the end
+  of `rhythm_of`): a line through the numbered kicks (else snares) against
+  the grid. Its slope is taken only within `REFINE_MOST` of the folded beat,
+  otherwise only the phase moves. `Spectrum._clock` counts from the rhythm's
+  tempo and phase whenever there is one.
+- **`av_sync` asks Core Audio through ctypes**, no dependency: the default
+  output device's latency, safety offset, buffer and largest stream latency.
+  `Allowance` asks again every `ASK_EVERY` and gives up for good after one
+  exception. The listener's trim is `viewer.json`'s `"sync"`, within
+  `AudioPane.SYNC_MOST`. The self test checks it ("the picture on the
+  beat").
+- **Levels are `rider_layout.DIFFICULTY`, applied in `Rider._set_level`.**
+  `LOOK_BEATS` and `PER_BEAT` are set on the scene there, so anything that
+  measures the road in beats must read them from the scene, not the class.
+  `set_difficulty` and `set_mode` each reset and keep the other. Points go
+  through `_paid`; Expert's `_shield_back` is None, which is no shield. Bests
+  are keyed by `AudioPane.best_kept_as`: Normal keeps the key bests had before
+  levels, the others are `"{mode} {level}"`.
+- **Crafts are `rider_gl.CRAFTS`, one a level (`CRAFT_FOR`)**, meshes cached
+  per craft in `RiderWorld._crafts`. `ship_triangles()` with no name is the
+  Arrow, the craft there always was. A longer craft grows forwards
+  (`TAIL_SHARE`). The flat picture's proportions are `Rider.FLAT_CRAFT`. A
+  grabbed frame is at the device pixel ratio: a loop over the logical size
+  samples a quarter of it, which is how the first road-hidden test passed a
+  craft that hid more.
+- **A corkscrew's tunnel hides the towers; it does not fix them.** They still
+  turn with the road. The tube is placed on the road by `onRoad` and drawn
+  after the ship, blended (`RiderWorld._draw_tunnel`), with how much of it is
+  there at each road sample (`inside`) read in `_read_road` from
+  `Rider._tunnel_at`. The flat picture's is `Rider._flat_tunnel`.
+- **Obstacles are owed on every figure** (`Rider._greyed`), carried up to
+  `OWED_MOST` and paid on the next heavy hit, or on a snare once the cap is
+  reached. Owed on the kick's figures alone, a garage drop came out at a
+  fifth obstacles and a second one at none. `danger_share` scales the share
+  by one less the calm, so an ambient record still has nothing to dodge.
+- **Never `hide()` a control that lives inside a holder.** The holder shows
+  and the control does not: that is how the Game box and the meters' Colours
+  button were missing from the window from Puzzle until now. The scene's own
+  controls are shown and hidden as groups (`_group`: `rider_group`,
+  `scope_group`, `meter_group`) by `_show_visual_controls`, and tests check
+  `isVisibleTo(pane)`, which sees a hidden child where `isVisible` on an
+  unshown pane cannot.
 - **The sounds are notes when the key's confidence is 0.05 or more**, and
   nothing else is asked. `harmony.tonality` is kept but is not a gate: on
   real mixes it is near zero whether the key came out right or not.
@@ -554,6 +613,19 @@ table. Test suite 4,315 tests (with the evaluation sets present) in about five m
   road and a proper bloom are affordable on a MacBook's own screen.
   Anything added has to be measured against the 5K and 6K rungs as well,
   because on a small card that is where it costs.
+- [ ] **The levels are a first design, to be tuned by playing them.** Asked
+  for "work with me": the five dials are one table
+  (`rider_layout.DIFFICULTY`), and each craft is one row of `CRAFTS`. What
+  a player says after an evening of Hard and Expert is worth more than any
+  number in them now.
+- [ ] **The allowance for the ear is measured on built-in speakers only.**
+  Core Audio's answer there is 19 ms. Bluetooth headphones report far more,
+  by design, and have not been tried here; **Timing…** is the way out if
+  the answer is wrong.
+- [ ] **The city through a corkscrew is hidden, not fixed.** The tunnel
+  closes over the towers turning with the road. A city that stays put
+  while the road rolls under it would need the road to be seen over empty
+  air, which is what the tunnel is for.
 
 ### Done in this round
 

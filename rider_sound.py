@@ -778,8 +778,18 @@ class SoundBoard:
     def _play_at(self, delay: float, name: str, loud: float) -> None:
         if delay <= 0.0 or self._later is None:
             self.play(name, loud)
-        else:
+            return
+        try:
             self._later(delay, lambda: self.play(name, loud))
+        except Exception as exc:      # noqa: BLE001 - late rather than never
+            # Played now rather than not at all, and the rest of the game's
+            # sounds kept: a failure here used to take the whole listener
+            # with it, and the game was silent from then on.
+            if not getattr(self, "_late_failed", False):
+                self._late_failed = True
+                log.warning("The rider's timed sounds are played at once "
+                            "(%s).", exc)
+            self.play(name, loud)
 
     def prepare(self) -> None:
         """Load every sound already made, before any is wanted: Qt loads a

@@ -140,7 +140,8 @@ class TestTheSelfTestLooksForWhatIsImportedLate:
     bundle can lose without anything else noticing."""
 
     @pytest.mark.parametrize("module,words", [("rider_layout", "road"),
-                                              ("scope_gl", "scope")])
+                                              ("scope_gl", "scope"),
+                                              ("av_sync", "beat")])
     def test_a_bundle_without_it_fails(self, tmp_path, monkeypatch, capsys,
                                        module, words):
         monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
@@ -158,6 +159,7 @@ class TestTheSelfTestLooksForWhatIsImportedLate:
         line = next(row for row in capsys.readouterr().out.splitlines()
                     if "attachment viewer" in row)
         assert "the rider's road" in line and "the scope on the card" in line
+        assert "the picture on the beat" in line
 
 
 class TestBundledPath:

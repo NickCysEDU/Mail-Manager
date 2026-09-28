@@ -192,16 +192,43 @@ class Plan:
         return pool[walk[slot % len(walk)] % len(pool)], mirrored
 
 
-def danger_share(kind: str, mode: str, style=None) -> float:
+#: How hard the game is, "different difficulty settings": how many of the
+#: figures are obstacles, how far apart the figures are, how many beats of
+#: road are in sight - which is how much warning there is and how fast the
+#: road runs - how long the shield takes to come back, if it comes back at
+#: all, and what a point is worth. Every level keeps the beat between
+#: figures that makes an obstacle one a player can get past (see spacing).
+DIFFICULTY: Dict[str, Dict[str, Optional[float]]] = {
+    "Easy": {"danger": 0.5, "spacing": 1.35, "look": 4.0, "shield": 0.5,
+             "score": 0.75},
+    "Normal": {"danger": 1.0, "spacing": 1.0, "look": 3.0, "shield": 1.0,
+               "score": 1.0},
+    "Hard": {"danger": 1.3, "spacing": 0.85, "look": 2.5, "shield": 1.5,
+             "score": 1.25},
+    "Expert": {"danger": 1.6, "spacing": 0.7, "look": 2.0, "shield": None,
+               "score": 1.5},
+}
+
+
+def level(name: str) -> Dict[str, Optional[float]]:
+    """A difficulty's settings, or Normal's for a name there is none of."""
+    return DIFFICULTY.get(name, DIFFICULTY["Normal"])
+
+
+def danger_share(kind: str, mode: str, style=None,
+                 difficulty: str = "Normal") -> float:
     """The share of a section's figures that are obstacles."""
     mono, ninja = DANGER_SHARE.get(kind, (0.3, 0.55))
     share = ninja if mode == "Ninja" else mono
+    share *= float(level(difficulty)["danger"])
     if style is not None and kind == "drop":
         share += 0.05 * max(float(getattr(style, "heavy", 0.0)),
                             float(getattr(style, "hard", 0.0)),
                             float(getattr(style, "broken", 0.0)))
     if style is not None:
-        share -= 0.1 * float(getattr(style, "calm", 0.0))
+        # Calm music is ridden, not dodged: as calm as a record is, that
+        # much less of it is an obstacle, and none of an ambient one.
+        share *= 1.0 - max(0.0, min(1.0, float(getattr(style, "calm", 0.0))))
     return max(0.0, min(0.8, share))
 
 
@@ -217,11 +244,13 @@ LOUDNESS = (1.2, 0.8)
 
 
 def spacing(kind: str, through: float, style=None,
-            loud: Optional[float] = None) -> float:
+            loud: Optional[float] = None, difficulty: str = "Normal") -> float:
     """Beats between figures ``through`` (0 to 1) a section of ``kind``,
-    where the track is ``loud`` (0 to 1) if that is known."""
+    where the track is ``loud`` (0 to 1) if that is known, at a level of
+    ``difficulty``."""
     first, last = SPACING.get(kind, (2.0, 2.0))
     beats = first + (last - first) * max(0.0, min(1.0, through))
+    beats *= float(level(difficulty)["spacing"])
     if style is not None:
         if kind == "drop":
             quick = max(float(getattr(style, "broken", 0.0)),

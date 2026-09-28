@@ -274,6 +274,31 @@ class TestTheBeatIsTheKick:
                                 rhythm_found=found)
         assert style.swung == 0.0
 
+    @pytest.mark.parametrize("style", ["house", "dnb", "garage", "hiphop"])
+    def test_the_grid_is_on_the_hits(self, style):
+        """The fold finds the beat to a twenty-fourth of it and the tempo
+        to a fiftieth of a beat a minute: a slot early, and 50 ms adrift by
+        the end of five minutes. The hits are timed to the sample, and the
+        line through them is the grid."""
+        import ridekit
+
+        chart, contour, beat, _truth = songkit.chart(style, offset=0.137)
+        length = len(contour["loud"]) / contour["rate"]
+        found = trackstyle.rhythm_of(ridekit.kit_for(chart, length),
+                                     tempo=60.0 / beat)
+        assert abs(found["tempo"] - 60.0 / beat) < 0.005, found["tempo"]
+        period = 60.0 / found["tempo"]
+        off = ((found["phase"] - 0.137) / period) % 1.0
+        assert min(off, 1.0 - off) * period < 0.003, off * period
+        # And still there at the end of the record, not only the start:
+        # against the last kick that is on a beat.
+        on_beats = [at for at in chart["Kick"]
+                    if abs((at - 0.137) / beat - round((at - 0.137) / beat))
+                    < 1e-6]
+        last = max(on_beats)
+        drift = ((last - found["phase"]) / period) % 1.0
+        assert min(drift, 1.0 - drift) * period < 0.003
+
     def test_a_snare_roll_with_no_kick_is_not_double_time(self):
         """A build rolls its snare on every beat, and a record with no kick
         in it at all was doubled on that."""

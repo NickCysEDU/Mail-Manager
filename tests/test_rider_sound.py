@@ -718,6 +718,11 @@ class TestTheEffectsSlider:
         try:
             label, slider = pane._full_effects
             assert slider.isVisibleTo(window) and label.isVisibleTo(window)
+            # Called what it is called in the window, not "fx".
+            from PySide6.QtWidgets import QLabel
+            assert label.text() == pane.effects_box.findChild(QLabel).text()
+            captions = {found.text() for found in window.findChildren(QLabel)}
+            assert "Volume" in captions and "Vol" not in captions
             slider.setValue(71)
             assert pane.effects.value() == 71
             pane.effects.setValue(12)
@@ -727,3 +732,79 @@ class TestTheEffectsSlider:
         finally:
             window.close()
             pane.deleteLater()
+
+
+class TestTheyAreReallyPlayedLater:
+    """The notes of an arpeggio and the echoes of a note are put off with
+    the pane's own timer. Every other test here hands the board a stand-in
+    for it - and the real one raised the first time a note echoed, the pane
+    let go of the game's listener, and the game was silent for the rest of
+    the session. These run the real one."""
+
+    @staticmethod
+    def _wait(seconds):
+        from PySide6.QtCore import QEventLoop, QTimer
+
+        loop = QEventLoop()
+        QTimer.singleShot(int(seconds * 1000), loop.quit)
+        loop.exec()
+
+    def test_the_pane_s_timer_does_it_on_time(self, qapp):
+        import time
+
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        fired = []
+        try:
+            asked = time.monotonic()
+            pane._later(0.08, lambda: fired.append(time.monotonic() - asked))
+            assert fired == [], "it did not wait"
+            self._wait(0.3)
+            assert len(fired) == 1, fired
+            assert 0.07 <= fired[0] < 0.2, fired
+        finally:
+            pane.deleteLater()
+
+    def test_a_note_taken_echoes_through_the_real_pane(self, qapp, tmp_path,
+                                                      monkeypatch):
+        """From the frame the game hands over to the echoes being played:
+        the listener stays, and the note sounds three times."""
+        monkeypatch.setattr(rider_sound, "make_elsewhere",
+                            lambda folder, names=None: None)
+        import visualizers
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        try:
+            pane.spectrum.set_harmony(C_MAJOR)
+            board = pane._sound_board()
+            played = []
+            board.play = lambda name, loud=1.0: played.append(name) or True
+            scene = visualizers.Rider()
+            scene._beat, scene._heard, scene._chain = 0.4, 1.0, 1
+            scene._pops = [["prize", 0.0, 1.0, None, 0.9, ""]]
+            pane.spectrum.set_listener(pane._listen_to_game)
+            pane.spectrum._scene = scene
+            pane.spectrum._tell_listener()
+            assert pane.spectrum._listener is not None, (
+                "the pane let go of the game's sounds")
+            assert len(played) == 1, (
+                f"the echoes did not wait for their beat: {played}")
+            self._wait(0.8)
+            assert len(played) == 3 and len(set(played)) == 1, played
+        finally:
+            pane.deleteLater()
+
+    def test_a_timer_that_fails_plays_it_at_once(self, tmp_path):
+        """Late rather than never - and the rest of the game's sounds
+        kept."""
+        def broken(seconds, action):
+            raise TypeError("no timer here")
+
+        board = rider_sound.SoundBoard(tmp_path, later=broken)
+        played = []
+        board.play = lambda name, loud=1.0: played.append(name) or True
+        board._play_at(0.3, "hit", 1.0)
+        board._play_at(0.3, "glass", 1.0)
+        assert played == ["hit", "glass"]

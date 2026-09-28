@@ -144,6 +144,19 @@ def _keep_viewer_pref(name: str, value) -> None:
             "Could not keep the viewer's %s (%s).", name, exc)
 
 
+def _group(*widgets) -> QWidget:
+    """Controls that belong together, as one thing that comes and goes -
+    set off from what is either side by a little more room than the row
+    leaves between its own controls."""
+    holder = QWidget()
+    row = QHBoxLayout(holder)
+    row.setContentsMargins(10, 0, 0, 0)
+    row.setSpacing(12)
+    for widget in widgets:
+        row.addWidget(widget)
+    return holder
+
+
 def _relabel(holder: QWidget, text: str, tip: str) -> None:
     """Change what a ``_labelled`` control is called, and its tooltip.
 
@@ -448,7 +461,6 @@ class AudioPane(QWidget):
         self.colour_button.setToolTip(
             "Meter colours and frequencies")
         self.colour_button.clicked.connect(self._choose_colours)
-        self.colour_button.hide()
         self.full_button = QPushButton("Full screen")
         self.full_button.setToolTip(
             "Full screen (F). Escape or F comes back.")
@@ -504,10 +516,9 @@ class AudioPane(QWidget):
 
         # Words, not prepositions. "on" and "every" were shorter and told
         # nobody what the slider under them did.
-        self.sense_box = _labelled("sens", self.sense)
-        self.rate_box = _labelled("rate", self.flash)
-        self.decay_box = _labelled("decay", self.decay)
-        self.decay_box.hide()
+        self.sense_box = _labelled("Sensitivity", self.sense)
+        self.rate_box = _labelled("Rate", self.flash)
+        self.decay_box = _labelled("Glow", self.decay)
 
         import visualizers as _vis
 
@@ -517,7 +528,7 @@ class AudioPane(QWidget):
             "plots left against right, which is what a record cut for a "
             "scope draws its picture in.")
         self.mode_box.currentTextChanged.connect(self.spectrum.set_scope_mode)
-        self.mode_box.hide()
+        self.mode_box_holder = _labelled("Beam", self.mode_box)
 
         # And the rider's two games, which share a road and score
         # nothing alike. Its own box rather than the scope's, because the
@@ -535,9 +546,31 @@ class AudioPane(QWidget):
             "Puzzle: a colour is worth nothing until three of them touch "
             "in the grid, and the grid is three columns deep by six.")
         self.game_box.currentTextChanged.connect(self.spectrum.set_scope_mode)
-        self.game_box.hide()
-        self.game_box_holder = _labelled("game", self.game_box)
-        self.game_box_holder.hide()
+        # Not hidden itself: its holder is what comes and goes, and a
+        # combo hidden inside a holder that is shown stays hidden - which
+        # is how the game could not be chosen in the window at all, only
+        # the word "game" with nothing after it.
+        self.game_box_holder = _labelled("Game", self.game_box)
+        # How hard it is. The rider is one scene for the session, so it is
+        # told directly; a new level is a new run, as a new game is.
+        rider = _vis.by_name("Music rider")
+        self.level_box = _combo(
+            list(rider.DIFFICULTIES),
+            "How hard the game is.\n\n"
+            "Easy: half the obstacles, more room between everything, four "
+            "beats of warning and a shield that comes back quickly.\n\n"
+            "Normal: as the game was built.\n\n"
+            "Hard: more obstacles closer together, less warning, and a "
+            "slower shield.\n\n"
+            "Expert: the most obstacles, two beats of warning and no shield "
+            "at all. Worth half as much again.")
+        self.level_box.setAccessibleName("Difficulty")
+        kept = _viewer_prefs().get("difficulty")
+        self.level_box.setCurrentText(kept if kept in rider.DIFFICULTIES
+                                      else "Normal")
+        rider.set_difficulty(self.level_box.currentText())
+        self.level_box.currentTextChanged.connect(self._level_chosen)
+        self.level_box_holder = _labelled("Level", self.level_box)
         # The rider's own sounds: a note for every block taken, climbing
         # as a run goes on, and a thump with the music ducking under it
         # when one is hit. On unless somebody says otherwise. See
@@ -548,7 +581,6 @@ class AudioPane(QWidget):
             "The game's own sounds: a note for each block you take, rising "
             "as the chain grows, and a thump for a hit. Key X.")
         self.sound_box.toggled.connect(self._sounds_changed)
-        self.sound_box.hide()
         # How loud those are against the music: a share of the player's
         # own volume, so the balance stays where it was put when the music
         # is turned up or down. Remembered, and heard as it is let go.
@@ -569,8 +601,7 @@ class AudioPane(QWidget):
             lambda: _keep_viewer_pref("effects", self.effects.value()))
         self.effects.valueChanged.connect(self._keep_effects.start)
         self.effects.sliderReleased.connect(self._preview_effects)
-        self.effects_box = _labelled("fx", self.effects)
-        self.effects_box.hide()
+        self.effects_box = _labelled("Effects", self.effects)
         self._board = None
         #: The track being played, as the bests know it, and the result
         #: last offered to them. See _keep_best.
@@ -606,7 +637,7 @@ class AudioPane(QWidget):
             "Tap it for a flash, hold it for a held light.")
         self.by_hand.setVisible(False)
         self.strobe_source.currentTextChanged.connect(self._show_by_hand)
-        self.source_box = _labelled("on", self.strobe_source)
+        self.source_box = _labelled("Listens to", self.strobe_source)
         # When a scene sets the strobe up for itself, the controls have to
         # move with it, or they show one thing while another happens.
         self.spectrum.strobe_settings_changed.connect(self._show_strobe)
@@ -619,31 +650,49 @@ class AudioPane(QWidget):
                        self.sense_box, self.rate_box):
             strobe_row.addWidget(widget)
 
-        # A row that wraps. These controls come and go with what is chosen,
-        # and in one fixed line they overlapped each other and then ran off
-        # the pane.
+        # What belongs to one scene, together, and there only while it is
+        # the scene: the rider's game, the scope's beam, the meters'
+        # colours. "Xxxxx xx xxx xxxxxxxx xxxxxxxxxx xxxxxx xx xxxx xx
+        # xxxxxxx xxx xxxxxx xx xxxxxxxx": they were loose in one wrapping
+        # row with everything else, captioned in fragments - "on", "sens",
+        # "fx" - and came and went one by one in the middle of it.
+        self.rider_group = _group(self.game_box_holder, self.level_box_holder,
+                                  self.sound_box, self.effects_box)
+        self.scope_group = _group(self.mode_box_holder, self.decay_box)
+        self.meter_group = _group(self.colour_button)
+        for group in (self.rider_group, self.scope_group, self.meter_group):
+            group.hide()
+        # When the picture is shown against the sound: see av_sync.
+        self.timing_button = QPushButton("Timing…")
+        self.timing_button.setAccessibleName("Timing")
+        self.timing_button.setToolTip(
+            "Move the picture against the music, if the beat you see is "
+            "not the beat you hear.")
+        self.timing_button.clicked.connect(self._show_timing)
+
+        # Two rows that wrap: what is drawn and how, and the strobe. In one
+        # fixed line they overlapped each other and then ran off the pane.
         self.visual_row = FlowRow(spacing=16)
-        # Grouped: what to draw, how it reacts, then what to do with it.
-        groups = ((self.enable_box, self.busy, self.scene_box, self.shape_box,
-                   self.colour_button, self.mode_box, self.game_box_holder,
-                   self.sound_box, self.effects_box, self.decay_box,
-                   self.full_button),
-                  (self.strobe_group,))
-        for index, group in enumerate(groups):
-            if index:
-                self.visual_row.add_gap(26)
-            for widget in group:
-                self.visual_row.addWidget(widget)
-        self.visual_holder = FlowHolder(self.visual_row)
+        for widget in (self.enable_box, self.busy, self.scene_box,
+                       self.shape_box, self.rider_group, self.scope_group,
+                       self.meter_group):
+            self.visual_row.addWidget(widget)
+        self.strobe_row = FlowRow(spacing=16)
+        self.strobe_row.addWidget(self.strobe_group)
+        self.visual_holder = QWidget()
+        rows = QVBoxLayout(self.visual_holder)
+        rows.setContentsMargins(0, 0, 0, 0)
+        rows.setSpacing(6)
+        rows.addWidget(FlowHolder(self.visual_row))
+        rows.addWidget(FlowHolder(self.strobe_row))
         # One size for the whole section. Checkboxes, combo boxes, buttons
         # and plain labels each come with their own idea of how big their
         # text should be, and side by side in one row that reads as a mess.
         _match_text(self.visual_holder)
         self._visual_controls = (self.scene_box, self.shape_box,
-                                 self.strobe_group, self.decay_box,
-                                 self.mode_box, self.game_box_holder,
-                                 self.sound_box, self.effects_box,
-                                 self.full_button, self.colour_button)
+                                 self.strobe_group, self.rider_group,
+                                 self.scope_group, self.meter_group,
+                                 self.timing_button, self.full_button)
         # Everything except the tick box starts unavailable, because the
         # visualiser starts off.
         self._grey_visual_controls(False)
@@ -690,8 +739,18 @@ class AudioPane(QWidget):
         controls.addWidget(self.wave, 1)
         controls.addWidget(self.clock)
         controls.addSpacing(10)
-        controls.addWidget(QLabel("Vol"))
+        controls.addWidget(QLabel("Volume"))
         controls.addWidget(self.volume)
+        # The whole picture's, not one scene's: at the end of the transport
+        # rather than in the middle of the scene's own controls.
+        controls.addSpacing(14)
+        controls.addWidget(self.timing_button)
+        controls.addWidget(self.full_button)
+        # Written at the size the rest of the picture's controls are.
+        for button in (self.timing_button, self.full_button):
+            font = button.font()
+            font.setPointSizeF(CONTROL_POINT_SIZE)
+            button.setFont(font)
 
         layout = QVBoxLayout(self)
         layout.addLayout(header)
@@ -730,6 +789,12 @@ class AudioPane(QWidget):
             return False
         self._audio = QAudioOutput()
         self._audio.setVolume(self.volume.value() / 100)
+        # The picture shows what is heard when it is seen, not what has
+        # been handed to the audio device - see av_sync.
+        import av_sync
+
+        self.spectrum.allowance = av_sync.Allowance()
+        self.spectrum.allowance.trim = self.sync_trim() / 1000.0
         self._player = QMediaPlayer()
         self._player.setAudioOutput(self._audio)
         self._player.positionChanged.connect(self._moved)
@@ -974,15 +1039,15 @@ class AudioPane(QWidget):
     def _show_visual_controls(self, on: bool) -> None:
         scene = self.scene_box.currentText()
         for widget in self._visual_controls:
-            if widget is self.colour_button:
+            if widget is self.meter_group:
                 widget.setVisible(on and scene == "VU meters")
-            elif widget in (self.decay_box, self.mode_box):
+            elif widget is self.scope_group:
                 widget.setVisible(on and scene == "Oscilloscope")
-            elif widget in (self.game_box_holder, self.sound_box,
-                            self.effects_box):
+            elif widget is self.rider_group:
                 widget.setVisible(on and scene == "Music rider")
             else:
                 widget.setVisible(on)
+        self.strobe_row.invalidate()
 
     def _enable_visualiser(self, on: bool) -> None:
         """Off means off: no decode, no timer, no widget with a height.
@@ -1105,6 +1170,89 @@ class AudioPane(QWidget):
             self._board.set_harmony(self.spectrum.harmony())
         return self._board
 
+    #: How far either way the picture may be moved against the music, in
+    #: milliseconds.
+    SYNC_MOST = 250
+
+    def sync_trim(self) -> int:
+        """The listener's own adjustment of the picture against the music,
+        in ms: more is the picture earlier. Remembered."""
+        kept = _viewer_prefs().get("sync", 0)
+        if not isinstance(kept, (int, float)) or abs(kept) > self.SYNC_MOST:
+            return 0
+        return int(kept)
+
+    def set_sync_trim(self, ms: int) -> int:
+        """Move the picture against the music by ``ms``, and remember it."""
+        ms = int(max(-self.SYNC_MOST, min(self.SYNC_MOST, int(ms))))
+        _keep_viewer_pref("sync", ms)
+        if self.spectrum.allowance is not None:
+            self.spectrum.allowance.trim = ms / 1000.0
+        return ms
+
+    @staticmethod
+    def timing_words(ms: int) -> str:
+        """What a trim does, in words."""
+        if ms == 0:
+            return "Picture on the beat as measured"
+        way = "earlier" if ms > 0 else "later"
+        return f"Picture {abs(ms)} ms {way}"
+
+    def timing_panel(self) -> QWidget:
+        """The timing controls, as a panel: see _show_timing."""
+        panel = QWidget()
+        rows = QVBoxLayout(panel)
+        rows.setContentsMargins(12, 10, 12, 10)
+        rows.setSpacing(8)
+        said = QLabel(self.timing_words(self.sync_trim()))
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(-self.SYNC_MOST, self.SYNC_MOST)
+        slider.setSingleStep(5)
+        slider.setPageStep(25)
+        slider.setValue(self.sync_trim())
+        slider.setMinimumWidth(260)
+        slider.setAccessibleName("Picture against the music")
+        slider.setToolTip("Right shows the picture earlier, left later.")
+
+        def moved(value: int) -> None:
+            kept = self.set_sync_trim(value)
+            said.setText(self.timing_words(kept))
+
+        slider.valueChanged.connect(moved)
+        back = QPushButton("Back to 0")
+        back.clicked.connect(lambda: slider.setValue(0))
+        allowance = self.spectrum.allowance
+        if allowance is not None:
+            screen = self.spectrum.screen()
+            refresh = screen.refreshRate() if screen is not None else 60.0
+            note = (f"Already allowed for: {allowance.audio() * 1000:.0f} ms "
+                    f"of sound output and {allowance.display(refresh) * 1000:.0f}"
+                    f" ms of screen.")
+        else:
+            note = "Allowed for automatically once a track plays."
+        line = QHBoxLayout()
+        line.addWidget(slider, 1)
+        line.addWidget(back)
+        rows.addWidget(said)
+        rows.addLayout(line)
+        rows.addWidget(_muted(note))
+        panel.slider = slider
+        panel.said = said
+        return panel
+
+    @Slot()
+    def _show_timing(self) -> None:
+        """The picture against the music, in a panel under the button."""
+        from PySide6.QtWidgets import QMenu, QWidgetAction
+
+        menu = QMenu(self)
+        action = QWidgetAction(menu)
+        action.setDefaultWidget(self.timing_panel())
+        menu.addAction(action)
+        self._timing_menu = menu
+        menu.popup(self.timing_button.mapToGlobal(
+            self.timing_button.rect().bottomLeft()))
+
     @Slot()
     def _preview_effects(self) -> None:
         """A pickup at the level just set, so moving the slider is setting
@@ -1112,12 +1260,25 @@ class AudioPane(QWidget):
         if self.sound_box.isChecked():
             self._sound_board().preview(self.spectrum._scene)
 
-    @staticmethod
-    def _later(seconds: float, action) -> None:
+    def _later(self, seconds: float, action) -> None:
         """Do ``action`` in ``seconds``, to the millisecond: the notes of
-        an arpeggio."""
-        QTimer.singleShot(max(0, int(round(seconds * 1000))),
-                          Qt.TimerType.PreciseTimer, action)
+        an arpeggio, and the echoes of a note taken.
+
+        A timer of the pane's own, precise and let go once it has fired.
+        ``QTimer.singleShot`` with a timer type and a function is not a
+        signature PySide has: the first echo raised, the pane let go of
+        the game's listener for it, and the game went silent for the rest
+        of the session - with nothing but a line in the log to say so."""
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.setTimerType(Qt.TimerType.PreciseTimer)
+
+        def fire() -> None:
+            timer.deleteLater()
+            action()
+
+        timer.timeout.connect(fire)
+        timer.start(max(0, int(round(seconds * 1000))))
 
     @Slot()
     def _sounds_changed(self, *_args) -> None:
@@ -1154,9 +1315,25 @@ class AudioPane(QWidget):
             self._best_keeper = rider_bests.Bests(
                 config.app_support_dir() / "rider-bests.json")
         before, beaten = self._best_keeper.offer(
-            self._track_key, result["mode"], int(result["worth"]))
+            self._track_key, self.best_kept_as(result), int(result["worth"]))
         scene.best_before = before
         scene.new_best = beaten
+
+    @staticmethod
+    def best_kept_as(result: dict) -> str:
+        """What a run's best is kept under: its game, and its level unless
+        that is Normal - which is what every best before there were levels
+        was, so those stay where they are."""
+        level = result.get("difficulty") or "Normal"
+        return (result["mode"] if level == "Normal"
+                else f"{result['mode']} {level}")
+
+    @Slot(str)
+    def _level_chosen(self, name: str) -> None:
+        import visualizers as _vis
+
+        _vis.by_name("Music rider").set_difficulty(name)
+        _keep_viewer_pref("difficulty", name)
 
     def _duck(self, depth: float, seconds: float) -> None:
         """The music, down by ``depth`` and back over ``seconds``."""
@@ -1368,16 +1545,17 @@ class AudioPane(QWidget):
     #: a hand strobe does have are how fast it repeats and how it comes
     #: up and goes down.
     SENSE_WORDS = (
-        "sens", "How big a jump counts as a hit, from fussy to eager.")
+        "Sensitivity", "How big a jump counts as a hit, from fussy to "
+                       "eager.")
     RATE_WORDS = (
-        "rate", "How soon after one flash the next may fire, from every "
+        "Rate", "How soon after one flash the next may fire, from every "
                 "few bars to every beat it can find.")
     HAND_SENSE_WORDS = (
-        "shape", "The shape of a flash you play by hand. Left is on and "
+        "Shape", "The shape of a flash you play by hand. Left is on and "
                  "off with nothing in between; right fades up and back "
                  "down.")
     HAND_RATE_WORDS = (
-        "rate", "How fast the strobe repeats while the strobe key is "
+        "Rate", "How fast the strobe repeats while the strobe key is "
                 "held, from about five a second to thirty.")
 
     def _show_by_hand(self, source: str) -> None:
@@ -1475,7 +1653,7 @@ class AudioPane(QWidget):
         effects.setAccessibleName("Effects volume")
         effects.valueChanged.connect(self.effects.setValue)
         effects.sliderReleased.connect(self._preview_effects)
-        effects_label = QLabel("fx")
+        effects_label = QLabel("Effects")
         effects_label.setToolTip(self.effects.toolTip())
         self._full_links.append(
             (self.effects.valueChanged,
@@ -1534,7 +1712,7 @@ class AudioPane(QWidget):
         full.add_control(play)
         full.add_control(seek, stretch=1)
         full.add_control(clock)
-        full.add_control(QLabel("Vol"))
+        full.add_control(QLabel("Volume"))
         full.add_control(volume)
         full.add_control(effects_label)
         full.add_control(effects)

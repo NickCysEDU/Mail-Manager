@@ -155,3 +155,43 @@ class TestTheMelody:
         starts = rider_layout.lead_onsets(self.HARMONY, 0.0, 3.0)
         assert starts[:3] == [0.25, 0.5, 0.75]
         assert 2.25 in starts, "a note after a rest was missed"
+
+
+class TestTheLevels:
+    """"Xxxx xxxxxxxxx xxxxxxxxxx xxxxxxxx xx xxxx xxx xxxxx xxxxx." """
+
+    LEVELS = ("Easy", "Normal", "Hard", "Expert")
+
+    def test_each_is_harder_than_the_one_before(self):
+        table = [rider_layout.level(name) for name in self.LEVELS]
+        dangers = [row["danger"] for row in table]
+        spacings = [row["spacing"] for row in table]
+        looks = [row["look"] for row in table]
+        scores = [row["score"] for row in table]
+        assert dangers == sorted(dangers) and len(set(dangers)) == 4
+        assert spacings == sorted(spacings, reverse=True)
+        assert looks == sorted(looks, reverse=True)
+        assert scores == sorted(scores) and scores[1] == 1.0
+
+    def test_normal_is_the_game_as_it_was(self):
+        for kind in rider_layout.SPACING:
+            assert rider_layout.spacing(kind, 0.5, difficulty="Normal") == (
+                rider_layout.spacing(kind, 0.5))
+            assert rider_layout.danger_share(kind, "Mono",
+                                             difficulty="Normal") == (
+                rider_layout.danger_share(kind, "Mono"))
+
+    def test_the_figures_come_closer_the_harder_it_is(self):
+        easy, normal, expert = (rider_layout.spacing("groove", 0.5,
+                                                     difficulty=name)
+                                for name in ("Easy", "Normal", "Expert"))
+        assert easy > normal > expert >= 1.0
+
+    def test_the_hardest_still_leaves_a_beat_between(self):
+        for kind in rider_layout.SPACING:
+            assert rider_layout.spacing(
+                kind, 1.0, _style(broken=1.0, hard=1.0), loud=1.0,
+                difficulty="Expert") >= 1.0
+
+    def test_a_level_there_is_none_of_is_normal(self):
+        assert rider_layout.level("Nightmare") == rider_layout.level("Normal")

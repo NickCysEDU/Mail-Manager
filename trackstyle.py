@@ -820,8 +820,88 @@ def rhythm_of(kit: Optional[dict], tempo: float = 0.0,
         beat /= 2.0
         measured = rhythm(curves["Kick"][0], curves["Snare"][0],
                           curves["Hats"][0], rate, beat, spans)
-    return {"tempo": 60.0 / beat, "phase": measured["phase"],
+    phase, beat = on_the_hits(measured["phase"], beat, kit)
+    measured["phase"] = phase
+    return {"tempo": 60.0 / beat, "phase": phase,
             "faster": faster, "measured": measured, "spans": spans}
+
+
+#: How far from the grid a hit may be and still say where the grid is, in
+#: beats: a kick on the beat is a few hundredths out at most, and one on
+#: the and is half a beat out and says nothing about it.
+NEAR_THE_GRID = 0.15
+#: How far the hits may move the tempo the fold found, as a share of it:
+#: a refinement, not a second opinion.
+REFINE_MOST = 0.002
+
+
+def on_the_hits(phase: float, beat: float,
+                kit: Optional[dict]) -> Tuple[float, float]:
+    """The beat's phase and length, moved onto where the drums really hit.
+
+    The fold finds the beat to one twenty-fourth of it - 21 ms at 120 - and
+    a hit's onset strength peaks a reading before the hit itself, so the
+    beat it found sat a slot early: every scene's pulse came round 17 ms
+    before the kick it was for. And its tempo is found to a fiftieth of a
+    beat a minute, which over five minutes is 50 ms of drift by the end.
+
+    The hits the kit found are timed to the sample. Each kick near the grid
+    is given its beat's number, and the straight line through them - when
+    each landed against which beat it was - is the grid, phase and length
+    both; the snares where there is no kick. Where the line will not do,
+    too few hits or a tempo further from the fold's than a refinement
+    should move it, the median of how far they are out puts the phase on
+    them and the tempo stays.
+    """
+    if beat <= 0.0:
+        return phase, beat
+    for name in ("Kick", "Snare"):
+        found = (kit or {}).get(name)
+        hits = [float(getattr(hit, "at", hit))
+                for hit in (getattr(found, "beats", None) or ())]
+        if len(hits) < 8:
+            continue
+        here, length = phase, beat
+        for _round in range(2):
+            numbered = []
+            for at in hits:
+                place = (at - here) / length
+                number = round(place)
+                if abs(place - number) <= NEAR_THE_GRID:
+                    numbered.append((number, at))
+            if len(numbered) < 8:
+                break
+            count = len(numbered)
+            mean_n = sum(n for n, _t in numbered) / count
+            mean_t = sum(t for _n, t in numbered) / count
+            spread = sum((n - mean_n) ** 2 for n, _t in numbered)
+            slope = (sum((n - mean_n) * (t - mean_t) for n, t in numbered)
+                     / spread) if spread > 0.0 else 0.0
+            if spread > 0.0 and abs(slope - beat) <= beat * REFINE_MOST:
+                here, length = mean_t - slope * mean_n, slope
+            else:
+                offsets = sorted(t - (here + n * length) for n, t in numbered)
+                here += offsets[len(offsets) // 2]
+                break
+        if len(numbered) >= 8:
+            # Near the start of the track, so the number is small.
+            here -= math.floor((here - hits[0]) / length) * length
+            return here, length
+    return phase, beat
+    for name in ("Kick", "Snare"):
+        found = (kit or {}).get(name)
+        hits = [float(getattr(hit, "at", hit))
+                for hit in (getattr(found, "beats", None) or ())]
+        offsets = []
+        for at in hits:
+            off = (at - phase) / beat
+            off -= round(off)
+            if abs(off) <= NEAR_THE_GRID:
+                offsets.append(off)
+        if len(offsets) >= 8:
+            offsets.sort()
+            return phase + offsets[len(offsets) // 2] * beat
+    return phase
 
 
 def read(chart: Optional[dict], beat: float, grid: Optional[float],

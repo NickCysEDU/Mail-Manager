@@ -704,3 +704,50 @@ class TestASeekIsNotARide:
         self._play(scene, clock, (again, contour), 10.6, 0.2)
         assert any(block[2] == "power" for block in scene._blocks), (
             "the power block went with the road it was laid on")
+
+
+class TestEachLevelKeepsItsOwnBest:
+    def test_normal_is_where_the_old_bests_are_and_the_rest_apart(self):
+        from attachment_view import AudioPane
+
+        assert AudioPane.best_kept_as({"mode": "Mono"}) == "Mono"
+        assert AudioPane.best_kept_as({"mode": "Mono",
+                                       "difficulty": "Normal"}) == "Mono"
+        assert AudioPane.best_kept_as({"mode": "Ninja",
+                                       "difficulty": "Expert"}) == (
+            "Ninja Expert")
+
+    def test_the_level_is_chosen_remembered_and_told_to_the_game(self, qapp):
+        import visualizers
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        try:
+            pane.level_box.setCurrentText("Hard")
+            assert visualizers.by_name("Music rider").difficulty == "Hard"
+        finally:
+            pane.deleteLater()
+        again = AudioPane()
+        try:
+            assert again.level_box.currentText() == "Hard"
+            again.level_box.setCurrentText("Normal")
+        finally:
+            again.deleteLater()
+
+    def test_it_is_there_only_for_the_game(self, qapp):
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        pane.resize(900, 700)
+        pane.show()
+        try:
+            pane.enable_box.setChecked(True)
+            pane.scene_box.setCurrentText("Music rider")
+            qapp.processEvents()
+            assert pane.level_box_holder.isVisible()
+            pane.scene_box.setCurrentText("Rave")
+            qapp.processEvents()
+            assert not pane.level_box_holder.isVisible()
+        finally:
+            pane.close()
+            pane.deleteLater()

@@ -43,7 +43,8 @@ def kit_for(chart: dict, length: float) -> dict:
 def ride(style: str = "house", mode: str = "Mono", fps: int = 30,
          shape=songkit.DANCE, offset: float = 0.0, harmony: Optional[dict]
          = None, steer=None, seconds: Optional[float] = None,
-         nudge: float = 0.0, drums_at: float = 0.0):
+         nudge: float = 0.0, drums_at: float = 0.0,
+         difficulty: str = "Normal"):
     """Ride a written record of ``style`` from end to end. ``steer`` is
     called with the scene every frame, if given, to play it. ``nudge``
     changes the record's loudness by that much everywhere - a different
@@ -78,6 +79,7 @@ def ride(style: str = "house", mode: str = "Mono", fps: int = 30,
     state.tempo = counted
     scene = visualizers.Rider()
     scene.set_mode(mode)
+    scene.set_difficulty(difficulty)
     log = Log()
     laid = scene._shape
 

@@ -5471,6 +5471,9 @@ class TestTheScenesSitOnTheBeat:
             beats=tuple(beatmap.Beat(at=n * 0.5, strength=0.9)
                         for n in range(40)),
             bpm=120.0, locked=True)})
+        # Playing, as the pane says it is whenever the player is: a clock
+        # told nothing runs only on the player's word, which is the pause.
+        spectrum.set_playing(True)
 
         # A player that only moves every fourth frame, which is what a
         # hundred millisecond notify interval looks like at sixty frames
@@ -6287,6 +6290,30 @@ class TestTheAirIsColouredByTheBass:
                 f"which is too dark for a colour to show")
             assert sat > 0.35, (
                 f"a quiet {width}x{height} frame is {sat:.2f} saturated")
+
+
+class TestTheLampIsRoundAtAnySize:
+    """"Ensure the rave background xx xxxxx xxxxx xxxxxxxx xxxx xx xx xx
+    xxxxxxxx xxxx, xxx xx xxxx xxxx xx xx xxx." The air was laid out as a
+    strip and stretched to the frame, and a lamp laid out round in a strip
+    stretched to a full screen was twice as tall as it was wide."""
+
+    @pytest.mark.parametrize("size", [(906, 270), (1440, 900), (2880, 1800),
+                                      (600, 900)])
+    def test_the_air_is_stretched_the_same_both_ways(self, size):
+        from PySide6.QtCore import QPointF, QRectF
+
+        import visualizers
+
+        width, height = size
+        rect = QRectF(0, 0, width, height)
+        tile = visualizers.Rave()._haze_tile(
+            rect, QPointF(width / 2, height * 0.45), 0.6, 0.4, 0.0)
+        across = width / tile.width()
+        down = height / tile.height()
+        assert down / across == pytest.approx(1.0, abs=0.04), (
+            f"at {width}x{height} a round lamp is drawn "
+            f"{down / across:.2f} times as tall as it is wide")
 
 
 class TestTheAirIsAsVividAtFullScreenAsInAWindow:
@@ -10401,13 +10428,13 @@ class TestTheStrobeSlidersSayWhatTheyDo:
 
         pane = AudioPane()
         try:
-            assert self._caption(pane.sense_box) == "sens"
+            assert self._caption(pane.sense_box) == "Sensitivity"
             pane.strobe_source.setCurrentText("Manual")
-            assert self._caption(pane.sense_box) == "shape", (
-                "the sens slider is still called sens in Manual, where it "
-                "sets the shape of a flash")
+            assert self._caption(pane.sense_box) == "Shape", (
+                "the sensitivity slider is still called that in Manual, "
+                "where it sets the shape of a flash")
             pane.strobe_source.setCurrentText("Bass")
-            assert self._caption(pane.sense_box) == "sens"
+            assert self._caption(pane.sense_box) == "Sensitivity"
         finally:
             pane.deleteLater()
 
@@ -13691,12 +13718,16 @@ class TestTheRoadTurnsOverAtTheBigMoments:
         box = [(x, y) for y in range(int(a.y()) - 40, int(a.y()) + 30, 2)
                for x in range(int(a.x()) - 60, int(a.x()) + 60, 2)
                if 0 <= x < 640 and 0 <= y < 400]
+        # Its own points, by their colour: the craft is grey and white,
+        # and what is lit round it - the road's lines, and half way round
+        # a corkscrew the tunnel it is in - is the passage's colours.
         craft = [(x, y) for x, y in box
-                 if before.pixelColor(x, y).valueF() > 0.3]
+                 if before.pixelColor(x, y).valueF() > 0.3
+                 and before.pixelColor(x, y).saturationF() < 0.3]
         kept = sum(1 for x, y in craft
                    if abs(before.pixelColor(x, y).valueF()
                           - after.pixelColor(x, y).valueF()) < 0.1)
-        assert len(craft) > 100 and kept / len(craft) > 0.9, (
+        assert len(craft) > 60 and kept / len(craft) > 0.9, (
             f"{kept} of the {len(craft)} lit points of the craft are where "
             f"they were half way round")
 
@@ -14151,12 +14182,14 @@ class TestTheGameBoxPicksTheGame:
                              ("Oscilloscope", False)):
             pane.scene_box.setCurrentText(scene)
             pane._show_visual_controls(True)
-            # isHidden rather than isVisible: Qt calls a widget
+            # Against the pane rather than isVisible: Qt calls a widget
             # invisible when any ancestor is, and this pane is never
-            # shown in a test.
-            assert pane.game_box_holder.isHidden() is not shown, (
+            # shown in a test. The rider's own controls come and go as a
+            # group, and the box is inside it.
+            seen = pane.game_box.isVisibleTo(pane)
+            assert seen is shown, (
                 f"with {scene} showing, the game box is "
-                f"{'hidden' if pane.game_box_holder.isHidden() else 'shown'}")
+                f"{'shown' if seen else 'hidden'}")
 
 
 class TestWakeboardLeavesTheRoad:

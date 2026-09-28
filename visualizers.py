@@ -3034,6 +3034,9 @@ class Rave(Scene):
     #: 0.541 against 0.539. The lamp becomes a column of light down the
     #: middle, which is what a lamp at the end of a room full of haze is.
     HAZE_TALLEST = 0.3
+    #: How much deeper the room's wash is in a frame twice as tall as a
+    #: strip or more, as a share of what it is in a strip.
+    HAZE_DEEPER = 0.25
 
     def _haze_tile(self, rect, horizon, bass, synth, flash):
         """The air in the room, painted small and stretched.
@@ -3102,13 +3105,20 @@ class Rave(Scene):
         def rich(base: float) -> float:
             """A saturation, taken as deep as the bass asks."""
             return max(0.0, min(1.0, base * deep))
-        # Never taller than a strip. See HAZE_TALLEST.
+        # The frame's own shape, so a lamp is round on it: "ensure the rave
+        # background is round colour xxxxxxxx xxxx xx xx xx xxxxxxxx xxxx,
+        # xxx xx xxxx". Laid out as a strip and stretched to a full screen,
+        # every lamp was stretched with it, twice as tall as wide. The
+        # lamps are the size they are in a strip, though - see
+        # HAZE_TALLEST - which is what keeps the full screen as vivid.
         size = QSize(self.HAZE, max(2, int(self.HAZE * min(
-            rect.height() / max(1.0, rect.width()),
-            self.HAZE_TALLEST))))
+            rect.height() / max(1.0, rect.width()), 2.0))))
         image = QImage(size, QImage.Format.Format_ARGB32_Premultiplied)
         image.fill(Qt.GlobalColor.transparent)
         wide, tall = size.width(), size.height()
+        # What the lamps are sized by: the height a strip of this width
+        # would have, or the frame's own if it is shorter than that.
+        lamp = min(wide, tall, wide * self.HAZE_TALLEST)
         middle = QPointF(across * wide, down * tall)
         box = QRectF(0, 0, wide, tall)
         other = (shade + self.HAZE_TURN) % 1.0
@@ -3119,24 +3129,28 @@ class Rave(Scene):
             # The room's own light: dim at the ceiling, warmer at the
             # floor, which is what an actual room does - the light lands
             # on the floor.
+            # Deeper as the frame is taller than a strip: the lamps are a
+            # strip's size, so what a taller frame has more of is this.
+            fill = 1.0 + self.HAZE_DEEPER * max(0.0, min(1.0, (
+                tall / wide - self.HAZE_TALLEST) / self.HAZE_TALLEST))
             wash = QLinearGradient(0.0, 0.0, 0.0, tall)
             wash.setColorAt(0.0, QColor.fromHsvF(other, rich(0.92),
-                                                 value * 0.52,
-                                                 alpha * 0.80))
+                                                 min(1.0, value * 0.52 * fill),
+                                                 min(1.0, alpha * 0.80 * fill)))
             wash.setColorAt(down, QColor.fromHsvF(shade, rich(0.80),
-                                                  value * 0.34,
-                                                  alpha * 0.34))
+                                                  min(1.0, value * 0.34 * fill),
+                                                  min(1.0, alpha * 0.34 * fill)))
             wash.setColorAt(1.0, QColor.fromHsvF((shade + 0.12) % 1.0,
                                                  rich(0.88),
-                                                 value * 0.86,
-                                                 alpha * 0.86))
+                                                 min(1.0, value * 0.86 * fill),
+                                                 min(1.0, alpha * 0.86 * fill)))
             into.setBrush(wash)
             into.drawRect(box)
 
             # A second lamp, off to one side, in the other colour.
             away = QRadialGradient(
-                QPointF(middle.x() - wide * 0.22, middle.y() + tall * 0.10),
-                max(1.0, min(wide, tall) * spread * self.HAZE_REACH))
+                QPointF(middle.x() - wide * 0.22, middle.y() + lamp * 0.10),
+                max(1.0, lamp * spread * self.HAZE_REACH))
             away.setColorAt(0.0, QColor.fromHsvF(other, rich(0.74),
                                                  min(1.0, value * 1.15),
                                                  second))
@@ -3148,8 +3162,7 @@ class Rave(Scene):
             into.drawRect(box)
 
             # And the light at the end of it.
-            glow = QRadialGradient(middle,
-                                   max(1.0, min(wide, tall) * spread * 2.0))
+            glow = QRadialGradient(middle, max(1.0, lamp * spread * 2.0))
             # The very centre is the lamp itself, so it is the one place
             # allowed to be nearly white - and even there the bass pulls
             # colour back into it.
@@ -3976,7 +3989,7 @@ class Rider(Scene):
             through = (when - section.start) / max(1e-6, section.length)
             loud = self._read(self._energy, when) if self._energy else None
             return rider_layout.spacing(section.kind, through, self._style,
-                                        loud)
+                                        loud, self._difficulty)
         if not self._energy:
             return self.GAP_BEATS
         energy = max(0.0, min(1.0, self._read(self._energy, when)))
@@ -4403,6 +4416,8 @@ class Rider(Scene):
         self._quiet = None
         self._peak = 0.0
         self._plasma = Plasma()
+        #: How hard it is, and what that changes - see set_difficulty.
+        self._set_level("Normal")
 
     # -- playing ----------------------------------------------------------
     def steer(self, way: int) -> bool:
@@ -4424,8 +4439,48 @@ class Rider(Scene):
         would put the mode back as well - so it is set again afterwards.
         """
         if mode in self.MODES and mode != self._mode:
+            difficulty = self._difficulty
             self.reset()
             self._mode = mode
+            self._set_level(difficulty)
+
+    #: How hard it is: see rider_layout.DIFFICULTY.
+    DIFFICULTIES = ("Easy", "Normal", "Hard", "Expert")
+
+    @property
+    def difficulty(self) -> str:
+        return self._difficulty
+
+    def set_difficulty(self, name: str) -> None:
+        """Change how hard it is, and start again: a run at one level is
+        not a run at another, any more than one game is another."""
+        if name in self.DIFFICULTIES and name != self._difficulty:
+            mode = self._mode
+            self.reset()
+            self._mode = mode
+            self._set_level(name)
+
+    def _set_level(self, name: str) -> None:
+        """What a level changes: see rider_layout.DIFFICULTY."""
+        import rider_layout
+
+        level = rider_layout.level(name)
+        self._difficulty = name if name in self.DIFFICULTIES else "Normal"
+        # How many beats of road are in sight, which is how much warning
+        # there is and how fast the road runs through them. On the
+        # scene, for everything that measures the road in beats.
+        self.LOOK_BEATS = float(level["look"])
+        self.PER_BEAT = (self.FAR - self.RIDER_AT) / self.LOOK_BEATS
+        shield = level["shield"]
+        self._shield_back = (None if shield is None
+                             else self.SHIELD_BACK * float(shield))
+        if self._shield_back is None:
+            self._shield = 0.0
+        self._score_share = float(level["score"])
+
+    def _paid(self, points: float) -> int:
+        """Points as this level pays them."""
+        return int(round(points * self._score_share))
 
     def report(self) -> dict:
         return {"score": self._score, "streak": self._streak,
@@ -4671,6 +4726,11 @@ class Rider(Scene):
             return 0
         return order
 
+    #: The most obstacle a section may carry to its next kick: a little
+    #: over one, so the next kick is one obstacle and never two in a row
+    #: for want of kicks between.
+    OWED_MOST = 1.25
+
     def _greyed(self, when: float, order: int) -> bool:
         """Whether the figure at this slot is an obstacle.
 
@@ -4681,8 +4741,7 @@ class Rider(Scene):
         """
         # Obstacles land on the heavy hits you can hear coming: the kick,
         # and on half-time music the snare it waits for.
-        if self._weight(order) != 0:
-            return False
+        heavy = self._weight(order) == 0
         # Nothing to dodge inside a corkscrew. The world turns all the
         # way over there and left stops meaning left half way round, so
         # an obstacle in one is not a thing you failed to dodge, it is a
@@ -4691,7 +4750,7 @@ class Rider(Scene):
         if self._twist_at(when) is not None:
             return False
         if self._beat <= 0.0:
-            return True
+            return heavy
         section = self._section_at(when)
         if section is not None:
             # How much of the section is to be dodged - see
@@ -4706,7 +4765,7 @@ class Rider(Scene):
             import rider_layout
 
             share = rider_layout.danger_share(section.kind, self._mode,
-                                              self._style)
+                                              self._style, self._difficulty)
             if order == 1:
                 share *= 0.7
             key = id(section)
@@ -4715,6 +4774,25 @@ class Rider(Scene):
                 owed = random.Random(self._style.seed
                                      ^ int(section.start * 1000)).random()
             owed += share
+            if not heavy:
+                # Owed all the same, and paid on the next kick. Counted on
+                # the kick's figures alone, a drop was its share of the
+                # figures that happened to land on a kick - a garage drop
+                # meant to be forty per cent obstacles came out at
+                # nineteen, most of its figures being on the snare. Held
+                # under OWED_MOST, so a run of snares cannot bank a row of
+                # obstacles for the next kicks.
+                owed = min(owed, self.OWED_MOST)
+                # And paid on the snare when the kicks will not come: the
+                # spacing can settle on the snares for a whole part, and a
+                # second garage drop laid every figure there and had
+                # nothing in it to dodge at all. A snare is a hit you can
+                # hear coming as well; hats and the melody never are.
+                if order == 1 and owed >= self.OWED_MOST:
+                    self._owed[key] = owed - 1.0
+                    return True
+                self._owed[key] = owed
+                return False
             jitter = random.Random(self._style.seed
                                    ^ int(round(when * 1000))).uniform(-0.2, 0.2)
             grey = owed >= 1.0 + jitter
@@ -4722,6 +4800,8 @@ class Rider(Scene):
                 owed -= 1.0
             self._owed[key] = owed
             return grey
+        if not heavy:
+            return False
         slot = int(round(when / self._beat / max(1e-6, self.GAP_BEATS)))
         pool = self.NINJA_POOL if self._mode == "Ninja" else self.GREY_POOL
         return pool[slot % len(pool)]
@@ -4945,7 +5025,7 @@ class Rider(Scene):
         if paid:
             self._airs += 1
             self._best_air = max(self._best_air, paid)
-            self._score += paid
+            self._score += self._paid(paid)
             self._double = 1.0
             self._got = 1.0
             self._burst(self._lane_here, prize=True)
@@ -5432,6 +5512,16 @@ class Rider(Scene):
     #: while a decision matters.
     TWIST_LOUD = 0.80
     TWIST_FOR = 2.5
+    #: How long before a corkscrew its tunnel begins and how long after it
+    #: the tunnel ends, and how long its mouth takes to open or close, in
+    #: seconds of the track. See _tunnel_at.
+    TUNNEL_LEAD = 0.8
+    TUNNEL_TAIL = 0.6
+    TUNNEL_RAMP = 0.5
+    #: The tunnel's radius beyond the road's edge, and how high its middle
+    #: is above the road.
+    TUNNEL_ROOM = 1.7
+    TUNNEL_MIDDLE = 0.9
     TWIST_APART = 25.0
 
     def _find_twists(self) -> tuple:
@@ -5490,6 +5580,30 @@ class Rider(Scene):
                 continue
             found.append(at)
         return tuple(found)
+
+    def _tunnel_at(self, when: float) -> float:
+        """How much of a corkscrew's tunnel there is at a moment of the
+        track, 0 to 1.
+
+        "Xxxxxxxxx xxxxx xxxx xxxx xxx xxxxx xxxx xxxxxxxxxx xxxxx." The
+        city stands along the road and turns with it, so through a
+        corkscrew it went round with the track - towers upside down over
+        the craft. A corkscrew is ridden through a tunnel now: it opens a
+        little before the road starts to turn and closes a little after it
+        is level again, and the city is outside it. Drawn by the world on
+        the card (rider_gl) and by _flat_tunnel here."""
+        best = 0.0
+        for start in self._twists or ():
+            enter = start - self.TUNNEL_LEAD
+            leave = start + self.TWIST_FOR + self.TUNNEL_TAIL
+            if when < enter:
+                here = 1.0 - (enter - when) / self.TUNNEL_RAMP
+            elif when > leave:
+                here = 1.0 - (when - leave) / self.TUNNEL_RAMP
+            else:
+                here = 1.0
+            best = max(best, here)
+        return max(0.0, min(1.0, best))
 
     def _twist_at(self, when: float):
         """How far through a corkscrew a moment is, 0 to 1, or None."""
@@ -5992,7 +6106,8 @@ class Rider(Scene):
         self._sore = max(0.0, self._sore - step)
         self._hurt = max(0.0, self._hurt - step / self.HURT_FOR)
         self._got = max(0.0, self._got - step / 0.35)
-        self._shield = min(1.0, self._shield + step / self.SHIELD_BACK)
+        if self._shield_back is not None:
+            self._shield = min(1.0, self._shield + step / self._shield_back)
         self._coin_spin += step * self.COIN_TURN
         self._fly(step)
         self._age_pops(step)
@@ -6114,9 +6229,9 @@ class Rider(Scene):
                     self._coins += 1
                     self._coin_run += 1
                     self._coin_best = max(self._coin_best, self._coin_run)
-                    self._score += min(
+                    self._score += self._paid(min(
                         self.COIN_MOST,
-                        self.COIN_WORTH + (self._coin_run - 1) * self.COIN_STEP)
+                        self.COIN_WORTH + (self._coin_run - 1) * self.COIN_STEP))
                     self._got = 1.0
                     self._burst(self._lane_at(lane), prize=True)
                     # Gold, and bigger the longer the row: a trail taken
@@ -6190,10 +6305,10 @@ class Rider(Scene):
                     self._chain += 1
                     self._taken += 1
                     self._chain_most = max(self._chain_most, self._chain)
-                    self._score += int(min(
+                    self._score += self._paid(int(min(
                         self.CHAIN_MOST,
                         self.CHAIN_FIRST
-                        + (self._chain - 1) * self.CHAIN_STEP) * self._double)
+                        + (self._chain - 1) * self.CHAIN_STEP) * self._double))
                     self._double = 1.0
                     self._got = 1.0
                     self._burst(self._lane_at(lane), prize=True)
@@ -6322,8 +6437,8 @@ class Rider(Scene):
             # is what one is for: it is worth carrying through a
             # corkscrew and cashing on a big cluster rather than on the
             # next thing that happens to clear.
-            self._score += int(self.WORTH[colour] * len(group) * len(group)
-                               * self._double)
+            self._score += self._paid(int(self.WORTH[colour] * len(group)
+                                          * len(group) * self._double))
             self._cleared += len(group)
         # A cluster going is the puzzle game's payout, and a big one is
         # the biggest thing that game does - quadratic in the size - so
@@ -6630,7 +6745,7 @@ class Rider(Scene):
             "hits": self._hits, "saves": self._saves,
             "clean": self._clean, "mode": self._mode,
             "airs": self._airs, "cleared": self._cleared,
-            "whole": self._whole,
+            "whole": self._whole, "difficulty": self._difficulty,
         }
 
     #: The grades, best first: the share of the prizes taken, and the
@@ -6770,6 +6885,7 @@ class Rider(Scene):
         painter.rotate(lean + self._rolled * 360.0)
         painter.translate(-horizon)
         self._glow(painter, rect, horizon, hue, surge, bass, beat, flash)
+        self._flat_tunnel(painter, rect, horizon, focal, hue, beat, flash)
         self._pillars(painter, horizon, focal, hue, kit, beat, flash)
         painter.restore()
 
@@ -7524,6 +7640,56 @@ class Rider(Scene):
             return
         painter.drawRect(box)
 
+    def _flat_tunnel(self, painter, rect, horizon, focal, hue, beat,
+                     flash) -> None:
+        """A corkscrew's tunnel, drawn flat: every colour wheeling round
+        the end of the road, and a ring round the road at every beat - the
+        way the world draws it on the card. See _tunnel_at."""
+        if not self._twists:
+            return
+        inside = self._tunnel_at(self._heard)
+        middle = self._eye(horizon, focal, 0.0, self.TUNNEL_MIDDLE,
+                           self.FAR * 0.9)
+        if inside > 0.01:
+            from PySide6.QtGui import QConicalGradient
+
+            wheel = QConicalGradient(middle, (self._bend * 60.0) % 360.0)
+            for step in range(7):
+                wheel.setColorAt(step / 6.0, QColor.fromHsvF(
+                    (hue + step / 6.0 + self._climb * 0.05) % 1.0, 0.95,
+                    0.55 + beat * 0.25 + flash * 0.2))
+            painter.save()
+            painter.setOpacity(painter.opacity() * inside * 0.85)
+            # Past the frame's corners every way: the picture turns over
+            # through a corkscrew, and a frame-sized fill turned with it
+            # left the corners black.
+            wide = math.hypot(rect.width(), rect.height())
+            painter.fillRect(rect.adjusted(-wide, -wide, wide, wide),
+                             QBrush(wheel))
+            painter.restore()
+        if self._beat <= 0.0:
+            return
+        radius = self.LANE_WIDE * self.LANES / 2.0 + self.TUNNEL_ROOM
+        first = math.ceil((self._at + self._near) / self.PER_BEAT)
+        for number in range(first, first + int(self.LOOK_BEATS) + 2):
+            at = number * self.PER_BEAT - self._at
+            if not self._near < at <= self.FAR:
+                continue
+            here = self._tunnel_at(self._when(at))
+            if here <= 0.01:
+                continue
+            centre = self._eye(horizon, focal, 0.0, self.TUNNEL_MIDDLE, at)
+            edge = self._eye(horizon, focal, radius, self.TUNNEL_MIDDLE, at)
+            reach = math.hypot(edge.x() - centre.x(), edge.y() - centre.y())
+            near = 1.0 - (at - self._near) / max(1e-6, self.FAR - self._near)
+            pen = QPen(QColor.fromHsvF(
+                (hue + 0.5 + number * 0.13) % 1.0, 0.6, 1.0,
+                min(1.0, here * (0.35 + near * 0.65))),
+                max(1.0, reach * 0.05))
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(centre, reach, reach)
+
     def _glow(self, painter, rect, horizon, hue, surge, bass, beat,
               flash) -> None:
         """A lamp at the end of the road, behind everything.
@@ -7692,12 +7858,19 @@ class Rider(Scene):
     HALO_REACH = 0.085
     HALO_MOST = 0.55
 
+    #: The flat craft of each level, as how wide it is and how far its nose
+    #: reaches against the first: a broad cruiser at Easy, a needle at
+    #: Expert, as the world on the card flies them (rider_gl.CRAFT_FOR).
+    FLAT_CRAFT = {"Easy": (1.25, 0.85), "Normal": (1.0, 1.0),
+                  "Hard": (0.85, 1.15), "Expert": (0.62, 1.32)}
+
     def _ship(self, painter, rect, horizon, focal, hue, flash,
               punch=0.0) -> None:
         """The rider: a lit triangle, low on the road."""
         at = self.RIDER_AT
         across = self._lane_here
-        wide = self.LANE_WIDE * 0.42
+        broad, long = self.FLAT_CRAFT.get(self._difficulty, (1.0, 1.0))
+        wide = self.LANE_WIDE * 0.42 * broad
         # Nose forward and up, tail low and wide, so it reads as a craft
         # leaning into the road rather than as a bar lying on it.
         # Nose down the road, tail towards the camera: pointed the other
@@ -7707,7 +7880,8 @@ class Rider(Scene):
         lift = self._air
         self._craft_spot = self._eye(horizon, focal, across, -0.14 - lift,
                                      at + 0.4)
-        nose = self._eye(horizon, focal, across, -0.26 - lift, at + 1.4)
+        nose = self._eye(horizon, focal, across, -0.26 - lift,
+                         at + 1.4 * long)
         left = self._eye(horizon, focal, across - wide, -0.02 - lift, at)
         right = self._eye(horizon, focal, across + wide, -0.02 - lift, at)
         # And the craft itself answers the kick. A halo around it rather
