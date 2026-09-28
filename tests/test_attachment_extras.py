@@ -5643,7 +5643,7 @@ def _drum_track(seconds: float, lean: float = 0.0, rate: int = 48000):
 
 
 def _analysed(qapp, pcm, cancel_after=None, workers=None, timeout=90.0,
-              while_waiting=None):
+              while_waiting=None, harmony=False):
     """Run the real analysis on ``pcm`` and collect what it says, in order.
 
     ``while_waiting`` is called on the GUI thread every pass of the wait,
@@ -5659,7 +5659,10 @@ def _analysed(qapp, pcm, cancel_after=None, workers=None, timeout=90.0,
         lambda d: said.append(("failed", d)),
         on_progress=lambda f: None,
         on_elements=lambda k: said.append(("elements", k)),
-        on_bands=lambda r: said.append(("bands", r)))
+        on_bands=lambda r: said.append(("bands", r)),
+        on_harmony=(lambda h: said.append(("harmony", h))) if harmony
+        else None,
+        on_beats=lambda b: said.append(("beats", b)))
     was = attachment_audio.WORKERS
     if workers is not None:
         attachment_audio.WORKERS = workers
@@ -5679,7 +5682,8 @@ def _analysed(qapp, pcm, cancel_after=None, workers=None, timeout=90.0,
                 break
             if any(k == "failed" for k, _ in said) or (
                     any(k == "done" for k, _ in said)
-                    and any(k == "elements" for k, _ in said)):
+                    and any(k == "elements" for k, _ in said)
+                    and (not harmony or any(k == "harmony" for k, _ in said))):
                 break
             time.sleep(0.002)
         thread.wait(10_000)
@@ -5790,6 +5794,51 @@ class TestTheAnalysisTakesNothingFromThePicture:
         finally:
             pane.deleteLater()
 
+    @pytest.mark.parametrize("workers", [True, False])
+    def test_the_beats_come_straight_after_the_bands(self, qapp, workers):
+        """The game lays its road on them. They are read off the bands in
+        milliseconds, and sent after the scope's traces they left the ride
+        with no tempo for the seconds those took."""
+        got = _analysed(qapp, _drum_track(6.0), workers=workers)
+        order = [kind for kind, _ in got["said"]]
+        assert order.index("bands") < order.index("beats") < order.index(
+            "done"), order
+        assert got["beats"] == got["done"][4], "the early beats are other beats"
+
+    @pytest.mark.parametrize("workers", [True, False])
+    def test_the_harmony_is_heard_and_follows_the_bands(self, qapp, workers):
+        from array import array
+
+        import songkit
+
+        pcm, rate, _truth = songkit.song(
+            [(2, "maj"), (7, "maj"), (9, "maj"), (2, "maj")], rate=48000,
+            repeats=1)
+        stereo = array("h")
+        for value in pcm:
+            stereo.append(value)
+            stereo.append(value)
+        got = _analysed(qapp, stereo, workers=workers, harmony=True)
+        order = [kind for kind, _ in got["said"]]
+        assert "harmony" in order, order
+        assert order.index("bands") < order.index("harmony"), order
+        found = got["harmony"]
+        assert found["key"]["tonic"] == 2 and found["key"]["mode"] == "major"
+
+    def test_nobody_asking_for_the_harmony_is_not_worked_out(self, qapp):
+        """Not started at all - a process of its own is a core of the
+        machine for as long as it runs - rather than worked out and its
+        answer dropped on the way back."""
+        got = _analysed(qapp, _drum_track(4.0))
+        assert not any(kind == "harmony" for kind, _ in got["said"])
+        names = [process.name for process in got["workers"]]
+        assert names and "mail-manager-harmony" not in names, names
+
+    def test_and_asked_for_it_is(self, qapp):
+        got = _analysed(qapp, _drum_track(4.0), harmony=True)
+        names = [process.name for process in got["workers"]]
+        assert "mail-manager-harmony" in names, names
+
     def test_with_no_workers_it_still_arrives(self, qapp):
         """A machine that will not start a process - a sandbox, a broken
         install - analyses on a thread, as it always used to."""
@@ -5880,33 +5929,36 @@ class TestThePictureArrivesBeforeTheAnalysisFinishes:
         frames, _calibration, shape = got["bands"]
         assert frames and shape and len(shape["lean"]) == len(shape["loud"])
 
-    def test_the_pane_draws_from_them(self, qtbot):
-        """And stops saying it is working."""
-        from array import array
+    def test_the_pane_draws_from_them(self, qtbot, qapp, monkeypatch):
+        """And stops saying it is working. Through the callback the pane
+        itself hands the analysis, with what the analysis really sends."""
+        from pathlib import Path
 
         import attachment_audio
         from attachment_view import AudioPane
 
+        sent = _analysed(qapp, _drum_track(3.0))["bands"]
+        told = {}
+
+        def decode(path, done, failed, progress, kit, bands, *rest):
+            told["bands"] = bands
+            return object()
+
+        monkeypatch.setattr(attachment_audio, "decode", decode)
         pane = AudioPane()
         qtbot.addWidget(pane)
         pane.enable_box.setChecked(True)
         spectrum = pane.spectrum
-        spectrum.set_working(0.4)
-        assert spectrum._working is not None
-
-        frames = [array("f", [0.3] * attachment_audio.BANDS)
-                  for _ in range(40)]
-        # What the early signal carries, through the same path the pane
-        # wires up.
-        import inspect
-
-        source = inspect.getsource(AudioPane._start_analysis)
-        assert "kit, bands)" in source, (
-            "the pane does not ask for the bands early")
-        spectrum.set_frames(frames, attachment_audio.RATE)
-        spectrum.set_working(None)
-        assert spectrum._working is None
-        assert spectrum.ready
+        try:
+            pane._start_analysis(Path("song"))
+            spectrum.set_working(0.4)
+            assert spectrum._working is not None
+            assert not spectrum.ready
+            told["bands"](sent)
+            assert spectrum._working is None
+            assert spectrum.ready
+        finally:
+            pane._decoder = None
 
     def test_a_cancelled_analysis_hands_nothing_over(self, qapp):
         """The early signal is one more thing that can arrive after the
@@ -7923,9 +7975,17 @@ class TestTheMusicRiderIsAGame:
         assert soonest > scene._heard, (
             f"the first block is for {soonest:.2f}s and the playhead is at "
             f"{scene._heard:.2f}s, so it is already late")
-        assert scene._laid >= scene.READ, (
-            f"only {scene._laid:.2f}s of chart was laid, and the road is "
-            f"{scene.LOOK_BEATS:.0f} beats long")
+        # All of the road, at the slowest tempo anybody plays, where a beat
+        # is longest and so is the stretch held back to choose the heaviest
+        # drum in (see ``commit`` in _lay).
+        slow = self._rider()
+        slow._heard = 0.0
+        slow._beat = 1.0
+        slow._lay(self._state(chart))
+        road = slow.LOOK_BEATS * slow._beat
+        assert slow._laid - slow._heard >= road, (
+            f"only {slow._laid:.2f}s of chart was laid at 60 bpm, and the "
+            f"road is {slow.LOOK_BEATS:.0f} beats - {road:.1f}s - long")
 
     def test_a_passage_with_no_hits_has_no_obstacles(self):
         """"Silence and xxxxx-xxx xxxxxx xxxx xx xxxxxxxxx." """
@@ -13153,8 +13213,10 @@ class TestTheCoinsBesideTheObstacles:
         """Drive through that many coins, taking or missing them."""
         scene._lane_here = scene._lane_at(lane if on_it else
                                           (lane + 1) % scene.LANES)
-        scene._blocks = [[10.0 + step, lane, "coin", False, False]
-                         for step in range(count)]
+        # A trail, spaced as the game spaces one: a coin a good while
+        # after the last is a new row. See COIN_ROW_GAP.
+        scene._blocks = [[10.0 + step * scene.COIN_GAP, lane, "coin", False,
+                          False] for step in range(count)]
         scene._collide()
 
     def test_each_coin_is_worth_more_than_the_one_before(self, qapp):

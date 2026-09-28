@@ -279,7 +279,7 @@ class TestThePaneKeepsTheBest:
 
         told = {}
 
-        def decode(path, done, failed, progress, kit, bands):
+        def decode(path, done, failed, progress, kit, bands, *rest):
             told["bands"] = bands
             return object()
 

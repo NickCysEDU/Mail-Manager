@@ -302,7 +302,7 @@ That first figure is the one that matters and it must stay at zero.
 
 **Speed.** Rules engine 10.1 ms per message. Lexicon opens in 38 ms using
 1.95 MB, down from 70 ms and 10.5 MB, and neither number now grows with the
-table. Test suite 4,095 tests (with the evaluation sets present) in about three minutes on four workers.
+table. Test suite 4,315 tests (with the evaluation sets present) in about five minutes on four workers.
 
 ---
 
@@ -391,6 +391,84 @@ table. Test suite 4,095 tests (with the evaluation sets present) in about three 
   every release until it was made to raise; anything added to the self test
   should be checked with a test that breaks it and expects `self_test() == 1`
   (see `TestTheSelfTestHasTeeth`).
+- **The rider is laid from four modules.** `harmony.py` (key, tuning, chords,
+  lead; runs in its own worker part, `"harmony"`), `trackstyle.py`
+  (`rhythm_of` is the heavy half and runs in the drums worker after the kit;
+  `read` is the cheap half and runs in `Rider._restyle`), `rider_layout.py`
+  (which figures, how many, how often) and `visualizers.Rider` (lays them).
+  The pane carries `state.harmony`, `state.rhythm` and `state.flux` (the kit's
+  onset strength, kept on `beatmap.BeatMap.flux`). Tests ride whole written
+  records through the game with `tests/ridekit.py`; `tests/songkit.py` writes
+  both audio (chords, tuning, lead) and charts (styles, sections).
+- **The drums worker sends two messages, and the rhythm is its last.** In
+  `_AnalysisThread._run_in_workers` every part but "picture" ends on one
+  message and the loop closes the pipe on it; "elements" is now followed by
+  "rhythm", so "elements" `continue`s. Anything added after it must keep that
+  shape. The picture part sends "beats" straight after "bands".
+- **Keys that stop the road being re-planned under the rider.**
+  `Rider._styled_from` keys the style on the chart, shape, harmony, rhythm
+  and the tempo *the pane counts in* (not `_beat`, which the style itself
+  changes - drum and bass - and would re-read forever). `_planned` keys the
+  road on the shape, the style and `_beat`. A late plan is spliced in beyond
+  `PLAN_KEEP` seconds (`_splice`). A change of `_beat` re-bases the road
+  (`_rebased`) without counting as a seek.
+- **Laying is committed short of what is read** (`commit` in `_lay`), and
+  snapping counts from the drums' fixed beat (`_anchor`): both were frame-rate
+  dependent, and `test_whatever_the_frame_rate` pins it. Obstacle shares are
+  carried per section in `_owed`, not drawn. Committed to the edge, the
+  heaviest-nearby choice never sees the hit after the one it is choosing
+  for - at every frame rate alike, so the frame-rate test cannot see that;
+  `TestTheHeaviestHitNearby` can. `Rider._weight` ranks the drums, and in
+  half time the snare ranks with the kick, for placement and obstacles both.
+- **Half time is read from the kick** (`rhythm`'s `"half"`: the snare two
+  beats from the kick's strongest beat against one beat from it, faded out
+  as the kick comes to every beat). Counting the snare's strong beats read
+  no real dubstep record as half time - the kick is loud in the snare's
+  bands. Half time counted at `HALVED_FROM` (155) or faster is recounted at
+  half in `rhythm_of`: hip hop counted at 176 is a backbeat at 88.
+- **The road and the blocks run on one curve.** `_world` (the road) and
+  `_flat` (a block's place) both warp each beat by `_lunge_of(n)`, the lunge
+  `_decide_lunges` gives beat n as it comes into view and never changes.
+  Anything that wants to push the road around inside a beat has to go
+  through there, or blocks between beats stop arriving on time
+  (`TestEveryBlockArrivesOnItsMoment`; `./dev playtest`'s "off" column).
+- **The rider's sounds are stereo synth voices** (`rider_sound`, cache
+  `VERSION` 5): notes are `pluck` (pickups) and `chime` (coins); `voice_of`
+  says which a name is. Each note taken is echoed through the board's
+  `later` on the scene's `_beat` (`SoundBoard.ECHOES`), never rendered into
+  the file, so one set of notes serves every tempo. The level is
+  `volume() * level()`, `level` being the pane's **fx** slider, kept in
+  `viewer.json` beside the bests - not in the mail settings, which the main
+  window saves whole. "Unpitched" is tested as no semitone standing over its
+  neighbours (`TestTheSoundsThemselves._line`), not against the range's
+  average, which a brightly filtered sound fails for its slope.
+- **The sounds are notes when the key's confidence is 0.05 or more**, and
+  nothing else is asked. `harmony.tonality` is kept but is not a gate: on
+  real mixes it is near zero whether the key came out right or not.
+- **Chords are heard over `harmony.CONTEXT` readings either side.** A bare
+  arpeggio was three chords taking turns; the key's relative is settled by
+  chord durations, so a change here is checked against the DJ program's keys
+  before it ships (`key_eval.py` in the session's scratchpad).
+- **The scope's screen lives on the card when the pane does** (`scope_gl.Tube`,
+  from `Oscilloscope.paint` when `_on_card(painter)`). It is composed as the
+  CPU composes it - a plain buffer dimmed, the new trace struck multisampled
+  into a scratch buffer and laid over - so the two agree to a hundredth
+  (`TestTheScopeOnTheCard`). It is sized to what the beam can reach
+  (`scope_gl.reach`), and a failure falls back to the CPU tube for good.
+  It rebinds the painter's framebuffer itself before `endNativePainting`:
+  Qt's engine restores its state there but not the target.
+- **A script run on the card must not reach the interpreter's teardown.**
+  `on_the_card` ends every script with `os._exit` and sets an excepthook
+  that does the same. An exception that reached Qt from a paint was kept in
+  `sys.last_traceback` with its painter still begun, and at exit PySide took
+  Qt apart before that was let go: `QPainter::end` on a dead device, an
+  abort, and a crash report on the screen. The runner also fails a
+  script that does not exit 0, which is how such an exception now shows.
+- **Measured locally, not in the suite:** the key profiles (fitted), the
+  tempo choice and the beat phase against a DJ program's analysis of the
+  local library. The scripts and every measurement stay in the session's
+  scratchpad; nothing about the library is in the repository. The towers'
+  one-piece turn through a corkscrew is still not pinned by a pixel test.
 - **Brace a shell variable that touches a curly quote.** `"as “$IDENTITY”"`
   is read by macOS's bash as a variable whose name includes the quote's
   bytes; under `set -u` it stopped `build_app.sh` after the bundle was
@@ -399,7 +477,7 @@ table. Test suite 4,095 tests (with the evaluation sets present) in about three 
   `tests/test_abuse.py` checks every script for it.
 - **`./dev test` runs `-n 4 --dist loadfile`.** Whole files per worker, because
   the Qt tests share one `QApplication` per process. A single file is about two
-  seconds; the whole suite is about three minutes. Serial was six.
+  seconds; the whole suite is about five minutes.
 - **Never assert on a menu by calling `exec`.** It enters a native modal loop
   that pytest's thread-based timeout cannot interrupt, and the suite hangs
   rather than failing. `build_table_menu()` and `build_header_menu()` return the

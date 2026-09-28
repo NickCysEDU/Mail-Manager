@@ -104,6 +104,46 @@ def _labelled(text: str, control) -> QWidget:
     return holder
 
 
+#: The viewer's own choices that outlive it, beside the rider's bests: kept
+#: apart from the mail settings, which the main window saves whole.
+VIEWER_PREFS = "viewer.json"
+
+
+def _viewer_prefs() -> dict:
+    """What the viewer was left set to, or nothing."""
+    import json
+
+    import config
+
+    try:
+        with open(config.app_support_dir() / VIEWER_PREFS,
+                  encoding="utf-8") as handle:
+            found = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    return found if isinstance(found, dict) else {}
+
+
+def _keep_viewer_pref(name: str, value) -> None:
+    """Remember one of the viewer's choices for next time."""
+    import json
+    import logging
+
+    import config
+
+    path = config.app_support_dir() / VIEWER_PREFS
+    prefs = _viewer_prefs()
+    prefs[name] = value
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        partial = path.with_suffix(".part")
+        partial.write_text(json.dumps(prefs, indent=1), encoding="utf-8")
+        partial.replace(path)
+    except OSError as exc:
+        logging.getLogger(__name__).info(
+            "Could not keep the viewer's %s (%s).", name, exc)
+
+
 def _relabel(holder: QWidget, text: str, tip: str) -> None:
     """Change what a ``_labelled`` control is called, and its tooltip.
 
@@ -363,6 +403,10 @@ class TextPane(QWidget):
 class AudioPane(QWidget):
     """Play it, see it, and read what the file says about itself."""
 
+    #: How loud the game's sounds are against the music, out of a hundred,
+    #: until somebody moves the slider.
+    EFFECTS = 50
+
     def __init__(self) -> None:
         super().__init__()
         self._player = None
@@ -505,6 +549,28 @@ class AudioPane(QWidget):
             "as the chain grows, and a thump for a hit. Key X.")
         self.sound_box.toggled.connect(self._sounds_changed)
         self.sound_box.hide()
+        # How loud those are against the music: a share of the player's
+        # own volume, so the balance stays where it was put when the music
+        # is turned up or down. Remembered, and heard as it is let go.
+        self.effects = QSlider(Qt.Orientation.Horizontal)
+        self.effects.setRange(0, 100)
+        kept = _viewer_prefs().get("effects", self.EFFECTS)
+        self.effects.setValue(int(kept) if isinstance(kept, (int, float))
+                              and 0 <= kept <= 100 else self.EFFECTS)
+        self.effects.setFixedWidth(74)
+        self.effects.setToolTip(
+            "How loud the game's sounds are against the music. All the way "
+            "right is as loud as the music itself.")
+        self.effects.setAccessibleName("Effects volume")
+        self._keep_effects = QTimer(self)
+        self._keep_effects.setSingleShot(True)
+        self._keep_effects.setInterval(400)
+        self._keep_effects.timeout.connect(
+            lambda: _keep_viewer_pref("effects", self.effects.value()))
+        self.effects.valueChanged.connect(self._keep_effects.start)
+        self.effects.sliderReleased.connect(self._preview_effects)
+        self.effects_box = _labelled("fx", self.effects)
+        self.effects_box.hide()
         self._board = None
         #: The track being played, as the bests know it, and the result
         #: last offered to them. See _keep_best.
@@ -560,7 +626,8 @@ class AudioPane(QWidget):
         # Grouped: what to draw, how it reacts, then what to do with it.
         groups = ((self.enable_box, self.busy, self.scene_box, self.shape_box,
                    self.colour_button, self.mode_box, self.game_box_holder,
-                   self.sound_box, self.decay_box, self.full_button),
+                   self.sound_box, self.effects_box, self.decay_box,
+                   self.full_button),
                   (self.strobe_group,))
         for index, group in enumerate(groups):
             if index:
@@ -575,8 +642,8 @@ class AudioPane(QWidget):
         self._visual_controls = (self.scene_box, self.shape_box,
                                  self.strobe_group, self.decay_box,
                                  self.mode_box, self.game_box_holder,
-                                 self.sound_box, self.full_button,
-                                 self.colour_button)
+                                 self.sound_box, self.effects_box,
+                                 self.full_button, self.colour_button)
         # Everything except the tick box starts unavailable, because the
         # visualiser starts off.
         self._grey_visual_controls(False)
@@ -761,7 +828,10 @@ class AudioPane(QWidget):
             self.spectrum.set_calibration(calibration)
             self.busy.stop()
             self.spectrum.set_working(None)
-            self.spectrum.set_beats(beats)
+            # Unless they came early and these are the same maps again:
+            # setting them twice starts the strobe's count over mid-song.
+            if beats != early.get("maps"):
+                self.spectrum.set_beats(beats)
             self.spectrum.set_traces(shapes, vectors)
             # Set again, because the position the pane is at has to be
             # read against the finished list rather than the one that
@@ -815,8 +885,32 @@ class AudioPane(QWidget):
             if alive():
                 self.spectrum.set_elements(elements)
 
+        def harmonised(found) -> None:
+            """The key and the chords, which the game's sounds are
+            played in. See harmony."""
+            if alive():
+                self.spectrum.set_harmony(found)
+                if self._board is not None:
+                    self._board.set_harmony(found)
+
+        early: dict = {}
+
+        def beaten(maps) -> None:
+            """The beats, straight after the picture: the game's road is
+            laid on them, so the sooner the better."""
+            if alive():
+                early["maps"] = maps
+                self.spectrum.set_beats(maps)
+
+        def rhythmic(found) -> None:
+            """The drums' own tempo and beat, which the game lays its
+            road on in preference to the beat maps'."""
+            if alive():
+                self.spectrum.set_rhythm(found)
+
         self._decoder = attachment_audio.decode(path, done, failed, progress,
-                                                kit, bands)
+                                                kit, bands, harmonised, beaten,
+                                                rhythmic)
 
     # -- transport --------------------------------------------------------
     @Slot()
@@ -884,7 +978,8 @@ class AudioPane(QWidget):
                 widget.setVisible(on and scene == "VU meters")
             elif widget in (self.decay_box, self.mode_box):
                 widget.setVisible(on and scene == "Oscilloscope")
-            elif widget in (self.game_box_holder, self.sound_box):
+            elif widget in (self.game_box_holder, self.sound_box,
+                            self.effects_box):
                 widget.setVisible(on and scene == "Music rider")
             else:
                 widget.setVisible(on)
@@ -1003,9 +1098,26 @@ class AudioPane(QWidget):
             self._board = rider_sound.SoundBoard(
                 config.cache_dir() / "sounds",
                 volume=lambda: self.volume.value() / 100.0,
-                duck=self._duck)
+                duck=self._duck, later=self._later,
+                level=lambda: self.effects.value() / 100.0)
             rider_sound.make_elsewhere(self._board.folder)
+            # In the record's key, if it has been heard already.
+            self._board.set_harmony(self.spectrum.harmony())
         return self._board
+
+    @Slot()
+    def _preview_effects(self) -> None:
+        """A pickup at the level just set, so moving the slider is setting
+        it by ear - if the game's sounds are on."""
+        if self.sound_box.isChecked():
+            self._sound_board().preview(self.spectrum._scene)
+
+    @staticmethod
+    def _later(seconds: float, action) -> None:
+        """Do ``action`` in ``seconds``, to the millisecond: the notes of
+        an arpeggio."""
+        QTimer.singleShot(max(0, int(round(seconds * 1000))),
+                          Qt.TimerType.PreciseTimer, action)
 
     @Slot()
     def _sounds_changed(self, *_args) -> None:
@@ -1093,6 +1205,7 @@ class AudioPane(QWidget):
         self._full_links = []
         self._full = None
         self._full_play = None
+        self._full_effects = ()
         self._by_hand_echo = []
         card = getattr(self, "_full_card", None)
         if card is not None and shiboken6.isValid(card):
@@ -1352,6 +1465,23 @@ class AudioPane(QWidget):
         volume.setToolTip("Volume")
         volume.valueChanged.connect(self.volume.setValue)
 
+        # The game's sounds against the music, as in the window - there
+        # only while the game is.
+        effects = QSlider(Qt.Orientation.Horizontal)
+        effects.setRange(0, 100)
+        effects.setValue(self.effects.value())
+        effects.setFixedWidth(80)
+        effects.setToolTip(self.effects.toolTip())
+        effects.setAccessibleName("Effects volume")
+        effects.valueChanged.connect(self.effects.setValue)
+        effects.sliderReleased.connect(self._preview_effects)
+        effects_label = QLabel("fx")
+        effects_label.setToolTip(self.effects.toolTip())
+        self._full_links.append(
+            (self.effects.valueChanged,
+             self.effects.valueChanged.connect(effects.setValue)))
+        self._full_effects = (effects_label, effects)
+
         import visualizers
         scene = _combo([s.name for s in visualizers.SCENES],
                        "Which visualiser to draw.  Keys 1 to "
@@ -1406,6 +1536,17 @@ class AudioPane(QWidget):
         full.add_control(clock)
         full.add_control(QLabel("Vol"))
         full.add_control(volume)
+        full.add_control(effects_label)
+        full.add_control(effects)
+
+        def game_only(name: str) -> None:
+            for widget in (effects_label, effects):
+                widget.setVisible(name == "Music rider")
+
+        game_only(self.scene_box.currentText())
+        self._full_links.append(
+            (self.scene_box.currentTextChanged,
+             self.scene_box.currentTextChanged.connect(game_only)))
         for widget in (scene, strobe, reaction, by_hand, colours):
             full.add_control(widget)
         full.add_control(leave)
@@ -1481,6 +1622,10 @@ class AudioPane(QWidget):
         self.wave.forget_track()
         self._track_key = None
         self._kept_result = None
+        # And its key: the next track's sounds are played in the next
+        # track's, or in none until it has been heard.
+        if self._board is not None:
+            self._board.set_harmony(None)
         # cancel(), not just forget: the analysis runs on a QThread, and Qt
         # calls qFatal if one is destroyed while it is still running.
         self._cancel_analysis()

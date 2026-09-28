@@ -1,98 +1,150 @@
-"""Music rider's sounds. See rider_sound.
+"""Music rider's sounds, in the record's key. See rider_sound.
 
 "Xxx xxxxx xxxx xx xxxxx xxxxx xx xxxxxxx: xxxxxxx xxx xxxxx, xxxxxxx xxx
 xxxxxxxx, xxxxxxx xxxx xxxxxx xx xxxxx xx xxxxxxx xxx xxxxxxxxx." A note
 for every block taken, climbing as the run goes on; a thump with the music
-ducking under it for a hit. Made, not recorded, and kept in the cache.
+ducking under it for a hit. And since "the sounds clash with the melodic
+elements", the notes are the record's own: the chord under the moment, in
+the record's tuning - or no notes at all where there is no key to be in.
 """
 
 from __future__ import annotations
 
 import math
 import wave
-from array import array
 
 import pytest
 
+import rider_sound
+
+#: A record in C major at A = 440, with C major for four seconds and then
+#: A minor, as the harmony pass would describe it.
+C_MAJOR = {"key": {"tonic": 0, "mode": "major", "confidence": 0.3,
+                   "name": "C"},
+           "tuning": 0.0, "tonal": 0.9,
+           "chords": [[0.0, 4.0, 0, "maj"], [4.0, 8.0, 9, "min"],
+                      [8.0, 12.0, -1, "none"]],
+           "lead": [], "rate": 4.0}
+
+
+def _midi(name):
+    """The MIDI note a note's name is, or None for a fixed sound."""
+    voice = rider_sound.voice_of(name)
+    if voice is None:
+        return None
+    return int(name[len(voice):len(voice) + 3].rstrip("+-"))
+
+
+def _pitch_classes(names):
+    """The pitch class of each note played, from its name."""
+    return [_midi(name) % 12 for name in names if _midi(name) is not None]
+
+
+def _power(samples, freq, start=0.02, end=0.12):
+    """How much of ``freq`` there is in a sound - both sides together -
+    between ``start`` and ``end`` seconds."""
+    samples = rider_sound.mono(samples)
+    window = samples[int(start * rider_sound.RATE):int(end * rider_sound.RATE)]
+    re = im = 0.0
+    for index, value in enumerate(window):
+        angle = math.tau * freq * index / rider_sound.RATE
+        re += value * math.cos(angle)
+        im += value * math.sin(angle)
+    return re * re + im * im
+
 
 class TestTheSoundsThemselves:
-    @pytest.mark.parametrize("name", sorted(
-        __import__("rider_sound").SOUNDS))
+    @pytest.mark.parametrize("name", sorted(rider_sound.FIXED) + [
+        rider_sound.note_name("pluck", 72, 0),
+        rider_sound.note_name("pluck", 96, 35),
+        rider_sound.note_name("chime", 84, -20),
+        rider_sound.note_name("chime", 103, 0)])
     def test_every_one_is_short_clean_and_below_full_scale(self, name):
         """No clip, no click at the end, no offset, and over within a
         second - a pickup sound that rang on would be over the next one."""
-        import rider_sound
-
-        samples = rider_sound.SOUNDS[name]()
+        samples = rider_sound.make(name)
         peak = max(abs(v) for v in samples) / 32767.0
         assert 0.3 < peak <= 0.9, f"{name} peaks at {peak:.2f}"
         assert max(abs(v) for v in samples[-10:]) / 32767.0 < 0.01, (
             f"{name} ends on a click")
         assert abs(sum(samples) / len(samples)) / 32767.0 < 0.01
-        # The end of a track rings out once; everything else has to be
-        # over before the next one could start.
-        longest = 2.0 if name == "finish" else 1.0
-        assert len(samples) / rider_sound.RATE <= longest
+        longest = 2.0 if name == "swell" else 1.0
+        assert len(rider_sound.mono(samples)) / rider_sound.RATE <= longest
+
+    @pytest.mark.parametrize("voice", ["pluck", "chime"])
+    @pytest.mark.parametrize("midi, cents", [(69, 0), (76, 30), (81, -25)])
+    def test_a_note_is_its_note_in_its_tuning(self, voice, midi, cents):
+        """The strongest thing in it is the note its name says, tuned as
+        its name says - measured off the samples: a tuning a record is in
+        is a tuning worth being in too."""
+        samples = rider_sound.make(rider_sound.note_name(voice, midi, cents))
+        want = rider_sound.hertz(midi + cents / 100.0)
+        at = _power(samples, want)
+        for off in (want * 2 ** (-1 / 12), want * 2 ** (1 / 12)):
+            assert at > _power(samples, off) * 3, (
+                f"a semitone off {want:.0f} Hz is as strong as the note")
+        # And tuned: the note as named beats the same note at A = 440.
+        if abs(cents) >= 25:
+            assert at > _power(samples, rider_sound.hertz(midi)) * 1.3
+
+    @staticmethod
+    def _line(samples, start=0.0, end=0.08):
+        """How far the strongest semitone from A4 up two octaves stands
+        over the semitones around it: a note is a line in the spectrum and
+        stands thousands of times over its neighbours; noise, a sweep or
+        metal is a spread and stands a few times over at the most. Against
+        its neighbours rather than against the average of the range, which
+        a sound filtered bright - most of its energy above that range, a
+        slope across it - fails for its slope."""
+        import statistics
+
+        power = {k: _power(samples, 110.0 * 2 ** (k / 12), start, end)
+                 for k in range(21, 51)}
+        return max(power[k] / (statistics.median(
+            [power[j] for j in range(k - 3, k + 4) if j != k]) or 1e-12)
+            for k in range(24, 48))
+
+    @pytest.mark.parametrize("name", [f"tick{i}" for i in range(8)]
+                             + [f"shake{i}" for i in range(8)]
+                             + ["hit", "glass", "landing", "sweep"])
+    def test_nothing_unpitched_has_a_note_in_it(self, name):
+        """A tick, a shaker and a hit are the sounds a record with no key
+        gets, and the hit, the glass and the rest are played over every
+        record: none may have a steady pitch for a melody to clash with."""
+        assert self._line(rider_sound.make(name)) < 40.0, name
+
+    def test_which_is_a_measure_that_hears_a_note(self):
+        for name in (rider_sound.note_name("pluck", 72, 0),
+                     rider_sound.note_name("chime", 91, 0)):
+            assert self._line(rider_sound.make(name), 0.02, 0.12) > 400.0
 
     def test_a_run_climbs_and_then_keeps_climbing_round_the_top(self):
-        """Up the scale a note a pickup, and then round the top octave
-        rather than back to the bottom, which would sound like the run
-        had been broken."""
-        from rider_sound import PENTATONIC, climb
+        """Up a note a pickup, and then round the top half rather than
+        back to the bottom, which would sound like the run had broken."""
+        steps = [rider_sound.climb(i, 7) for i in range(30)]
+        assert steps[:7] == list(range(7))
+        assert min(steps[7:]) >= 4, "a long run fell back to the bottom"
 
-        steps = [climb(i) for i in range(30)]
-        top = len(PENTATONIC)
-        assert steps[:top] == list(range(top))
-        assert min(steps[top:]) >= 5, "a long run fell back to the bottom"
-
-    def test_the_notes_are_different_notes(self):
-        import rider_sound
-
-        made = [bytes(rider_sound.prize(step)) for step in range(4)]
-        assert len(set(made)) == 4
-
-    def test_the_pickup_is_on_its_note(self):
-        """The strongest thing in the first note is the note it says -
-        measured off the samples, over the part where it rings."""
-        import rider_sound
-
-        samples = rider_sound.prize(0)
-        rate = rider_sound.RATE
-        want = rider_sound.PRIZE_ROOT
-        window = samples[int(0.02 * rate):int(0.12 * rate)]
-
-        def power(freq):
-            re = im = 0.0
-            for index, value in enumerate(window):
-                angle = math.tau * freq * index / rate
-                re += value * math.cos(angle)
-                im += value * math.sin(angle)
-            return re * re + im * im
-
-        at = power(want)
-        for off in (want * 2 ** (-2 / 12), want * 2 ** (2 / 12)):
-            assert at > power(off) * 4, (
-                f"a whole tone off {want:.0f} Hz is as loud as the note")
+    def test_a_ladder_is_the_classes_it_is_asked_for(self):
+        notes = rider_sound.ladder((0, 4, 7), 72, 96)
+        assert notes[0] == 72 and {n % 12 for n in notes} == {0, 4, 7}
+        assert notes == sorted(notes) and notes[-1] <= 96
 
 
 class TestTheyAreKeptInTheCache:
     def test_written_once_and_named_for_the_version(self, tmp_path):
-        import rider_sound
-
-        path = rider_sound.write("coin0", tmp_path)
+        path = rider_sound.write("tick0", tmp_path)
         assert f"-{rider_sound.VERSION}-" in path.name
         with wave.open(str(path)) as handle:
             assert handle.getframerate() == rider_sound.RATE
-            assert handle.getnchannels() == 1
+            assert handle.getnchannels() == rider_sound.CHANNELS == 2
         stamp = path.stat().st_mtime_ns
-        assert rider_sound.write("coin0", tmp_path) == path
+        assert rider_sound.write("tick0", tmp_path) == path
         assert path.stat().st_mtime_ns == stamp, "it was made again"
 
     def test_they_are_made_in_another_process_when_missing(self, tmp_path,
                                                            monkeypatch):
         import multiprocessing
-
-        import rider_sound
 
         started = []
 
@@ -107,13 +159,30 @@ class TestTheyAreKeptInTheCache:
 
         monkeypatch.setattr(multiprocessing, "get_context",
                             lambda how: Context())
-        rider_sound.make_elsewhere(tmp_path)
+        notes = rider_sound.notes_for(15)
+        rider_sound.make_elsewhere(tmp_path, notes)
         assert started and started[0][0] is rider_sound.make_all
+        assert list(started[0][1][1]) == notes
         # And not when they are all there already.
         started.clear()
-        rider_sound.make_all(tmp_path)
-        rider_sound.make_elsewhere(tmp_path)
+        rider_sound.make_all(tmp_path, notes[:3])
+        rider_sound.make_elsewhere(tmp_path, notes[:3])
         assert started == []
+
+    def test_old_builds_and_old_tunings_are_cleared_out(self, tmp_path):
+        (tmp_path / "rider-3-prize0.wav").write_bytes(b"x" * 100)
+        for cents in (0, 10, 20, 30, 40, 50):
+            rider_sound.write(rider_sound.note_name("pluck", 72, cents),
+                              tmp_path)
+        rider_sound.write("tick0", tmp_path)
+        rider_sound.prune(tmp_path, keep_cents=(0,))
+        left = {path.name for path in tmp_path.iterdir()}
+        assert "rider-3-prize0.wav" not in left, "an older build's sound stayed"
+        tunings = [name for name in left if "pluck72" in name]
+        assert len(tunings) <= rider_sound.TUNINGS_KEPT + 1
+        assert any("pluck72+00" in name for name in tunings), (
+            "the tuning in use was cleared")
+        assert f"rider-{rider_sound.VERSION}-tick0.wav" in left
 
 
 class TestWhatIsPlayed:
@@ -122,15 +191,18 @@ class TestWhatIsPlayed:
     disagree about whether something was taken."""
 
     @staticmethod
-    def _board(tmp_path, ducked=None):
-        import rider_sound
-
+    def _board(tmp_path, harmony=None, ducked=None, delays=None):
         board = rider_sound.SoundBoard(
             tmp_path, volume=lambda: 0.7,
             duck=(lambda depth, seconds: ducked.append((depth, seconds)))
-            if ducked is not None else None)
+            if ducked is not None else None,
+            later=(lambda seconds, action: (delays.append(seconds),
+                                            action()))
+            if delays is not None else None)
+        board._harmony = harmony
+        board._cents = rider_sound.cents_of(harmony)
         played = []
-        board.play = lambda name, loud=1.0: played.append(name)
+        board.play = lambda name, loud=1.0: played.append(name) or True
         return board, played
 
     @staticmethod
@@ -142,61 +214,205 @@ class TestWhatIsPlayed:
             setattr(scene, key, value)
         return scene
 
-    def test_each_pickup_is_a_note_higher(self, tmp_path):
-        board, played = self._board(tmp_path)
-        scene = self._scene()
-        for chain in range(1, 6):
+    def _pickups(self, board, scene, count, kind="prize", at=1.0):
+        for chain in range(1, count + 1):
             scene._chain = chain
-            scene._pops = [["prize", 0.0, 1.0, None, 0.9, ""]]
+            scene._coin_run = chain
+            scene._heard = at
+            scene._pops = [[kind, 0.0, 1.0, None, 0.9, ""]]
             board.listen(scene)
-        assert played == [f"prize{i}" for i in range(5)]
 
-    def test_a_row_of_coins_climbs(self, tmp_path):
-        board, played = self._board(tmp_path)
+    def test_a_run_is_the_chord_going_up(self, tmp_path):
+        board, played = self._board(tmp_path, C_MAJOR)
+        self._pickups(board, self._scene(), 5)
+        assert _pitch_classes(played) == [0, 4, 7, 0, 4], played
+        midi = [_midi(name) for name in played]
+        assert midi == sorted(midi), "the run does not climb"
+
+    def test_and_follows_the_chord_when_it_changes(self, tmp_path):
+        """Over A minor the same run is A, C and E: never a C major third
+        against an A minor chord."""
+        board, played = self._board(tmp_path, C_MAJOR)
+        self._pickups(board, self._scene(), 4, at=5.0)
+        assert set(_pitch_classes(played)) <= {9, 0, 4}, played
+
+    def test_where_no_chord_is_heard_it_is_the_key(self, tmp_path):
+        board, played = self._board(tmp_path, C_MAJOR)
+        self._pickups(board, self._scene(), 5, at=9.0)
+        assert set(_pitch_classes(played)) <= {0, 2, 4, 7, 9}, played
+
+    def test_a_minor_key_climbs_its_own_pentatonic(self, tmp_path):
+        minor = dict(C_MAJOR, chords=[],
+                     key={"tonic": 9, "mode": "minor", "confidence": 0.3})
+        board, played = self._board(tmp_path, minor)
+        self._pickups(board, self._scene(), 6)
+        assert set(_pitch_classes(played)) <= {9, 0, 2, 4, 7}, played
+
+    def test_in_the_record_s_tuning(self, tmp_path):
+        """A record a quarter-tone flat gets notes a quarter-tone flat."""
+        flat = dict(C_MAJOR, tuning=-0.23)
+        board, played = self._board(tmp_path, flat)
+        self._pickups(board, self._scene(), 2)
+        assert all(name.endswith("-25") for name in played), played
+
+    @pytest.mark.parametrize("harmony", [
+        None,
+        dict(C_MAJOR, key={"tonic": 0, "mode": "major", "confidence": 0.01}),
+        dict(C_MAJOR, key={"tonic": 0, "mode": "major", "confidence": 0.04})])
+    def test_no_key_to_be_in_is_no_notes(self, tmp_path, harmony):
+        """Unheard, or a key the analysis is not sure of: a tick for a
+        pickup and a shaker for a coin, which have no note to clash
+        with."""
+        board, played = self._board(tmp_path, harmony)
         scene = self._scene()
-        for run in (1, 2, 3):
-            scene._coin_run = run
-            scene._pops = [["coin", 0.0, 1.0, 0.13, 0.6, ""]]
-            board.listen(scene)
-        assert played == ["coin0", "coin1", "coin2"]
+        self._pickups(board, scene, 3)
+        self._pickups(board, scene, 2, kind="coin")
+        assert played == ["tick0", "tick1", "tick2", "shake0", "shake1"]
+
+    def test_a_key_that_is_sure_enough_is_played_in(self, tmp_path):
+        """Just over the line, on a record the in-tune measure calls all
+        drums: that measure scored nothing on real mixes whose key came out
+        right, and between 0.03 and 0.06 of confidence no key read against
+        a DJ program's was worse than a fifth out."""
+        barely = dict(C_MAJOR, tonal=0.02,
+                      key={"tonic": 0, "mode": "major", "confidence": 0.06})
+        board, played = self._board(tmp_path, barely)
+        self._pickups(board, self._scene(), 3)
+        assert len(_pitch_classes(played)) == len(played) == 3, played
+        assert set(_pitch_classes(played)) <= {0, 4, 7}, played
+
+    def test_coins_climb_the_chord_brighter(self, tmp_path):
+        board, played = self._board(tmp_path, C_MAJOR)
+        self._pickups(board, self._scene(), 3, kind="coin")
+        assert all(name.startswith("chime") for name in played)
+        assert _pitch_classes(played) == [0, 4, 7]
 
     def test_a_hit_thumps_and_the_music_ducks(self, tmp_path):
         ducked = []
-        board, played = self._board(tmp_path, ducked)
+        board, played = self._board(tmp_path, C_MAJOR, ducked)
         scene = self._scene()
         scene._pops = [["hit", 0.0, 1.0, 0.0, 0.95, ""]]
         board.listen(scene)
         assert played == ["hit"]
         assert ducked and 0.2 < ducked[0][0] < 0.8, ducked
 
+    def test_a_milestone_is_the_chord_arpeggiated_on_time(self, tmp_path):
+        delays = []
+        board, played = self._board(tmp_path, C_MAJOR, delays=delays)
+        scene = self._scene(_heard=1.0)
+        scene._pops = [["milestone", 0.0, 1.0, None, 0.9, ""]]
+        board.listen(scene)
+        assert set(_pitch_classes(played)) <= {0, 4, 7} and len(played) >= 4
+        spaced = sorted(delays)
+        assert all(b - a == pytest.approx(board.SPREAD, abs=1e-6)
+                   for a, b in zip(spaced, spaced[1:])), delays
+
+    def test_the_end_goes_home(self, tmp_path):
+        """The finish is the key's own chord, whatever chord the track
+        ended on."""
+        board, played = self._board(tmp_path, C_MAJOR, delays=[])
+        scene = self._scene(_heard=5.0)     # over A minor
+        scene._pops = [["finish", 0.0, 1.0, None, 0.9, ""]]
+        board.listen(scene)
+        assert set(_pitch_classes(played)) == {0, 4, 7}
+
+    def test_the_shield_rings_in_the_chord(self, tmp_path):
+        board, played = self._board(tmp_path, C_MAJOR, delays=[])
+        scene = self._scene(_heard=5.0)
+        scene._pops = [["shatter", 0.0, 1.0, 0.55, 0.3, "SHIELD"]]
+        board.listen(scene)
+        assert played[0] == "glass"
+        assert set(_pitch_classes(played[1:])) <= {9, 0, 4} and played[1:]
+
     def test_what_happened_is_answered_once(self, tmp_path):
-        board, played = self._board(tmp_path)
+        board, played = self._board(tmp_path, C_MAJOR)
         scene = self._scene()
-        pop = ["shatter", 0.0, 1.0, 0.55, 0.3, "SHIELD"]
+        pop = ["hit", 0.0, 1.0, 0.55, 0.3, ""]
         scene._pops = [pop]
         board.listen(scene)
         board.listen(scene)
-        assert played == ["shatter"]
-
-    def test_the_end_of_the_track_has_its_fanfare(self, tmp_path):
-        board, played = self._board(tmp_path)
-        scene = self._scene()
-        scene._pops = [["finish", 0.0, 1.4, 0.13, 0.5, ""]]
-        board.listen(scene)
-        assert played == ["finish"]
+        assert played == ["hit"]
 
     def test_the_puzzle_climbs_as_the_grid_fills(self, tmp_path):
-        board, played = self._board(tmp_path)
+        board, played = self._board(tmp_path, None)
         scene = self._scene()
         scene._mode = "Puzzle"
         scene._cells = [[0], [1, 1], []]
         scene._pops = [["prize", 0.0, 1.0, None, 0.9, ""]]
         board.listen(scene)
-        assert played == ["prize3"]
+        assert played == ["tick3"]
+
+    def test_a_note_taken_echoes_on_the_record_s_grid(self, tmp_path):
+        """A dotted eighth and a dotted quarter later, quieter each time,
+        timed from the drums' beat: the delay a trance lead is run
+        through, so a run rings on in time with the music."""
+        delays, levels = [], []
+        board = rider_sound.SoundBoard(
+            tmp_path, later=lambda seconds, action: (delays.append(seconds),
+                                                     action()))
+        board._harmony, board._cents = C_MAJOR, 0
+        board.play = lambda name, loud=1.0: levels.append((name, loud)) or True
+        scene = self._scene(_beat=0.5, _heard=1.0, _chain=1)
+        scene._pops = [["prize", 0.0, 1.0, None, 0.9, ""]]
+        board.listen(scene)
+        assert delays == pytest.approx([0.375, 0.75]), delays
+        names = {name for name, _loud in levels}
+        assert len(names) == 1 and rider_sound.voice_of(names.pop()) == "pluck"
+        louds = [loud for _name, loud in levels]
+        assert louds[0] > louds[1] > louds[2] > 0.0, louds
+
+    @pytest.mark.parametrize("beat, kind", [(0.0, "prize"), (2.0, "prize"),
+                                            (0.5, "hit"), (0.5, "milestone"),
+                                            (0.5, "finish")])
+    def test_and_only_a_note_taken_in_a_tempo(self, tmp_path, beat, kind):
+        """No echo without a tempo to be in time with; none on a hit - a
+        thump twice is two hits - and none on an arpeggio or the finish,
+        whose notes are already a run of their own."""
+        def delays_at(tempo):
+            delays = []
+            board = rider_sound.SoundBoard(
+                tmp_path,
+                later=lambda seconds, action: delays.append(seconds))
+            board._harmony, board._cents = C_MAJOR, 0
+            board.play = lambda name, loud=1.0: True
+            scene = self._scene(_beat=tempo, _heard=1.0, _chain=1)
+            scene._pops = [[kind, 0.0, 1.0, None, 0.9, ""]]
+            board.listen(scene)
+            return delays
+
+        # Nothing more than the same moment with no tempo at all.
+        assert delays_at(beat) == delays_at(0.0)
+
+    def test_the_preview_is_a_pickup_in_the_key(self, tmp_path):
+        board, played = self._board(tmp_path, C_MAJOR)
+        assert board.preview(self._scene(_heard=1.0)) == played[-1]
+        assert _pitch_classes(played) and set(_pitch_classes(played)) <= {
+            0, 4, 7}
+        keyless, played = self._board(tmp_path, None)
+        assert keyless.preview() == "tick3" == played[-1]
+
+    def test_the_level_is_a_share_of_the_music_s(self, tmp_path):
+        """Turning the music down turns them down with it: the balance
+        somebody set stays set."""
+        set_to = []
+
+        class Effect:
+            def setVolume(self, value):      # noqa: N802 - Qt's name
+                set_to.append(value)
+
+            def play(self):
+                pass
+
+        music = [0.8]
+        board = rider_sound.SoundBoard(tmp_path, volume=lambda: music[0],
+                                       level=lambda: 0.25)
+        board._voice = lambda name: Effect()
+        board.play("hit")
+        music[0] = 0.4
+        board.play("hit", 0.5)
+        assert set_to == pytest.approx([0.2, 0.05])
 
     def test_switched_off_it_is_silent(self, tmp_path):
-        import rider_sound
-
         board = rider_sound.SoundBoard(tmp_path)
         board.enabled = False
         made = []
@@ -205,8 +421,6 @@ class TestWhatIsPlayed:
         assert made == []
 
     def test_a_machine_that_cannot_play_them_goes_on_without(self, tmp_path):
-        import rider_sound
-
         board = rider_sound.SoundBoard(tmp_path)
 
         def broken(name):
@@ -216,6 +430,29 @@ class TestWhatIsPlayed:
         board.play("hit")
         board.play("hit")
         assert board._broken is True
+
+    def test_a_note_not_made_yet_is_not_made_here(self, tmp_path):
+        """The thread that plays them is the thread drawing the picture:
+        a note that is not there is not played, rather than made on the
+        spot - that was a forty millisecond frame the first time any
+        pickup was taken."""
+        board = rider_sound.SoundBoard(tmp_path)
+        name = rider_sound.note_name("pluck", 72, 0)
+        assert board.play(name) is False
+        assert not rider_sound.path_for(name, tmp_path).exists()
+
+    def test_the_notes_are_loaded_a_few_at_a_time_once_made(self, tmp_path):
+        board = rider_sound.SoundBoard(tmp_path)
+        board._harmony, board._cents = C_MAJOR, 0
+        loaded = []
+        board._voice = lambda name: (loaded.append(name),
+                                     board._voices.setdefault(name, [1]))
+        notes = rider_sound.notes_for(0)
+        rider_sound.make_all(tmp_path, notes[:5])
+        assert board.tend() == board.LOAD_EACH
+        assert board.tend() == 2
+        assert board.tend() == 0, "it loaded notes that were not made"
+        assert loaded == notes[:5]
 
 
 class TestThePaneAsksAfterEveryFrame:
@@ -293,10 +530,12 @@ class TestTheSwitch:
             pane.scene_box.setCurrentText("Music rider")
             qapp.processEvents()
             assert pane.sound_box.isVisible()
+            assert pane.effects_box.isVisible()
             assert pane.spectrum._listener is not None
             pane.scene_box.setCurrentText("Rave")
             qapp.processEvents()
             assert not pane.sound_box.isVisible()
+            assert not pane.effects_box.isVisible()
             assert pane.spectrum._listener is None, (
                 "the game's sounds are still listening to another scene")
         finally:
@@ -324,6 +563,9 @@ class TestTheSwitch:
                 def prepare(self):
                     pass
 
+                def set_harmony(self, harmony):
+                    pass
+
             pane._board = Board()
             pane._listen_to_game(pane.spectrum._scene)
             assert played == [], "the sounds were asked for while off"
@@ -334,6 +576,25 @@ class TestTheSwitch:
             pane.scene_box.setCurrentText("Rave")
             assert pane.vj("sounds") is False, (
                 "X did something in a scene with no sounds")
+        finally:
+            pane.deleteLater()
+
+    def test_the_board_hears_the_key_and_forgets_it_for_the_next_track(
+            self, qapp, tmp_path, monkeypatch):
+        """Made before or after the harmony lands, the board plays in it;
+        a new track puts it back to no key until that one is heard."""
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        monkeypatch.setattr(rider_sound, "make_elsewhere",
+                            lambda folder, names=None: None)
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        try:
+            pane.spectrum.set_harmony(C_MAJOR)
+            board = pane._sound_board()
+            assert board.in_key, "a board made after the key did not get it"
+            pane.stop()
+            assert not board.in_key, "the last track's key outlived it"
         finally:
             pane.deleteLater()
 
@@ -364,4 +625,105 @@ class TestTheSwitch:
                 f"and did not come back to where it was: {levels[-3:]}")
         finally:
             pane._audio = None
+            pane.deleteLater()
+
+
+class TestTheEffectsSlider:
+    """"Xxxxx xxxx xx xxx xxxxxx xx xxxxx xxxxxxx xxxx x xxxxxx." """
+
+    @staticmethod
+    def _pane():
+        from attachment_view import AudioPane
+
+        return AudioPane()
+
+    def test_it_sets_the_board_s_level(self, qapp, monkeypatch):
+        monkeypatch.setattr(rider_sound, "make_elsewhere",
+                            lambda folder, names=None: None)
+        pane = self._pane()
+        try:
+            board = pane._sound_board()
+            pane.effects.setValue(30)
+            assert board._level() == pytest.approx(0.30)
+            pane.effects.setValue(0)
+            assert board._level() == 0.0
+        finally:
+            pane.deleteLater()
+
+    def test_it_starts_at_half_and_is_remembered(self, qapp):
+        from attachment_view import AudioPane
+
+        pane = self._pane()
+        try:
+            assert pane.effects.value() == AudioPane.EFFECTS == 50
+            pane.effects.setValue(22)
+            # Kept a moment after the last move, by itself.
+            import time
+
+            from attachment_view import _viewer_prefs
+
+            end = time.monotonic() + 3.0
+            while (_viewer_prefs().get("effects") != 22
+                   and time.monotonic() < end):
+                qapp.processEvents()
+                time.sleep(0.02)
+            assert _viewer_prefs().get("effects") == 22
+        finally:
+            pane.deleteLater()
+        again = self._pane()
+        try:
+            assert again.effects.value() == 22
+        finally:
+            again.deleteLater()
+
+    @pytest.mark.parametrize("kept", ['{"effects": 500}', "not json",
+                                      '["effects"]', '{"effects": "loud"}'])
+    def test_a_file_that_makes_no_sense_is_the_default(self, qapp, kept):
+        import config
+        from attachment_view import VIEWER_PREFS, AudioPane
+
+        path = config.app_support_dir() / VIEWER_PREFS
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(kept)
+        pane = self._pane()
+        try:
+            assert pane.effects.value() == AudioPane.EFFECTS
+        finally:
+            pane.deleteLater()
+
+    def test_letting_go_plays_one_to_hear_it_by(self, qapp):
+        pane = self._pane()
+        heard = []
+
+        class Board:
+            def preview(self, scene=None):
+                heard.append(scene)
+
+        try:
+            pane._board = Board()
+            pane.effects.sliderReleased.emit()
+            assert len(heard) == 1
+            pane.sound_box.setChecked(False)
+            pane.effects.sliderReleased.emit()
+            assert len(heard) == 1, "a preview with the sounds switched off"
+        finally:
+            pane._board = None
+            pane.deleteLater()
+
+    def test_full_screen_has_it_for_the_game(self, qapp):
+        pane = self._pane()
+        pane.scene_box.setCurrentText("Music rider")
+        pane._go_full_screen()
+        window = pane._full
+        try:
+            label, slider = pane._full_effects
+            assert slider.isVisibleTo(window) and label.isVisibleTo(window)
+            slider.setValue(71)
+            assert pane.effects.value() == 71
+            pane.effects.setValue(12)
+            assert slider.value() == 12
+            pane.scene_box.setCurrentText("Rave")
+            assert not slider.isVisibleTo(window)
+        finally:
+            window.close()
             pane.deleteLater()

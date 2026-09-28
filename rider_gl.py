@@ -478,6 +478,12 @@ uniform float uGrey;         // an obstacle, not a prize
 uniform float uAlpha;
 uniform vec3 uLight;
 uniform float uCoin;         // struck metal rather than a lit block
+uniform float uGlass;        // glass: the canopy
+uniform vec3 uEye;           // where the camera is, for what glass reflects
+uniform float uClock;        // seconds, for what slides past in it
+uniform vec3 uSkyLow;        // the world it reflects: the horizon's colour,
+uniform vec3 uSkyHigh;       // the sky's above it,
+uniform vec3 uCity;          // and the city's lights
 void main() {
     vec3 n = normalize(vNormal);
     float lit = 0.35 + 0.65 * max(dot(n, normalize(uLight)), 0.0);
@@ -505,6 +511,36 @@ void main() {
         float glint = pow(max(dot(reflect(-normalize(uLight), n),
                                   vec3(0.0, 0.0, 1.0)), 0.0), 24.0);
         colour = gold + vec3(1.0, 0.95, 0.8) * glint * 2.0;
+    }
+    if (uGlass > 0.5) {
+        // Glass: the world reflected in it, more of it the more obliquely
+        // it is seen (Schlick's Fresnel), over a dim cockpit lit from
+        // below by its instruments, with the key light's highlight on top.
+        vec3 v = normalize(uEye - vWorld);
+        float facing = abs(dot(n, v));
+        float fresnel = 0.05 + 0.95 * pow(1.0 - facing, 5.0);
+        vec3 r = reflect(-v, n);
+        float up = clamp(r.y * 0.5 + 0.5, 0.0, 1.0);
+        vec3 sky = mix(uSkyLow, uSkyHigh, smoothstep(0.5, 0.95, up));
+        // The city's lights overhead, sliding back over the glass as the
+        // craft goes forward under them.
+        float lights = pow(max(0.0, sin(r.x * 11.0 + r.z * 5.0
+                                         - uClock * 7.0)), 28.0)
+                       * smoothstep(0.45, 0.75, up);
+        float more = pow(max(0.0, sin(r.x * 23.0 - r.z * 9.0
+                                       - uClock * 11.0)), 40.0)
+                     * smoothstep(0.55, 0.85, up);
+        sky += uCity * (lights * 1.6 + more * 0.9);
+        // And the sun on the road ahead, low in the reflection.
+        float sun = pow(max(dot(r, normalize(vec3(0.0, 0.12, -1.0))), 0.0), 48.0);
+        sky += uSkyLow * sun * 4.0;
+        float low = smoothstep(0.30, 0.13, vLocal.y);
+        vec3 inside = uColour * (0.10 + 0.45 * low)
+                      + uCity * 0.08 * low;
+        float shine = pow(max(dot(reflect(-normalize(uLight), n), v), 0.0),
+                          80.0);
+        colour = mix(inside, sky, fresnel) + vec3(1.0, 0.97, 0.92) * shine * 3.0
+                 + uColour * fresnel * 0.25;
     }
     gl_FragColor = vec4(fogged(colour, vDepth), uAlpha);
 }
@@ -1588,6 +1624,7 @@ class RiderWorld:
             else 0.0,
             "half": scene.LANE_WIDE * scene.LANES / 2.0,
             "pixels": 1.0,
+            "eye": eye_at,
         }
 
     def _road_uniforms(self, program, frame) -> None:
@@ -1666,6 +1703,7 @@ class RiderWorld:
         self._road_uniforms(p, frame)
         self._fog_uniforms(p, frame)
         p.set("uLight", QVector3D(0.3, 1.0, 0.6))
+        p.set("uGlass", 0.0)
         return p
 
     @staticmethod
@@ -1848,10 +1886,22 @@ class RiderWorld:
         body = (0.16 + hurt * 0.8, 0.17, 0.21)
         self._put(p, place, (SHIP, SHIP, SHIP), angles, body, 0.0, 0.0, 0.0)
         self.ship.draw(self.gl, p)
-        # The canopy: tinted glass with the cockpit's light behind it.
+        # The canopy: glass, reflecting the world it is going through - the
+        # sky, the sun on the road and the city's lights sliding back over
+        # it - with the cockpit dim behind. It was one flat tint.
         glass = colorsys.hsv_to_rgb((frame["hue"] + 0.5) % 1.0, 0.85, 0.75)
-        self._put(p, place, (SHIP, SHIP, SHIP), angles, glass, 0.55, 0.0, 0.0)
+        low = colorsys.hsv_to_rgb(frame["hue"] % 1.0, 0.9, 1.4)
+        high = colorsys.hsv_to_rgb((frame["hue"] + 0.55) % 1.0, 0.8, 0.10)
+        city = colorsys.hsv_to_rgb((frame["hue"] + 0.5) % 1.0, 0.7, 1.6)
+        p.set("uGlass", 1.0)
+        p.set("uEye", QVector3D(*frame["eye"]))
+        p.set("uClock", float(frame["travel"]) * 0.12)
+        p.set("uSkyLow", QVector3D(*low))
+        p.set("uSkyHigh", QVector3D(*high))
+        p.set("uCity", QVector3D(*city))
+        self._put(p, place, (SHIP, SHIP, SHIP), angles, glass, 0.0, 0.0, 0.0)
         self.canopy.draw(self.gl, p)
+        p.set("uGlass", 0.0)
         p.release()
 
     def _draw_trim(self, frame) -> None:

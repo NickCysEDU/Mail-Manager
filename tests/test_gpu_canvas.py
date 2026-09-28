@@ -31,6 +31,19 @@ ROOT = Path(__file__).resolve().parents[1]
 #: Everything a script on the card needs before its own body.
 HEAD = textwrap.dedent("""
     import json, math, os, sys
+    # An exception that reaches Qt from a paint or a timer is printed and
+    # swallowed there, and the frame it came from is kept (as
+    # sys.last_traceback) until the interpreter shuts down - painter and
+    # all, which then ended itself on a device already gone and aborted
+    # the process with a crash report on the screen. Here it ends the
+    # script at once instead, and the test sees it.
+    def _unhandled(kind, value, trace):
+        import traceback
+        traceback.print_exception(kind, value, trace)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(70)
+    sys.excepthook = _unhandled
     sys.path.insert(0, {root!r})
     from array import array
     from PySide6.QtWidgets import QApplication, QWidget
@@ -96,13 +109,28 @@ HAIRLINE = textwrap.dedent("""
 """)
 
 
+#: The end of every script: out without the interpreter's teardown, which
+#: takes Qt's objects apart in whatever order it likes - a painter after
+#: the buffer it was painting on - and a process that has said what it
+#: had to say has nothing left to do.
+TAIL = textwrap.dedent("""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
+""")
+
+
 def on_the_card(body: str) -> dict:
-    """Run ``body`` on the real platform and give back what it printed."""
+    """Run ``body`` on the real platform and give back what it printed.
+
+    And fail if it did not finish cleanly: an exception that escaped into
+    Qt, or a crash on the way out, is a fault in what was being drawn
+    even where the numbers it printed first look right."""
     env = dict(os.environ)
     env.pop("QT_QPA_PLATFORM", None)
     env["MAIL_MANAGER_GPU"] = "1"
     done = subprocess.run(
-        [sys.executable, "-c", HEAD + textwrap.dedent(body)],
+        [sys.executable, "-c", HEAD + textwrap.dedent(body) + TAIL],
         capture_output=True, text=True, timeout=180, env=env, cwd=ROOT)
     lines = [line for line in done.stdout.splitlines()
              if line.startswith("{")]
@@ -113,6 +141,10 @@ def on_the_card(body: str) -> dict:
     found = json.loads(lines[-1])
     if "skip" in found:
         pytest.skip(found["skip"])
+    if done.returncode != 0:
+        raise AssertionError(
+            f"the script on the card did not finish cleanly (exit "
+            f"{done.returncode}):\n{done.stderr[-3000:]}")
     return found
 
 
@@ -378,6 +410,207 @@ class TestThePaneIsOnTheCard:
             f"against {got['before']} before")
 
 
+#: The scope painted both ways, frame after frame: into a buffer on the
+#: card through Qt's OpenGL engine, and into an image on the CPU. Each
+#: frame is a new trace fifteen times a second, as the pane hands them
+#: over, so what is compared is a phosphor with several traces fading on
+#: it - the fade and the laying over as well as the beam.
+SCOPE_BOTH_WAYS = textwrap.dedent("""
+    from PySide6.QtGui import QOpenGLContext, QOffscreenSurface
+    from PySide6.QtOpenGL import (QOpenGLFramebufferObject,
+        QOpenGLFramebufferObjectFormat, QOpenGLPaintDevice)
+    from attachment_widgets import SpectrumState
+    W, H = 900, 520
+
+    def traces(mode, count):
+        out = []
+        for frame in range(count):
+            if mode == "X-Y":
+                v = []
+                for i in range(900):
+                    t = i / 900 * math.tau
+                    v.append(int(26000 * math.sin(3 * t + frame * 0.3)))
+                    v.append(int(26000 * math.sin(2 * t)))
+                out.append(v)
+            else:
+                out.append([0.8 * math.sin(i / 1024 * math.tau * 3
+                                           + frame * 0.7)
+                            + 0.15 * math.sin(i / 1024 * math.tau * 17)
+                            for i in range(1024)])
+        return out
+
+    def state_for(trace, mode):
+        s = SpectrumState()
+        s.levels = [0.4] * 27
+        s.bass = s.mid = s.high = 0.4
+        s.at = 1.0
+        if mode == "X-Y":
+            s.vector = trace
+        else:
+            s.trace = trace
+        s.settle()
+        return s
+
+    def run(paint_on, mode, opacity=1.0, frames=6):
+        scene = type(visualizers.by_name("Oscilloscope"))()
+        scene.set_mode(mode)
+        clock = [500.0]
+        was = visualizers.time.monotonic
+        visualizers.time.monotonic = lambda: clock[0]
+        try:
+            for trace in traces(mode, frames):
+                clock[0] += 1.0 / 15.0
+                paint_on(scene, state_for(trace, mode), opacity)
+        finally:
+            visualizers.time.monotonic = was
+        return scene
+
+    surface = QOffscreenSurface()
+    surface.create()
+    context = QOpenGLContext()
+    context.create()
+    context.makeCurrent(surface)
+    shape = QOpenGLFramebufferObjectFormat()
+    shape.setSamples(4)
+    shape.setAttachment(
+        QOpenGLFramebufferObject.Attachment.CombinedDepthStencil)
+    buffer = QOpenGLFramebufferObject(QSize(W, H), shape)
+    device = QOpenGLPaintDevice(QSize(W, H))
+    cpu = QImage(W, H, QImage.Format.Format_ARGB32_Premultiplied)
+
+    def on_card(scene, state, opacity):
+        buffer.bind()
+        p = QPainter(device)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.fillRect(QRectF(0, 0, W, H), QColor(0, 0, 0))
+        p.setOpacity(opacity)
+        scene.paint(p, QRectF(0, 0, W, H), state)
+        p.end()
+        buffer.release()
+
+    def on_cpu(scene, state, opacity):
+        cpu.fill(QColor(0, 0, 0))
+        p = QPainter(cpu)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        p.setOpacity(opacity)
+        scene.paint(p, QRectF(0, 0, W, H), state)
+        p.end()
+
+    def apart(a, b):
+        points = [(x, y) for x in range(0, W, 3) for y in range(0, H, 3)]
+        return sum(abs(lightness(a, x, y) - lightness(b, x, y))
+                   for x, y in points) / len(points)
+
+    def lit(image):
+        # Where the trace is, and not the dim field and grid behind it.
+        return sum(1 for x in range(0, W, 3) for y in range(0, H, 3)
+                   if lightness(image, x, y) > 0.3)
+""")
+
+
+class TestTheScopeOnTheCard:
+    """At a Retina full screen the scope's phosphor cost 16 ms a trace to
+    strike on the CPU and more to hand to the card, and with every pixel
+    drawn it ran at 33 frames a second. Its screen now stays on the card
+    (see scope_gl) - and has to look exactly as it did."""
+
+    @pytest.mark.parametrize("mode,opacity", [("Sweep", 1.0), ("X-Y", 1.0),
+                                              ("Sweep", 0.55)])
+    def test_it_draws_what_the_cpu_draws(self, mode, opacity):
+        got = on_the_card(SCOPE_BOTH_WAYS + textwrap.dedent(f"""
+            card = run(on_card, {mode!r}, {opacity})
+            gpu = buffer.toImage()
+            plain = run(on_cpu, {mode!r}, {opacity})
+            print(json.dumps({{
+                "diff": apart(gpu, cpu), "lit_gpu": lit(gpu),
+                "lit_cpu": lit(cpu),
+                "on_card": type(card._card).__name__,
+                "cpu_screen": card._screen is not None}}))
+        """))
+        assert got["on_card"] == "Tube" and not got["cpu_screen"], (
+            "the scope kept its screen on the CPU")
+        assert got["lit_cpu"] > 100, "the trace drew nothing to compare"
+        assert got["diff"] < 0.01, (
+            f"the card and the CPU draw the scope {got['diff']:.4f} apart "
+            f"in brightness on average")
+        assert abs(got["lit_gpu"] - got["lit_cpu"]) < 0.1 * got["lit_cpu"], (
+            got["lit_gpu"], got["lit_cpu"])
+
+    def test_a_window_resized_while_paused_keeps_its_picture(self):
+        """Scaled to the new size, as the CPU's screen is, rather than
+        started dark: a paused track strikes nothing new, and dragging the
+        window's edge would otherwise wipe the scope."""
+        got = on_the_card(SCOPE_BOTH_WAYS + textwrap.dedent("""
+            def resized(paint_on, target):
+                scene = type(visualizers.by_name("Oscilloscope"))()
+                clock = [500.0]
+                was = visualizers.time.monotonic
+                visualizers.time.monotonic = lambda: clock[0]
+                try:
+                    held = traces("Sweep", 5)
+                    for trace in held:
+                        clock[0] += 1.0 / 15.0
+                        paint_on(scene, state_for(trace, "Sweep"), 1.0,
+                                 QRectF(0, 0, W, H))
+                    # Paused: the same trace again, in a smaller window.
+                    clock[0] += 1.0 / 15.0
+                    paused = state_for(held[-1], "Sweep")
+                    paused.trace = held[-1]
+                    paint_on(scene, paused, 1.0, QRectF(0, 0, 700, 420))
+                finally:
+                    visualizers.time.monotonic = was
+
+            def card_in(scene, state, opacity, rect):
+                buffer.bind()
+                p = QPainter(device)
+                p.fillRect(QRectF(0, 0, W, H), QColor(0, 0, 0))
+                scene.paint(p, rect, state)
+                p.end()
+                buffer.release()
+
+            def cpu_in(scene, state, opacity, rect):
+                cpu.fill(QColor(0, 0, 0))
+                p = QPainter(cpu)
+                p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                scene.paint(p, rect, state)
+                p.end()
+
+            resized(card_in, None)
+            gpu = buffer.toImage()
+            resized(cpu_in, None)
+            print(json.dumps({"lit_gpu": lit(gpu), "lit_cpu": lit(cpu),
+                              "diff": apart(gpu, cpu)}))
+        """))
+        assert got["lit_cpu"] > 100
+        assert got["lit_gpu"] > 0.8 * got["lit_cpu"], (
+            f"resized while paused, the scope on the card lit "
+            f"{got['lit_gpu']} against the CPU's {got['lit_cpu']}")
+        assert got["diff"] < 0.01, got["diff"]
+
+    def test_its_screen_is_only_as_big_as_the_beam_reaches(self):
+        """On a wide screen, a quarter of the pixels are where no beam can
+        go - and fading and laying them cost as much as any others."""
+        import scope_gl
+
+        assert scope_gl.reach(2880, 1800) == (2160, 1800)
+        assert scope_gl.reach(1000, 1600) == (1000, 1200)
+        assert scope_gl.reach(500, 500) == (500, 500)
+
+    def test_a_card_that_will_not_keep_it_hands_it_to_the_cpu(self):
+        """Once, and the scope goes on drawing."""
+        got = on_the_card(SCOPE_BOTH_WAYS + textwrap.dedent("""
+            import scope_gl
+            def broken(*args, **kwargs):
+                raise RuntimeError("a card that will not keep a screen")
+            scope_gl.Tube.draw = broken
+            card = run(on_card, "Sweep")
+            gpu = buffer.toImage()
+            print(json.dumps({"card": card._card, "lit": lit(gpu)}))
+        """))
+        assert got["card"] is False
+        assert got["lit"] > 100, "the scope drew nothing after the card failed"
+
+
 class TestABigScreenOnASmallCard:
     """Fewer samples, then fewer pixels, when the card cannot keep up.
 
@@ -409,11 +642,12 @@ class TestABigScreenOnASmallCard:
     def test_it_starts_at_every_pixel_and_four_samples(self):
         assert self._card().choice(5120 * 2880, 2.0, "rider") == (4, 1.0)
 
-    def test_it_gives_up_samples_before_pixels(self):
+    def test_it_gives_up_samples_and_never_pixels(self):
         """Two samples a pixel at a Retina density is most of the
-        smoothness of four; half the pixels is a picture that has gone
-        soft. So the samples go first, and the resolution only goes to
-        the screen's logical resolution - a whole-number stretch."""
+        smoothness of four, and none is still every pixel; half the pixels
+        is a picture gone soft, and it used to go there in the first
+        seconds of a track, when the analysis was busy on the same
+        machine. "Xxxx xxx xxxx xxxx xxxxxxxx xxxx xx xxxxxxxxxxx"."""
         card = self._card()
         self._past_the_warmup(card)
         seen = [card.choice(5120 * 2880, 2.0, "rider")]
@@ -422,7 +656,8 @@ class TestABigScreenOnASmallCard:
             for _ in range(card.SETTLE):
                 card.record(30.0, 2.0)
             seen.append(card.choice(5120 * 2880, 2.0, "rider"))
-        assert seen == [(4, 1.0), (2, 1.0), (4, 0.5), (2, 0.5), (2, 0.5)]
+        assert seen == [(4, 1.0), (2, 1.0), (0, 1.0), (0, 1.0), (0, 1.0)]
+        assert all(share == 1.0 for _, share in seen)
 
     def test_a_screen_at_one_pixel_a_point_keeps_its_pixels(self):
         """Half the pixels of a screen that has one per point is a
@@ -430,8 +665,8 @@ class TestABigScreenOnASmallCard:
         instead, all of them if it has to."""
         from attachment_widgets import CardSharpness
 
-        assert CardSharpness.rungs(1.0) == ((4, 1.0), (2, 1.0), (0, 1.0))
-        assert all(share >= 1.0 for _, share in CardSharpness.rungs(1.0))
+        for ratio in (1.0, 1.5, 2.0, 3.0):
+            assert all(share >= 1.0 for _, share in CardSharpness.rungs(ratio))
 
     def test_a_frame_that_fits_stays_where_it_is(self):
         card = self._card()

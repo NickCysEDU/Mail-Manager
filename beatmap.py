@@ -86,6 +86,9 @@ ELEMENTS: Dict[str, Tuple[float, float, float]] = {
     "Synth": (0.25, 0.75, 0.09),
 }
 
+#: The parts of the kit whose onset strength is kept with their beats.
+KEPT_FLUX = ("Kick", "Snare", "Hats")
+
 #: The three places a hit can be, used to decide which instrument it was.
 #: Coarse on purpose: the question is only "bottom, middle or top", and a
 #: finer split makes the shares noisier without making them truer.
@@ -330,6 +333,14 @@ class BeatMap:
     bpm: float = 0.0
     #: Whether those beats are a grid or the onsets themselves.
     locked: bool = False
+    #: The onset strength the beats were picked from, a reading every
+    #: ``rate``th of a second, for the parts of the kit: how hard the
+    #: spectrum rose in that part's bands at every moment, peak or not.
+    #: A detector's peaks on a real mix are two or three to the beat and
+    #: most of them are not the drum; this, folded on the bar, is where
+    #: the drum really is. See trackstyle. Empty where not kept.
+    flux: Tuple[float, ...] = ()
+    rate: float = 0.0
 
     def __bool__(self) -> bool:
         return bool(self.beats)
@@ -679,7 +690,13 @@ def elements(frames: Sequence, rate: float,
             if not fits(wants, bottom, middle, top):
                 continue
             kept.append(beat)
-        found[name] = BeatMap(beats=tuple(kept))
+        # Rounded, because it goes between processes and into every frame's
+        # state: three places is a thousandth of the range, and it halves
+        # what is sent.
+        found[name] = BeatMap(beats=tuple(kept),
+                              flux=tuple(round(value, 3) for value in envelope)
+                              if name in KEPT_FLUX else (),
+                              rate=float(rate))
     return found
 
 

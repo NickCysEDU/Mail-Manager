@@ -653,9 +653,10 @@ def _worker(connection, rate: int, channels: int, part: str) -> None:
     takes nothing from the one drawing.
 
     ``part`` is ``"picture"`` - the bands, then the traces and the beat
-    maps - or ``"drums"``, the finer pass for the kit. They run side by
-    side, so the drums the rider builds its road from arrive about when
-    the picture does rather than a quarter of a minute after it.
+    maps - ``"drums"``, the finer pass for the kit, or ``"harmony"``, the
+    key, the tuning and the chords (see harmony). They run side by side,
+    so the drums the rider builds its road from arrive about when the
+    picture does rather than a quarter of a minute after it.
     """
     import os
 
@@ -684,6 +685,12 @@ def _worker(connection, rate: int, channels: int, part: str) -> None:
             connection.send(("bands", (frames, calibration,
                                        _whole_contour(frames, samples, rate,
                                                       channels, calibration))))
+            # The beats straight after: they are read off the bands and
+            # take milliseconds, and the game lays its road on them. Sent
+            # after the traces, as they were, the ride began with no tempo
+            # for the seconds those took, and re-based itself when it came.
+            beats = beatmap.build(frames, RATE)
+            connection.send(("beats", beats))
             # In slices. Taking twenty-seven megabytes of traces apart in
             # one piece held the other process's interpreter for 18 ms,
             # which is a frame the pane did not draw.
@@ -692,12 +699,20 @@ def _worker(connection, rate: int, channels: int, part: str) -> None:
                                                          channels))):
                 for start in range(0, len(rows), SLICE):
                     connection.send((kind, rows[start:start + SLICE]))
-            beats = beatmap.build(frames, RATE)
             connection.send(("done", beats))
+        elif part == "harmony":
+            import harmony
+
+            connection.send(("harmony", harmony.analyse(samples, rate,
+                                                        channels)))
         else:
             fine = onset_frames(samples, rate, channels)
             kit = beatmap.elements(fine, ONSET_RATE) if fine else None
             connection.send(("elements", kit))
+            # And the drums' own tempo, beat and pattern, from what was
+            # just found: the heavy half of reading the track's style,
+            # here rather than on the thread drawing. See trackstyle.
+            connection.send(("rhythm", _rhythm_of(fine, kit)))
     except Exception as exc:      # noqa: BLE001 - reported, not raised
         try:
             connection.send(("failed", f"{type(exc).__name__}: {exc}"))
@@ -705,6 +720,19 @@ def _worker(connection, rate: int, channels: int, part: str) -> None:
             pass
     finally:
         connection.close()
+
+
+def _rhythm_of(fine, kit) -> Optional[dict]:
+    """The drums' tempo, beat and pattern: see trackstyle.rhythm_of."""
+    if not fine or not kit:
+        return None
+    import trackstyle
+
+    try:
+        return trackstyle.rhythm_of(kit)
+    except Exception as exc:      # noqa: BLE001 - a style, not the mail
+        log.info("Could not read the drums' rhythm (%s).", exc)
+        return None
 
 
 def worker_check(timeout: float = 30.0) -> str:
@@ -782,17 +810,28 @@ class _AnalysisThread(_QThread_base):
     #: first second. So the frames go out as soon as they are ready and
     #: the kit follows a few seconds later.
     elements = _Signal(object)
+    #: The key, the tuning and the chords, from a pass of their own. See
+    #: harmony. Only the game's own sounds need them, so they come last.
+    harmony = _Signal(object)
+    #: The beat maps, as soon as they exist - straight after the bands -
+    #: rather than with everything else at the end.
+    beats = _Signal(object)
+    #: The drums' own tempo, beat and pattern, with the kit. See
+    #: trackstyle.rhythm_of.
+    rhythm = _Signal(object)
     failed = _Signal(str)
     progress = _Signal(float)
 
     def __init__(self, samples, rate: int, channels: int,
-                 wants_elements: bool = True) -> None:
+                 wants_elements: bool = True,
+                 wants_harmony: bool = False) -> None:
         super().__init__()
         self._samples = samples
         self._rate = rate
         self._channels = channels
         self._stop = False
         self._wants_elements = wants_elements
+        self._wants_harmony = wants_harmony
         #: The worker processes, while there are any. See _worker.
         self._processes: list = []
 
@@ -838,7 +877,8 @@ class _AnalysisThread(_QThread_base):
         from multiprocessing.connection import wait
 
         context = multiprocessing.get_context("spawn")
-        parts = ["picture"] + (["drums"] if self._wants_elements else [])
+        parts = (["picture"] + (["drums"] if self._wants_elements else [])
+                 + (["harmony"] if self._wants_harmony else []))
         running: dict = {}
         for part in parts:
             ours, theirs = context.Pipe()
@@ -857,6 +897,8 @@ class _AnalysisThread(_QThread_base):
         shapes: list = []
         vectors: list = []
         held = None
+        held_harmony = None
+        held_rhythm = None
         sent_bands = False
         while running:
             if self._stop:
@@ -875,6 +917,10 @@ class _AnalysisThread(_QThread_base):
                 if kind in ("shapes", "vectors"):
                     (shapes if kind == "shapes" else vectors).extend(payload)
                     continue
+                if kind == "beats":
+                    self.beats.emit(payload)
+                    continue
+
                 if kind == "bands":
                     frames, calibration, _shape = payload
                     self.bands.emit(payload)
@@ -882,6 +928,12 @@ class _AnalysisThread(_QThread_base):
                     if held is not None:
                         self.elements.emit(held)
                         held = None
+                    if held_harmony is not None:
+                        self.harmony.emit(held_harmony)
+                        held_harmony = None
+                    if held_rhythm is not None:
+                        self.rhythm.emit(held_rhythm)
+                        held_rhythm = None
                     continue
                 if kind == "done":
                     self.done.emit((frames, shapes, vectors, calibration,
@@ -894,8 +946,25 @@ class _AnalysisThread(_QThread_base):
                             self.elements.emit(payload)
                         else:
                             held = payload
+                    # Not the drums' last word: the rhythm follows it.
+                    continue
+                elif kind == "rhythm":
+                    if payload is not None:
+                        if sent_bands:
+                            self.rhythm.emit(payload)
+                        else:
+                            held_rhythm = payload
+                elif kind == "harmony":
+                    if payload is not None:
+                        # Not before the bands either: see elements.
+                        if sent_bands:
+                            self.harmony.emit(payload)
+                        else:
+                            held_harmony = payload
                 elif kind == "failed":
-                    if part != "picture":
+                    if part == "harmony":
+                        log.info("Could not hear the harmony (%s).", payload)
+                    elif part != "picture":
                         log.info("Could not pick the drums out (%s).", payload)
                     elif not sent_bands:
                         # Nothing has gone out: do it here instead.
@@ -925,6 +994,9 @@ class _AnalysisThread(_QThread_base):
             self.bands.emit((frames, calibration, _whole_contour(
                 frames, self._samples, self._rate, self._channels,
                 calibration)))
+            import beatmap
+            early = beatmap.build(frames, RATE)
+            self.beats.emit(early)
             # The waveform the oscilloscope draws, on the same schedule as
             # the bands so one index reads both.
             shapes = traces(self._samples, self._rate, self._channels,
@@ -936,8 +1008,7 @@ class _AnalysisThread(_QThread_base):
             # against the seconds the analysis takes and doing it here
             # means the strobe knows the whole track before a note plays -
             # which is what lets it sit on the beat instead of chasing it.
-            import beatmap
-            beats = beatmap.build(frames, RATE)
+            beats = early
         except Exception as exc:      # noqa: BLE001
             if not self._stop:
                 self.failed.emit(str(exc))
@@ -965,6 +1036,22 @@ class _AnalysisThread(_QThread_base):
             return
         if not self._stop:
             self.elements.emit(kit)
+            found_rhythm = _rhythm_of(fine, kit)
+            if found_rhythm is not None and not self._stop:
+                self.rhythm.emit(found_rhythm)
+        if self._stop or not self._wants_harmony:
+            return
+        try:
+            import harmony
+
+            found = harmony.analyse(self._samples, self._rate,
+                                    self._channels,
+                                    should_stop=lambda: self._stop)
+        except Exception as exc:      # noqa: BLE001 - sounds, not the mail
+            log.info("Could not hear the harmony (%s).", exc)
+            return
+        if not self._stop and found is not None:
+            self.harmony.emit(found)
 
 
 class _Analysis(QObject_base):
@@ -974,11 +1061,15 @@ class _Analysis(QObject_base):
     """
 
     def __init__(self, decoder, on_done, on_fail, on_progress=None,
-                 on_elements=None, on_bands=None) -> None:
+                 on_elements=None, on_bands=None, on_harmony=None,
+                 on_beats=None, on_rhythm=None) -> None:
         super().__init__()
         self._decoder = decoder
         self._on_done = on_done
         self._on_bands = on_bands
+        self._on_harmony = on_harmony
+        self._on_beats = on_beats
+        self._on_rhythm = on_rhythm
         self._on_fail = on_fail
         self._on_progress = on_progress
         self._on_elements = on_elements
@@ -1023,13 +1114,20 @@ class _Analysis(QObject_base):
         if self._stop:
             return
         thread = _AnalysisThread(samples, rate, channels,
-                                 self._on_elements is not None)
+                                 self._on_elements is not None,
+                                 self._on_harmony is not None)
         thread.done.connect(self._finished)
         if self._on_bands is not None:
             thread.bands.connect(self._early)
         thread.failed.connect(self._failed)
         if self._on_elements is not None:
             thread.elements.connect(self._kit)
+        if self._on_harmony is not None:
+            thread.harmony.connect(self._harmonised)
+        if self._on_beats is not None:
+            thread.beats.connect(self._beaten)
+        if self._on_rhythm is not None:
+            thread.rhythm.connect(self._rhythmic)
         thread.finished.connect(self._thread_done)
         if self._on_progress is not None:
             thread.progress.connect(self._report)
@@ -1045,6 +1143,21 @@ class _Analysis(QObject_base):
         """The drums, once the finer pass has finished."""
         if not self._stop and self._on_elements is not None:
             self._on_elements(elements)
+
+    def _rhythmic(self, found) -> None:
+        """The drums' own tempo and beat, with the kit."""
+        if not self._stop and self._on_rhythm is not None:
+            self._on_rhythm(found)
+
+    def _beaten(self, maps) -> None:
+        """The beat maps, straight after the bands."""
+        if not self._stop and self._on_beats is not None:
+            self._on_beats(maps)
+
+    def _harmonised(self, found) -> None:
+        """The key and the chords, last of all."""
+        if not self._stop and self._on_harmony is not None:
+            self._on_harmony(found)
 
     def _report(self, fraction: float) -> None:
         if not self._stop and self._on_progress is not None:
@@ -1069,7 +1182,9 @@ class _Analysis(QObject_base):
 
 
 def decode(path, on_done, on_fail, on_progress=None,
-           on_elements=None, on_bands=None) -> Optional[object]:
+           on_elements=None, on_bands=None,
+           on_harmony=None, on_beats=None,
+           on_rhythm=None) -> Optional[object]:
     """Decode a file to PCM with Qt, then hand the frames back.
 
     Returns a handle the caller must keep alive and may ``cancel()``. Qt
@@ -1125,7 +1240,7 @@ def decode(path, on_done, on_fail, on_progress=None,
         handle.start_analysis(collected, state["rate"], state["channels"])
 
     handle = _Analysis(decoder, on_done, on_fail, on_progress, on_elements,
-                       on_bands)
+                       on_bands, on_harmony, on_beats, on_rhythm)
     decoder.bufferReady.connect(buffer_ready)
     decoder.finished.connect(finished)
     # The signal is named differently across Qt 6 point releases, and a

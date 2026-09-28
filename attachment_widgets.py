@@ -215,7 +215,8 @@ class SpectrumState:
                  "dials", "dial_labels", "dial_colour", "background",
                  "trace", "vector", "calibration", "history",
                  "trace_history", "vector_history", "kit", "tempo",
-                 "beat_at", "at", "chart", "moving", "contour")
+                 "beat_at", "at", "chart", "moving", "contour", "harmony",
+                 "flux", "rhythm")
 
     def __init__(self) -> None:
         self.levels: List[float] = []
@@ -252,9 +253,20 @@ class SpectrumState:
         #: cannot work from the kit levels, which only say what is
         #: happening now.
         self.chart: dict = {}
+        #: And how hard each part of the kit was hitting at every moment,
+        #: as (readings, readings a second), for reading a track's rhythm
+        #: without trusting any one detected hit. See trackstyle.
+        self.flux: dict = {}
         #: The track's shape from end to end: see attachment_audio's
         #: ``contour``. None until the analysis has landed.
         self.contour = None
+        #: Its key, tuning, chords and lead: see harmony. None until that
+        #: pass has landed, which is last, and for good on a track with
+        #: no harmony to hear.
+        self.harmony = None
+        #: The drums' own tempo, beat and pattern: see trackstyle. None
+        #: until the kit has been found.
+        self.rhythm = None
         #: Whether the track is actually going. A paused player reports
         #: the same position every frame, and a scene that travels needs
         #: to know the difference: without it the rave's corridor crept
@@ -665,6 +677,9 @@ class Spectrum(QWidget):
         self._contour = None
         self._contour_from = None
         self._contour_whole = False
+        #: See set_harmony and set_rhythm.
+        self._harmony = None
+        self._rhythm = None
         self._moved_at = None
         #: How far through each element's list the playhead has got.
         self._kit_at: dict = {}
@@ -1393,6 +1408,20 @@ class Spectrum(QWidget):
             self._contour = None
             self._contour_from = None
 
+    def set_harmony(self, harmony) -> None:
+        """The track's key, tuning and chords, once they are known."""
+        self._harmony = harmony
+
+    def set_rhythm(self, rhythm) -> None:
+        """The drums' own tempo, beat and pattern, once they are known."""
+        self._rhythm = rhythm
+
+    def rhythm(self):
+        return self._rhythm
+
+    def harmony(self):
+        return self._harmony
+
     def set_contour(self, contour) -> None:
         """The track's whole shape, sent with the bands. Final."""
         if contour is None:
@@ -1471,6 +1500,8 @@ class Spectrum(QWidget):
         self._frames = []
         self._level = []
         self._peak = []
+        self._harmony = None
+        self._rhythm = None
         self._state.history = []
         self._state.trace_history = []
         self._state.vector_history = []
@@ -1960,6 +1991,8 @@ class Spectrum(QWidget):
                 self._state.calibration)
                 if self._frames else None)
         state.contour = self._contour
+        state.harmony = self._harmony
+        state.rhythm = self._rhythm
         if self._chart_from is not self._elements:
             # Built once per analysis. The maps arrive a few seconds after
             # the rest, and rebuilding this every frame would walk every
@@ -1968,6 +2001,9 @@ class Spectrum(QWidget):
             state.chart = {name: tuple(beat.at for beat in found.beats)
                            for name, found in self._elements.items()
                            if getattr(found, "beats", None)}
+            state.flux = {name: (found.flux, found.rate)
+                          for name, found in self._elements.items()
+                          if getattr(found, "flux", None)}
         found = None
         for name in ("Kick", "Bass", self._strobe_source, "Mids"):
             candidate = self._beats.get(name)
@@ -3382,13 +3418,19 @@ class CardSharpness:
         2560x1664   8.9 ms      3456x2234  13.8 ms      6016x3384  32.3 ms
         3024x1964  11.2 ms      5120x2880  22.7 ms
 
-    The last two are 44 and 31 frames a second. What gives first is the
+    The last two are 44 and 31 frames a second. What gives is the
     multisampling, because at a Retina display's density two samples a
     pixel is most of the smoothness of four and at 5K it is half the
-    scene's cost - 9.1 ms against 5.5. Only once that is not enough does
-    the resolution go, and then to the screen's logical resolution, the
-    whole-number step the CPU's own ladder settles on (see Sharpness for
-    why a whole number beats anything in between).
+    scene's cost - 9.1 ms against 5.5 - and after that none at all.
+
+    Never the resolution. It used to go next, to the screen's logical
+    resolution stretched back up, and the moment it went was often not the
+    card at all: the first seconds of a track are when three analysis
+    processes are busy on the same machine, and a median over half a
+    second of that put full screen at half its pixels until the next
+    retry. "Xxxxxx xxx xxxxxxxxxxx xxx xxxx xxx xxxx xxxx xxxxxxxx xxxx xx
+    xxxxxxxxxxx": a frame that will not fit at every pixel with no
+    samples is drawn at every pixel a little later instead.
 
     Measured rather than guessed from the pixel count, for the same
     reason Sharpness is: the same frame costs very different amounts on
@@ -3447,10 +3489,8 @@ class CardSharpness:
 
     @staticmethod
     def rungs(ratio: float) -> tuple:
-        """(samples a pixel, share of the screen's pixels), best first."""
-        logical = round(1.0 / max(1.0, ratio), 4)
-        if logical < 1.0:
-            return ((4, 1.0), (2, 1.0), (4, logical), (2, logical))
+        """(samples a pixel, share of the screen's pixels), best first:
+        every pixel, whatever the screen. See the class."""
         return ((4, 1.0), (2, 1.0), (0, 1.0))
 
     def choice(self, pixels: float, ratio: float, scene) -> tuple:

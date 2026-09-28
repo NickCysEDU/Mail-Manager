@@ -98,8 +98,15 @@ def decoded(path, patience=PATIENCE):
     def kit(elements):
         got["elements"] = elements
 
+    def harmonised(found):
+        got["harmony"] = found
+
+    def rhythmic(found):
+        got["rhythm"] = found
+
     handle = attachment_audio.decode(str(path), done, failed,
-                                     on_elements=kit)
+                                     on_elements=kit, on_harmony=harmonised,
+                                     on_rhythm=rhythmic)
     if handle is None:
         return None, "no decoder in this build"
     started = time.monotonic()
@@ -114,10 +121,17 @@ def decoded(path, patience=PATIENCE):
             return None, f"gave up after {patience:.0f}s"
         loop.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 20)
         QCoreApplication.processEvents()
+    # And the harmony, which comes last and may not come at all - a track
+    # with nothing to hear in it still has a road.
+    while "harmony" not in got and time.monotonic() - started < patience:
+        loop.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 20)
+        QCoreApplication.processEvents()
     frames, shapes, vectors, calibration, beats = got["analysis"]
     return {"frames": frames, "traces": shapes, "vectors": vectors,
             "calibration": calibration, "beats": beats,
-            "elements": got["elements"]}, None
+            "elements": got["elements"],
+            "harmony": got.get("harmony"),
+            "rhythm": got.get("rhythm")}, None
 
 
 def paned(got, mode="Mono", size=(1280, 720)):
@@ -134,6 +148,8 @@ def paned(got, mode="Mono", size=(1280, 720)):
     pane.set_calibration(got["calibration"])
     pane.set_beats(got["beats"])
     pane.set_elements(got["elements"])
+    pane.set_harmony(got.get("harmony"))
+    pane.set_rhythm(got.get("rhythm"))
     pane.set_labels([str(c) for c in attachment_audio.CENTRES])
     pane._reveal_changed(1.0)
     rider = next(s for s in visualizers.SCENES if s.name == "Music rider")
@@ -361,6 +377,13 @@ def ride(got, seconds=45.0, mode="Mono", fps=60, save=None, steer=True,
         "score": report,
         "still": (None if still is None or still[2] == 0
                   else still[1] / still[2]),
+        # How the record was read: see trackstyle and harmony.
+        "style": (scene._style.family() if scene._style is not None
+                  else "-"),
+        "drums": bool(scene._style is not None and scene._style.from_drums),
+        "sections": ("".join(section.kind[0] for section in
+                             scene._style.sections)
+                     if scene._style is not None else ""),
     }
 
 
@@ -385,7 +408,8 @@ def main(argv=None) -> int:
 
     print(f"{'track':26} {'bpm':>5} {'blocks':>6} {'off ms':>11} "
           f"{'speed lo/mean/hi':>20} {'back':>5} {'empty':>6} "
-          f"{'hits':>5} {'coins':>7} {'twist':>5} {'ms':>11}")
+          f"{'hits':>5} {'coins':>7} {'twist':>5} {'ms':>11} "
+          f"{'key':>4} {'style':>7}")
     worst = 0
     for path in args.songs:
         name = path.name[:30]
@@ -394,6 +418,11 @@ def main(argv=None) -> int:
             print(f"{name:30} could not be analysed: {why}")
             worst = max(worst, 1)
             continue
+        # The key the game's sounds are played in, or "-" for none.
+        import rider_sound
+
+        heard = got.get("harmony")
+        key = (heard["key"]["name"] if rider_sound.pitched(heard) else "-")
         out = ride(got, seconds=args.seconds, mode=args.mode, fps=args.fps,
                    save=args.save if path is args.songs[0] else None,
                    steer=not args.no_steer,
@@ -411,7 +440,12 @@ def main(argv=None) -> int:
               f"{got['hits']:5d} "
               f"{got['coins']:3d}/x{got['coin_best']:<3d} "
               f"{got['twists']:5d} "
-              f"{out['ms'][0]:5.1f}/{out['ms'][1]:5.1f}" + air)
+              f"{out['ms'][0]:5.1f}/{out['ms'][1]:5.1f} "
+              f"{key:>4} {out['style']:>7}" + air)
+        # What the record was taken to be made of, a letter a part:
+        # intro, build, drop, groove, break, outro.
+        print(f"     parts {out['sections']}  tempo from "
+              f"{'the drums' if out['drums'] else 'the beat maps'}")
         fair = out["fair"]
         if fair and fair["stuck_at"] is not None:
             print(f"     UNFAIR: nothing to move to at {fair['stuck_at']}s, "

@@ -318,7 +318,9 @@ def self_test(offline: bool = False) -> int:
             raise RuntimeError("the rider's world is not in this build")
         working.append("the rider's world")
         import rider_sound
-        if len(rider_sound.coin(0)) < 1000:
+        if (len(rider_sound.make("tick0")) < 1000
+                or len(rider_sound.make(rider_sound.note_name("pluck", 72, 0)))
+                < 1000):
             raise RuntimeError("the rider's sounds are not in this build")
         working.append("the rider's sounds")
         # Kept, read back and beaten, in a folder of its own that is then
@@ -335,6 +337,48 @@ def self_test(offline: bool = False) -> int:
             if rider_bests.Bests(place).offer(track, "Mono", 20) != (10, True):
                 raise RuntimeError("the rider's bests are not kept")
         working.append("the rider's bests")
+        # And what the road and the sounds are laid from: a chord heard in
+        # its key, and a beat read off a kick. Imported in the analysis's
+        # own processes and on the game's first frame, so a bundle without
+        # them fails there rather than here.
+        import math
+
+        import harmony
+        import trackstyle
+        from array import array as _array
+
+        rate = 8000
+        chord = _array("h", [int(8000 * (math.sin(2 * math.pi * 261.63 * i / rate)
+                                         + math.sin(2 * math.pi * 329.63 * i / rate)
+                                         + math.sin(2 * math.pi * 392.0 * i / rate)))
+                             for i in range(rate * 3)])
+        heard = harmony.analyse(chord, rate, 1)
+        if not heard or heard["key"]["tonic"] not in (0, 9):
+            raise RuntimeError("the rider cannot hear a key")
+        kick = [1.0 if i % 30 == 0 else 0.0 for i in range(60 * 20)]
+        kit = {name: trackstyle._Kept(kick, 60.0)
+               for name in ("Kick", "Snare", "Hats")}
+        found = trackstyle.rhythm_of(kit, tempo=120.0)
+        if not found or abs(found["tempo"] - 120.0) > 1.0:
+            raise RuntimeError("the rider cannot read a beat")
+        working.append("the rider's key and beat")
+        # What the road is laid with, for the style just read: imported on
+        # the game's first frame.
+        import rider_layout
+        plan = rider_layout.Plan(trackstyle.Style(steady=1.0, seed=7))
+        drop = trackstyle.Section(0.0, 30.0, "drop", 0.9, True)
+        if plan.figure(drop, 0, True)[0] not in rider_layout.DANGER:
+            raise RuntimeError("the rider cannot lay a road")
+        working.append("the rider's road")
+        # The scope's screen on the card, imported the first time the
+        # scope is drawn there. A bundle without it draws the scope on the
+        # CPU instead, which is too slow at a full screen to notice as
+        # anything but a stutter - so it is looked for here.
+        import scope_gl
+        if scope_gl.reach(2880, 1800) != (2160, 1800) or not hasattr(
+                scope_gl, "Tube"):
+            raise RuntimeError("the scope cannot draw on the card")
+        working.append("the scope on the card")
         return ", ".join(working)
 
     check("attachment viewer", _attachment_viewer)

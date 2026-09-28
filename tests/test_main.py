@@ -134,6 +134,32 @@ class TestTheSelfTestHasTeeth:
         assert "FAILED" in line and "bests" in line, line
 
 
+class TestTheSelfTestLooksForWhatIsImportedLate:
+    """Modules the viewer imports inside a method, on the game's first
+    frame or the first time the scope is drawn on the card - the kind a
+    bundle can lose without anything else noticing."""
+
+    @pytest.mark.parametrize("module,words", [("rider_layout", "road"),
+                                              ("scope_gl", "scope")])
+    def test_a_bundle_without_it_fails(self, tmp_path, monkeypatch, capsys,
+                                       module, words):
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        # What a bundle that lost it does on ``import``.
+        monkeypatch.setitem(sys.modules, module, None)
+        assert self_test() == 1
+        line = next(row for row in capsys.readouterr().out.splitlines()
+                    if "attachment viewer" in row)
+        assert "FAILED" in line and module in line, line
+
+    def test_and_says_so_when_it_is_there(self, tmp_path, monkeypatch,
+                                          capsys):
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        self_test()
+        line = next(row for row in capsys.readouterr().out.splitlines()
+                    if "attachment viewer" in row)
+        assert "the rider's road" in line and "the scope on the card" in line
+
+
 class TestBundledPath:
     def test_finds_a_resource_next_to_the_source(self):
         assert _bundled_path("assets/icon.png") is not None
@@ -175,3 +201,21 @@ class TestMainEntry:
     def test_reset_settings_on_a_clean_install_is_not_an_error(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
         assert main_module.main(["--reset-settings", "--print-paths"]) == 0
+
+
+class TestTheSelfTestHearsAndCounts:
+    def test_a_rider_that_cannot_hear_a_key_fails(self, tmp_path, monkeypatch,
+                                                  capsys):
+        import harmony
+
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        monkeypatch.setattr(harmony, "analyse", lambda *a, **k: None)
+        assert self_test() == 1
+
+    def test_a_rider_that_cannot_count_fails(self, tmp_path, monkeypatch,
+                                             capsys):
+        import trackstyle
+
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        monkeypatch.setattr(trackstyle, "rhythm_of", lambda *a, **k: None)
+        assert self_test() == 1

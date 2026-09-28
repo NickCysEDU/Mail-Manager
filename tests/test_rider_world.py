@@ -810,6 +810,89 @@ class TestTheWorldOnTheCard:
             f"{got['moved']:.0%} of the craft moved when only the road "
             f"ahead of it turned: it is not turned in one piece")
 
+    def test_the_canopy_is_glass_not_paint(self):
+        """"Xxx xxxx xxxxxxx xxxx xxxxxx xxxx xxxx xxxx xxxxxxxxxx xx xx
+        xxxx xxxx x xxxx xxxxx." The craft alone, with its canopy and
+        without, so the canopy is exactly the points that differ; across
+        them, glass runs from the dim cockpit it is facing you over to the
+        bright world it reflects at its edges, and a flat tint only as far
+        as the light on each face takes it.
+
+        And it is the world's colours on it and moving over it, which is
+        what tells glass from a tint: lit the same way, a flat canopy has
+        one hue across it (a spread of 0.02, measured) and changes as the
+        craft travels no more than the hull does, where the glass carries
+        the sky's hues (0.36) and the city sliding back over it (five times
+        the hull's change)."""
+        got = on_the_card(RIDER + textwrap.dedent("""
+            import math
+            ALONE = ("_draw_sky", "_draw_city", "_draw_road", "_draw_blocks",
+                     "_draw_barriers", "_draw_beacons", "_draw_gates",
+                     "_draw_streaks", "_draw_trim", "_draw_particles")
+            def craft(canopy):
+                made, scene = rider_pane(size=(800, 500))
+                shots = []
+                with Clock() as clock:
+                    for i in range(40):
+                        clock.step(1 / 60)
+                        made.set_position(int((10 + i / 60) * 1000))
+                        scene._placed = scene._laid = 1e9
+                        scene._blocks = []
+                        world = made._canvas.world
+                        if world is not None:
+                            for name in ALONE:
+                                setattr(world, name, lambda frame: None)
+                            if not canopy:
+                                world.canopy.draw = lambda gl, p: None
+                        made._tick()
+                        shot = made._canvas.grabFramebuffer()
+                        if i in (29, 39):
+                            shots.append(shot)
+                return shots
+            (a, later), (b, _later) = craft(True), craft(False)
+            points, hull = [], []
+            for y in range(0, a.height(), 2):
+                for x in range(0, a.width(), 2):
+                    one, two = a.pixelColor(x, y), b.pixelColor(x, y)
+                    if abs(one.valueF() - two.valueF()) > 0.03 or abs(
+                            one.hueF() - two.hueF()) > 0.05:
+                        points.append((x, y))
+                    elif two.valueF() > 0.05:
+                        hull.append((x, y))
+            glass = sorted(a.pixelColor(x, y).valueF() for x, y in points)
+            hues = [a.pixelColor(x, y).hueF() for x, y in points
+                    if a.pixelColor(x, y).saturationF() > 0.15
+                    and a.pixelColor(x, y).valueF() > 0.08]
+            # One minus the length of the mean of the hues as angles: 0 for
+            # one hue, towards 1 for every hue there is.
+            spread = (1.0 - math.hypot(
+                sum(math.cos(h * math.tau) for h in hues),
+                sum(math.sin(h * math.tau) for h in hues)) / len(hues)
+                if hues else 0.0)
+            def change(where):
+                return sum(abs(a.pixelColor(x, y).valueF()
+                               - later.pixelColor(x, y).valueF())
+                           for x, y in where) / max(1, len(where))
+            print(json.dumps({"points": len(glass),
+                              "low": glass[len(glass) // 10] if glass else 0,
+                              "high": glass[len(glass) * 9 // 10] if glass else 0,
+                              "top": glass[-1] if glass else 0,
+                              "spread": spread, "moving": change(points),
+                              "hull_moving": change(hull)}))
+        """))
+        assert got["points"] > 40, f"the canopy was not found: {got}"
+        assert got["high"] > got["low"] * 2.2 + 0.05, (
+            f"the canopy runs from {got['low']:.2f} to {got['high']:.2f}: a "
+            f"flat tint")
+        assert got["top"] > 0.85, "nothing on it catches the light"
+        assert got["spread"] > 0.15, (
+            f"the canopy is one colour (a spread of hues of "
+            f"{got['spread']:.3f}): a tint, not the world reflected")
+        assert got["moving"] > 2.5 * got["hull_moving"], (
+            f"the canopy changes {got['moving']:.3f} as the craft travels "
+            f"against the hull's {got['hull_moving']:.3f}: nothing slides "
+            f"over it")
+
     def test_it_survives_being_moved_into_full_screen(self):
         """Full screen takes the pane out of the window and puts it in
         another, which can bring a new context: the world built on the

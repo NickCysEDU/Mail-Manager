@@ -803,6 +803,22 @@ one wide pen over that path measured 880 ms and the stack 3. End to end
 the scene runs 7.4 ms a frame at full screen against 16.6 before, and its
 worst frame 36 ms against 205.
 
+**On the graphics card the tube stays there** (`scope_gl.py`). Full screen
+is every pixel now (below), and at a Retina full screen's 2880x1800 the
+CPU's tube cost 16 ms to strike each new trace and a few more to hand the
+whole screen to the card: fifteen times a second a frame took 30 ms, and
+the scope ran at 33 frames a second. On the card the screen is a buffer
+that never leaves it, the beam is the same painter calls through Qt's
+OpenGL engine, and it is composed the way the CPU composes it: the screen
+kept in plain pixels and dimmed there, and only the new trace struck with
+four samples a pixel, into a scratch buffer, and laid over it. It is kept
+only as wide as the beam can reach - a square a little bigger than the
+screen is tall, a quarter fewer pixels on a wide screen. A frame with a new
+trace is 14.8 ms at the 90th percentile and the rest 9.6, and the picture
+is the CPU's to within a hundredth in brightness, sweep and X-Y, faded and
+not. A card that will not keep the screen hands it back to the CPU for the
+rest of the session, and the scope goes on drawing.
+
 ### The shape of the track
 
 In the window, the whole track is drawn as a waveform where the seek bar
@@ -923,6 +939,12 @@ the picture 2.3 degrees rather than 3.4. The ceiling in the test is set
 just above what it measures rather than at the old headroom, so it
 cannot drift back up without saying so.
 
+**Corkscrews go into the drops.** A corkscrew now starts two and a half
+seconds before a drop and lands the right way up on its first beat, the
+biggest drops first and twenty-five seconds apart at least - further on
+calm music - where the track has drops; where it has none, at its loudest
+moments as below.
+
 **Corkscrews.** Audiosurf 2 places "corkscrew loops and powerups timed
 perfectly with big moments in your music", and what counts as a big
 moment is already measured here - the loudness contour the road's hill
@@ -1019,6 +1041,39 @@ the run builds, from nothing at all to a gold glow at forty, which is
 where the chain pays near its cap and a grey stops costing points and
 starts costing the run. Puzzle has no chain to measure, so there it
 follows how full the grid is, which is the thing that game is building.
+
+**The road is laid on the drums' own beat.** The beat maps the rest of the
+app counts in are found at fifteen readings a second and phased from the
+first thing they heard - which on a real record is as often between two
+beats as on one. Measured against a DJ program's beat grids on sixty
+records, they were more than a tenth of a beat out on ten of twenty-four,
+and the tempo was wrong outright - by a third or a quarter, not an octave -
+on sixteen of forty: blocks laid between the beats, or drifting across
+them. The rider now takes its tempo and beat from the drums: the kick and
+the snare's onset strength at sixty readings a second, folded over the
+whole record. The tempo is chosen among the drums' own readings and their
+usual mistakes (a half, two thirds, three quarters, four thirds and so on)
+by how sharply the whole track folds onto it - a hundredth of a beat a
+minute off and over seven minutes the beats smear - and it comes out right
+on 55 of 60 records, 40 exactly and 15 an octave apart, which is how the DJ
+program files drum and bass. The beat is where the kick and the snare land,
+moved half a beat if that puts the snare between beats rather than on
+them; where the tempo is right it sits within seven milliseconds of the
+DJ program's grid at the median. Drum and bass, which every other scene
+counts at half its tempo (below), is ridden at its own: counted at 87, its
+snare falls on every beat it is counted in, which at its real tempo is two
+and four.
+
+The other way round, hip hop is ridden at its own tempo too. Kick on one
+and snare on three at 176 is a backbeat at 88 beat for beat - the fold
+cannot tell them apart, only the tempo can - and two hip hop records in
+eight were counted at 170 and 176, which ran the road at twice the speed
+of the music with its obstacles twice as close. Half time counted at 155
+or faster is counted at half: that fast it is hip hop or half-time drum
+and bass, which a DJ program and a nodding head both count at 80 to 100,
+while dubstep, riddim and trap sit at 140 to 150 and are left there.
+Against the DJ program's tempos on 89 records that put four more right and
+none wrong that had been right.
 
 **A tempo is counted the way a person would count it.** Tempo detectors
 make octave errors - they find the right pulse and report it doubled or
@@ -1127,10 +1182,21 @@ done - the amplitude is the envelope the waveform above the transport is
 drawn from, and the lean is read off the oscilloscope's own traces - so
 the pre-pass costs about a millisecond on top of it.
 
-A chorus runs downhill and a breakdown climbs. A mix that sits to the
-left turns the road left; the lean is *summed* along the road rather than
-used directly, because a lean is a direction and a road is where
-following one gets you.
+The loudness is the *slope*, not the height: "quiet, slow, or ambient
+sections generate steep uphill climbs ... when a loud, high-energy section
+occurs, the track plunges sharply downhill." So the height is the loudness
+summed about its middle, and a breakdown is a long climb and a chorus a
+long run down, where the height itself made a hill of every chorus. A
+build climbs harder towards its end, so the road crests where the drop
+comes, and the first two bars of a drop fall away at most of forty per
+cent - which the lit world, seeing six seconds of road, shows as a road
+dropping away beyond the crest; the flat picture, whose eye sees a second
+and a half, shows three tenths of the relief. A mix that sits to the left
+turns the road left; the lean is *summed* along the road rather than used
+directly, because a lean is a direction and a road is where following one
+gets you. On top of it goes a turn a phrase long, one way and then mostly
+the other, in the character of the music (see below): long sweeps on four
+to the floor, a turn every two bars on broken and hard music.
 
 Summed **about its own middle**, though, and that correction is the
 difference between a road with corners and no road at all. A mix has a
@@ -1185,6 +1251,20 @@ and one at the end. The lunge is also chosen once a beat and held for the
 whole of it: it shapes where the road is *within* a beat, so changing it
 part-way through moves the road, and a road that may only go forwards
 stops instead and waits for the curve to catch up.
+
+And a block between two beats is put on the same curve, or it arrives
+early: the curve is only the straight line at a beat's two ends. The lunge
+used to be chosen from the bass as each beat began, too late for anything
+already on the road, so blocks were placed on the straight line - harmless
+while every block sat on a beat, and once the road laid swung eighths,
+streams and trails of coins between beats, the median block reached the
+rider 29 ms from its moment and one at the half beat 80 ms early. Each
+beat's lunge is now decided as the beat comes into view, from how loud
+the track is there - which the analysis knows in advance - and is fixed
+from then, so what is in sight never moves and every block arrives within
+the frame it is due in: 8 ms at the median and 16 at the worst, on a real
+record, against 10 and 82 before any of this. A hit still eases the lunge,
+for the beats that come into view after it.
 
 **The same game on every machine.** A lane change is a share of the
 remaining distance, and a share *per frame* is a different game on every
@@ -1341,6 +1421,16 @@ range it claims before anything sums it, and a nan comes back as the
 floor rather than as the nearest bound, because a nan is an answer that
 was never worked out.
 
+**Full screen is every pixel, always.** The card gives up its
+multisampling when a frame will not fit - four samples to two, and then
+none - and never its resolution. It used to go next to the screen's
+logical resolution stretched back up, and the moment it went was often not
+the card at all: the first seconds of a track are when three analysis
+processes are busy on the same machine, and a median over half a second of
+that put full screen at half its pixels until the next retry. "Xxxx xxx
+xxxx xxxx xxxxxxxx xxxx xx xxxxxxxxxxx": a frame that will not fit at every
+pixel with no samples is drawn at every pixel a little later instead.
+
 **Full screen is sharp.** It was soft because it could not afford to be
 anything else. A Retina full screen is 2880x1800 real pixels, and on the
 CPU Music rider cost 42 ms a frame there with its bloom and vignette,
@@ -1493,24 +1583,80 @@ of the difference was the canvas multisampling a frame the world had
 already made smooth, and a floating-point format packed into eleven,
 eleven and ten bits rather than four half floats did the rest.
 
-**Music rider makes sounds of its own.** A note for every block you
-take, a bell struck under the music, one step up a pentatonic scale each
-time - so a run is something you hear climbing, and it stays in tune with
-itself against any record, because a pentatonic scale has no wrong note in
-it. A long run carries on round the top octave rather than falling back to
-the bottom, which would sound like the run had broken. In the puzzle game
-the note climbs as the grid fills, which is what Audiosurf does. A coin is
-a brighter ting that climbs along a row; a power block is a rising sweep;
-a milestone is an arpeggio; a shield going is glass.
+**Music rider makes sounds of its own, in the record's key.** A note for
+every block you take, one step up each time - so a run is something you
+hear climbing. They are made the way the records they play over are: a
+pickup is the pluck a trance lead is built from, two sawtooths seven cents
+either side of the note, one in each ear, through a resonant filter that
+opens on the strike and closes as it rings; a coin is glass struck by
+frequency modulation with a blip up into its note. Each comes back twice,
+quieter, a dotted eighth and a dotted quarter later on the record's own
+beat - the delay a lead is run through - so a run rings on in time with
+the music rather than over it. The notes used to be a
+pentatonic scale on E whatever was playing, and over a record in another
+key they were wrong notes on top of its melody. Now the analysis hears the
+record's key, its tuning and the chord under every moment (see
+`harmony.py`) - each chord heard over a second and a half around it, so
+that an arpeggio, which sounds its chord a note at a time and gives a
+quarter-second reading two notes of three, is its chord and not three
+chords taking turns (right 73 per cent of the time on a bare arpeggio
+with no bass under it, against a third), and a pickup is the next note up *that chord*: a run is an
+arpeggio through the song's own changes, and tuned to the record even when
+it is not at A = 440. Where no chord is heard the notes are the key's
+pentatonic. A long run carries on round the top of its notes rather than
+falling back to the bottom. A coin climbs the same way, higher; a power
+block is a riser - noise through a resonant band climbing to the top of
+the range over a climbing saw - with the chord's root and fifth landing
+on top of it; a milestone arpeggiates the chord; the shield going is a
+power-down falling through the floor under a scatter of glass, with the
+chord ringing in it; the end of a track goes home to the key's own
+chord.
 
-A hit is not a note. It is a thump under the music, a crunch over it and
-a stab in no key at all - and the music itself ducks for a moment and
-comes back, which is the part you feel rather than hear.
+Where there is no key worth playing in - a noise, a record the analysis is
+not sure of - the pickups are not notes at all but digital chatter, three
+grains of noise flicking between the ears, and the coins a metallic
+shimmer, both brighter as the run climbs, which cannot be out of key
+because they have none. How sure is enough was measured on the same records: at a
+confidence of 0.1 and over, 58 in 61 came out the key or its relative, and
+between 0.03 and 0.06 none was worse than a fifth out, which a note taken
+from the chord barely notices - so notes from 0.05 up. A drum track can
+come out with a key its drums lean to, and gets notes in it; with no
+melody over them they have nothing to clash with. A hit is never a note: an impact - a
+sub-bass drop under the music, a crunch of bit-crushed noise over it and a
+zap tearing down through the whole range - and the music itself ducks for
+a moment and comes back, which is the part you feel rather than hear. It
+used to carry a stab "in no key at all", the one sound that clashed on
+purpose. None of the sounds without a note has one hiding in it: measured,
+the strongest semitone in any of them stands at most twelve times over the
+semitones around it, where a note stands two to twenty thousand times.
+
+The key: the whole record's pitch classes held against a major and a minor
+profile of how much each degree of a scale is heard, fitted on 88
+electronic dance records against the keys a DJ program reads for them. Left
+out one record at a time, 80 per cent come out the same key, against 65 for
+Temperley's published profiles and 49 for Krumhansl and Kessler's. A key and
+its relative - A minor and C major, the same seven notes - fit about equally
+often, and then the chords decide: whichever key's own chord is heard
+longer, and if that is even, the one the track begins on. The tuning is the
+average of every peak's distance from the semitone grid, round the circle,
+and comes out within a few cents on written material from forty cents flat
+to forty-five sharp. How much of a record has a pitch at all is the share of
+its spectral peaks that sit in tune: drums on their own land anywhere, notes
+land on the grid. That is kept for the road's melodic figures and not asked
+before playing in key: on a real mix the drums outweigh everything, and
+records whose key came out right scored almost nothing on it.
 
 Nothing is recorded and nothing ships: each sound is a few hundred
-milliseconds of arithmetic, made once in a process of its own and kept as
-a short WAV in `~/Library/Caches/Mail Manager/sounds`. They play at a
-share of the player's own volume. **Sounds** beside the game box turns
+milliseconds of arithmetic, made in a process of its own - the notes for a
+tuning the first time a record in it is played, never on the thread drawing
+the picture - and kept as a short WAV in
+`~/Library/Caches/Mail Manager/sounds`, with the notes of the newest few
+tunings kept. **fx**, the
+slider beside **Sounds**, sets how loud they are against the music - a
+share of the player's own volume, so turning the music up or down keeps
+the balance where it was put; half by default, as loud as the music at
+the right. Letting go of it plays a pickup at the new level, it is on the
+full-screen bar while the game is, and it is remembered. **Sounds** turns
 them off, and so does **X** while the game is on screen.
 
 **A ride ends with how it went.** When the track finishes, fireworks go
@@ -1553,6 +1699,82 @@ the craft jumped over going into it, for nothing. The game keeps a record
 of what it did with each block - taken, hit, or saved by the bumper - and
 the picture, like the sounds, answers that.
 
+**Every record rides its own way.** The road used to be laid from one rule
+for every record: a figure every two beats or so, the same eight shapes in
+turn, a quarter of them obstacles. A house record and a drum and bass
+record were the same ride at two speeds. Now each record is read before it
+is ridden (`trackstyle.py`), for how it moves and how it is put together.
+
+How it moves is a handful of numbers rather than a genre's name - steady
+(a kick on every beat), broken (a kick that dodges the beat under a snare on
+two and four), heavy (half time: the snare waits for the third beat), swung,
+rolls (hats in thirty-seconds), hard (steady and fast), melodic and calm -
+because a record is house *and* garage, techno *and* trance, and the road
+needs how it moves more than what it is called. They are read off the
+drums' onset strength folded on the bar, not off the detected hits: a kick
+detector on a real mix finds two or three hits to the beat and most of them
+are not the kick, and read from the hits every record in the library came
+out "broken". Folded, the drums stand out of their own noise, and written
+charts buried in two false hits a beat still read as what they are.
+
+Half time is measured from the kick: the snare two beats after the kick's
+strongest beat against the snare one beat either side of it. It was
+measured by counting the snare's strong beats - a backbeat has two, half
+time one - and on thirteen real dubstep and trap records not one read as
+half time, because the kick is loud in the snare's bands too and gave the
+snare a second strong beat of its own. From the kick, the dubstep records
+came out at 1.9 and sixteen house and techno records at 0.94; every one
+counted at 140 to 150 reads heavy, and thirteen drum and bass records stay
+under 0.75. Four to the floor has no strongest kick - which of the four
+came out on top was chance - so the measure fades out as the kick comes to
+every beat.
+
+How it is put together is its sections, bar by bar: where the drums come
+in and drop out and the loudness steps up or falls away, each part an
+intro, a build, a drop, a groove, a break or an outro.
+
+What is laid comes from both (`rider_layout.py`). There is a vocabulary of
+figures, each a way of moving to music: walls; gates, whose open lane walks
+across the road a gate at a time - a weave to four to the floor; chicanes,
+two walls half a beat apart - a broken beat's double step; runs; stairs,
+prizes climbing the lanes the way the melody goes; streams, a row of coins
+on a hat roll; pairs, two prizes side by side on a chord; and single prizes
+in the lane of the note the melody is on, low notes left and high right.
+Each section draws a short palette of them, weighted by how the record moves
+and what kind of section it is - a drop dense and dangerous, a build
+rolling and tightening towards the drop, a break a melody to collect with
+nothing to dodge - and walks it in a pattern, so a part has a rhythm of its
+own. A part that comes back, the second chorus, takes the palette the first
+drew, mirrored. How many of a section's figures are obstacles is carried
+from one slot to the next rather than drawn afresh, so a drop is about
+forty per cent obstacles every time rather than two thirds on one record
+and a fifth on another. Obstacles land on the kick, and on half-time music
+the snare; where the kick plays, the hats are what figures land between,
+not on. A figure goes on the heaviest hit within a moment of where it
+could go, and in half time the snare on three is as heavy as the kick:
+ranked below it, a dubstep drop was laid entirely on the kick half a beat
+after the snare - thirty-two figures on the and of three and not one on
+the downbeat or the snare. Now it is laid on one and three, the two hits
+a head nods to, a figure every two beats. Broken and swung music, and a kick that is itself on the off-beat,
+put their figures on the eighth.
+
+Every choice is drawn from a seed made of the record itself, so the same
+record lays out the same way every time - which is what makes a best mean
+anything - at any frame rate, and a different record lays out its own way.
+A good player looking ahead is never hit, on any kind of record, in either
+game with obstacles in it.
+
+**The canopy is glass.** It was one flat tint. It reflects the world it is
+going through now - the sky, the sun on the road ahead and the city's
+lights sliding back over it as the craft goes forward - more of it the
+more obliquely it is seen, over a dim cockpit lit from below by its
+instruments, with the light's highlight on top.
+
+**A row of coins is one trail.** A coin a good while after the last starts
+a new row: with a stream of coins on every hat roll, a row that only ended
+at a coin missed ran to a hundred and thirty, and every coin paid the most
+a coin can.
+
 **A coin is round.** It was ten points joined by straight lines, which
 was round enough while the frame was drawn at half the screen's
 resolution. At all of it, a coin passing the craft is ninety pixels
@@ -1593,7 +1815,7 @@ source .venv/bin/activate
 pip install -r requirements-dev.txt
 
 QT_QPA_PLATFORM=offscreen python tools/make_icon.py      # assets/icon.icns
-QT_QPA_PLATFORM=offscreen python -m pytest               # 4,095 tests (with the evaluation sets present)
+QT_QPA_PLATFORM=offscreen python -m pytest               # 4,315 tests (with the evaluation sets present)
 
 rm -rf build dist
 python -m PyInstaller --clean --noconfirm MailManager.spec
@@ -1976,7 +2198,7 @@ corkscrews the track earned, and what a frame costs. No song, path or
 frame of one is ever written into the repository.
 
 ```bash
-./dev test        # 4,095 tests, about three minutes
+./dev test        # 4,315 tests, about five minutes
 ./dev cov         # with a coverage report
 ./dev watch       # re-run on every save
 ```

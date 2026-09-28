@@ -113,6 +113,9 @@ tests/fixtures/private/
 *.odt
 *.pages
 *.key
+# Reference material dropped in the working folder to build from - somebody
+# else's writing, not this project's to publish.
+xxxxxxxxx_0_xxxxxxxxxx_xxxxxxxxxx_xxxxxxxxx.xx
 *.numbers
 *.xls
 *.xlsx

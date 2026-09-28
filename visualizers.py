@@ -28,6 +28,17 @@ from PySide6.QtGui import (QBrush, QColor, QFont, QImage, QLinearGradient,
 
 log = logging.getLogger(__name__)
 
+
+def _on_card(painter) -> bool:
+    """Whether ``painter`` is drawing on the graphics card (see
+    attachment_widgets._GpuCanvas) rather than into an image."""
+    from PySide6.QtGui import QPaintEngine
+
+    engine = painter.paintEngine()
+    return (engine is not None
+            and engine.type() == QPaintEngine.Type.OpenGL2)
+
+
 #: The face the meter dials are lettered in, and where it comes from.
 #:
 #: It ships with the app rather than being asked for by name, and that is
@@ -1094,6 +1105,9 @@ class Oscilloscope(Scene):
         #: back every frame, and drawing it again would pile brightness on
         #: brightness until the screen was a solid disc.
         self._burned = None
+        #: The screen on the graphics card, when the pane is drawing on
+        #: one (see scope_gl); False once the card has failed to keep one.
+        self._card = None
 
     @property
     def mode(self) -> str:
@@ -1135,6 +1149,18 @@ class Oscilloscope(Scene):
         if trace is None:
             return
 
+        if self._card is not False and _on_card(painter):
+            try:
+                if self._card is None:
+                    import scope_gl
+
+                    self._card = scope_gl.Tube()
+                self._card.draw(self, painter, rect, trace, drawing, flash)
+                return
+            except Exception:      # noqa: BLE001 - a picture, not the mail
+                log.exception("The scope's screen could not be kept on the "
+                              "graphics card; keeping it on the CPU.")
+                self._card = False
         # How many real pixels one unit of this rect is worth. The pane
         # draws big frames into a smaller buffer and stretches them, so
         # the rect a scene is handed is in logical units that can be
@@ -1164,27 +1190,14 @@ class Oscilloscope(Scene):
         if size.width() < 2 or size.height() < 2:
             return None
         screen = self._fit(size)
-
-        now = time.monotonic()
-        step = self.MAX_STEP if self._last is None else min(
-            self.MAX_STEP, max(0.0, now - self._last))
-        self._last = now
-
-        # A paused track hands back the trace it handed back last frame.
-        # Neither fading nor redrawing it is right - the picture should
-        # simply sit there - so a repeat is left alone entirely.
-        if trace is self._burned:
+        keep = self._fade_now(trace)
+        if keep is None:
             return screen
-        self._burned = trace
 
         beam = QPainter(screen)
         try:
             beam.setCompositionMode(
                 QPainter.CompositionMode.CompositionMode_DestinationIn)
-            # How much survives this step. Exponential, so the trace is
-            # down to FADED of its brightness after `decay` seconds
-            # whatever the frame rate happens to be.
-            keep = self.FADED ** (step / max(1e-3, self._decay))
             beam.fillRect(screen.rect(),
                           QColor(0, 0, 0, max(0, min(255, int(keep * 255)))))
             beam.setCompositionMode(
@@ -1195,6 +1208,25 @@ class Oscilloscope(Scene):
         finally:
             beam.end()
         return screen
+
+    def _fade_now(self, trace):
+        """How much of the screen survives to this frame, or None where
+        ``trace`` is the one already burned into it.
+
+        A paused track hands back the trace it handed back last frame.
+        Neither fading nor redrawing it is right - the picture should
+        simply sit there - so a repeat is left alone entirely.
+        """
+        now = time.monotonic()
+        step = self.MAX_STEP if self._last is None else min(
+            self.MAX_STEP, max(0.0, now - self._last))
+        self._last = now
+        if trace is self._burned:
+            return None
+        self._burned = trace
+        # Exponential, so the trace is down to FADED of its brightness
+        # after `decay` seconds whatever the frame rate happens to be.
+        return self.FADED ** (step / max(1e-3, self._decay))
 
     def _fit(self, size):
         """The screen at this size, keeping what was on the old one.
@@ -3933,7 +3965,18 @@ class Rider(Scene):
 
     def _apart(self, when: float) -> float:
         """How many beats apart the figures are at this point in the
-        track. See GAP_LEAST."""
+        track: by the section it is in, where the track has been heard -
+        tight in a drop, loose in a break, tightening through a build as
+        the drop comes (see rider_layout.spacing) - and otherwise by how
+        loud it is. See GAP_LEAST."""
+        section = self._section_at(when)
+        if section is not None:
+            import rider_layout
+
+            through = (when - section.start) / max(1e-6, section.length)
+            loud = self._read(self._energy, when) if self._energy else None
+            return rider_layout.spacing(section.kind, through, self._style,
+                                        loud)
         if not self._energy:
             return self.GAP_BEATS
         energy = max(0.0, min(1.0, self._read(self._energy, when)))
@@ -4189,6 +4232,10 @@ class Rider(Scene):
         #: Whether the playhead jumped this frame, and from where.
         self._jumped = False
         self._jumped_from = 0.0
+        #: What the road is counted in - the beat's length - and whether
+        #: that changed this frame. See _advance.
+        self._counted_in = None
+        self._rebased = False
         #: Set from outside, where the bests are kept: the best this
         #: track has been played to before, and whether this run beat it.
         self.best_before = None
@@ -4250,10 +4297,12 @@ class Rider(Scene):
         self._loudness = 0.0
         self._pushing = 0.0
         self._speed = self.FREE_RUN
-        #: How hard the road is lunging into the beat, and the beat it
-        #: was chosen on. See LUNGE.
+        #: How hard the road lunges into a beat nobody has decided yet.
+        #: See LUNGE and _lunge_of.
         self._lunge = 1.0
-        self._lunge_from = None
+        #: The lunge each beat was given as it came into view, by beat
+        #: number, and fixed from then. See _decide_lunges.
+        self._lunges: dict = {}
         #: Seconds in a beat, or 0 when nothing has found a tempo.
         self._beat = 0.0
         #: A moment that is known to be on the beat, for snapping to.
@@ -4321,6 +4370,29 @@ class Rider(Scene):
         self._twists = ()
         #: Which twists have had their power block laid.
         self._twisted = set()
+        #: How the track moves and how it is put together, once it has
+        #: been heard, and what it was read from. See trackstyle.
+        self._style = None
+        self._styled_from = None
+        #: The key and chords, for laying blocks along the melody.
+        self._harmony = None
+        #: Which figures each section lays, and how many it has laid. See
+        #: rider_layout.
+        self._plan = None
+        self._slots: dict = {}
+        #: Where a gate's open lane has walked to.
+        self._gate_step = 0
+        #: When the last coin taken was due. See COIN_ROW_GAP.
+        self._coin_last = None
+        #: How much of each section's share of obstacles is still owed.
+        #: See _greyed.
+        self._owed: dict = {}
+        #: What the road was last planned from. See ``_carve``.
+        self._planned = None
+        #: How much of the road's rise and fall a drawing shows: all of it
+        #: on the card, where the road can be seen a long way off, and a
+        #: share of it flat. See FLAT_RELIEF.
+        self._relief = 1.0
         #: What the next thing collected is multiplied by, if anything.
         self._double = 1.0
         self._every = 1.0
@@ -4402,7 +4474,8 @@ class Rider(Scene):
         # a single frame and took the ones in the craft's lane - five
         # thousand points for skipping to the end - and a jump back found
         # the stretch it went back over already laid and gone, so empty.
-        fresh = chart is not self._chart_from or self._jumped
+        fresh = (chart is not self._chart_from or self._jumped
+                 or self._rebased)
         if fresh:
             self._chart_from = chart
             self._blocks = []
@@ -4412,9 +4485,18 @@ class Rider(Scene):
             # view when the road was laid again was never laid again.
             self._twisted = set()
         ahead = self._heard + self.READ
-        if ahead <= self._laid:
+        # Committed only up to a little short of what has been read, so a
+        # candidate always has the ones after it in view when the heaviest
+        # nearby is chosen - see PREFER_BEATS. Committed to the edge, the
+        # window each frame reads is a sixtieth of a second long and holds
+        # one candidate, so the choice depended on where the frames fell
+        # rather than on the music.
+        reach = (self._beat * self.PREFER_BEATS if self._beat > 0.0
+                 else self.PREFER)
+        commit = ahead - reach
+        if commit <= self._laid:
             return
-        low, self._laid = self._laid, ahead
+        low, self._laid = self._laid, commit
 
         # Every hit in the window, heaviest first at the same moment, so a
         # kick and a hat on the same beat give a wall rather than both.
@@ -4422,11 +4504,35 @@ class Rider(Scene):
         for order, (name, shape) in enumerate(self.PATTERNS):
             for when in chart.get(name, ()):
                 if low < when <= ahead:
+                    # Hats where the kick is playing are what the figures
+                    # land between, not on: they are everywhere, so the
+                    # next one after the gap was nearly always a hat, and
+                    # a half-time drop was laid entirely off its hats -
+                    # sixty-four figures, not one on the kick or the snare
+                    # it is made of. Where there are no drums, the hats are
+                    # the rhythm, and lay figures as ever.
+                    if name == "Hats":
+                        section = self._section_at(when)
+                        if section is not None and section.drums:
+                            continue
                     due.append((when, order, shape))
+        # And the melody, after every drum: the synths' own onsets, then
+        # the notes the harmony pass heard in the lead. They are what a
+        # breakdown with no drums in it is laid from.
+        melodic = len(self.PATTERNS)
+        for when in chart.get("Synth", ()):
+            if low < when <= ahead:
+                due.append((when, melodic, "melody"))
+        import rider_layout
+
+        for when in rider_layout.lead_onsets(self._harmony, low, ahead):
+            due.append((when, melodic + 1, "melody"))
         due.sort()
         index = 0
         while index < len(due):
             when, _order, shape = due[index]
+            if when > commit:
+                break
             # How far apart the figures are here. Audiosurf spawns more
             # blocks where there is more going on, and the place to ask
             # is where the figure lands rather than where the playhead
@@ -4444,18 +4550,21 @@ class Rider(Scene):
             # 234 ms from a beat, which is exactly half of one.
             reach = (self._beat * self.PREFER_BEATS if self._beat > 0.0
                      else self.PREFER)
+            def rank(at):
+                return (self._weight(due[at][1]), self._off_beat(due[at][0]))
+
             best = index
             for other in range(index + 1, len(due)):
                 if due[other][0] - when > reach:
                     break
-                if (due[other][1], self._off_beat(due[other][0])) < (
-                        due[best][1], self._off_beat(due[best][0])):
+                if rank(other) < rank(best):
                     best = other
             when, order, shape = due[best]
-            when = self._snap(when)
+            when = self._snap(when, self._division(when, order))
             self._placed = when
-            self._shape(self._varied(shape, when), when,
-                        grey=self._greyed(when, order))
+            grey = self._greyed(when, order)
+            figure, mirrored = self._figure(when, grey, shape)
+            self._shape(figure, when, grey=grey, mirrored=mirrored)
             index = best + 1
         # And something to do where the track went quiet.
         #
@@ -4479,17 +4588,18 @@ class Rider(Scene):
         if self._beat > 0.0:
             every = self._beat * self.QUIET_BEATS
             last = max(self._placed, low - every)
-            while last + every <= ahead:
+            while last + every <= commit:
                 when = self._snap(max(last + every, low + 1e-6))
                 if when <= last:
                     break
                 last = self._placed = when
-                self._shape(self._varied("block", when), when, grey=False)
+                figure, mirrored = self._figure(when, False, "block")
+                self._shape(figure, when, grey=False, mirrored=mirrored)
         # And the powerup at the mouth of each corkscrew. Audiosurf 2
         # puts "corkscrew loops and powerups timed perfectly with big
         # moments in your music" - one comes with the other.
         for start in self._twists:
-            if low < start <= ahead and start not in self._twisted:
+            if low < start <= commit and start not in self._twisted:
                 self._twisted.add(start)
                 self._blocks.append(
                     [self._snap(start + self.TWIST_FOR * 0.5),
@@ -4546,6 +4656,21 @@ class Rider(Scene):
     #: whether or not there is more of everything else.
     NINJA_POOL = (True, False, True, True, False, True, False)
 
+    def _weight(self, order: int) -> int:
+        """How heavy a hit of the drum at ``order`` in PATTERNS is, lightest
+        last: the kick, and on half-time music the snare as well.
+
+        Half time is the kick on one and the snare it waits for on three,
+        and those are the two hits a head nods to. Ranked below the kick,
+        the snare lost every slot to the kick half a beat after it, and a
+        dubstep drop was laid entirely on that pickup - thirty-two figures
+        on the and of three, and not one on the snare or the downbeat.
+        Ranked with it, the one on the beat wins.
+        """
+        if order == 1 and self._style is not None and self._style.heavy > 0.5:
+            return 0
+        return order
+
     def _greyed(self, when: float, order: int) -> bool:
         """Whether the figure at this slot is an obstacle.
 
@@ -4554,7 +4679,9 @@ class Rider(Scene):
         thing in it was the kick. So the obstacles land on the beats you
         can hear coming.
         """
-        if order != 0:
+        # Obstacles land on the heavy hits you can hear coming: the kick,
+        # and on half-time music the snare it waits for.
+        if self._weight(order) != 0:
             return False
         # Nothing to dodge inside a corkscrew. The world turns all the
         # way over there and left stops meaning left half way round, so
@@ -4565,9 +4692,82 @@ class Rider(Scene):
             return False
         if self._beat <= 0.0:
             return True
+        section = self._section_at(when)
+        if section is not None:
+            # How much of the section is to be dodged - see
+            # rider_layout.DANGER_SHARE - laid by carrying the share over
+            # from one slot to the next rather than drawing each afresh:
+            # drawn, a drop came out two thirds obstacles on one record and
+            # a fifth on another, and could run five in a row. A little of
+            # the track's own seed in where each lands keeps it from being
+            # a metronome.
+            import random
+
+            import rider_layout
+
+            share = rider_layout.danger_share(section.kind, self._mode,
+                                              self._style)
+            if order == 1:
+                share *= 0.7
+            key = id(section)
+            owed = self._owed.get(key)
+            if owed is None:
+                owed = random.Random(self._style.seed
+                                     ^ int(section.start * 1000)).random()
+            owed += share
+            jitter = random.Random(self._style.seed
+                                   ^ int(round(when * 1000))).uniform(-0.2, 0.2)
+            grey = owed >= 1.0 + jitter
+            if grey:
+                owed -= 1.0
+            self._owed[key] = owed
+            return grey
         slot = int(round(when / self._beat / max(1e-6, self.GAP_BEATS)))
         pool = self.NINJA_POOL if self._mode == "Ninja" else self.GREY_POOL
         return pool[slot % len(pool)]
+
+    def _figure(self, when: float, grey: bool, shape: str) -> tuple:
+        """What figure goes here, and whether it is mirrored: from the
+        section's palette where the track has sections (see rider_layout),
+        and from the pool of shapes where it has not."""
+        section = self._section_at(when)
+        if section is None or self._plan is None:
+            return self._varied(shape, when), False
+        slot = self._slots.get(id(section), 0)
+        self._slots[id(section)] = slot + 1
+        figure, mirrored = self._plan.figure(section, slot, grey)
+        if not grey and figure == "block" and shape == "melody":
+            figure = "melody"
+        return figure, mirrored
+
+    def _division(self, when: float, order: int = 0) -> int:
+        """How finely a figure may be placed: on the beat, or on the
+        eighth - on broken and swung music, whose figures live between the
+        beats, and for a kick or a snare that is itself on the off-beat
+        (half time's kick on the and of three). Snapped to a beat, that
+        kick sat exactly half way between two and went to whichever a
+        hair of rounding favoured, which was not the same one at every
+        frame rate."""
+        style = self._style
+        if style is None or self._beat <= 0.0:
+            return 1
+        if style.broken + style.swung > 0.8:
+            return 2
+        if order in (0, 1):
+            steps = (when - self._anchor()) / self._beat
+            part = steps - math.floor(steps)
+            if abs(part - 0.5) < 0.12:
+                return 2
+        return 1
+
+    def _anchor(self) -> float:
+        """A beat to count the grid from: the drums' own, which does not
+        move, where it is known; the one worked out from the playhead
+        this frame otherwise."""
+        style = self._style
+        if style is not None and style.from_drums:
+            return style.beat_phase
+        return self._grid if self._grid is not None else 0.0
 
     def _varied(self, shape: str, when: float) -> str:
         """What shape this slot takes.
@@ -4587,7 +4787,7 @@ class Rider(Scene):
         slot = int(round(when / self._beat / max(1e-6, self.GAP_BEATS)))
         return self.POOL[slot % len(self.POOL)]
 
-    def _snap(self, when: float) -> float:
+    def _snap(self, when: float, division: int = 1) -> float:
         """The nearest beat to ``when``, or ``when`` if there is no grid.
 
         The detector says where it heard a drum, and on real music that is
@@ -4601,8 +4801,20 @@ class Rider(Scene):
         """
         if self._beat <= 0.0 or self._grid is None:
             return when
-        steps = (when - self._grid) / self._beat
-        return self._grid + round(steps) * self._beat
+        anchor = self._anchor()
+        steps = (when - anchor) / self._beat
+        if division <= 1:
+            return anchor + round(steps) * self._beat
+        # On the eighth, and the off-beat eighth where the record swings
+        # it: a figure put on the straight eighth of a swung record lands
+        # between the hat and the beat, which is on neither.
+        late = 0.0
+        if self._style is not None:
+            late = max(0.0, float(self._style.measured.get("swing", 0.0)))
+        whole = math.floor(steps)
+        options = (whole, whole + 0.5 + late, whole + 1.0)
+        nearest = min(options, key=lambda place: abs(place - steps))
+        return anchor + nearest * self._beat
 
     def _off_beat(self, when: float) -> float:
         """How far a moment is from the nearest beat, in seconds.
@@ -4642,6 +4854,8 @@ class Rider(Scene):
     COIN_MOST = 200
     COINS_RUN = 3
     COIN_GAP = 0.16
+    #: How long after the last coin a coin still carries its row on.
+    COIN_ROW_GAP = 0.6
 
     #: How long before a wall arrives its coin trail has to have ended.
     #:
@@ -4778,34 +4992,43 @@ class Rider(Scene):
         last = when - self.COIN_LEAD
         self._coin_trail(last - (self.COINS_RUN - 1) * self.COIN_GAP, side)
 
-    def _coin_trail(self, first: float, side: int) -> None:
+    def _coin_trail(self, first: float, side: int, count: int = 0,
+                    gap: float = 0.0) -> None:
         """Lay one, if the lane is free for the whole of it.
 
         Never into a lane something else is already using: a coin a
         player cannot take without being hit is not a reward, and one
         sitting inside a prize is a coin nobody can see.
         """
-        last = first + (self.COINS_RUN - 1) * self.COIN_GAP
-        pad = self.COIN_GAP / 2.0
+        count = count or self.COINS_RUN
+        gap = gap or self.COIN_GAP
+        last = first + (count - 1) * gap
+        pad = gap / 2.0
         for other, taken, _kind, _done, _grey in self._blocks:
             if taken == side and first - pad <= other <= last + pad:
                 return
-        for step in range(self.COINS_RUN):
+        for step in range(count):
             self._blocks.append(
-                [first + step * self.COIN_GAP, side, "coin", False, False])
+                [first + step * gap, side, "coin", False, False])
 
-    def _shape(self, pattern: str, when: float, grey: bool = True) -> None:
-        """One hit, as one or more blocks in lanes.
+    def _shape(self, pattern: str, when: float, grey: bool = True,
+               mirrored: bool = False) -> None:
+        """One figure, as one or more blocks in lanes. See rider_layout
+        for what each is.
 
         ``grey`` is Audiosurf's distinction and the whole of its Mono
         mode: a grey block is an obstacle to be dodged and a coloured one
-        is a prize to be driven into. A figure is grey when the drum that
-        put it there was the kick - the heavy one, the one you feel
-        coming - and coloured otherwise.
+        is a prize to be driven into. ``mirrored`` swaps left and right:
+        the second time a part of the track comes round.
         """
         # The lane comes from the time rather than from a random number,
         # so a track lays out the same way every time it is played.
         seed = int(when * 977) % self.LANES
+        top = self.LANES - 1
+        if mirrored:
+            seed = top - seed
+        step = max(self.SIXTEENTH, self._beat / 4.0 if self._beat > 0.0
+                   else self.SIXTEENTH)
         if pattern == "wall":
             for lane in range(self.LANES):
                 if lane != seed:
@@ -4813,18 +5036,96 @@ class Rider(Scene):
             self._coins_before(
                 when, [lane for lane in range(self.LANES) if lane != seed],
                 grey)
+        elif pattern == "gate":
+            # The open lane walks across the road and back, a gate at a
+            # time: a weave to the kick.
+            walk = (0, 1, 2, 1)
+            open_lane = walk[self._gate_step % len(walk)]
+            self._gate_step += 1
+            if mirrored:
+                open_lane = top - open_lane
+            for lane in range(self.LANES):
+                if lane != open_lane:
+                    self._blocks.append([when, lane, "wall", False, grey])
+            self._coins_before(
+                when, [lane for lane in range(self.LANES) if lane != open_lane],
+                grey)
+        elif pattern == "chicane":
+            # Two walls half a beat apart, their gaps side by side: one
+            # step and then another, the broken beat's double step.
+            first = 0 if seed < 1 or (seed == 1 and int(when * 31) % 2) else top
+            second = 1
+            later = when + max(self.CHICANE_LEAST, self._beat * 0.5)
+            for lane in range(self.LANES):
+                if lane != first:
+                    self._blocks.append([when, lane, "wall", False, grey])
+                if lane != second:
+                    self._blocks.append([later, lane, "wall", False, grey])
         elif pattern == "block":
-            self._blocks.append([when, seed, "block", False, grey])
-            self._coins_beside(when, seed, grey)
+            lane = seed
+            if not grey:
+                lane = self._melody_lane(when, seed)
+            self._blocks.append([when, lane, "block", False, grey])
+            self._coins_beside(when, lane, grey)
+        elif pattern == "melody":
+            lane = self._melody_lane(when, seed)
+            self._blocks.append([when, lane, "block", False, grey])
         elif pattern == "run":
-            for step in range(3):
-                lane = (seed + step) % self.LANES
-                self._blocks.append([when + step * self.RUN_GAP, lane,
+            for count in range(3):
+                lane = (seed + count) % self.LANES
+                self._blocks.append([when + count * self.RUN_GAP, lane,
                                      "run", False, grey])
             # Beside the first of them only. A slalom already asks for
             # three moves; paying for a fourth lane change between each
             # pair would ask for something nobody can do.
             self._coins_beside(when, seed, grey)
+        elif pattern == "stairs":
+            # Across the lanes the way the melody goes: up the road to the
+            # right as it climbs, down to the left as it falls.
+            import rider_layout
+
+            going = rider_layout.rising(self._harmony, when)
+            if going is None:
+                going = (seed + int(mirrored)) % 2 == 0
+            lanes = list(range(self.LANES)) if going else list(
+                reversed(range(self.LANES)))
+            for count, lane in enumerate(lanes):
+                self._blocks.append([when + count * max(step, self.RUN_GAP),
+                                     lane, "run", False, False])
+        elif pattern == "stream":
+            # A row of coins in one lane, a sixteenth apart: a hat roll to
+            # hold a lane through.
+            lane = self._melody_lane(when, seed)
+            self._coin_trail(when, lane, count=self.STREAM, gap=step)
+        elif pattern == "pair":
+            # Two prizes side by side on a chord: take one.
+            lanes = (0, top) if seed != 1 else ((0, 1) if mirrored else (1, top))
+            for lane in lanes:
+                self._blocks.append([when, lane, "block", False, False])
+
+    #: The shortest a sixteenth may be, in seconds, when a figure steps
+    #: on them: past this at a fast tempo a lane change a sixteenth is
+    #: faster than the craft moves.
+    SIXTEENTH = 0.14
+    #: The shortest time between a chicane's two walls.
+    CHICANE_LEAST = 0.26
+    #: How many coins a stream is.
+    STREAM = 5
+
+    def _melody_lane(self, when: float, fallback: int) -> int:
+        """The lane of the note the melody is on here - low notes left,
+        high right, across the range it spans in this part of the track -
+        or ``fallback`` where there is no melody to follow."""
+        import rider_layout
+
+        section = self._section_at(when)
+        if section is None or self._harmony is None:
+            return fallback
+        low, high = rider_layout.lead_range(self._harmony, section.start,
+                                            section.end)
+        lane = rider_layout.lead_lane(self._harmony, when, self.LANES, low,
+                                      high)
+        return fallback if lane is None else lane
 
     # -- the world --------------------------------------------------------
     #: The colour of the road, by how much is going on in the music.
@@ -4848,29 +5149,81 @@ class Rider(Scene):
         hue = self.TIERS[low] + (self.TIERS[low + 1] - self.TIERS[low]) * share
         return (hue + synth * self.TIER_SYNTH) % 1.0
 
+    def _restyle(self, state) -> None:
+        """Read the track's style again if anything it is read from has
+        changed: the chart, the shape, the harmony or the tempo. Cheap - it
+        walks the chart once - but not every frame. See trackstyle."""
+        import trackstyle
+
+        chart = getattr(state, "chart", None) or _NO_CHART
+        contour = getattr(state, "contour", None)
+        harmony = getattr(state, "harmony", None)
+        rhythm = getattr(state, "rhythm", None)
+        flux = getattr(state, "flux", None)
+        # The tempo the pane counts in, not the ride's own: the ride's is
+        # decided by the style, and keyed on it the style would be read
+        # again every time it changed its own mind.
+        counted = bounded(getattr(state, "tempo", 0.0), most=1000.0)
+        wanted = (id(chart), id(contour), id(harmony), id(rhythm),
+                  round(counted, 3))
+        if wanted == self._styled_from:
+            return
+        self._styled_from = wanted
+        self._harmony = harmony
+        if not contour and not chart:
+            self._style = None
+            self._plan = None
+            return
+        import rider_layout
+
+        beat = 60.0 / counted if counted > 0.0 else 0.0
+        self._style = trackstyle.read(
+            chart, beat, self._grid if beat > 0.0 else None, contour,
+            harmony, flux=flux, rhythm_found=rhythm, light=rhythm is None)
+        self._plan = rider_layout.Plan(self._style, self._mode)
+        self._slots = {}
+        self._owed = {}
+
+    def _section_at(self, when: float):
+        """The part of the track ``when`` is in, once it has been heard
+        with a tempo; None before, or where no part is."""
+        if self._style is None or self._beat <= 0.0:
+            return None
+        return self._style.section_at(when)
+
+    #: When a better plan for the road arrives part way through a ride -
+    #: the drums and the tempo land a few seconds after the picture - the
+    #: road already in view is kept for this long past the playhead, and
+    #: the new one is faded in over the next stretch, so nothing on screen
+    #: moves. The world on the card sees about five seconds ahead.
+    PLAN_KEEP = 7.0
+    PLAN_FADE = 4.0
+
     def _carve(self, state) -> None:
         """Take the track's shape and make a road out of it.
 
         Audiosurf does not invent its track: it reads the song once,
-        before anything is drawn, and the amplitude becomes the incline
-        while the balance between the channels becomes the curve. That is
-        what ``attachment_audio.contour`` produces, and this turns it
-        into the two arrays the road is read out of.
+        before anything is drawn, and makes the incline and the curves out
+        of it. The incline is the slope: "quiet, slow, or ambient sections
+        generate steep uphill climbs ... when a loud, high-energy section
+        occurs, the track plunges sharply downhill". So the road's height
+        is the loudness *summed* - see ``_terrain`` - and not the loudness
+        itself, which made a hill of every chorus rather than a descent
+        into it. The curve is the stereo lean summed along the road, as
+        Audiosurf steers with the panning, and a turn a phrase long on top
+        of it, in the character of the music - see ``_bends``.
 
-        The hill is the amplitude about its own middle, so a chorus runs
-        downhill and a breakdown climbs. The curve is the lean *summed*
-        along the road rather than used directly, because a lean is a
-        direction and a road is where following a direction gets you -
-        used directly it would be a road that kinks, and summed it is a
-        road that turns. What that sum drifts to does not matter: the
-        camera is pinned to the road, so only the bend is ever seen.
-
-        Built once a track, and the road is then the same road every time
-        that track is played.
+        Built again when anything it is made from changes - the shape, the
+        tempo, the sections - and never under the rider: see PLAN_KEEP.
         """
+        self._restyle(state)
         shape = getattr(state, "contour", None)
-        if shape is self._shaped:
+        # And the tempo: the plan's sections and corkscrews are counted in
+        # it, and planned before it was known they were planned without.
+        wanted = (id(shape), id(self._style), round(self._beat, 4))
+        if wanted == self._planned:
             return
+        self._planned = wanted
         self._shaped = shape
         loud = (shape or {}).get("loud") or ()
         lean = (shape or {}).get("lean") or ()
@@ -4882,9 +5235,7 @@ class Rider(Scene):
         # road and how thickly the figures come are both "how much is
         # going on here", which is the reading itself.
         self._energy = tuple(loud)
-        middle = sorted(loud)[len(loud) // 2]
-        self._hill = self._eased(
-            [(value - middle) * 2.0 for value in loud])
+        hill = self._terrain()
         curve, run = [], 0.0
         # The lean about its own middle, in units of how much this
         # record leans at all.
@@ -4911,7 +5262,8 @@ class Rider(Scene):
         middle = sum(wide) / len(wide)
         spread = math.sqrt(
             sum((value - middle) ** 2 for value in wide) / len(wide))
-        for value in wide:
+        bends = self._bends(len(loud))
+        for index, value in enumerate(wide):
             # And no single reading may throw the road across it. The
             # distribution has a long tail - one reading on the record
             # measured above is thirteen spreads out on its own - and
@@ -4920,10 +5272,143 @@ class Rider(Scene):
             # a bend.
             step = (value - middle) / (spread or 1.0)
             run += max(-self.LEAN_MOST, min(self.LEAN_MOST, step))
-            curve.append(run)
-        self._curve = self._eased(curve)
-        self._twists = self._find_twists()
-        self._twisted = set()
+            curve.append(run + bends[index])
+        curve = self._eased(curve)
+        twists = self._find_twists()
+        riding = self._heard > 0.5 and bool(self._hill)
+        if riding:
+            hill = self._splice(self._hill, hill, self._heard)
+            curve = self._splice(self._curve, curve, self._heard)
+            horizon = self._heard + self.PLAN_KEEP + self.PLAN_FADE
+            twists = tuple(sorted(
+                [start for start in self._twists if start < horizon]
+                + [start for start in twists if start >= horizon]))
+        else:
+            self._twisted = set()
+        self._hill = tuple(hill)
+        self._curve = tuple(curve)
+        self._twists = twists
+
+    def _splice(self, old, new, when: float) -> tuple:
+        """``new``, but ``old`` up to PLAN_KEEP past ``when``, and faded
+        from one to the other over PLAN_FADE - continuous where they meet,
+        because the two can sit at any height or offset from each other and
+        only the shape of either matters."""
+        if not old or not new:
+            return tuple(new)
+        keep = min(len(new) - 1, int((when + self.PLAN_KEEP) * self._every))
+        fade = max(1, int(self.PLAN_FADE * self._every))
+        if keep <= 0:
+            return tuple(new)
+        pinned = old[min(keep, len(old) - 1)]
+        shift = pinned - new[keep]
+        out = [old[min(index, len(old) - 1)] for index in range(keep)]
+        for index in range(keep, len(new)):
+            moved = new[index] + shift
+            before = old[index] if index < len(old) else moved
+            share = min(1.0, (index - keep) / fade)
+            share = share * share * (3.0 - 2.0 * share)
+            out.append(before + (moved - before) * share)
+        return tuple(out)
+
+    #: The slope of the road, in units of height a second, for each unit
+    #: of loudness below the track's middle - so a quiet passage climbs
+    #: and a loud one runs down. 2.4 is about nine per cent up or down at
+    #: the loudness a record normally strays from its middle by, at the
+    #: twelve units a second the road runs.
+    SLOPE = 2.4
+    #: What a build adds to the climb, rising through it to its crest,
+    #: and how hard the road falls away from the crest into the drop -
+    #: most of forty per cent at its steepest - and for how many bars.
+    BUILD_CLIMB = 1.6
+    DROP_PLUNGE = 4.5
+    DROP_BARS = 2
+
+    #: How much of the rise and fall the flat picture shows. Its eye is
+    #: two units above the road and sees twenty units of it, and a hill
+    #: that fills the card's long view puts the flat road's far end above
+    #: the eye.
+    FLAT_RELIEF = 0.3
+
+    def _terrain(self) -> list:
+        """The road's height, as depth below where it started - the
+        convention everything else here reads heights in - a reading at a
+        time, from the slope. See SLOPE."""
+        energy = self._eased(self._energy)
+        middle = sorted(energy)[len(energy) // 2]
+        slope = [self.SLOPE * (middle - value) for value in energy]
+        style = self._style
+        if style is not None and style.sections and self._beat > 0.0:
+            rate = self._every
+            for section in style.sections:
+                first = int(section.start * rate)
+                last = min(len(slope), int(section.end * rate))
+                if section.kind == "build":
+                    for index in range(first, last):
+                        share = (index - first) / max(1, last - first)
+                        slope[index] += self.BUILD_CLIMB * share
+                elif section.kind == "drop":
+                    span = max(1, int(self.DROP_BARS * 4 * self._beat * rate))
+                    for index in range(first, min(len(slope), first + span)):
+                        share = (index - first) / span
+                        slope[index] -= self.DROP_PLUNGE * (1.0 - share) ** 1.5
+        depth, run = [], 0.0
+        for value in slope:
+            run -= value / self._every
+            depth.append(run)
+        return depth
+
+    #: How hard a phrase's own turn pulls the road sideways, in the same
+    #: units the lean is summed in, a second, at a drop.
+    BEND_RATE = 9.0
+    #: How much of that each kind of section gets.
+    BEND_SHARE = {"drop": 1.0, "groove": 0.75, "build": 0.55,
+                  "break": 0.4, "intro": 0.3, "outro": 0.3}
+
+    def _bends(self, count: int) -> list:
+        """A turn a phrase long, one way and then mostly the other, in the
+        character of the music: long sweeps a phrase of eight bars apart
+        on music that holds a steady four, turns every two bars on broken
+        and hard music, and every four on half time. How hard each pulls
+        is how much is going on in its section, and which way the first
+        goes and when two in a row go the same way comes from the track's
+        own seed - so every record winds its own way, the same way every
+        time.
+        """
+        import random
+
+        style = self._style
+        if (style is None or self._beat <= 0.0 or not style.sections
+                or count <= 0):
+            return [0.0] * count
+        weights = {8: style.steady * 0.6 + style.melodic + style.calm,
+                   4: style.heavy + style.swung + style.steady * 0.4,
+                   2: style.broken + style.hard}
+        bars = max(weights, key=lambda key: weights[key])
+        if weights[bars] <= 0.0:
+            bars = 4
+        rng = random.Random(style.seed ^ 0x5EED)
+        length = bars * 4 * self._beat
+        first = style.sections[0].start
+        rate = self._every
+        out, run = [], 0.0
+        direction = rng.choice((-1.0, 1.0))
+        segment = -1
+        for index in range(count):
+            when = index / rate
+            here = int(max(0.0, when - first) // length)
+            if here != segment:
+                segment = here
+                if rng.random() < 0.8:
+                    direction = -direction
+            section = style.section_at(when)
+            share = self.BEND_SHARE.get(section.kind if section else "groove",
+                                        0.6)
+            phase = (max(0.0, when - first) % length) / length
+            pull = math.sin(math.pi * phase) ** 2
+            run += direction * self.BEND_RATE * share * pull / rate
+            out.append(run)
+        return out
 
     #: The corkscrews: how loud a moment has to be to turn the road
     #: over, how long one takes end to end, and how much road there is
@@ -4950,12 +5435,33 @@ class Rider(Scene):
     TWIST_APART = 25.0
 
     def _find_twists(self) -> tuple:
-        """The moments the road turns over, from the loudest of the song.
+        """The moments the road turns over.
+
+        Into the drops, where the track has them: a corkscrew that starts
+        TWIST_FOR before a drop and lands the right way up on its first
+        beat, the biggest drops first and TWIST_APART between them. Where
+        it has none, the loudest moments, as before.
 
         Off the track rather than off a timer, so a record corkscrews in
         the same places every time it is played - which is the whole
         promise of the scene.
         """
+        style = self._style
+        if style is not None and self._beat > 0.0:
+            drops = []
+            for index, section in enumerate(style.sections):
+                if section.kind != "drop":
+                    continue
+                before = style.sections[index - 1].level if index else 0.0
+                drops.append((section.level - before, section.start))
+            chosen: list = []
+            for _step, start in sorted(drops, reverse=True):
+                at = start - self.TWIST_FOR
+                if at > 0.0 and all(abs(at - other) >= self.TWIST_APART
+                                    for other in chosen):
+                    chosen.append(at)
+            if chosen:
+                return tuple(sorted(chosen))
         if not self._energy or self._every <= 0.0:
             return ()
         loudest = max(self._energy)
@@ -4970,12 +5476,17 @@ class Rider(Scene):
         # track, so nothing passes.
         middle = sorted(self._energy)[len(self._energy) // 2]
         gate = max(loudest * self.TWIST_LOUD, (middle + loudest) / 2.0)
+        # Further apart on calm music, which has fewer big moments to spend
+        # them on: twenty-five seconds on a record with drums, up to
+        # seventy-five on one with none.
+        apart = self.TWIST_APART * (1.0 + 2.0 * (
+            style.calm if style is not None else 0.0))
         found = []
         for index, value in enumerate(self._energy):
             if value <= gate:
                 continue
             at = index / self._every
-            if found and at - found[-1] < self.TWIST_APART:
+            if found and at - found[-1] < apart:
                 continue
             found.append(at)
         return tuple(found)
@@ -5229,8 +5740,12 @@ class Rider(Scene):
         # difference between two of them *is* the slope.
         on = self._read(self._curve, self._when(line + 1.0))
         turn = (on * self.TRACK_BEND * push - across)
+        # The height as it is, not scaled by how loud it is here: it is a
+        # height summed over the whole track, and scaling it by the moment
+        # moved the whole road ahead up and down with every change of
+        # level.
         return (across,
-                self._read(self._hill, self._when(at)) * self.CLIMB * push,
+                self._read(self._hill, self._when(at)) * self._relief,
                 -turn * self.BANK)
 
     def _eye(self, horizon, focal, lane_x: float, up: float, at: float):
@@ -5283,6 +5798,14 @@ class Rider(Scene):
         self._was_at = said
         self._rolling += ((1.0 if moving or said <= 0.0 else 0.0)
                           - self._rolling) * 0.25
+        # And all the way there, rather than a quarter of the way for ever:
+        # every ease is gated on this, and a gate a millionth open still
+        # moves the road a millionth of a unit a frame - which, on the edge
+        # of something, is a pixel changing under a stopped track.
+        if self._rolling < 1e-4:
+            self._rolling = 0.0
+        elif self._rolling > 1.0 - 1e-4:
+            self._rolling = 1.0
         # The music's own clock. Smoothed between the player's reports,
         # because they arrive a few a second and the road runs at sixty -
         # but never moved on its own while the track is stopped. It used
@@ -5317,7 +5840,30 @@ class Rider(Scene):
         tempo = bounded(getattr(state, "tempo", 0.0), most=1000.0)
         self._beat = 60.0 / tempo if tempo > 0.0 else 0.0
         self._pulse = bounded(getattr(state, "beat_at", 0.0))
+        # The drums' own tempo and beat, once they are known, rather than
+        # the beat maps': those are phased from the first thing they heard
+        # and were a third of a beat out on real records - every figure
+        # laid between two beats. See trackstyle.rhythm_of.
+        style = self._style
+        drums = (style is not None and style.from_drums and style.tempo > 0.0
+                 and self._beat > 0.0)
+        if drums:
+            self._beat = 60.0 / style.tempo
+            self._pulse = ((said - style.beat_phase) / self._beat) % 1.0
+        # A change of what the road is counted in - the drums' reading
+        # arriving, a record found to run at twice the tempo it was heard
+        # at - lays the road again from here, as a seek does, without
+        # being one.
+        counted_in = round(self._beat, 5)
+        rebase = counted_in != self._counted_in and self._counted_in is not None
+        self._counted_in = counted_in
+        # And the first moment there is a beat to count from: until then
+        # the road runs on its own clock, and moving onto the beat's is a
+        # change of coordinates, not a distance - counted as one, the road
+        # went fifty-five units a second for a frame as a ride began.
+        onto_beat = False
         if self._beat > 0.0 and said > 0.0:
+            onto_beat = self._origin is None
             # One known beat, so that a figure can be put exactly on the
             # grid rather than wherever the detector heard a drum. See
             # ``_snap``. Re-derived every frame, which keeps it exactly
@@ -5331,8 +5877,11 @@ class Rider(Scene):
             # of a fraction of a beat, never a whole one, so the beat a
             # moment falls on cannot change under it.
             start = said - self._pulse * self._beat
-            if self._origin is None or jumped:
+            if self._origin is None or jumped or rebase:
                 self._origin = start
+                # Beat numbers count from the origin: new numbers, new
+                # lunges.
+                self._lunges = {}
             elif moving:
                 # Only while the track is playing. This is a correction
                 # towards the phase the analysis reports, and with the
@@ -5384,24 +5933,13 @@ class Rider(Scene):
         self._pushing += ((self._loudness - self._pushing)
                           * (1.0 - math.exp(-step / self.PUSH_EASE)))
         self._slow = min(1.0, self._slow + self.SLOW_BACK * self._rolling)
-        # The lunge is chosen once a beat and held for the whole of it.
-        #
-        # It shapes where the road is *within* a beat, so changing it
-        # part-way through moves the road - and the road may only ever go
-        # forwards, so it stops instead and waits for the curve to catch
-        # up. Measured on a real track, the slowest the road ran was
-        # zero: "I don't xxxx xxx xxx xxxx xxxxxx xxxxx xxxxxxx xxxxx".
-        # Changing it only on a beat boundary costs nothing, because
-        # every curve in the family agrees there: they are all zero at
-        # the start of a beat and one at the end.
-        #
-        # And not at all while the track is stopped, because the bass
-        # goes on easing after a pause and the road would move without
-        # the beat having.
+        # Each beat's lunge, decided as the beat comes into view and held
+        # from then - see _decide_lunges. And not while the track is
+        # stopped, because the bass goes on easing after a pause and the
+        # road would move without the beat having.
         beat_now = self._beat_number(self._heard)
-        if self._rolling > 0.02 and beat_now != self._lunge_from:
-            self._lunge_from = beat_now
-            self._lunge = 1.0 + bass * self._slow * self.LUNGE
+        if self._rolling > 0.02 and beat_now is not None:
+            self._decide_lunges(beat_now, bass)
         was, was_when = self._at, self._last_heard
         self._last_heard = self._heard
         rolled = self._world(self._heard)
@@ -5410,7 +5948,9 @@ class Rider(Scene):
         # asked to stand where it stood two frames ago. Beats only go
         # forwards, so neither does the road - except across a seek, which
         # is the one time it may.
-        self._at = rolled if jumped else max(self._at, rolled)
+        self._at = (rolled if jumped or rebase or onto_beat
+                    else max(self._at, rolled))
+        self._rebased = rebase
         # Against the track's own clock, not the frame's: the frame's is
         # gated by whether the track is playing, so dividing by it at a
         # pause divides by nothing.
@@ -5419,7 +5959,7 @@ class Rider(Scene):
         # Nothing across a seek: the road is measured from an origin and
         # a seek re-bases it, so the step across one is a change of
         # coordinates rather than a distance travelled.
-        self._speed = (0.0 if jumped or went <= 1e-6
+        self._speed = (0.0 if jumped or rebase or onto_beat or went <= 1e-6
                        else (self._at - was) / went)
         self._drift_sparks(step)
         self._bend += step * (0.30 + self._loudness * 0.85)
@@ -5436,9 +5976,19 @@ class Rider(Scene):
         # straight.
         self._under = self._road(self.RIDER_AT)[1]
         self._side = self._road(self.RIDER_AT)[0]
-        self._shake = max(0.0, self._shake - self._shake * self.SHAKE_FALL
+        # On the track's clock, as everything else here is: ``step`` is
+        # nothing while the track is stopped. A share of a frame, both of
+        # them, went on being taken and a stopped track's held kick went
+        # on being added, so the shake settled towards where the two
+        # balanced for as long as the pause lasted - and moved the picture
+        # a pixel with it. In sixtieths of a second, which is what the
+        # share and the kick's push were measured in.
+        frames = step * 60.0
+        self._shake = max(0.0, self._shake
+                          - self._shake * min(1.0, self.SHAKE_FALL * frames)
                           - step * 0.9)
-        self._shake = min(1.0, self._shake + kit.get("Kick", 0.0) * 0.35)
+        self._shake = min(1.0, self._shake
+                          + kit.get("Kick", 0.0) * 0.35 * min(1.0, frames))
         self._sore = max(0.0, self._sore - step)
         self._hurt = max(0.0, self._hurt - step / self.HURT_FOR)
         self._got = max(0.0, self._got - step / 0.35)
@@ -5552,6 +6102,15 @@ class Rider(Scene):
                 # rather than clipping the end of.
                 if on_it:
                     self._record(block, "taken")
+                    # A row is one trail. A coin a good while after the
+                    # last is a new row, not the next of an old one: with
+                    # a stream of coins on every hat roll, a row that only
+                    # ended at a coin missed ran to a hundred and thirty
+                    # and every coin paid the most a coin can.
+                    if (self._coin_last is not None
+                            and when - self._coin_last > self.COIN_ROW_GAP):
+                        self._coin_run = 0
+                    self._coin_last = when
                     self._coins += 1
                     self._coin_run += 1
                     self._coin_best = max(self._coin_best, self._coin_run)
@@ -5881,9 +6440,51 @@ class Rider(Scene):
         # nothing in timing because both curves are zero at zero and one
         # at one: a beat still covers exactly one beat's worth of road
         # and arrives exactly on time.
-        lunged = 1.0 - (1.0 - through) ** self._lunge
-        went = through * (1.0 - self.LUNGE_MIX) + lunged * self.LUNGE_MIX
-        return (whole + went) * self.PER_BEAT
+        return (whole + self._covered(through, self._lunge_of(whole))
+                ) * self.PER_BEAT
+
+    def _covered(self, through: float, lunge: float) -> float:
+        """How much of a beat's road is covered ``through`` (0 to 1) it."""
+        lunged = 1.0 - (1.0 - through) ** lunge
+        return through * (1.0 - self.LUNGE_MIX) + lunged * self.LUNGE_MIX
+
+    def _lunge_of(self, number: int) -> float:
+        """The lunge of beat ``number``: as decided when it came into
+        view, or the undecided one for a beat still beyond it."""
+        found = self._lunges.get(number)
+        return self._lunge if found is None else found
+
+    def _decide_lunges(self, now: int, bass: float) -> None:
+        """Give every beat coming into view its lunge, once.
+
+        The lunge shapes where the road is *within* a beat, so a block
+        between two beats sits wherever that beat's curve puts its moment
+        - and the road reaches it exactly then only if the block was put
+        on the same curve. The lunge used to be chosen from the bass as
+        each beat began, too late for anything already on the road, so
+        the blocks were put on a straight line instead: every block
+        between beats arrived early, eighty milliseconds at the half beat,
+        and once the road laid swung eighths, streams and trails of coins
+        between the beats the median block was 29 ms off where it had
+        been 10.
+
+        Decided as a beat comes into view, it is fixed before anything on
+        it is seen. From how loud the track is at that beat - which the
+        analysis knows in advance - and otherwise the bass now; and eased
+        off after a hit, as the lunge always was, which a player now meets
+        the few beats later that the hit's beat takes to arrive.
+        """
+        for number in range(now, now + int(math.ceil(self.LOOK_BEATS)) + 2):
+            if number in self._lunges:
+                continue
+            push = bass
+            if self._energy and self._beat > 0.0 and self._origin is not None:
+                push = self._read(self._energy,
+                                  self._origin + number * self._beat)
+            push = max(0.0, min(1.0, push))
+            self._lunges[number] = 1.0 + push * self._slow * self.LUNGE
+        for number in [n for n in self._lunges if n < now - 2]:
+            del self._lunges[number]
 
     def _where(self, when: float) -> float:
         """How far down the road a hit due at ``when`` is now.
@@ -5895,15 +6496,16 @@ class Rider(Scene):
         return self.RIDER_AT + self._flat(when) - self._at
 
     def _flat(self, when: float) -> float:
-        """Where a moment sits on the road, with no lunge in it.
-
-        A block's place is fixed when it is laid; only the road moves.
-        Putting the lunge in here as well would shuffle every block on the
-        road every time the bass changed.
-        """
+        """Where a moment sits on the road: on the same curve the road
+        runs, each beat with the lunge it was given as it came into view.
+        Fixed from then, so nothing on the road moves; see
+        _decide_lunges."""
         if self._beat <= 0.0 or self._origin is None:
             return when * self.FREE_RUN
-        return (when - self._origin) / self._beat * self.PER_BEAT
+        beats = (when - self._origin) / self._beat
+        whole = math.floor(beats)
+        return (whole + self._covered(beats - whole, self._lunge_of(whole))
+                ) * self.PER_BEAT
 
     # -- drawing ----------------------------------------------------------
     def _slide(self, step: float) -> float:
@@ -6056,6 +6658,7 @@ class Rider(Scene):
         from PySide6.QtCore import QRect
         from PySide6.QtGui import QOpenGLContext
 
+        self._relief = 1.0
         self._step(state)
         kit = state.kit or {}
         bass = max(state.bass, kit.get("Bass", 0.0))
@@ -6117,6 +6720,7 @@ class Rider(Scene):
         self._results(painter, rect)
 
     def paint(self, painter, rect, state) -> None:
+        self._relief = self.FLAT_RELIEF
         self._step(state)
 
         flash = self.flash(state)
