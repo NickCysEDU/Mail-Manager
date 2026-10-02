@@ -39,7 +39,8 @@ from __future__ import annotations
 
 import hashlib
 import math
-from bisect import bisect_left
+import statistics
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -101,10 +102,21 @@ class Style:
     #: Whether the tempo and the beat are the drums' own (see rhythm_of),
     #: rather than what the style was read at.
     from_drums: bool = False
+    #: The beat times where the tempo moves (see follow), else empty.
+    beats: List[float] = field(default_factory=list)
+    #: The time of one first beat of a bar.
+    downbeat: Optional[float] = None
     #: The measurements the numbers above came from, for anybody checking.
     measured: Dict[str, float] = field(default_factory=dict)
     sections: List[Section] = field(default_factory=list)
     seed: int = 0
+
+    def clock(self):
+        """Where this track's beats fall: see beat_clock."""
+        from beat_clock import BeatClock
+
+        return BeatClock(60.0 / self.tempo if self.tempo > 0.0 else 0.0,
+                         self.beat_phase, self.beats, self.downbeat)
 
     def section_at(self, when: float) -> Optional[Section]:
         starts = [section.start for section in self.sections]
@@ -757,10 +769,12 @@ def rhythm_of(kit: Optional[dict], tempo: float = 0.0,
     track's style, done where the drums are found - in a process of its
     own - rather than on the thread drawing the picture.
 
-    ``{"tempo", "phase", "faster", "measured", "spans"}``: beats a
-    minute; the time of a beat, in seconds; 2 for a record heard at half
+    ``{"tempo", "phase", "faster", "measured", "spans", "beats"}``: beats
+    a minute; the time of a beat, in seconds; 2 for a record heard at half
     its speed (see ``read``) and otherwise 1; what the drums do (see
-    ``rhythm``); and where the kick is playing. None with no kit.
+    ``rhythm``); where the kick is playing; and the beat times where the
+    tempo moves, or None where one steady grid fits (see ``follow``). None
+    with no kit.
 
     The beat maps the rest of the app counts in are found at fifteen
     readings a second and phased from the first thing they heard, which on
@@ -823,7 +837,8 @@ def rhythm_of(kit: Optional[dict], tempo: float = 0.0,
     phase, beat = on_the_hits(measured["phase"], beat, kit)
     measured["phase"] = phase
     return {"tempo": 60.0 / beat, "phase": phase,
-            "faster": faster, "measured": measured, "spans": spans}
+            "faster": faster, "measured": measured, "spans": spans,
+            "beats": follow(both, rate, 60.0 / beat, phase)}
 
 
 #: How far from the grid a hit may be and still say where the grid is, in
@@ -888,20 +903,137 @@ def on_the_hits(phase: float, beat: float,
             here -= math.floor((here - hits[0]) / length) * length
             return here, length
     return phase, beat
-    for name in ("Kick", "Snare"):
-        found = (kit or {}).get(name)
-        hits = [float(getattr(hit, "at", hit))
-                for hit in (getattr(found, "beats", None) or ())]
-        offsets = []
-        for at in hits:
-            off = (at - phase) / beat
-            off -= round(off)
-            if abs(off) <= NEAR_THE_GRID:
-                offsets.append(off)
-        if len(offsets) >= 8:
-            offsets.sort()
-            return phase + offsets[len(offsets) // 2] * beat
-    return phase
+
+
+#: Tempo following. The drums are read in stretches of FOLLOW_SPAN beats,
+#: FOLLOW_HOP apart. A stretch fails the track's tempo when another tempo
+#: folds it far more sharply (FAIL) and is more than STEADY away; only a run
+#: of FAILING such stretches means the tempo really moves.
+FOLLOW_SPAN = 16
+FOLLOW_HOP = 8
+STEADY = 0.015
+FAIL = 0.6
+FAILING = 4
+#: A stretch that folds best at one of these shares of the track's tempo is
+#: playing a different rhythm at the same speed, not a new tempo.
+METRES = (0.5, 2.0 / 3.0, 0.75, 4.0 / 3.0, 1.5, 2.0)
+#: How far from the whole track's tempo a stretch's is looked for.
+FOLLOW_RANGE = 0.3
+#: How sharp a stretch's fold must be to say anything: a breakdown with no
+#: drums folds flat.
+CLEAR = 1.5
+#: Stretches whose tempos are this close are one part.
+SAME_PART = 0.01
+
+
+def _stretch_tempo(stretch: Sequence[float], rate: float, tempo: float):
+    """The tempo a stretch folds onto most sharply near ``tempo``, and how
+    sharply."""
+    best = (0.0, tempo)
+    steps = int(FOLLOW_RANGE * 100)
+    for k in range(-steps, steps + 1):
+        bpm = tempo * (1.0 + k / 100.0)
+        best = max(best, (_sharpness(stretch, rate, 60.0 / bpm), bpm))
+    near = best[1]
+    for k in range(-5, 6):
+        bpm = near * (1.0 + k / 1000.0)
+        best = max(best, (_sharpness(stretch, rate, 60.0 / bpm), bpm))
+    return best[1], best[0]
+
+
+def _part_phase(values: Sequence[float], rate: float, beat: float,
+                start: float, end: float) -> float:
+    """Where the beat falls in one part of a track, as a time."""
+    pattern = fold(values, rate, beat, 0.0, [(start, end)], beats=1)
+    smooth = [pattern[i - 1] + 2.0 * pattern[i]
+              + pattern[(i + 1) % PER_BEAT] for i in range(PER_BEAT)]
+    return smooth.index(max(smooth)) / PER_BEAT * beat
+
+
+def follow(values: Sequence[float], rate: float, tempo: float,
+           phase: float) -> Optional[List[float]]:
+    """Beat times that follow the tempo where it moves, or None where one
+    steady grid at ``tempo`` and ``phase`` fits the whole track.
+
+    A track that changes tempo is cut into parts, each with a steady grid
+    of its own fitted the way the whole track's is."""
+    if tempo <= 0.0 or rate <= 0.0 or not values:
+        return None
+    beat = 60.0 / tempo
+    length = len(values) / rate
+    span = beat * FOLLOW_SPAN
+    if length < span * 2.0:
+        return None
+    readings = []      # (start, end, tempo or None, fails)
+    start = 0.0
+    while start + span <= length:
+        stretch = values[int(start * rate):int((start + span) * rate)]
+        bpm, sharp = _stretch_tempo(stretch, rate, tempo)
+        here = _sharpness(stretch, rate, beat)
+        clear = sharp >= CLEAR
+        ratio = bpm / tempo
+        fails = (clear and abs(ratio - 1.0) > STEADY and here < sharp * FAIL
+                 and not any(abs(ratio / metre - 1.0) < STEADY
+                             for metre in METRES))
+        readings.append((start, start + span, bpm if clear else None, fails))
+        start += beat * FOLLOW_HOP
+    # A run of failing stretches that agree with each other on the tempo
+    # they do fit.
+    run, longest, agreed = 0, 0, None
+    for _s, _e, bpm, fails in readings:
+        if fails and agreed is not None and abs(bpm / agreed - 1.0) <= STEADY:
+            run += 1
+        elif fails:
+            run, agreed = 1, bpm
+        else:
+            run, agreed = 0, None
+        longest = max(longest, run)
+    if longest < FAILING:
+        return None
+    # Parts: neighbouring stretches whose tempos agree. A stretch with no
+    # clear beat belongs to the part before it.
+    parts: List[List] = []        # [start, end, [tempos]]
+    for begin, finish, bpm, _fails in readings:
+        if bpm is None or (parts and abs(bpm / statistics.median(
+                parts[-1][2]) - 1.0) <= SAME_PART):
+            if parts:
+                parts[-1][1] = finish
+                if bpm is not None:
+                    parts[-1][2].append(bpm)
+                continue
+            if bpm is None:
+                continue
+        parts.append([begin, finish, [bpm]])
+    if len(parts) < 2:
+        return None
+    parts[0][0] = 0.0
+    parts[-1][1] = length
+    # Parts overlap by the stretches' overlap; each starts where the one
+    # before it is half way through their shared stretch.
+    for before, after in zip(parts, parts[1:]):
+        middle = (after[0] + before[1]) / 2.0
+        before[1] = after[0] = middle
+    out: List[float] = []
+    for begin, finish, bpms in parts:
+        bpm = _refined(values[int(begin * rate):int(finish * rate)], rate,
+                       statistics.median(bpms))
+        length_here = 60.0 / bpm
+        found = _part_phase(values, rate, length_here, begin, finish)
+        at = found + math.ceil((begin - found) / length_here) * length_here
+        # From the last beat of the part before, never sooner than half a
+        # beat after it.
+        if out:
+            while at < out[-1] + length_here * 0.5:
+                at += length_here
+            while at - length_here >= out[-1] + length_here * 0.5:
+                at -= length_here
+        else:
+            while at - length_here >= 0.0:
+                at -= length_here
+        while at < finish:
+            out.append(at)
+            at += length_here
+    return out
 
 
 def read(chart: Optional[dict], beat: float, grid: Optional[float],
@@ -963,6 +1095,7 @@ def read(chart: Optional[dict], beat: float, grid: Optional[float],
     style.tempo = found["tempo"]
     style.faster = float(found.get("faster", 1.0))
     style.beat_phase = float(found["phase"])
+    style.beats = list(found.get("beats") or ())
     # The first downbeat: the beat of four the kick is strongest on and the
     # snare weakest, from the drums folded over the whole track.
     whole = [(0.0, length)]
@@ -986,6 +1119,7 @@ def read(chart: Optional[dict], beat: float, grid: Optional[float],
     first = style.beat_phase + downbeat * beat
     while first - beat * BAR >= -beat * 0.5:
         first -= beat * BAR
+    style.downbeat = first
     style.sections = sections(chart, beat, style.beat_phase, contour or {},
                               length, kick=curves["Kick"], first=first)
     tonal = float((harmony or {}).get("tonal", 0.0))

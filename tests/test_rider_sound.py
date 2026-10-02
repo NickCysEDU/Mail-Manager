@@ -57,8 +57,8 @@ class TestTheSoundsThemselves:
     @pytest.mark.parametrize("name", sorted(rider_sound.FIXED) + [
         rider_sound.note_name("pluck", 72, 0),
         rider_sound.note_name("pluck", 96, 35),
-        rider_sound.note_name("chime", 84, -20),
-        rider_sound.note_name("chime", 103, 0)])
+        rider_sound.note_name("soft", 72, -20),
+        rider_sound.note_name("soft", 91, 0)])
     def test_every_one_is_short_clean_and_below_full_scale(self, name):
         """No clip, no click at the end, no offset, and over within a
         second - a pickup sound that rang on would be over the next one."""
@@ -71,7 +71,7 @@ class TestTheSoundsThemselves:
         longest = 2.0 if name == "swell" else 1.0
         assert len(rider_sound.mono(samples)) / rider_sound.RATE <= longest
 
-    @pytest.mark.parametrize("voice", ["pluck", "chime"])
+    @pytest.mark.parametrize("voice", ["pluck", "soft"])
     @pytest.mark.parametrize("midi, cents", [(69, 0), (76, 30), (81, -25)])
     def test_a_note_is_its_note_in_its_tuning(self, voice, midi, cents):
         """The strongest thing in it is the note its name says, tuned as
@@ -113,9 +113,37 @@ class TestTheSoundsThemselves:
         record: none may have a steady pitch for a melody to clash with."""
         assert self._line(rider_sound.make(name)) < 40.0, name
 
+    @staticmethod
+    def _high_share(samples, note):
+        """How much of a sound is more than three times its note's
+        frequency: a bright, plucky sound is mostly up there, a soft one
+        mostly at its note."""
+        total = sum(_power(samples, note * k / 4.0) for k in range(2, 40))
+        high = sum(_power(samples, note * k / 4.0) for k in range(13, 40))
+        return high / total if total else 0.0
+
+    @staticmethod
+    def _attack(samples):
+        """Seconds from a tenth of the loudest to nine tenths of it."""
+        level = [abs(v) for v in rider_sound.mono(samples)]
+        top = max(level)
+        window = 64
+        smooth = [max(level[i:i + window]) for i in range(0, len(level), window)]
+        first = next(i for i, v in enumerate(smooth) if v >= top * 0.1)
+        nine = next(i for i, v in enumerate(smooth) if v >= top * 0.9)
+        return (nine - first) * window / rider_sound.RATE
+
+    @pytest.mark.parametrize("midi", [72, 84, 91])
+    def test_a_coin_is_a_soft_hit_not_a_pluck(self, midi):
+        """Most of a coin is at its note, and it comes up with no edge."""
+        samples = rider_sound.make(rider_sound.note_name("soft", midi, 0))
+        note = rider_sound.hertz(midi)
+        assert self._high_share(samples, note) < 0.12
+        assert self._attack(samples) >= 0.005
+
     def test_which_is_a_measure_that_hears_a_note(self):
         for name in (rider_sound.note_name("pluck", 72, 0),
-                     rider_sound.note_name("chime", 91, 0)):
+                     rider_sound.note_name("soft", 76, 0)):
             assert self._line(rider_sound.make(name), 0.02, 0.12) > 400.0
 
     def test_a_run_climbs_and_then_keeps_climbing_round_the_top(self):
@@ -281,10 +309,10 @@ class TestWhatIsPlayed:
         assert len(_pitch_classes(played)) == len(played) == 3, played
         assert set(_pitch_classes(played)) <= {0, 4, 7}, played
 
-    def test_coins_climb_the_chord_brighter(self, tmp_path):
+    def test_coins_climb_the_chord_softly(self, tmp_path):
         board, played = self._board(tmp_path, C_MAJOR)
         self._pickups(board, self._scene(), 3, kind="coin")
-        assert all(name.startswith("chime") for name in played)
+        assert all(name.startswith("soft") for name in played)
         assert _pitch_classes(played) == [0, 4, 7]
 
     def test_a_hit_thumps_and_the_music_ducks(self, tmp_path):
@@ -808,3 +836,33 @@ class TestTheyAreReallyPlayedLater:
         board._play_at(0.3, "hit", 1.0)
         board._play_at(0.3, "glass", 1.0)
         assert played == ["hit", "glass"]
+
+
+class TestTheNotesAreInTheKey:
+    """A pickup's note is from the chord only when the chord is the key's
+    own, and from the key where the song is - which can move."""
+
+    KEY = {"tonic": 0, "mode": "major", "confidence": 0.5}
+
+    def test_a_chord_out_of_the_key_is_not_followed(self):
+        import rider_sound
+
+        found = {"key": self.KEY, "chords": [[0.0, 10.0, 3, "maj"]]}
+        assert sorted(rider_sound.classes_at(found, 5.0)) == [0, 2, 4, 7, 9]
+
+    def test_a_chord_of_the_key_is(self):
+        import rider_sound
+
+        found = {"key": self.KEY, "chords": [[0.0, 10.0, 5, "maj"]]}
+        assert sorted(rider_sound.classes_at(found, 5.0)) == [0, 5, 9]
+
+    def test_a_song_that_changes_key_takes_its_notes_with_it(self):
+        import rider_sound
+
+        found = {"key": self.KEY, "chords": [],
+                 "keys": [[0.0, 20.0, 0, "major"], [20.0, 40.0, 2, "major"]]}
+        assert sorted(rider_sound.classes_at(found, 5.0)) == [0, 2, 4, 7, 9]
+        assert sorted(rider_sound.classes_at(found, 30.0)) == [2, 4, 6, 9, 11]
+        # A chord of the old key, misheard in the new one, is not used.
+        found["chords"] = [[25.0, 35.0, 5, "maj"]]
+        assert 5 not in rider_sound.classes_at(found, 30.0)

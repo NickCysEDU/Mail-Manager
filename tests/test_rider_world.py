@@ -701,10 +701,11 @@ class TestTheWorldOnTheCard:
                 made, scene = rider_pane(size=(800, 500))
                 def one_far_off(i, scene=scene, far=far):
                     scene._placed = scene._laid = 1e9
-                    # Forty units ahead of the craft.
-                    ahead = 40.0 / scene._cruise()
-                    scene._blocks = ([[scene._heard + ahead, 1, "block",
-                                       False, False]] if far else [])
+                    # Forty units ahead of the craft, however fast the
+                    # road is running there.
+                    due = scene._when(scene.RIDER_AT + 40.0)
+                    scene._blocks = ([[due, 1, "block", False, False]]
+                                     if far else [])
                 shots[far] = play(made, 0.6, each=one_far_off)
             a, b = shots[True], shots[False]
             w, h = a.width(), a.height()
@@ -1199,3 +1200,57 @@ class TestTheCorkscrewIsATunnel:
         _s, inside = spread_at(twist + 1.0)
         _s, outside = spread_at(twist - 3.0)
         assert inside >= 7 and inside > outside + 3, (inside, outside)
+
+
+class TestTheCityThroughACorkscrew:
+    """Seen from outside, the towers ahead stand upright whatever the road
+    does: turned with it, they were buildings twisting in the distance as a
+    corkscrew came. From inside its tunnel the view turns with the road and
+    they turn with it, as they always have."""
+
+    def test_the_towers_ahead_stay_upright_until_the_tunnel(self):
+        got = on_the_card(RIDER + textwrap.dedent("""
+            ONLY = ("_draw_road", "_draw_tunnel", "_draw_blocks",
+                    "_draw_ship", "_draw_trim", "_draw_gates",
+                    "_draw_barriers", "_draw_streaks", "_draw_particles")
+
+            def city(turn=0.0, inside=0.0, towers=True):
+                made, scene = rider_pane(size=(640, 400))
+                def each(i):
+                    world = made._canvas.world
+                    if world is None:
+                        return
+                    for name in ONLY:
+                        setattr(world, name, lambda frame: None)
+                    if not towers:
+                        world._draw_city = lambda frame: None
+                        world._draw_beacons = lambda frame: None
+                    # Turned only well ahead of the craft, as a corkscrew
+                    # coming is: the view itself stays level.
+                    world._twist = lambda scene, z: turn if z > 12.0 else 0.0
+                    real = type(world)._read_road
+                    def read(scene, real=real, world=world):
+                        out = real(world, scene)
+                        world.inside = inside
+                        return out
+                    world._read_road = read
+                return play(made, 0.5, each=each)
+
+            def apart(a, b):
+                w, h = a.width(), a.height()
+                return sum(abs(a.pixelColor(x, y).valueF()
+                               - b.pixelColor(x, y).valueF())
+                           for y in range(0, h, 2) for x in range(0, w, 2))
+
+            level = city()
+            out = {"city": apart(level, city(towers=False)),
+                   "outside": apart(level, city(turn=1.3)),
+                   "inside": apart(city(inside=1.0),
+                                   city(turn=1.3, inside=1.0))}
+            print(json.dumps(out))
+        """))
+        assert got["city"] > 50.0, f"no city to see: {got}"
+        assert got["outside"] < got["city"] * 0.01, (
+            f"the towers ahead turned with the road: {got}")
+        assert got["inside"] > got["city"] * 0.05, (
+            f"inside the tunnel the towers no longer turn with it: {got}")

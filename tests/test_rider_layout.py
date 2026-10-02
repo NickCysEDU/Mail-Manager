@@ -195,3 +195,27 @@ class TestTheLevels:
 
     def test_a_level_there_is_none_of_is_normal(self):
         assert rider_layout.level("Nightmare") == rider_layout.level("Normal")
+
+    def test_expert_is_twice_the_obstacles_and_never_nothing(self):
+        """Twice Normal's where there are any, and something to dodge even
+        in a break - unless the music is calm, which is ridden, not
+        dodged, at every level."""
+        for kind in ("drop", "groove", "build"):
+            normal = rider_layout.danger_share(kind, "Mono")
+            expert = rider_layout.danger_share(kind, "Mono",
+                                               difficulty="Expert")
+            assert expert >= min(rider_layout.DANGER_MOST, normal * 2.0) - 1e-9
+        assert rider_layout.danger_share("break", "Mono") == 0.0
+        assert rider_layout.danger_share("break", "Mono",
+                                         difficulty="Expert") >= 0.15
+        assert rider_layout.danger_share("break", "Mono",
+                                         difficulty="Hard") > 0.0
+        assert rider_layout.danger_share("break", "Mono", _style(calm=1.0),
+                                         difficulty="Expert") == 0.0
+
+    def test_there_is_always_something_to_take(self):
+        for kind in rider_layout.DANGER_SHARE:
+            for mode in ("Mono", "Ninja"):
+                share = rider_layout.danger_share(
+                    kind, mode, _style(heavy=1.0), difficulty="Expert")
+                assert share <= rider_layout.DANGER_MOST < 1.0

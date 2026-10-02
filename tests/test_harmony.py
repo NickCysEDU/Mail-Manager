@@ -37,6 +37,43 @@ class TestTheKey:
         assert (found["key"]["tonic"], found["key"]["mode"]) == (9, "minor")
 
 
+class TestTheKeyThroughTheTrack:
+    """A song that changes key is followed into it; one that does not is
+    left in its own."""
+
+    PROGRESSION = [(0, "maj"), (5, "maj"), (7, "maj"), (9, "min")]
+
+    @classmethod
+    def _song(cls, *tonics):
+        from array import array
+
+        pcm = array("h")
+        rate = 8000
+        for tonic in tonics:
+            part, rate, _truth = songkit.song(
+                [((root + tonic) % 12, quality)
+                 for root, quality in cls.PROGRESSION], repeats=6, rate=8000)
+            pcm.extend(part)
+        return harmony.analyse(pcm, rate, 1)
+
+    def test_a_song_that_goes_up_a_tone_is_followed_there(self):
+        found = self._song(0, 2)
+        assert harmony.key_at(found, 10.0) == (0, "major")
+        assert harmony.key_at(found, 85.0) == (2, "major")
+        changes = [start for start, _end, _tonic, _mode in found["keys"][1:]]
+        assert len(changes) == 1 and 36.0 < changes[0] < 60.0, found["keys"]
+
+    def test_a_song_in_one_key_stays_in_it(self):
+        found = self._song(0, 0)
+        assert [k[2:] for k in found["keys"]] == [[0, "major"]]
+
+    def test_no_key_to_follow_without_a_key(self):
+        assert harmony.keys([], None, 0.25) == []
+        assert harmony.key_at(None, 3.0) is None
+        assert harmony.key_at({"key": {"tonic": 4, "mode": "minor"}},
+                              3.0) == (4, "minor")
+
+
 class TestTheTuning:
     @pytest.mark.parametrize("cents", [-40.0, -15.0, 0.0, 22.0, 45.0])
     def test_it_is_heard_to_a_few_cents(self, cents):

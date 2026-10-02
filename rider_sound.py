@@ -54,13 +54,12 @@ log = logging.getLogger(__name__)
 RATE = 44100
 #: Bumped whenever a sound is changed, so a cache from an older build is
 #: not played instead of it.
-VERSION = 5
+VERSION = 6
 
-#: Where the pickups ring and where the coins do, as MIDI notes: from C5
-#: up two octaves, and a brighter octave above that. Above most leads, so
-#: they are heard without sitting on the melody.
-PRIZE_LOW, PRIZE_HIGH = 72, 96
-COIN_LOW, COIN_HIGH = 84, 103
+#: Where the pickups ring and where the coins do, as MIDI notes: C4 to C6,
+#: and C5 to G6 - in among the music's own notes rather than above them.
+PRIZE_LOW, PRIZE_HIGH = 60, 84
+COIN_LOW, COIN_HIGH = 72, 91
 
 #: The scales a pickup climbs when the chord is not known but the key is:
 #: the pentatonic of the key, which has no note in it that clashes with
@@ -107,7 +106,7 @@ TUNINGS_KEPT = 4
 # melody to clash with.
 
 #: The two voices notes are made in: a pickup's and a coin's.
-VOICES = ("pluck", "chime")
+VOICES = ("pluck", "soft")
 
 #: Stereo: every sound is written as two channels, left then right.
 CHANNELS = 2
@@ -285,57 +284,51 @@ def pluck(midi: float) -> array:
     table = _saw(_cents(freq, 8.0))
 
     def opening(t: float) -> float:
-        return freq * (1.4 + 9.0 * math.exp(-t / 0.05))
+        return freq * (1.4 + 4.5 * math.exp(-t / 0.05))
 
     def ring(t: float) -> float:
-        return (min(1.0, t / 0.0015)
-                * (0.82 * math.exp(-t / 0.10) + 0.18 * math.exp(-t / 0.32)))
+        return (min(1.0, t / 0.004)
+                * (0.75 * math.exp(-t / 0.12) + 0.25 * math.exp(-t / 0.34)))
 
     _add(left, _filter(_play(table, _cents(freq, -7.0), count), opening,
-                       1.6), 1.0, ring)
+                       0.9), 1.0, ring)
     _add(right, _filter(_play(table, _cents(freq, 7.0), count, 0.37),
-                        opening, 1.6), 1.0, ring)
+                        opening, 0.9), 1.0, ring)
     under = _play(_table([(1, 1.0)]), freq / 2.0, count)
     glint = _play(_table([(1, 1.0)]), freq * 4.0, int(0.08 * RATE))
     for side in (left, right):
         _add(side, under, 0.3,
              lambda t: min(1.0, t / 0.003) * math.exp(-t / 0.11))
-        _add(side, glint, 0.16, lambda t: math.exp(-t / 0.018))
+        _add(side, glint, 0.06, lambda t: math.exp(-t / 0.018))
     return _finish(left, right, 0.52)
 
 
-def chime(midi: float) -> array:
-    """A coin: glass struck by frequency modulation, with a chirp up into
-    the note - a blip, the way a machine says yes.
-
-    The modulator is twice the carrier, so every partial is a harmonic of
-    the note, and it dies faster than the note does, so the strike is
-    bright and the ring is pure. The right side is a few cents sharp and a
-    few milliseconds late, which is width without a second note."""
+def soft(midi: float) -> array:
+    """A coin: a soft synth hit. Two saws a few cents apart, one in each
+    ear, through a low-pass that hardly opens, a sine at the note for its
+    body, and an attack slow enough to have no edge - a pad struck once,
+    which sits inside the music rather than on top of it."""
     freq = hertz(midi)
-    length = 0.3
+    length = 0.5
     left, right = _silence(length)
+    count = len(left)
+    table = _saw(_cents(freq, 4.0))
 
-    def voice(side: List[float], cents: float, late: float) -> None:
-        note = _cents(freq, cents)
-        phase = 0.0
-        first = int(late * RATE)
-        for index in range(len(side) - first):
-            t = index / RATE
-            # Up into the note over the first few milliseconds.
-            here = note * (1.0 - 0.25 * math.exp(-t / 0.004))
-            phase += math.tau * here / RATE
-            depth = 2.4 * math.exp(-t / 0.03)
-            shape = (min(1.0, t / 0.0008)
-                     * (0.88 * math.exp(-t / 0.075)
-                        + 0.12 * math.exp(-t / 0.2)))
-            side[first + index] += shape * (
-                math.sin(phase + depth * math.sin(2.0 * phase))
-                + 0.14 * math.exp(-t / 0.02) * math.sin(4.0 * phase))
+    def opening(t: float) -> float:
+        return freq * (2.0 + 2.2 * math.exp(-t / 0.07))
 
-    voice(left, -4.0, 0.0)
-    voice(right, 4.0, 0.006)
-    return _finish(left, right, 0.44)
+    def ring(t: float) -> float:
+        rise = 0.5 - 0.5 * math.cos(math.pi * min(1.0, t / 0.012))
+        return rise * (0.65 * math.exp(-t / 0.13) + 0.35 * math.exp(-t / 0.4))
+
+    _add(left, _filter(_play(table, _cents(freq, -4.0), count), opening,
+                       0.55), 1.0, ring)
+    _add(right, _filter(_play(table, _cents(freq, 4.0), count, 0.31),
+                        opening, 0.55), 1.0, ring)
+    body = _play(_table([(1, 1.0)]), freq, count)
+    for side in (left, right):
+        _add(side, body, 0.5, ring)
+    return _finish(left, right, 0.5)
 
 
 def tick(step: int) -> array:
@@ -488,7 +481,7 @@ for _step in range(8):
     FIXED[f"tick{_step}"] = (lambda step=_step: tick(step))
     FIXED[f"shake{_step}"] = (lambda step=_step: shake(step))
 
-_MAKERS = {"pluck": pluck, "chime": chime}
+_MAKERS = {"pluck": pluck, "soft": soft}
 
 
 def note_name(voice: str, midi: int, cents: int) -> str:
@@ -500,7 +493,7 @@ def notes_for(cents: int) -> List[str]:
     """Every note there is to make for a tuning."""
     return ([note_name("pluck", midi, cents)
              for midi in range(PRIZE_LOW, PRIZE_HIGH + 1)]
-            + [note_name("chime", midi, cents)
+            + [note_name("soft", midi, cents)
                for midi in range(COIN_LOW, COIN_HIGH + 1)])
 
 
@@ -644,23 +637,25 @@ def pitched(harmony: Optional[dict]) -> bool:
     """Whether a record has a key worth playing in."""
     if not harmony:
         return False
+    if harmony.get("keys"):
+        return True
     key = harmony.get("key") or {}
     return float(key.get("confidence", 0.0)) >= SURE
 
 
 def classes_at(harmony: dict, when: float) -> Tuple[int, ...]:
     """The pitch classes a pickup may be at ``when``: the chord sounding
-    then, or the key's pentatonic if no chord is."""
+    then if it is one of the key's own, and otherwise the key's
+    pentatonic - the key there, which a song that changes key has moved."""
     import harmony as _harmony
 
+    tonic, mode = _harmony.key_at(harmony, when)
     chord = _harmony.chord_at(harmony, when)
-    if chord is not None:
+    if chord is not None and _harmony.in_key(chord, tonic, mode):
         root, quality = chord
         return tuple((root + step) % 12 for step in CHORD_TONES[quality])
-    key = harmony["key"]
-    scale = (MINOR_PENTATONIC if key["mode"] == "minor"
-             else MAJOR_PENTATONIC)
-    return tuple((key["tonic"] + step) % 12 for step in scale)
+    scale = MINOR_PENTATONIC if mode == "minor" else MAJOR_PENTATONIC
+    return tuple((tonic + step) % 12 for step in scale)
 
 
 # ==========================================================================
@@ -848,7 +843,7 @@ class SoundBoard:
                 notes = self._ladder(scene, COIN_LOW, COIN_HIGH)
                 if notes:
                     return [(0.0, self._note(
-                        "chime", notes[climb(run, len(notes))]), 1.0)]
+                        "soft", notes[climb(run, len(notes))]), 1.0)]
             return [(0.0, f"shake{min(7, run)}", 1.0)]
         if kind == "hit":
             return [(0.0, "hit", 1.0)]
@@ -860,7 +855,7 @@ class SoundBoard:
                 notes = self._ladder(scene, COIN_LOW, COIN_HIGH)[-6:]
                 for index, midi in enumerate(notes[::2]):
                     out.append((0.015 + index * 0.03,
-                                self._note("chime", midi), 0.6))
+                                self._note("soft", midi), 0.6))
             return out
         if kind == "power":
             out = [(0.0, "sweep", 1.0)]
@@ -882,10 +877,14 @@ class SoundBoard:
         if kind == "finish":
             if not keyed:
                 return [(0.0, "swell", 1.0)]
-            # Home: up the key's own chord, and that chord to finish on.
-            key = self._harmony["key"]
-            tones = CHORD_TONES["min" if key["mode"] == "minor" else "maj"]
-            home = ladder([(key["tonic"] + step) % 12 for step in tones],
+            # Home: up the chord of the key the track ends in, and that
+            # chord to finish on.
+            import harmony as _harmony
+
+            tonic, mode = _harmony.key_at(
+                self._harmony, float(getattr(scene, "_heard", 0.0)))
+            tones = CHORD_TONES["min" if mode == "minor" else "maj"]
+            home = ladder([(tonic + step) % 12 for step in tones],
                           PRIZE_LOW, PRIZE_HIGH)
             run = home[:7]
             out = [(index * 0.07, self._note("pluck", midi), 0.7)

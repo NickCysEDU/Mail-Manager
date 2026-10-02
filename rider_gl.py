@@ -131,6 +131,43 @@ vec3 onRoadAs(float u, float h, float z, float anchor) {
 }
 """ % {"samples": ROAD_SAMPLES, "last": ROAD_SAMPLES - 1}
 
+#: How many beats' starts the shaders are given, from just behind the eye
+#: to past the end of the road: at the slowest the road runs, a few dozen.
+BEAT_MARKS = 64
+
+#: Where the beats are on the road: the beat number at a point of it,
+#: through the starts of the beats near it. A beat is not one length of
+#: road; see Rider._decide_lunges.
+BEATS_GLSL = """
+uniform float uBeatAt[%(marks)d];
+uniform float uBeatFirst;
+float beatsAt(float along) {
+    float first = uBeatAt[0];
+    float last = uBeatAt[%(last)d];
+    if (along <= first) {
+        return uBeatFirst + (along - first) / max(1e-4, uBeatAt[1] - first);
+    }
+    if (along >= last) {
+        return uBeatFirst + %(last)d.0
+               + (along - last) / max(1e-4, last - uBeatAt[%(last)d - 1]);
+    }
+    int low = 0;
+    int high = %(last)d;
+    for (int step = 0; step < %(steps)d; step++) {
+        int middle = (low + high) / 2;
+        if (uBeatAt[middle] <= along) {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    float start = uBeatAt[low];
+    return uBeatFirst + float(low)
+           + (along - start) / max(1e-4, uBeatAt[low + 1] - start);
+}
+""" % {"marks": BEAT_MARKS, "last": BEAT_MARKS - 1,
+       "steps": int(math.ceil(math.log2(BEAT_MARKS - 1)))}
+
 #: Shared by everything that fades into the distance.
 FOG_GLSL = """
 uniform vec3 uFog;
@@ -359,7 +396,7 @@ void main() {
 }
 """
 
-ROAD_FRAGMENT = HUES_GLSL + FOG_GLSL + """
+ROAD_FRAGMENT = HUES_GLSL + FOG_GLSL + BEATS_GLSL + """
 varying float vU;
 varying float vZ;
 varying float vDepth;
@@ -387,13 +424,13 @@ void main() {
     vec3 colour = hsv(uHue, 0.7, 0.05 + uLoud * 0.05);
     // A grid scrolling under you: a line every quarter of a beat across
     // the road, and every lane along it.
-    float quarter = fract(along / (uPerBeat * 0.25));
+    float beats = beatsAt(along);
+    float quarter = fract(beats * 4.0);
     float fine = 1.0 - smoothstep(0.0, 0.035, min(quarter, 1.0 - quarter));
     colour += hue * fine * 0.10;
     // The beat itself: a bright line across the road every beat, which
     // reaches the craft exactly on it. Lit harder as it gets close, and
     // hardest as it passes under you.
-    float beats = along / uPerBeat;
     float onBeat = 1.0 - smoothstep(0.0, 0.018, min(fract(beats),
                                                       1.0 - fract(beats)));
     float near = exp(-abs(vZ - uRider) * 0.25);
@@ -586,9 +623,23 @@ void main() {
 """
 
 TOWER_GLSL = """
+uniform float uInside;      // how far the craft is inside a tunnel, 0 to 1
 float towerTall(float level, float reach, float kick) {
     return (1.8 + level * 8.0 + kick * level * 2.5)
            * (0.55 + clamp(reach / 18.0, 0.0, 0.9));
+}
+// On the road's line, turned by the road's roll where it stands - but
+// without a corkscrew's turn (the road sample's w) until the craft is in
+// its tunnel. Seen from outside, a tower turned with the road ahead was a
+// building twisting in the distance; from inside, the view turns with the
+// road and the towers turn with it, as they always have.
+vec3 onRoadUpright(float u, float h, float z, float anchor) {
+    vec4 r = roadAt(z);
+    vec4 a = roadAt(anchor);
+    float roll = a.z - a.w * (1.0 - uInside);
+    float c = cos(roll);
+    float s = sin(roll);
+    return vec3(r.x + u * c - h * s, r.y + u * s + h * c, -z);
 }
 """
 
@@ -609,12 +660,12 @@ varying float vStyle;
 void main() {
     float level = uLevels[int(aTower.w)];
     vStyle = fract(aTower.y * 0.618 + aTower.z * 3.1);
-    float tall = towerTall(level, abs(aTower.x), uKick);
     float along = mod(aTower.y - uTravel, uLoop) + uFrom;
+    float tall = towerTall(level, abs(aTower.x), uKick);
     vec3 local = vec3(aCorner.x * aTower.z, aCorner.y * tall,
                       aCorner.z * aTower.z);
-    vec3 p = onRoadAs(aTower.x + local.x, local.y - 1.2, along + local.z,
-                      along);
+    vec3 p = onRoadUpright(aTower.x + local.x, local.y - 1.2,
+                           along + local.z, along);
     vec4 eye = uView * vec4(p, 1.0);
     vDepth = eye.w;
     vCorner = aCorner;
@@ -683,9 +734,9 @@ varying float vDepth;
 varying float vOn;
 void main() {
     float level = uLevels[int(aTower.w)];
-    float tall = towerTall(level, abs(aTower.x), uKick);
     float along = mod(aTower.y - uTravel, uLoop) + uFrom;
-    vec3 p = onRoad(aTower.x, tall - 1.2 + 0.25, along);
+    float tall = towerTall(level, abs(aTower.x), uKick);
+    vec3 p = onRoadUpright(aTower.x, tall - 1.2 + 0.25, along, along);
     vec4 eye = uView * vec4(p, 1.0);
     vDepth = eye.w;
     // One tower in three carries a beacon, and they flash on the beat.
@@ -724,7 +775,7 @@ void main() {
 }
 """
 
-BARRIER_FRAGMENT = HUES_GLSL + FOG_GLSL + """
+BARRIER_FRAGMENT = HUES_GLSL + FOG_GLSL + BEATS_GLSL + """
 varying float vUp;
 varying float vZ;
 varying float vDepth;
@@ -742,7 +793,7 @@ void main() {
     float glass = 0.04 + vUp * 0.10;
     float top = 1.0 - smoothstep(0.0, 0.06, 1.0 - vUp);
     // Posts every half beat, lit on the beat.
-    float along = (vZ + uTravel) / (uPerBeat * 0.5);
+    float along = beatsAt(vZ + uTravel) * 2.0;
     float post = 1.0 - smoothstep(0.0, 0.03, abs(fract(along) - 0.5));
     // The kick's wave running along it with the one on the road.
     float wave = exp(-pow((vZ - uWave) * 0.9, 2.0)) * uWaveLit;
@@ -901,7 +952,7 @@ void main() {
 }
 """ % {"samples": ROAD_SAMPLES, "last": ROAD_SAMPLES - 1}
 
-TUNNEL_FRAGMENT = HUES_GLSL + FOG_GLSL + """
+TUNNEL_FRAGMENT = HUES_GLSL + FOG_GLSL + BEATS_GLSL + """
 varying float vAngle;
 varying float vAlong;
 varying float vHere;
@@ -924,7 +975,7 @@ void main() {
     colour += hsv(hue + 0.33, 1.0, 0.30 * max(0.0, weave));
     // A ring of light at every beat, as the gates are: they pass the
     // craft on the beat, so the beat is still there to be seen in here.
-    float beat = fract((vAlong - uRider + uTravel) / uPerBeat);
+    float beat = fract(beatsAt(vAlong - uRider + uTravel));
     float ring = exp(-min(beat, 1.0 - beat) * uPerBeat * 3.0);
     colour += hsv(hue + 0.5, 0.55, 1.0) * ring * (0.9 + uBeat * 2.2);
     colour *= 0.85 + uKick * 0.9;
@@ -1791,19 +1842,36 @@ class RiderWorld:
         else:
             bands = [0.0] * BANDS
         travel = float(scene._at)
-        per_beat = scene.PER_BEAT if scene._beat > 0.0 else 1e6
+        per_beat = 1e6
+        marks_first = 0.0
+        marks = [index * 1e6 for index in range(BEAT_MARKS)]
+        if scene._clock:
+            here = scene._beat_number(scene._heard) or 0
+            per_beat = scene.PER_BEAT * scene._pace_of(here)
+            first = scene._beat_at_road(
+                travel - scene.RIDER_AT + ROAD_FROM) - 1
+            marks_first = float(first)
+            marks = [scene.beat_on_road(first + index)
+                     for index in range(BEAT_MARKS)]
         return {
             "road": road, "view": view, "hue": hue, "loud": loud,
             "rush": rush, "hurt": hurt, "beat": beat, "kick": kick,
             "air": air, "across": across, "aspect": aspect, "roll": roll,
             "horizon": horizon, "sun": sun, "fog": fog, "bands": bands,
             "travel": travel, "per_beat": per_beat, "scene": scene,
+            "marks": marks, "marks_first": marks_first,
             "flash": float(scene.flash(state)) if hasattr(scene, "flash")
             else 0.0,
             "half": scene.LANE_WIDE * scene.LANES / 2.0,
             "pixels": 1.0,
             "eye": eye_at,
         }
+
+    @staticmethod
+    def _beat_uniforms(program, frame) -> None:
+        """Where the beats start on the road, for BEATS_GLSL."""
+        program.array("uBeatAt", frame["marks"], BEAT_MARKS, 1)
+        program.set("uBeatFirst", float(frame["marks_first"]))
 
     def _road_uniforms(self, program, frame) -> None:
         program.array("uRoad", frame["road"], ROAD_SAMPLES, 4)
@@ -1838,6 +1906,7 @@ class RiderWorld:
         p.bind()
         self._road_uniforms(p, frame)
         self._fog_uniforms(p, frame)
+        p.set("uInside", float(self.inside))
         p.array("uLevels", frame["bands"], BANDS, 1)
         p.set("uTravel", float(frame["travel"]))
         p.set("uLoop", 80.0)
@@ -1868,6 +1937,7 @@ class RiderWorld:
         p.set("uBeat", float(frame["beat"]))
         p.set("uKick", float(self._kick_punch))
         p.set("uPerBeat", float(frame["per_beat"]))
+        self._beat_uniforms(p, frame)
         p.set("uRider", float(scene.RIDER_AT))
         gl.glEnable(GL_BLEND)
         gl.glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
@@ -1887,6 +1957,7 @@ class RiderWorld:
         p.set("uLane", float(scene.LANE_WIDE))
         p.set("uTravel", float(frame["travel"] - scene.RIDER_AT))
         p.set("uPerBeat", float(frame["per_beat"]))
+        self._beat_uniforms(p, frame)
         p.set("uRider", float(scene.RIDER_AT))
         p.set("uHue", float(frame["hue"]))
         p.set("uLoud", float(frame["loud"]))
@@ -2171,15 +2242,13 @@ class RiderWorld:
         import colorsys
 
         scene = frame["scene"]
-        if scene._beat <= 0.0:
+        if not scene._clock:
             return
-        per = scene.PER_BEAT
         p = self._solid(frame)
         colour = colorsys.hsv_to_rgb(frame["hue"], 0.8, 1.0)
-        base = scene._at - scene.RIDER_AT
-        first = math.ceil((base + scene.RIDER_AT - 3.0) / per)
-        for n in range(first, first + 10):
-            z = scene.RIDER_AT + n * per - scene._at
+        first = scene._beat_at_road(scene._at - 3.0)
+        for n in range(first, first + BEAT_MARKS):
+            z = scene.RIDER_AT + scene.beat_on_road(n) - scene._at
             if z > SEEN_AHEAD:
                 break
             if z < scene.RIDER_AT - 2.5:
@@ -2191,10 +2260,11 @@ class RiderWorld:
                 lit = 4.0 * math.exp(gap * 3.0)
             if abs(gap) < 0.6:
                 lit += 5.0 * (1.0 - abs(gap) / 0.6)
-            # Every fourth one taller and brighter: the bar, which is
-            # the shape a phrase is counted in.
-            bar = 1.35 if n % 4 == 0 else 1.0
-            lit *= 1.6 if n % 4 == 0 else 1.0
+            # The first beat of each bar taller and brighter, and all of
+            # them turned down where the music is calm.
+            downbeat = scene.bar_place(n) == 0
+            bar = 1.35 if downbeat else 1.0
+            lit *= (1.6 if downbeat else 1.0) * scene.gate_light(n)
             self._put(p, (0.0, 0.0, z), (bar, bar, 1.0), (0.0, 0.0, 0.0),
                       tuple(c * lit for c in colour), 1.0, 0.0, 0.0)
             self.arch.draw(self.gl, p)
@@ -2211,6 +2281,7 @@ class RiderWorld:
         p.set("uBeat", float(frame["beat"]))
         p.set("uTravel", float(frame["travel"] - scene.RIDER_AT))
         p.set("uPerBeat", float(frame["per_beat"]))
+        self._beat_uniforms(p, frame)
         p.set("uWave", float(self._wave))
         p.set("uWaveLit", float(self._wave_lit))
         p.set("uRider", float(scene.RIDER_AT))
@@ -2222,6 +2293,7 @@ class RiderWorld:
         p.bind()
         self._road_uniforms(p, frame)
         self._fog_uniforms(p, frame)
+        p.set("uInside", float(self.inside))
         p.array("uLevels", frame["bands"], BANDS, 1)
         p.set("uTravel", float(frame["travel"]))
         p.set("uLoop", 80.0)
@@ -2506,6 +2578,9 @@ class Hud:
         self._chain_bump = 0.0
         self._chain_was = 0
         self._now = None
+        #: Where each number was last drawn, by name, for anybody checking
+        #: that nothing is drawn on top of anything else.
+        self.placed = {}
 
     def draw(self, painter, rect, scene, state) -> None:
         import time as _time
@@ -2591,7 +2666,9 @@ class Hud:
             painter.setPen(QPen(QColor(0, 0, 0, 150), max(1.0, size * 0.06)))
             painter.setBrush(colour)
             painter.drawPath(path)
+            return path.boundingRect()
 
+        self.placed = {}
         if getattr(scene, "_finished", False):
             # The results card says all of it now. See Rider._results.
             painter.restore()
@@ -2614,11 +2691,18 @@ class Hud:
                                1.0)
         left = rect.left() + rect.width() * 0.035
         floor = rect.bottom() - tall * 0.05
-        text(QPointF(left, floor - tall * 0.085), label, tall * 0.018,
-             QColor(255, 255, 255, 200), "left", None, weight=700)
-        text(QPointF(left, floor), f"{chain}",
-             tall * 0.07 * (1.0 + self._chain_bump * 0.25), warm, "left",
-             warm)
+        if scene._mode == "Puzzle" and hasattr(scene, "matrix_box"):
+            # Beside the grid, not on it: the grid is in this corner too.
+            box = scene.matrix_box(rect)
+            left = box.right() + tall * 0.035
+            floor = box.bottom()
+        self.placed["chain label"] = text(
+            QPointF(left, floor - tall * 0.085), label, tall * 0.018,
+            QColor(255, 255, 255, 200), "left", None, weight=700)
+        self.placed["chain"] = text(
+            QPointF(left, floor), f"{chain}",
+            tall * 0.07 * (1.0 + self._chain_bump * 0.25), warm, "left",
+            warm)
         # How far to the next milestone.
         marks = getattr(scene, "MILESTONES", ())
         if scene._mode != "Puzzle" and marks:

@@ -544,11 +544,13 @@ def contour(frames: Sequence, vectors: Optional[Sequence] = None,
     """
     loud = outline(frames, calibration, columns=max(
         1, int(len(frames) / max(1, RATE) * CONTOUR_RATE)))
+    low = bass_line(frames, len(loud))
     if lean is not None and loud:
         # Worked out from the samples already. See ``balance``.
         given = list(lean)[:len(loud)]
         given += [0.0] * (len(loud) - len(given))
-        return {"loud": loud, "lean": given, "rate": float(CONTOUR_RATE)}
+        return {"loud": loud, "lean": given, "low": low,
+                "rate": float(CONTOUR_RATE)}
     lean = [0.0] * len(loud)
     if vectors and loud:
         span = len(vectors) / max(1e-6, RATE)
@@ -563,7 +565,34 @@ def contour(frames: Sequence, vectors: Optional[Sequence] = None,
                 right += abs(trace[step + 1])
             total = left + right
             lean[index] = 0.0 if total <= 0 else (right - left) / total
-    return {"loud": loud, "lean": lean, "rate": float(CONTOUR_RATE)}
+    return {"loud": loud, "lean": lean, "low": low,
+            "rate": float(CONTOUR_RATE)}
+
+
+#: The bands a bass line is in, from the bottom.
+BASS_BANDS = 3
+
+
+def bass_line(frames: Sequence, columns: int) -> List[float]:
+    """How much bass there is across the track, 0..1 a column: the lowest
+    bands, averaged a column at a time and scaled so the 95th percentile
+    is full."""
+    if not frames or columns <= 0:
+        return []
+    out = []
+    count = len(frames)
+    for index in range(columns):
+        start = index * count // columns
+        end = max(start + 1, (index + 1) * count // columns)
+        total = 0.0
+        for frame in frames[start:end]:
+            total += sum(frame[:BASS_BANDS]) / max(1, min(BASS_BANDS, len(frame)))
+        out.append(total / (end - start))
+    ordered = sorted(out)
+    top = ordered[int(len(ordered) * 0.95)] if ordered else 0.0
+    if top <= 0.0:
+        return [0.0] * columns
+    return [min(1.0, value / top) for value in out]
 
 
 #: Every analysis still in flight. A pane destroyed as somebody's child
@@ -1082,12 +1111,7 @@ class _Analysis(QObject_base):
     def cancel(self) -> None:
         """Abandon the work. Safe to call more than once."""
         self._stop = True
-        decoder, self._decoder = self._decoder, None
-        if decoder is not None:
-            try:
-                decoder.stop()
-            except Exception:      # noqa: BLE001 - already gone
-                pass
+        self._release_decoder()
         thread, self._thread = self._thread, None
         if thread is not None:
             thread.stop()
@@ -1104,6 +1128,19 @@ class _Analysis(QObject_base):
                     if thread not in _ABANDONED:
                         _ABANDONED.append(thread)
         _LIVE.discard(self)
+
+    def _release_decoder(self) -> None:
+        """Stop the decoder and delete it. Dropping it is not enough: its
+        signals hold the closures that hold it and the decoded track, a
+        cycle through Qt that the collector cannot see, so every track
+        decoded stayed in memory."""
+        decoder, self._decoder = self._decoder, None
+        if decoder is not None:
+            try:
+                decoder.stop()
+                decoder.deleteLater()
+            except Exception:      # noqa: BLE001 - already gone
+                pass
 
     @property
     def cancelled(self) -> bool:
@@ -1172,11 +1209,17 @@ class _Analysis(QObject_base):
             self._on_done(frames)
 
     def _thread_done(self) -> None:
-        """The thread's own signal: run() has returned and it is safe."""
+        """The thread's own signal: run() has returned. The decoder goes,
+        and the track the thread was handed with it; the thread itself is
+        kept, because Qt may still count it as running."""
         _LIVE.discard(self)
+        self._release_decoder()
+        if self._thread is not None:
+            self._thread._samples = None
 
     def _failed(self, detail: str) -> None:
         _LIVE.discard(self)
+        self._release_decoder()
         if not self._stop:
             self._on_fail(detail)
 
@@ -1215,28 +1258,37 @@ def decode(path, on_done, on_fail, on_progress=None,
     decoder.setAudioFormat(wanted)
 
     collected = array("h")
-    state = {"rate": DECODE_RATE, "channels": 2}
+    state = {"rate": DECODE_RATE, "channels": 2, "too_long": False}
 
     def buffer_ready() -> None:
         buffer = decoder.read()
-        if not buffer.isValid():
+        if not buffer.isValid() or state["too_long"]:
             return
         fmt = buffer.format()
         state["rate"] = fmt.sampleRate() or DECODE_RATE
         state["channels"] = fmt.channelCount() or 1
-        raw = buffer.constData()
         try:
+            data = bytes(buffer.constData())
             chunk = array("h")
-            chunk.frombytes(bytes(raw)[: (len(bytes(raw)) // 2) * 2])
+            chunk.frombytes(data[: (len(data) // 2) * 2])
             collected.extend(chunk)
         except Exception:      # noqa: BLE001 - a bad buffer is not fatal
             pass
+        # Nothing past MAX_SECONDS is analysed, so nothing past it is kept:
+        # an hour-long mix decoded whole, and then copied to every worker,
+        # was gigabytes.
+        most = (MAX_SECONDS + 1) * state["rate"] * state["channels"]
+        if len(collected) > most:
+            state["too_long"] = True
+            del collected[:]
+            handle.cancel()
+            on_fail(f"longer than {MAX_SECONDS // 60} minutes")
 
     def finished() -> None:
-        # Off the UI thread. This used to run here, and a three minute
-        # track spent five and a half seconds inside analyse() with the
-        # event loop stopped - the window went grey and the pointer became
-        # a beachball, which reads as a crash rather than as work.
+        if state["too_long"]:
+            return
+        # Off the UI thread: analysed here, a three minute track stopped
+        # the event loop for five seconds.
         handle.start_analysis(collected, state["rate"], state["channels"])
 
     handle = _Analysis(decoder, on_done, on_fail, on_progress, on_elements,
@@ -1248,8 +1300,11 @@ def decode(path, on_done, on_fail, on_progress=None,
     for name in ("errorOccurred", "error"):
         signal = getattr(decoder, name, None)
         if signal is not None and hasattr(signal, "connect"):
+            def refused(*_args) -> None:
+                handle.cancel()
+                on_fail("this file will not decode")
             try:
-                signal.connect(lambda *_: on_fail("this file will not decode"))
+                signal.connect(refused)
                 break
             except (TypeError, RuntimeError):
                 continue

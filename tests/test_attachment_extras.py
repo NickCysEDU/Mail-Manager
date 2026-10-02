@@ -8792,6 +8792,7 @@ class TestTheRiderIsOnTheBeat:
 
         scene = visualizers.Rider()
         scene._beat = cls.BEAT
+        scene._clock = visualizers.BeatClock(cls.BEAT, 0.0)
         state = SpectrumState()
         state.levels = [0.4] * 27
         state.chart = cls.CHART
@@ -8819,6 +8820,7 @@ class TestTheRiderIsOnTheBeat:
         scene._beat = self.BEAT
         scene._origin = 0.0
         scene._grid = 0.0
+        scene._clock = visualizers.BeatClock(scene._beat, 0.0)
         for beat in (4, 9, 33):
             due = beat * self.BEAT
             scene._heard = due
@@ -8843,6 +8845,7 @@ class TestTheRiderIsOnTheBeat:
         scene._beat = self.BEAT
         scene._origin = 0.0
         scene._grid = 0.0
+        scene._clock = visualizers.BeatClock(scene._beat, 0.0)
         scene._lunge = 1.0
         due = 12 * self.BEAT
         seen = []
@@ -9176,6 +9179,7 @@ class TestTheRiderSnapsToTheGrid:
         scene = visualizers.Rider()
         scene._beat = cls.BEAT
         scene._grid = grid
+        scene._clock = visualizers.BeatClock(scene._beat, grid)
         state = cls._state(chart)
         scene._heard = 0.0
         while scene._heard < seconds:
@@ -9245,6 +9249,7 @@ class TestTheRiderSnapsToTheGrid:
         scene = visualizers.Rider()
         scene._beat = self.BEAT
         scene._grid = 0.137
+        scene._clock = visualizers.BeatClock(scene._beat, 0.137)
         for step in range(400):
             when = 3.0 + step * 0.01
             moved = abs(scene._snap(when) - when)
@@ -9297,6 +9302,7 @@ class TestTheRiderSnapsToTheGrid:
         scene = visualizers.Rider()
         scene._beat = beat
         scene._grid = truth["Kick"][0]
+        scene._clock = visualizers.BeatClock(scene._beat, truth["Kick"][0])
         state = self._state(chart)
         scene._heard = 0.0
         while scene._heard < 20.0:
@@ -9325,6 +9331,7 @@ class TestTheRiderSnapsToTheGrid:
         scene = visualizers.Rider()
         scene._beat = self.BEAT
         scene._grid = 0.137
+        scene._clock = visualizers.BeatClock(scene._beat, 0.137)
         for beat in range(1, 9):
             on = 0.137 + beat * self.BEAT
             assert scene._off_beat(on) < 1e-9, (
@@ -10989,6 +10996,7 @@ class TestTheRiderRunsOnOneClock:
         scene = visualizers.Rider()
         scene._beat = self.BEAT
         scene._origin = scene._grid = 0.0
+        scene._clock = visualizers.BeatClock(scene._beat, 0.0)
         scene._lunge = 1.4
         due = 10 * self.BEAT
         gate = 3 * scene.PILLAR_EVERY        # a gate's place on the road
@@ -11032,6 +11040,7 @@ class TestTheRiderRunsOnOneClock:
             beat = 60.0 / tempo
             scene._beat = beat
             scene._origin = scene._grid = 0.0
+            scene._clock = visualizers.BeatClock(scene._beat, 0.0)
             scene._lunge = 1.0
             scene._heard = 0.0
             scene._at = scene._world(0.0)
@@ -11730,6 +11739,7 @@ class TestTheRoadIsBuiltFromTheSong:
         scene._carve(state)
         scene._beat = 60.0 / tempo
         scene._origin = 0.0
+        scene._clock = visualizers.BeatClock(scene._beat, 0.0)
         return scene
 
     @staticmethod
@@ -11761,8 +11771,21 @@ class TestTheRoadIsBuiltFromTheSong:
         import attachment_audio
 
         assert attachment_audio.contour([], None, None) == {
-            "loud": [], "lean": [], "rate": float(
+            "loud": [], "lean": [], "low": [], "rate": float(
                 attachment_audio.CONTOUR_RATE)}
+
+    def test_the_bass_line_is_where_the_bass_is(self):
+        """The low bands across the track, so the road can run fastest
+        where the bass is heaviest."""
+        import attachment_audio
+
+        quiet = [0.05] * 3 + [0.5] * 24
+        heavy = [0.9] * 3 + [0.5] * 24
+        frames = [quiet] * 60 + [heavy] * 60
+        low = attachment_audio.bass_line(frames, 8)
+        assert len(low) == 8 and max(low) == 1.0
+        assert max(low[:4]) < 0.2 and min(low[4:]) > 0.9
+        assert attachment_audio.bass_line([], 8) == []
 
     # -- and what the road makes of it -------------------------------------
     def test_a_chorus_runs_downhill(self, qapp):
@@ -11844,6 +11867,8 @@ class TestTheRoadIsBuiltFromTheSong:
     def test_a_loud_passage_really_gets_more_figures(self, qapp):
         """Not just a smaller number out of ``_apart``: the chart has to
         use it."""
+        import visualizers
+
         shape = self._contour()
         laid = {}
         # Windows well inside each passage, and the figures counted by
@@ -11855,6 +11880,7 @@ class TestTheRoadIsBuiltFromTheSong:
             scene = self._scene(shape)
             beat = scene._beat
             scene._grid = 0.0
+            scene._clock = visualizers.BeatClock(scene._beat, 0.0)
             scene._heard = scene._laid = first - scene.READ
             state = type("S", (), {})()
             state.chart = {"Kick": tuple(i * beat for i in range(400))}
@@ -11998,6 +12024,7 @@ class TestMonoScoring:
         scene = visualizers.Rider()
         scene._beat = beat
         scene._grid = scene._origin = 0.0
+        scene._clock = visualizers.BeatClock(scene._beat, 0.0)
         state = SpectrumState()
         state.levels = [0.4] * 27
         state.chart = {
@@ -13774,6 +13801,7 @@ class TestTheRoadTurnsOverAtTheBigMoments:
         scene = self._scene(self._drops(10.0, 45.0))
         scene._beat = 0.5
         scene._grid = 0.0
+        scene._clock = visualizers.BeatClock(scene._beat, 0.0)
         state = SpectrumState()
         state.levels = [0.4] * 27
         state.chart = {"Kick": tuple(i * 0.5 for i in range(200))}
@@ -14689,6 +14717,7 @@ class TestTheRoadIsNeverBare:
         scene._last = None
         scene._beat = cls.BEAT
         scene._grid = 0.0
+        scene._clock = visualizers.BeatClock(scene._beat, 0.0)
         state = SpectrumState()
         state.levels = [0.4] * 27
         state.chart = chart

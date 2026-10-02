@@ -174,8 +174,7 @@ class TestEveryBlockArrivesOnItsMoment:
                                                 seconds=50.0)
         assert len(log.crossings) > 60
         between = [(due, crossed) for due, crossed in log.crossings
-                   if 0.15 < ((due - scene._anchor()) / scene._beat) % 1.0
-                   < 0.85]
+                   if 0.15 < scene._clock.number(due) % 1.0 < 0.85]
         assert len(between) > 20, "hardly anything between the beats"
         late = [abs(crossed - due) for due, crossed in log.crossings]
         assert max(late) <= 1.0 / 60.0 + 1e-3, (
@@ -197,8 +196,7 @@ class TestEveryBlockArrivesOnItsMoment:
         seen = [block for block in scene._blocks
                 if scene.RIDER_AT < scene._where(block[0]) < scene.FAR]
         between = [block for block in seen
-                   if 0.15 < ((block[0] - scene._anchor()) / scene._beat)
-                   % 1.0 < 0.85]
+                   if 0.15 < scene._clock.number(block[0]) % 1.0 < 0.85]
         assert between, "nothing between the beats in sight"
         now = scene._beat_number(scene._heard)
         assert max(scene._lunge_of(n) for n in range(now, now + 4)) > 1.5
@@ -230,6 +228,7 @@ class TestEveryBlockArrivesOnItsMoment:
         def lunges(slow):
             scene = visualizers.Rider()
             scene._beat, scene._origin = 0.5, 0.0
+            scene._clock = visualizers.BeatClock(0.5, 0.0)
             scene._energy = [0.9] * 400
             scene._slow = slow
             scene._decide_lunges(0, 0.9)
@@ -483,7 +482,7 @@ class TestTheLevelsRideDifferently:
             scene = visualizers.Rider()
             scene.set_difficulty(level)
             worth[level] = scene._paid(100)
-        assert worth == {"Easy": 75, "Normal": 100, "Expert": 150}
+        assert worth == {"Easy": 75, "Normal": 100, "Expert": 170}
 
     @pytest.mark.parametrize("level", ["Hard", "Expert"])
     @pytest.mark.parametrize("style", ["house", "dnb", "dubstep", "garage"])
@@ -497,3 +496,108 @@ class TestTheLevelsRideDifferently:
                                                  difficulty=level)
         assert scene._hits == 0, f"{scene._hits} hits: {style} {mode} {level}"
         assert any(f[2] for f in log.figures)
+
+
+class TestTheRoadRunsWithTheMusic:
+    """Slow where the music is calm, fast where it drives: each beat's
+    length of road from how loud and how heavy the track is there and what
+    kind of part it is (see Rider._pace_target)."""
+
+    @staticmethod
+    def _speed(log, spans):
+        import statistics
+
+        found = [speed for at, speed in log.speeds
+                 if speed > 0.0 and any(a + 1.0 < at < b - 0.5
+                                        for a, b in spans)]
+        return statistics.mean(found)
+
+    def test_calm_is_slow_and_a_drop_is_fast(self):
+        _scene, log, truth, _beat = ridekit.ride("house")
+        drop = self._speed(log, [(a, b) for k, a, b in truth if k == "drop"])
+        for calm in ("intro", "break", "outro"):
+            spans = [(a + (b - a) / 2.0, b) for k, a, b in truth if k == calm]
+            assert drop > 3.5 * self._speed(log, spans), calm
+
+    def test_a_build_speeds_up_into_its_drop(self):
+        _scene, log, truth, _beat = ridekit.ride("house")
+        for kind, start, end in truth:
+            if kind != "build":
+                continue
+            part = (end - start) / 4.0
+            first = self._speed(log, [(start, start + part)])
+            last = self._speed(log, [(end - part, end)])
+            assert last > 2.5 * first, (start, first, last)
+
+    @pytest.mark.parametrize("level", ["Easy", "Normal", "Hard", "Expert"])
+    def test_however_fast_there_is_the_level_s_warning(self, level):
+        """A beat's road is never so long that the road in sight is crossed
+        quicker than the level's least warning."""
+        import rider_layout
+
+        least = float(rider_layout.level(level)["warning"])
+        worst = []
+
+        def watch(scene):
+            if not scene._clock:
+                return
+            for number, pace in scene._paces.items():
+                seconds = scene._clock.length(scene._clock.time(number + 0.5))
+                worst.append(scene.LOOK_BEATS * seconds / pace)
+
+        for style in ("house", "dnb"):
+            ridekit.ride(style, difficulty=level, steer=watch)
+        assert worst and min(worst) >= least - 1e-6, (level, min(worst))
+
+    def test_the_arches_are_turned_down_where_it_is_calm(self):
+        lit = {}
+
+        def watch(scene):
+            if scene._clock and scene._style is not None:
+                section = scene._section_at(scene._heard)
+                # Inside a part, clear of the beats it starts and ends on.
+                if (section is not None
+                        and section.start + 1.0 < scene._heard
+                        < section.end - 1.0):
+                    now = scene._beat_number(scene._heard)
+                    lit.setdefault(section.kind, []).append(
+                        scene.gate_light(now))
+
+        ridekit.ride("house", steer=watch)
+        assert max(lit["break"][len(lit["break"]) // 2:]) < 0.35
+        assert min(lit["drop"]) > 0.85
+
+    def test_the_tall_arch_is_on_the_first_beat_of_the_bar(self):
+        """Counted from the drums' own first beat of a bar, not from
+        wherever the road happened to start counting."""
+        scene, _log, truth, _beat = ridekit.ride("house", seconds=40.0)
+        clock = scene._clock
+        assert clock.downbeat is not None
+        drop = [a for kind, a, _b in truth if kind == "drop"][0]
+        first = round(clock.number(drop))
+        assert scene.bar_place(first) == 0
+        assert [scene.bar_place(first + n) for n in range(1, 4)] == [1, 2, 3]
+
+    def test_a_calm_part_winds_and_a_drop_runs_straighter(self):
+        """How much the road in sight bends, a unit of road at a time, in
+        the calm parts against the drops."""
+        import statistics
+
+        bends = {}
+
+        def watch(scene):
+            section = scene._section_at(scene._heard)
+            if (section is None or not scene._curve
+                    or not section.start + 2.0 < scene._heard
+                    < section.end - 2.0):
+                return
+            across = [scene._road(scene.RIDER_AT + step)[0]
+                      for step in range(0, 18)]
+            turning = sum(abs(a - 2.0 * b + c) for a, b, c in
+                          zip(across, across[1:], across[2:]))
+            bends.setdefault(section.kind, []).append(turning)
+
+        ridekit.ride("house", steer=watch)
+        calm = statistics.mean(bends["break"] + bends["intro"])
+        drop = statistics.mean(bends["drop"])
+        assert calm > 20.0 * drop, (calm, drop)

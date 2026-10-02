@@ -209,19 +209,24 @@ def mono_at(samples, rate: int, channels: int) -> tuple:
     slices, so a seven minute track takes about a second.
     """
     channels = max(1, channels)
-    if channels > 1:
-        mono = list(map(add, samples[0::channels], samples[1::channels]))
-    else:
-        mono = list(samples)
     factor = max(1, int(rate // RATE))
-    out = mono[0::factor]
-    for phase in range(1, factor):
-        more = mono[phase::factor]
-        if len(more) < len(out):
-            out = out[:len(more)]
-        out = list(map(add, out, more))
     scale = 1.0 / (32768.0 * factor * min(2, channels))
-    return array("f", [value * scale for value in out]), rate / factor
+    result = array("f")
+    # A second at a time: as one list of Python numbers, a seven minute
+    # stereo track was twenty million objects and most of a gigabyte.
+    step = channels * factor * max(1, int(rate) // factor)
+    usable = len(samples) - len(samples) % (channels * factor)
+    for start in range(0, usable, step):
+        piece = samples[start:min(usable, start + step)]
+        if channels > 1:
+            mono = list(map(add, piece[0::channels], piece[1::channels]))
+        else:
+            mono = list(piece)
+        out = mono[0::factor]
+        for phase in range(1, factor):
+            out = list(map(add, out, mono[phase::factor]))
+        result.extend(map(scale.__mul__, out))
+    return result, rate / factor
 
 
 def _peaks(spectrum, rate: float) -> list:
@@ -577,11 +582,130 @@ def chords(notes: Sequence, basses: Sequence, key: Optional[dict],
     return out
 
 
+#: The key through the track, not only over the whole of it: a song that
+#: goes up a tone for its last chorus is in another key there. How far
+#: either side of a moment its key is heard, in seconds; how often it is
+#: read; and what moving to another key costs against a fit of 0 to 1 a
+#: reading - at 0.8 another key has to fit clearly better for most of ten
+#: seconds.
+KEY_REACH = 12.0
+KEY_STEP = 1.0
+KEY_CHANGE = 0.8
+#: How much the key of the whole track is favoured a reading, so that a
+#: passage that fits two keys about equally stays in the song's own.
+KEY_HOME = 0.02
+
+
+def keys(notes: Sequence, key: Optional[dict], seconds_per: float,
+         offset: float = 0.0, profiles=None) -> list:
+    """The key through the track, as [start, end, tonic, mode] with times
+    in seconds, or [] where no part of it has a key worth following.
+
+    Read as a key signature - which seven notes - rather than a key: C
+    major and A minor are one set of notes, and a key and its relative
+    swapping back and forth is not a change of anything a note is chosen
+    from. A signature that moves is the whole key moving, so the tonic
+    moves with it and the mode stays the track's. Sure or not is asked of
+    each stretch rather than of the whole: a song that changes key fits no
+    one key well over all of it.
+    """
+    if not notes:
+        return []
+    major, minor = profiles or (MAJOR, MINOR)
+    count = len(notes)
+    stride = max(1, int(round(KEY_STEP / seconds_per)))
+    reach = max(1, int(round(KEY_REACH / seconds_per)))
+    running = [[0.0] * 12]
+    for row in notes:
+        last = running[-1]
+        running.append([last[pc] + row[pc] for pc in range(12)])
+    points = list(range(0, count, stride))
+    fits = []
+    sure = []
+    for at in points:
+        low, high = max(0, at - reach), min(count, at + reach + 1)
+        window = [running[high][pc] - running[low][pc] for pc in range(12)]
+        here = []
+        for signature in range(12):
+            as_major = [major[(pc - signature) % 12] for pc in range(12)]
+            as_minor = [minor[(pc - (signature + 9)) % 12] for pc in range(12)]
+            here.append(max(_correlation(window, as_major),
+                            _correlation(window, as_minor))
+                        if any(window) else 0.0)
+        ordered = sorted(here, reverse=True)
+        sure.append(ordered[0] - ordered[1])
+        fits.append(here)
+    if sorted(sure)[len(sure) // 2] < SURE:
+        return []
+    mode = key["mode"] if key else "major"
+    if key and key.get("confidence", 0.0) >= SURE:
+        home = (key["tonic"] if key["mode"] == "major"
+                else (key["tonic"] + 3) % 12)
+    else:
+        totals = [sum(row[s] for row in fits) for s in range(12)]
+        home = totals.index(max(totals))
+    for row in fits:
+        row[home] += KEY_HOME
+    best = list(fits[0])
+    back: List[List[int]] = []
+    for here in fits[1:]:
+        top = max(range(12), key=lambda s: best[s])
+        leave = best[top] - KEY_CHANGE
+        new, came = [], []
+        for signature in range(12):
+            if best[signature] >= leave:
+                new.append(best[signature] + here[signature])
+                came.append(signature)
+            else:
+                new.append(leave + here[signature])
+                came.append(top)
+        best = new
+        back.append(came)
+    path = [max(range(12), key=lambda s: best[s])]
+    for came in reversed(back):
+        path.append(came[path[-1]])
+    path.reverse()
+    out: list = []
+    span = stride * seconds_per
+    for index, signature in enumerate(path):
+        tonic = signature if mode == "major" else (signature + 9) % 12
+        start = max(0.0, offset + points[index] * seconds_per - span / 2.0)
+        end = offset + points[index] * seconds_per + span / 2.0
+        if out and out[-1][2] == tonic:
+            out[-1][1] = end
+        else:
+            out.append([start, end, tonic, mode])
+    if out:
+        out[0][0] = 0.0
+    return out
+
+
+def key_at(harmony: Optional[dict], when: float):
+    """The key at ``when``: (tonic, mode), from the key through the track
+    where it was read and the track's own otherwise; None with no key."""
+    if not harmony or not (harmony.get("key") or harmony.get("keys")):
+        return None
+    for start, end, tonic, mode in harmony.get("keys") or ():
+        if start <= when < end:
+            return tonic, mode
+    found = harmony.get("keys") or ()
+    if found and when >= found[-1][1]:
+        return found[-1][2], found[-1][3]
+    key = harmony["key"]
+    return key["tonic"], key["mode"]
+
+
+def in_key(chord, tonic: int, mode: str) -> bool:
+    """Whether a (root, quality) chord is one of the key's own."""
+    return tuple(chord) in _diatonic(tonic, mode)
+
+
 def analyse(samples, rate: int, channels: int, should_stop=None,
             on_progress=None, profiles=None) -> Optional[dict]:
     """The whole answer for a track, or None if there is nothing to read.
 
-    ``{"key": {...}, "tuning": semitones, "chords": [...], "lead": [...],
+    ``{"key": {...}, "tuning": semitones, "chords": [...], "keys": [...],
+    "lead": [...],
     "lead_from": seconds, "rate": readings a second, "tonal": 0..1}``.
     ``lead`` is one entry a reading - reading ``i`` is centred at
     ``lead_from + i / rate`` - a pitch in semitones (MIDI, tuned) or None.
@@ -619,6 +743,7 @@ def analyse(samples, rate: int, channels: int, should_stop=None,
     key = settle_relative(key_found, found)
     return {"key": key, "tuning": tuned,
             "chords": found,
+            "keys": keys(notes, key, per, centre - per / 2.0, profiles),
             "lead": leads, "lead_from": centre, "rate": 1.0 / per,
             "tonal": tonal, "chroma": total}
 

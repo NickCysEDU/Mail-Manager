@@ -386,6 +386,41 @@ class TestBothPicturesShowIt:
             "the lit picture never showed the card")
 
 
+class TestTheCountIsBesideTheGrid:
+    """Puzzle's grid is in the bottom left corner, and so was the count of
+    what it has cleared, on top of it."""
+
+    @pytest.mark.parametrize("size", [(906, 270), (1440, 900), (600, 900),
+                                      (2880, 1800)])
+    def test_the_count_is_never_on_the_grid(self, qapp, clock, size):
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import rider_gl
+        import visualizers
+
+        width, height = size
+        rect = QRectF(0, 0, width, height)
+        scene = visualizers.Rider()
+        scene.set_mode("Puzzle")
+        scene._cleared = 888
+        hud = rider_gl.Hud()
+        image = QImage(width, height, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0))
+        painter = QPainter(image)
+        try:
+            hud.draw(painter, rect, scene, _state(10.5))
+        finally:
+            painter.end()
+        grid = scene.matrix_box(rect)
+        for name in ("chain", "chain label"):
+            placed = hud.placed[name]
+            assert placed.width() > 0
+            assert not placed.intersects(grid), (
+                f"at {width}x{height} the {name} is drawn on the grid")
+            assert rect.contains(placed), f"the {name} is off the frame"
+
+
 class TestTheLiveNumbersMakeWay:
     def test_the_score_goes_when_the_card_comes(self, qapp, clock):
         """Two scores on the screen at once, one counting and one final,
@@ -697,7 +732,7 @@ class TestASeekIsNotARide:
         chart, contour = self._track()
         self._play(scene, clock, (chart, contour), 10.0, 0.2)
         # Just past what is laid, so that it comes into view.
-        scene._twists = (scene._heard + scene.READ + 0.1,)
+        scene._twists = (scene._laid + 0.1,)
         self._play(scene, clock, (chart, contour), 10.2, 0.4)
         assert any(block[2] == "power" for block in scene._blocks)
         again = dict(chart)
@@ -750,4 +785,91 @@ class TestEachLevelKeepsItsOwnBest:
             assert not pane.level_box_holder.isVisible()
         finally:
             pane.close()
+            pane.deleteLater()
+
+
+class TestAChoiceOutlivesARun:
+    """The pane starts a scene afresh when it is picked and when a track
+    loads, and afresh was the first game at the first level: every ride was
+    Normal Mono whatever the boxes said. What the viewer chose is kept
+    (Scene.KEPT); what a run has done is not."""
+
+    @staticmethod
+    def _back_to_how_it_was():
+        import visualizers
+
+        rider = visualizers.by_name("Music rider")
+        rider.set_difficulty("Normal")
+        rider.set_mode("Mono")
+        scope = visualizers.by_name("Oscilloscope")
+        scope.set_mode("Sweep")
+        scope.set_decay(0.28)
+
+    def test_picking_the_scene_and_loading_a_track_keep_the_level(self,
+                                                                  qapp):
+        import rider_layout
+        import visualizers
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        try:
+            pane.enable_box.setChecked(True)
+            pane.scene_box.setCurrentText("Music rider")
+            pane.game_box.setCurrentText("Ninja")
+            pane.level_box.setCurrentText("Expert")
+            rider = visualizers.by_name("Music rider")
+            rider._score = 999
+            pane.scene_box.setCurrentText("Rave")
+            pane.scene_box.setCurrentText("Music rider")
+            pane.spectrum.clear()
+            assert rider.difficulty == "Expert"
+            assert rider.LOOK_BEATS == 2.0, "Expert's road, not Normal's"
+            assert rider.PER_BEAT == pytest.approx(
+                (rider.FAR - rider.RIDER_AT) / 2.0)
+            assert rider._shield_back is None, "Expert has no shield"
+            assert rider._score_share == pytest.approx(
+                rider_layout.level("Expert")["score"])
+            assert rider.mode == "Ninja"
+            # And the run itself is new.
+            assert rider._score == 0
+        finally:
+            pane.level_box.setCurrentText("Normal")
+            self._back_to_how_it_was()
+            pane.deleteLater()
+
+    def test_going_back_to_the_start_keeps_it_too(self):
+        import visualizers
+
+        rider = visualizers.Rider()
+        rider.set_mode("Puzzle")
+        rider.set_difficulty("Hard")
+        rider._finished = True
+        rider._length = lambda state: 200.0
+
+        class State:
+            at = 0.5
+        rider._finish(State())
+        assert rider._finished is False, "not a new run"
+        assert (rider.mode, rider.difficulty) == ("Puzzle", "Hard")
+        assert rider.LOOK_BEATS == 2.5
+
+    def test_the_scope_keeps_its_beam_and_glow(self, qapp):
+        import visualizers
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        try:
+            pane.enable_box.setChecked(True)
+            pane.scene_box.setCurrentText("Oscilloscope")
+            pane.mode_box.setCurrentText("X-Y")
+            pane.decay.setValue(90)
+            pane.scene_box.setCurrentText("Equaliser")
+            pane.scene_box.setCurrentText("Oscilloscope")
+            pane.spectrum.clear()
+            scope = visualizers.by_name("Oscilloscope")
+            assert scope.mode == "X-Y"
+            assert scope.decay == pytest.approx(0.90)
+        finally:
+            self._back_to_how_it_was()
+            pane.mode_box.setCurrentText("Sweep")
             pane.deleteLater()

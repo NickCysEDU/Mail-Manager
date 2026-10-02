@@ -688,6 +688,9 @@ class Spectrum(QWidget):
         #: See set_harmony and set_rhythm.
         self._harmony = None
         self._rhythm = None
+        #: The drums' beats where the tempo moves, as a clock: (the rhythm it
+        #: was built from, the clock). See _clock.
+        self._rhythm_clock = None
         self._moved_at = None
         #: How far through each element's list the playhead has got.
         self._kit_at: dict = {}
@@ -2039,6 +2042,18 @@ class Spectrum(QWidget):
         # against a DJ program's grids, the drums' beat is 7 ms out at the
         # median.
         rhythm = self._rhythm
+        if rhythm and rhythm.get("beats"):
+            # A tempo that moves: counted on the drums' own beats.
+            if self._rhythm_clock is None or self._rhythm_clock[0] is not rhythm:
+                from beat_clock import BeatClock
+
+                self._rhythm_clock = (rhythm, BeatClock(times=rhythm["beats"]))
+            clock = self._rhythm_clock[1]
+            here = clock.tempo(self._now)
+            state.tempo = visualizers.folded_tempo(here)
+            share = here / max(1e-6, state.tempo)
+            state.beat_at = (clock.number(self._now) / share) % 1.0
+            return
         if rhythm and float(rhythm.get("tempo") or 0.0) > 0.0:
             state.tempo = visualizers.folded_tempo(float(rhythm["tempo"]))
             period = 60.0 / max(1e-6, state.tempo)

@@ -192,22 +192,29 @@ class Plan:
         return pool[walk[slot % len(walk)] % len(pool)], mirrored
 
 
-#: How hard the game is, "different difficulty settings": how many of the
-#: figures are obstacles, how far apart the figures are, how many beats of
-#: road are in sight - which is how much warning there is and how fast the
-#: road runs - how long the shield takes to come back, if it comes back at
-#: all, and what a point is worth. Every level keeps the beat between
-#: figures that makes an obstacle one a player can get past (see spacing).
+#: How hard the game is: how many of the figures are obstacles, how far
+#: apart they are, how many beats of road are in sight (how much warning
+#: there is, and how fast the road runs), how long the shield takes to come
+#: back if it does, what a point is worth, the least share of any section
+#: that is obstacles, and the least warning in seconds however fast the
+#: road runs. Every level keeps a beat between figures (see spacing).
 DIFFICULTY: Dict[str, Dict[str, Optional[float]]] = {
-    "Easy": {"danger": 0.5, "spacing": 1.35, "look": 4.0, "shield": 0.5,
-             "score": 0.75},
-    "Normal": {"danger": 1.0, "spacing": 1.0, "look": 3.0, "shield": 1.0,
-               "score": 1.0},
-    "Hard": {"danger": 1.3, "spacing": 0.85, "look": 2.5, "shield": 1.5,
-             "score": 1.25},
-    "Expert": {"danger": 1.6, "spacing": 0.7, "look": 2.0, "shield": None,
-               "score": 1.5},
+    "Easy": {"danger": 0.6, "spacing": 1.3, "look": 4.0, "shield": 0.5,
+             "score": 0.75, "warning": 0.9},
+    "Normal": {"danger": 1.15, "spacing": 1.0, "look": 3.0, "shield": 1.0,
+               "score": 1.0, "warning": 0.6},
+    "Hard": {"danger": 1.6, "spacing": 0.6, "look": 2.5, "shield": 1.6,
+             "score": 1.3, "least": 0.1, "warning": 0.5},
+    "Expert": {"danger": 2.4, "spacing": 0.55, "look": 2.0, "shield": None,
+               "score": 1.7, "least": 0.25, "warning": 0.4},
 }
+#: How calm a record has to be to have nothing to dodge at all.
+CALM_RIDDEN = 0.75
+
+#: The most of any section that is obstacles, at any level: what is left
+#: is what there is to take, and a road of nothing but greys is a road
+#: with no game on it but staying alive.
+DANGER_MOST = 0.85
 
 
 def level(name: str) -> Dict[str, Optional[float]]:
@@ -220,16 +227,21 @@ def danger_share(kind: str, mode: str, style=None,
     """The share of a section's figures that are obstacles."""
     mono, ninja = DANGER_SHARE.get(kind, (0.3, 0.55))
     share = ninja if mode == "Ninja" else mono
-    share *= float(level(difficulty)["danger"])
+    chosen = level(difficulty)
+    share *= float(chosen["danger"])
+    # The harder levels have something to dodge everywhere, even where
+    # twice nothing would still be nothing.
+    share = max(share, float(chosen.get("least") or 0.0))
     if style is not None and kind == "drop":
         share += 0.05 * max(float(getattr(style, "heavy", 0.0)),
                             float(getattr(style, "hard", 0.0)),
                             float(getattr(style, "broken", 0.0)))
     if style is not None:
-        # Calm music is ridden, not dodged: as calm as a record is, that
-        # much less of it is an obstacle, and none of an ambient one.
-        share *= 1.0 - max(0.0, min(1.0, float(getattr(style, "calm", 0.0))))
-    return max(0.0, min(0.8, share))
+        # Calm music is ridden, not dodged: the calmer a record, the less of
+        # it is an obstacle, and none at all from CALM_RIDDEN up.
+        calm = max(0.0, float(getattr(style, "calm", 0.0)))
+        share *= max(0.0, 1.0 - calm / CALM_RIDDEN)
+    return max(0.0, min(DANGER_MOST, share))
 
 
 #: How much the loudness where a figure lands stretches or tightens its
