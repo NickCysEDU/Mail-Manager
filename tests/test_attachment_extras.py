@@ -12156,7 +12156,9 @@ class TestTheMonoBumper:
         was = visualizers.time.monotonic
         visualizers.time.monotonic = lambda: clock[0]
         try:
-            for frame in range(int(seconds * fps)):
+            # One more frame than seconds times fps: the first has nothing
+            # before it, so it is the gaps between frames that are time.
+            for frame in range(int(seconds * fps) + 1):
                 clock[0] += 1.0 / fps
                 state.at = 5.0 + (frame / fps if playing else 0.0)
                 scene._advance(state)

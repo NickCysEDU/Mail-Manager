@@ -98,8 +98,9 @@ def _bare_world():
     world._now = 1.0
     world._screen_ship = (0.5, 0.3)
     for name in ("_shock_hard", "_knock", "_split", "_flash", "_trim",
-                 "_bloom_bump", "_flash_lane"):
+                 "_bloom_bump", "_flash_lane", "_glow", "_punch"):
         setattr(world, name, 0.0)
+    world._glow_colour = (1.0, 1.0, 1.0)
     world._shock = 9.0
     world._shock_at = (0.5, 0.5)
     world._flash_colour = (1.0, 1.0, 1.0)
@@ -270,7 +271,7 @@ class TestWhatWasTaken:
             "a prize the craft jumped over was drawn going into it")
         assert world._taken_now == []
 
-    def test_a_grey_hit_is_gone_and_one_met_unhurt_goes_through(self, qapp):
+    def test_a_grey_hit_is_gone_and_so_is_one_straight_after(self, qapp):
         scene = _rider()
         (hit,) = self._met(scene, [(4.0, 1, "block", False, True)],
                            _shield=0.0)
@@ -279,12 +280,12 @@ class TestWhatWasTaken:
         world._notice(scene)
         assert id(hit) in world._taken
         assert world._taken_now == [], "a hit lit the lane like a pickup"
-        # Straight after a hit the craft cannot be hurt, and the next one
-        # passes through it rather than vanishing as if it had hit.
-        (through,) = self._met(scene, [(4.0, 1, "block", False, True)])
-        assert scene._hits == 1
+        # One straight after it is a hit as well, and lands again: every
+        # obstacle met is felt, however close together.
+        (again,) = self._met(scene, [(4.0, 1, "block", False, True)])
+        assert scene._hits == 2
         world._notice(scene)
-        assert id(through) not in world._taken
+        assert id(again) in world._taken
 
     @pytest.mark.parametrize("kind, grey, mode, shield, how", [
         ("block", False, "Mono", 0.0, "taken"),
@@ -1254,3 +1255,77 @@ class TestTheCityThroughACorkscrew:
             f"the towers ahead turned with the road: {got}")
         assert got["inside"] > got["city"] * 0.05, (
             f"inside the tunnel the towers no longer turn with it: {got}")
+
+
+class TestEveryHitLandsAndRunsOfThemBuild:
+    """Each obstacle met is a hit that lands again, however close to the
+    last, and one hard on the last lands harder; a prize answers with its
+    own colour and a punch forward, building through a quick run."""
+
+    @staticmethod
+    def _hits(scene, times):
+        for when in times:
+            scene._lane = 1
+            scene._lane_here = scene._lane_at(1)
+            scene._heard = when
+            scene._shield = 0.0
+            scene._blocks = [[when, 1, "block", False, True]]
+            scene._collide()
+        return [pop[2] for pop in scene._pops if pop[0] == "hit"]
+
+    def test_a_run_of_hits_lands_harder_each_time(self, qapp):
+        strengths = self._hits(_rider(), (4.0, 4.4, 4.8))
+        assert len(strengths) == 3
+        assert strengths[0] < strengths[1] < strengths[2]
+
+    def test_and_starts_again_after_a_gap(self, qapp):
+        strengths = self._hits(_rider(), (4.0, 9.0))
+        assert strengths[0] == pytest.approx(strengths[1])
+
+    def test_the_world_answers_every_one_from_the_start(self):
+        world = _bare_world()
+        scene = _rider()
+        scene._pops = [["hit", 0.0, 1.0, 0.0, 0.95, ""]]
+        world._events(scene)
+        assert world._shock == 0.0 and world._shock_hard == 1.0
+        world._shock = 0.6           # the first one's ring is on its way
+        scene._pops.append(["hit", 0.0, 1.5, 0.0, 0.95, ""])
+        world._events(scene)
+        assert world._shock == 0.0, "the second hit did not start again"
+        assert world._shock_hard == pytest.approx(1.5)
+
+    def test_prizes_bring_their_colour_and_build(self):
+        world = _bare_world()
+        scene = _rider()
+        green = (0.1, 1.0, 0.2)
+        world._taken_now = [("block", False, green)]
+        scene._pops = [["prize", 0.0, 1.0, 0.33, 0.9, ""]]
+        world._events(scene)
+        one = (world._glow, world._punch)
+        assert world._glow_colour == green and one[0] > 0.0 and one[1] > 0.0
+        scene._pops.append(["prize", 0.0, 1.0, 0.33, 0.9, ""])
+        world._events(scene)
+        assert world._glow > one[0] and world._punch > one[1]
+
+    def test_a_prize_colours_the_edges_of_the_picture(self):
+        got = on_the_card(RIDER + textwrap.dedent("""
+            def edges(glow):
+                made, scene = rider_pane(size=(640, 400))
+                def each(i):
+                    world = made._canvas.world
+                    if world is not None:
+                        world._glow = glow
+                        world._glow_colour = (0.0, 1.0, 0.0)
+                        world._punch = 0.0
+                shot = play(made, 0.3, each=each)
+                w, h = shot.width(), shot.height()
+                green = other = 0.0
+                for y in range(0, h, 6):
+                    for x in (2, w // 12, w - w // 12, w - 3):
+                        c = shot.pixelColor(x, y)
+                        green += c.greenF()
+                        other += c.redF() + c.blueF()
+                return green, other
+            print(json.dumps({"off": edges(0.0), "on": edges(1.5)}))
+        """))
+        assert got["on"][0] > got["off"][0] * 1.3, got

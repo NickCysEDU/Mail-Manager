@@ -872,6 +872,8 @@ uniform float uShock;
 uniform float uShockHard;
 uniform float uAspect;
 uniform float uHurt;
+uniform float uGlow;         // a prize: its colour, in from the edges
+uniform vec3 uGlowColour;
 uniform float uFlash;        // the strobe
 uniform float uOpacity;
 uniform float uTime;
@@ -906,6 +908,11 @@ void main() {
     // A hit takes the colour out of the world and leaves red.
     c = mix(c, vec3(grey * 1.4, grey * 0.15, grey * 0.12) + vec3(0.25, 0.0, 0.0)
             * uHurt, uHurt * 0.75);
+    // A prize does the opposite: its colour, coming in from the edges and
+    // lifting the world where a hit drains it.
+    float rim = smoothstep(0.15, 0.95,
+                           length((vUv - 0.5) * vec2(1.0, 0.8)) * 1.6);
+    c += uGlowColour * uGlow * (0.10 + rim * 0.55);
     float v = smoothstep(1.25, 0.25, length((vUv - 0.5) * vec2(1.0, 0.8)) * 1.6);
     c *= mix(1.0, v, uVignette);
     // Dithered, a least significant bit of triangular noise per channel:
@@ -1450,6 +1457,8 @@ class RiderWorld:
     #: The field of view, calm and at full tilt, in degrees.
     FOV_CALM = 62.0
     FOV_FAST = 74.0
+    #: How many degrees a prize opens the view by, at full strength.
+    PUNCH = 7.0
     #: How far the craft hovers.
     HOVER = 0.28
 
@@ -1501,6 +1510,12 @@ class RiderWorld:
         self._flash_colour = (1.0, 1.0, 1.0)
         self._shock = 9.0
         self._shock_hard = 0.0
+        #: A prize taken: its colour coming in from the edges of the
+        #: picture, and the camera punched forward. Each prize adds to
+        #: them, so a quick run of them builds.
+        self._glow = 0.0
+        self._glow_colour = (1.0, 1.0, 1.0)
+        self._punch = 0.0
         self._shock_at = (0.5, 0.3)
         self._split = 0.0
         self._knock = 0.0
@@ -1761,6 +1776,8 @@ class RiderWorld:
         self._shock += dt * 1.1
         self._shock_hard *= math.exp(-dt * 3.0)
         self._split *= math.exp(-dt * 5.0)
+        self._glow *= math.exp(-dt * 4.5)
+        self._punch *= math.exp(-dt * 5.5)
 
         loud = float(getattr(scene, "_loudness", 0.0))
         rush = max(0.0, min(1.0, float(getattr(scene, "_rushing", 0.0))))
@@ -1807,7 +1824,7 @@ class RiderWorld:
                 + math.sin(float(getattr(scene, "_wobble", 0.0)) * 2.3)
                 * hurt * 0.10)
         fov = (self.FOV_CALM + (self.FOV_FAST - self.FOV_CALM) * rush
-               + self._kick_punch * 3.0)
+               + self._kick_punch * 3.0 + self._punch * self.PUNCH)
         view = QMatrix4x4()
         view.perspective(fov / max(1.0, aspect / 1.6) ** 0.35, aspect,
                          0.05, 400.0)
@@ -2428,14 +2445,17 @@ class RiderWorld:
             # going, past the craft, rather than vanishing with the hit.
             nose = (at[0], 0.35, scene.RIDER_AT + self.NOSE + travel)
             if kind == "hit":
-                self._shock, self._shock_hard = 0.0, 1.0
+                # Again from the start for each, and harder in a run.
+                hard = max(1.0, strength)
+                self._shock, self._shock_hard = 0.0, min(1.8, hard)
                 self._shock_at = self._screen_ship
                 self._knock = 1.0
-                self._split = 1.0
-                self._spawn(110, at, 10.0, (5.0, 0.6, 0.2), 0.45, 0.7)
+                self._split = min(2.0, hard)
+                self._spawn(int(110 * hard), at, 10.0, (5.0, 0.6, 0.2),
+                            0.45, 0.7)
                 self._spawn(40, at, 6.0, (0.9, 0.9, 1.0), 0.6, 0.9)
-                self._spawn(34, nose, 5.5, (3.2, 0.35, 0.22), 1.0, 1.1,
-                            spread=1.3, up=1.1)
+                self._spawn(int(34 * hard), nose, 5.5, (3.2, 0.35, 0.22),
+                            1.0, 1.1, spread=1.3, up=1.1)
             elif kind == "shatter":
                 self._shock, self._shock_hard = 0.0, 0.6
                 self._shock_at = self._screen_ship
@@ -2466,6 +2486,10 @@ class RiderWorld:
                 self._bloom_bump = max(self._bloom_bump, 0.5 * strength)
                 self._spawn(int(40 + 40 * strength), at, 6.0,
                             tuple(c * 3.0 for c in colour), 0.55, 0.6)
+                if kind in ("prize", "clear", "power", "milestone"):
+                    self._glow = min(1.6, self._glow + 0.6 * strength)
+                    self._glow_colour = colour
+                    self._punch = min(1.6, self._punch + 0.55 * strength)
                 if kind == "milestone":
                     self._split = 0.4
                     for _ in range(3):
@@ -2546,6 +2570,8 @@ class RiderWorld:
         p.set("uShockHard", float(self._shock_hard))
         p.set("uAspect", float(frame["aspect"]))
         p.set("uHurt", float(frame["hurt"]))
+        p.set("uGlow", float(self._glow))
+        p.set("uGlowColour", QVector3D(*self._glow_colour))
         p.set("uFlash", float(frame["flash"]))
         p.set("uOpacity", float(opacity))
         p.set("uTime", float(self._now % 100.0))

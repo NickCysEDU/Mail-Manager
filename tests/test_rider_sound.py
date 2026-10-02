@@ -691,11 +691,11 @@ class TestTheEffectsSlider:
             from attachment_view import _viewer_prefs
 
             end = time.monotonic() + 3.0
-            while (_viewer_prefs().get("effects") != 22
+            while (_viewer_prefs().get(AudioPane.EFFECTS_PREF) != 22
                    and time.monotonic() < end):
                 qapp.processEvents()
                 time.sleep(0.02)
-            assert _viewer_prefs().get("effects") == 22
+            assert _viewer_prefs().get(AudioPane.EFFECTS_PREF) == 22
         finally:
             pane.deleteLater()
         again = self._pane()
@@ -704,8 +704,10 @@ class TestTheEffectsSlider:
         finally:
             again.deleteLater()
 
-    @pytest.mark.parametrize("kept", ['{"effects": 500}', "not json",
-                                      '["effects"]', '{"effects": "loud"}'])
+    @pytest.mark.parametrize("kept", ['{"effects_level": 500}', "not json",
+                                      '["effects_level"]',
+                                      '{"effects_level": "loud"}',
+                                      '{"effects": 57}'])
     def test_a_file_that_makes_no_sense_is_the_default(self, qapp, kept):
         import config
         from attachment_view import VIEWER_PREFS, AudioPane
@@ -717,6 +719,29 @@ class TestTheEffectsSlider:
         try:
             assert pane.effects.value() == AudioPane.EFFECTS
         finally:
+            pane.deleteLater()
+
+    def test_a_double_click_puts_it_back_to_half(self, qapp):
+        from PySide6.QtCore import QPoint, Qt
+        from PySide6.QtTest import QTest
+
+        from attachment_view import AudioPane
+
+        pane = self._pane()
+        pane.resize(900, 700)
+        pane.show()
+        try:
+            pane.enable_box.setChecked(True)
+            pane.scene_box.setCurrentText("Music rider")
+            qapp.processEvents()
+            assert pane.effects.isVisible()
+            pane.effects.setValue(90)
+            QTest.mouseDClick(pane.effects, Qt.MouseButton.LeftButton,
+                              Qt.KeyboardModifier.NoModifier,
+                              QPoint(5, pane.effects.height() // 2))
+            assert pane.effects.value() == AudioPane.EFFECTS
+        finally:
+            pane.close()
             pane.deleteLater()
 
     def test_letting_go_plays_one_to_hear_it_by(self, qapp):

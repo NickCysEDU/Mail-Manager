@@ -4283,6 +4283,8 @@ class Rider(Scene):
         #: moment one is. See CHAIN_FIRST.
         self._chain = 0
         self._got = 0.0
+        #: The last of each kind of run and how long it is. See _combo.
+        self._combos: dict = {}
         #: Whether a grey has been touched yet. See CLEAN_BONUS.
         self._clean = True
         #: How far off the road the craft is, how fast it is rising,
@@ -4371,6 +4373,20 @@ class Rider(Scene):
         #: The playhead as it was last frame, so a paused track can be
         #: told from a playing one.
         self._was_at = None
+        #: The pane's count of jumps as of the last frame. See _advance.
+        self._jumps_seen = None
+        #: Whether the drums' beat is still on its way (see _advance), and
+        #: whether the scene has shown a frame of road yet (see _lay).
+        self._waiting = False
+        self._started = False
+        #: Blocks in sight and where they were, kept across the road being
+        #: counted afresh, and where the road was on the old count. See
+        #: _advance.
+        self._kept: list = []
+        self._carried = None
+        #: How far the beat-locked parts of the road - arches, lines - have
+        #: come up since there was a beat to lock them to, 0 to 1.
+        self._beat_shown = 0.0
         self._rolling = 1.0
         #: Where the camera is looking, across the road and up it, and
         #: how hard it is banked into the bend.
@@ -4493,8 +4509,9 @@ class Rider(Scene):
             self.reset()
             self._set_level(name)
 
-    #: The game and the level: the player's, not the run's.
-    KEPT = ("_mode", "_difficulty")
+    #: The game and the level: the player's, not the run's. And how much of
+    #: the hills the picture drawing it shows, which is the painter's.
+    KEPT = ("_mode", "_difficulty", "_relief")
 
     def reset(self) -> None:
         """A new run, in the game and at the level chosen. See
@@ -4572,21 +4589,34 @@ class Rider(Scene):
         # yet does not look like a new chart on every frame and throw the
         # road away sixty times a second.
         chart = getattr(state, "chart", None) or _NO_CHART
-        # And across a seek, from where it landed. Left laid from where it
-        # was, a jump forward met every block in the stretch it skipped in
-        # a single frame and took the ones in the craft's lane - five
-        # thousand points for skipping to the end - and a jump back found
-        # the stretch it went back over already laid and gone, so empty.
+        started, self._started = self._started, True
+        if self._waiting:
+            return
         fresh = (chart is not self._chart_from or self._jumped
                  or self._rebased)
-        if fresh:
+        if fresh and (self._jumped or not started):
+            # A seek, or the scene's first frame: laid from here. Left laid
+            # from where it was, a jump forward met everything it skipped
+            # in one frame, and a jump back found nothing.
             self._chart_from = chart
             self._blocks = []
             self._laid = self._heard
             self._placed = -99.0
-            # The corkscrews' power blocks with the rest: one already in
-            # view when the road was laid again was never laid again.
             self._twisted = set()
+        elif fresh:
+            # The same ride counted afresh - the drums' beat arriving, the
+            # chart arriving: what is in sight stays where it is, and the
+            # rest is laid from the far end of the road.
+            self._chart_from = chart
+            end = self._when(self.RIDER_AT + self.IN_SIGHT)
+            self._blocks = [block for block in self._blocks
+                            if block[0] <= end]
+            self._laid = end
+            kept = [block[0] for block in self._blocks
+                    if block[2] != "coin"]
+            self._placed = max(kept) if kept else -99.0
+            self._twisted = {start for start in self._twisted
+                             if start <= end}
         ahead = self._heard + self.READ
         if self._clock:
             # Further where the road runs slowly, so a block comes out of
@@ -5167,9 +5197,12 @@ class Rider(Scene):
             self._blocks.append([when, lane, "block", False, grey])
         elif pattern == "run":
             for count in range(3):
+                at = when + count * self.RUN_GAP
                 lane = (seed + count) % self.LANES
-                self._blocks.append([when + count * self.RUN_GAP, lane,
-                                     "run", False, grey])
+                if not grey:
+                    # A run of prizes goes where the melody goes.
+                    lane = self._melody_lane(at, lane)
+                self._blocks.append([at, lane, "run", False, grey])
             # Beside the first of them only. A slalom already asks for
             # three moves; paying for a fourth lane change between each
             # pair would ask for something nobody can do.
@@ -5185,8 +5218,11 @@ class Rider(Scene):
             lanes = list(range(self.LANES)) if going else list(
                 reversed(range(self.LANES)))
             for count, lane in enumerate(lanes):
-                self._blocks.append([when + count * max(step, self.RUN_GAP),
-                                     lane, "run", False, False])
+                at = when + count * max(step, self.RUN_GAP)
+                # Each step on the note being played then, where it can be
+                # heard; the sweep where it cannot.
+                self._blocks.append([at, self._melody_lane(at, lane),
+                                     "run", False, False])
         elif pattern == "stream":
             # A row of coins in one lane, a sixteenth apart: a hat roll to
             # hold a lane through.
@@ -5705,16 +5741,36 @@ class Rider(Scene):
             + (-before + 3.0 * here - 3.0 * after + beyond)
             * share * share * share)
 
-    def _when(self, at: float) -> float:
-        """The moment of the track a point on the road belongs to."""
+    def _when(self, at: float, exact: bool = False) -> float:
+        """The moment of the track a point on the road belongs to. Exact,
+        through each beat's lunge, for putting a block back where it was;
+        otherwise evenly through the beat, which is what the road's shape
+        is read with - read through the lunge, every beat put a kink in
+        the bends."""
         reach = self._at + at - self.RIDER_AT
         if not self._clock:
-            return reach / self.FREE_RUN
+            return (reach - self._road_shift) / self.FREE_RUN
         number = self._beat_at_road(reach)
         road = (reach - self._road_shift) / self.PER_BEAT
-        through = (road - self._start_of(number)) / max(
-            1e-9, self._pace_of(number))
-        return self._clock.time(number + max(0.0, min(1.0, through)))
+        covered = max(0.0, min(1.0, (road - self._start_of(number)) / max(
+            1e-9, self._pace_of(number))))
+        through = (self._uncovered(covered, self._lunge_of(number))
+                   if exact else covered)
+        return self._clock.time(number + through)
+
+    def _uncovered(self, covered: float, lunge: float) -> float:
+        """How far through a beat its road is ``covered`` (0 to 1) along:
+        the inverse of _covered, so a moment and its place on the road
+        always find each other again."""
+        through = covered
+        mix = self.LUNGE_MIX
+        for _round in range(6):
+            miss = self._covered(through, lunge) - covered
+            if abs(miss) < 1e-12:
+                break
+            slope = (1.0 - mix) + mix * lunge * (1.0 - through) ** (lunge - 1.0)
+            through = max(0.0, min(1.0, through - miss / max(1e-9, slope)))
+        return through
 
     def _beat_at_road(self, units: float) -> int:
         """The beat whose road a point ``units`` along it is on."""
@@ -5940,59 +5996,65 @@ class Rider(Scene):
         return QPointF(horizon.x() + focal * sx / z,
                        horizon.y() + focal * (sy + self.EYE_UP) / z)
 
+    #: How far down the road, in road units, a block is in sight: past the
+    #: last of what the lit world draws.
+    IN_SIGHT = 60.0
+    #: How long the arches and the beat lines take to come up once there is
+    #: a beat, in seconds of the track.
+    BEAT_SHOW = 1.0
+
+    #: A move of the playhead bigger than this in one frame is a seek, for
+    #: anything that drives the scene with a bare time and no count of its
+    #: jumps (see Spectrum.seek_to).
+    JUMP = 0.35
+
     def _advance(self, state) -> float:
-        now = time.monotonic()
-        step = 0.016 if self._last is None else min(0.1, max(0.0,
-                                                             now - self._last))
-        self._last = now
+        self._last = time.monotonic()
         kit = {name: bounded(value)
                for name, value in (state.kit or {}).items()}
         bass = max(bounded(state.bass), kit.get("Bass", 0.0))
         loud = (bass + bounded(state.mid) + bounded(state.high)) / 3.0
 
-        # The playhead, which everything here is measured from. A player
-        # that reports a nan position would otherwise hand it to the
-        # road, the chart and the grid in one frame.
+        # The playhead, which everything here is measured from: the pane's
+        # one moment a frame, already smooth, taken as it is. A second clock
+        # of the scene's own, eased towards it, ran a frame ahead while
+        # playing and on past a pause, and took seconds to find its place
+        # again after one.
         said = bounded(getattr(state, "at", 0.0), most=self.LONGEST)
-        # Whether the track is actually playing. A paused player reports
-        # the same position every frame, and the road went on rolling
-        # under a stopped song: "xxxxxx xxxxxx xxxxxx xxxx xxxx xxxxxx".
         first = self._was_at is None
-        moving = first or abs(said - self._was_at) > 1e-4
+        playing = getattr(state, "playing", None)
+        if playing is None:
+            moving = first or abs(said - self._was_at) > 1e-4
+        else:
+            moving = first or bool(playing)
+        jumps = getattr(state, "jumps", None)
+        if first:
+            jumped = False
+        elif jumps is not None:
+            jumped = jumps != self._jumps_seen
+        else:
+            jumped = abs(said - self._was_at) > self.JUMP
+        self._jumps_seen = jumps
+        # How much of the track went by this frame: what everything the
+        # scene animates moves by, so a stopped track stops the lot.
+        if first or jumped or not moving:
+            step = 0.0
+        else:
+            step = max(0.0, min(0.1, said - self._was_at))
         self._was_at = said
         self._rolling += ((1.0 if moving or said <= 0.0 else 0.0)
                           - self._rolling) * 0.25
-        # And all the way there, rather than a quarter of the way for ever:
-        # every ease is gated on this, and a gate a millionth open still
-        # moves the road a millionth of a unit a frame - which, on the edge
-        # of something, is a pixel changing under a stopped track.
         if self._rolling < 1e-4:
             self._rolling = 0.0
         elif self._rolling > 1.0 - 1e-4:
             self._rolling = 1.0
-        # The music's own clock. Smoothed between the player's reports,
-        # because they arrive a few a second and the road runs at sixty -
-        # but never moved on its own while the track is stopped. It used
-        # to creep forward by ``step`` whatever was happening and get
-        # yanked back whenever it drifted a third of a second from the
-        # playhead, which is a road that crawls forward and snaps back
-        # over and over: "road continues moving and obstacles xx xxxxxx
-        # xxx xxxxxx xxx xxxxxx xxxx xx xxxxx xxxxxxxx xxxxxxxx xxx xxxx
-        # xx xxxxxx xxx xxxxxx xx x xxxx".
-        jumped = False
-        if said <= 0.0:
-            self._heard += step
-        elif abs(said - self._heard) > 0.35:
+        if jumped:
             self._jumped_from = self._heard
-            self._heard = said       # a seek, or the first frame
-            jumped = True
-        elif moving:
-            self._heard += step * self._rolling + (said - self._heard) * 0.06
-        # A seek is a jump from somewhere the run has been. The first
-        # frame is not one - there is nothing behind it to skip or to go
-        # back over - but a run that starts part way in is not the whole
+        self._heard = said
+        # A seek is a jump from somewhere the run has been; the first frame
+        # is not one, but a run that starts part way in is not the whole
         # track either. See _finish.
-        self._jumped = jumped and not first
+        self._jumped = jumped
         if first and self._heard >= self.START_AGAIN:
             self._whole = False
 
@@ -6008,8 +6070,17 @@ class Rider(Scene):
         # maps': those are phased from the first thing they heard and were
         # a third of a beat out on real records. See trackstyle.rhythm_of.
         style = self._style
-        drums = (style is not None and style.from_drums and style.tempo > 0.0
-                 and self._beat > 0.0)
+        # When the drums' own beat is on its way, nothing is counted on
+        # another first: counted on the pane's and then on the drums', the
+        # road was laid twice in a track's first seconds and everything on
+        # it jumped. The road runs free until then.
+        waiting = (bool(getattr(state, "rhythm_due", None))
+                   and not (style is not None and style.from_drums))
+        if waiting:
+            self._beat = 0.0
+        self._waiting = waiting
+        drums = (style is not None and style.from_drums
+                 and style.tempo > 0.0)
         if drums:
             drums_clock = style.clock()
             self._beat = drums_clock.length(said)
@@ -6025,52 +6096,47 @@ class Rider(Scene):
             counted_in = ("pane", round(self._beat, 5))
         rebase = counted_in != self._counted_in and self._counted_in is not None
         self._counted_in = counted_in
-        # And the first moment there is a beat to count from: until then
-        # the road runs on its own clock, and moving onto the beat's is a
-        # change of coordinates, not a distance - counted as one, the road
-        # went fifty-five units a second for a frame as a ride began.
-        onto_beat = False
-        if self._beat > 0.0 and said > 0.0:
-            onto_beat = self._origin is None
-            # One known beat, so that a figure can be put exactly on the
-            # grid rather than wherever the detector heard a drum. See
-            # ``_snap``. Re-derived every frame, which keeps it exactly
-            # on the phase the analysis reports.
+        # The pane's own grid, where it is what the road is counted on: a
+        # beat from the playhead and the pulse, and a fixed one to measure
+        # distance from, only nudged towards it while playing - a fraction
+        # of a beat, never a whole one, so a moment's beat cannot change.
+        if not drums and self._beat > 0.0 and said > 0.0:
             self._grid = said + (1.0 - self._pulse) * self._beat
-            # And a *fixed* one to measure distance from, which is not
-            # the same thing at all: the snapping reference walks forward
-            # with the playhead, and a distance measured from something
-            # that walks with you is always the same distance. Set once,
-            # and thereafter only nudged to keep its phase - a correction
-            # of a fraction of a beat, never a whole one, so the beat a
-            # moment falls on cannot change under it.
             start = said - self._pulse * self._beat
             if self._origin is None or jumped or rebase:
                 self._origin = start
-                # New numbers, or a road laid again: new lunges and new
-                # lengths of road.
-                self._lunges = {}
-                self._paces = {}
-                self._starts = {}
-                self._drives = {}
-                self._marks = None
             elif moving:
-                # Only while the track is playing. This is a correction
-                # towards the phase the analysis reports, and with the
-                # track stopped there is nothing to correct towards - but
-                # the correction still had somewhere to go, because the
-                # error it is easing away from sits at a fixed fraction
-                # of a beat and never reaches zero. The road is measured
-                # from here, so it crept ten units a second under a
-                # stopped song.
                 off = (start - self._origin) / self._beat
                 self._origin += (off - round(off)) * self._beat * 0.1
         if drums:
-            self._clock = drums_clock
+            clock = drums_clock
         elif self._beat > 0.0 and self._origin is not None:
-            self._clock = BeatClock(self._beat, self._origin)
+            clock = BeatClock(self._beat, self._origin)
         else:
-            self._clock = None
+            clock = None
+        # A beat to count from appearing, or going, is a change of
+        # coordinates rather than a distance; see _road_shift.
+        had_clock = bool(self._clock)
+        onto_beat = bool(clock) != had_clock
+        self._carried = None
+        if onto_beat or jumped or rebase:
+            if not jumped:
+                # Where the road would be now on the old count, which it
+                # carries on from, and where each block in sight is on it,
+                # so it can be put back there on the new one.
+                self._carried = self._world(self._heard)
+                self._kept = [
+                    (block, self.RIDER_AT + self._flat(block[0])
+                     - self._carried)
+                    for block in self._blocks
+                    if self.RIDER_AT + self._flat(block[0]) - self._carried
+                    <= self.IN_SIGHT]
+            self._lunges = {}
+            self._paces = {}
+            self._starts = {}
+            self._drives = {}
+            self._marks = None
+        self._clock = clock
         # From here on, a frame's worth of movement is however much of a
         # frame the *track* moved. Everything the scene animates reads
         # this rather than the wall clock, so a stopped track stops the
@@ -6121,18 +6187,28 @@ class Rider(Scene):
         was, was_when = self._at, self._last_heard
         self._last_heard = self._heard
         rolled = self._world(self._heard)
-        if (onto_beat or rebase) and not jumped:
-            # New beats to count in, not a new place on the road.
-            self._road_shift += was - rolled
-            rolled = was
+        if self._carried is not None:
+            # New beats to count in, not a new place on the road: on from
+            # where the old count would have had it.
+            self._road_shift += self._carried - rolled
+            rolled = self._carried
         # Never backwards. The curve is chosen by the push, so a push that
         # moves within a beat moves the whole mapping and the road can be
         # asked to stand where it stood two frames ago. Beats only go
         # forwards, so neither does the road - except across a seek, which
         # is the one time it may.
-        self._at = (rolled if jumped or rebase or onto_beat
-                    else max(self._at, rolled))
-        self._rebased = rebase
+        self._at = rolled if jumped else max(self._at, rolled)
+        if self._kept:
+            # The moment each kept block now stands for, on the new count.
+            for block, where in self._kept:
+                block[0] = self._when(where, exact=True)
+            self._kept = []
+        if self._clock:
+            self._beat_shown = min(1.0, self._beat_shown
+                                   + step / self.BEAT_SHOW)
+        else:
+            self._beat_shown = 0.0
+        self._rebased = rebase or onto_beat
         # Against the track's own clock, not the frame's: the frame's is
         # gated by whether the track is playing, so dividing by it at a
         # pause divides by nothing.
@@ -6141,7 +6217,7 @@ class Rider(Scene):
         # Nothing across a seek: the road is measured from an origin and
         # a seek re-bases it, so the step across one is a change of
         # coordinates rather than a distance travelled.
-        self._speed = (0.0 if jumped or rebase or onto_beat or went <= 1e-6
+        self._speed = (0.0 if jumped or went <= 1e-6
                        else (self._at - was) / went)
         self._drift_sparks(step)
         self._bend += step * (0.30 + self._loudness * 0.85)
@@ -6313,8 +6389,6 @@ class Rider(Scene):
             if not grey:
                 self._offered += 1
             if grey and on_it:
-                if self._sore > 0.0:
-                    continue
                 if self._shield >= 1.0:
                     # Shattered rather than hit. It still counts as
                     # having touched one, so the clean run is over.
@@ -6338,18 +6412,19 @@ class Rider(Scene):
                 self._coin_run = 0
                 self._clean = False
                 self._sore = self.SORE
-                self._shake = min(1.0, self._shake + 0.8)
+                # Each hit lands again, and one hard on the last lands
+                # harder: the whole picture answers, every time.
+                combo = self._combo("hit", when)
+                self._shake = min(1.0 + 0.15 * (combo - 1),
+                                  self._shake + 0.8)
                 self._slow = self.SLOW
-                # "Xxxx xxx xxxxxx xxxxxx xxxxx xx xx obstacle hit."
-                # Not the block, not the ship: the picture.
                 self._hurt = 1.0
                 self._burst(self._lane_at(lane))
-                # And say what it cost, when it cost something. A chain
-                # of forty going is the worst thing that can happen on
-                # this road and it used to look exactly like a chain of
-                # two going.
+                # And say what it cost, when it cost something: a chain of
+                # forty going is the worst thing that can happen here.
                 self._pop("hit", hue=0.0, sat=0.95,
-                          strength=1.0 + min(0.5, lost / 80.0),
+                          strength=1.0 + min(0.5, lost / 80.0)
+                          + self.COMBO_LIFT * (combo - 1),
                           text=(f"CHAIN LOST  {lost}"
                                 if lost >= self.LOST_WORTH else ""))
             elif grey:
@@ -6380,9 +6455,11 @@ class Rider(Scene):
                     self._double = 1.0
                     self._got = 1.0
                     self._burst(self._lane_at(lane), prize=True)
-                    # Bigger as the run gets hotter, so the run is felt
-                    # in every prize and not only at the milestones.
-                    self._pop("prize", strength=0.7 + self._heat() * 0.6)
+                    # Bigger as the run gets hotter, and bigger again for
+                    # one taken hard on the last.
+                    combo = self._combo("prize", when)
+                    self._pop("prize", strength=0.7 + self._heat() * 0.6
+                              + self.COMBO_LIFT * min(4, combo - 1))
                     self._milestone(before, self._chain)
 
     # -- the grid ---------------------------------------------------------
@@ -6605,7 +6682,7 @@ class Rider(Scene):
         costs nothing in timing.
         """
         if not self._clock:
-            return when * self.FREE_RUN
+            return when * self.FREE_RUN + self._road_shift
         beats = self._clock.number(when)
         whole = math.floor(beats)
         return (self._start_of(whole) + self._pace_of(whole)
@@ -6661,7 +6738,8 @@ class Rider(Scene):
         drive = self._drives.get(number)
         if drive is None:
             drive = 0.5
-        return self.GATE_CALM + (1.0 - self.GATE_CALM) * drive
+        return (self.GATE_CALM + (1.0 - self.GATE_CALM) * drive
+                ) * self._beat_shown
 
     #: How lit the arches are in the calmest music, against a drop's.
     GATE_CALM = 0.12
@@ -7616,6 +7694,21 @@ class Rider(Scene):
         "milestone": (0.95, 0.95, 0.80, 1.00, 1.8),
         "finish":    (2.20, 1.10, 0.60, 1.00, 2.0),
     }
+    #: Hits, or prizes, this close together are one run of them, and each
+    #: after the first lands harder by COMBO_LIFT.
+    COMBO_GAP = 1.0
+    COMBO_LIFT = 0.25
+
+    def _combo(self, which: str, when: float) -> int:
+        """How many ``which`` in a row, counting this one at ``when``."""
+        last, count = self._combos.get(which, (None, 0))
+        if last is not None and 0.0 <= when - last <= self.COMBO_GAP:
+            count += 1
+        else:
+            count = 1
+        self._combos[which] = (when, count)
+        return count
+
     #: Chains worth stopping the world for. Ten is the first that means
     #: anything, and past a hundred the chain is paying its cap, so the
     #: moments thin out rather than go on counting.
@@ -7628,7 +7721,7 @@ class Rider(Scene):
         """Answer something the player did. See POPS."""
         if hue is None:
             hue = self._hue_now
-        self._pops.append([kind, 0.0, max(0.0, min(1.5, strength)),
+        self._pops.append([kind, 0.0, max(0.0, min(2.0, strength)),
                            hue % 1.0, sat, text])
         # Never a queue of them: the newest few are all anybody sees.
         if len(self._pops) > 12:

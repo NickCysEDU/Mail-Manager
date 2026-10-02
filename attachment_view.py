@@ -66,6 +66,19 @@ def _hz(value) -> str:
     return f"{int(value)}"
 
 
+class _Slider(QSlider):
+    """A slider that goes back to where it started when double-clicked."""
+
+    def __init__(self, default: int, *args) -> None:
+        super().__init__(*args)
+        self._default = int(default)
+
+    def mouseDoubleClickEvent(self, event) -> None:      # noqa: N802 - Qt's
+        self.setValue(self._default)
+        self.sliderReleased.emit()
+        event.accept()
+
+
 def _muted(text: str) -> QLabel:
     label = QLabel(text)
     label.setProperty("dim", "true")
@@ -419,6 +432,20 @@ class AudioPane(QWidget):
     #: How loud the game's sounds are against the music, out of a hundred,
     #: until somebody moves the slider.
     EFFECTS = 50
+    #: Where it is kept. A new name when the default changes, so a level
+    #: set while trying an older one is not carried over.
+    EFFECTS_PREF = "effects_level"
+    #: What each of the rider's games is, in a line, under the controls.
+    GAME_ABOUT = {
+        "Mono": "Take the coloured blocks and miss the grey ones. Colours "
+                "in a row are worth more each; a grey breaks the chain.",
+        "Ninja": "Mono with far more grey blocks. Coins beside each one pay "
+                 "for riding close, and a clean run pays double.",
+        "Wakeboard": "Mono, but the up arrow jumps off the road. A jump "
+                     "where the road crests is worth the most.",
+        "Puzzle": "Colours drop into a grid three wide. Three or more of a "
+                  "colour touching clear and score; greys clutter it.",
+    }
 
     def __init__(self) -> None:
         super().__init__()
@@ -584,21 +611,21 @@ class AudioPane(QWidget):
         # How loud those are against the music: a share of the player's
         # own volume, so the balance stays where it was put when the music
         # is turned up or down. Remembered, and heard as it is let go.
-        self.effects = QSlider(Qt.Orientation.Horizontal)
+        self.effects = _Slider(self.EFFECTS, Qt.Orientation.Horizontal)
         self.effects.setRange(0, 100)
-        kept = _viewer_prefs().get("effects", self.EFFECTS)
+        kept = _viewer_prefs().get(self.EFFECTS_PREF, self.EFFECTS)
         self.effects.setValue(int(kept) if isinstance(kept, (int, float))
                               and 0 <= kept <= 100 else self.EFFECTS)
         self.effects.setFixedWidth(74)
         self.effects.setToolTip(
-            "How loud the game's sounds are against the music. All the way "
-            "right is as loud as the music itself.")
+            "How loud the game's sounds are against the music. Half by "
+            "default; double-click to go back to half.")
         self.effects.setAccessibleName("Effects volume")
         self._keep_effects = QTimer(self)
         self._keep_effects.setSingleShot(True)
         self._keep_effects.setInterval(400)
         self._keep_effects.timeout.connect(
-            lambda: _keep_viewer_pref("effects", self.effects.value()))
+            lambda: _keep_viewer_pref(self.EFFECTS_PREF, self.effects.value()))
         self.effects.valueChanged.connect(self._keep_effects.start)
         self.effects.sliderReleased.connect(self._preview_effects)
         self.effects_box = _labelled("Effects", self.effects)
@@ -684,6 +711,13 @@ class AudioPane(QWidget):
         rows.setContentsMargins(0, 0, 0, 0)
         rows.setSpacing(6)
         rows.addWidget(FlowHolder(self.visual_row))
+        self.game_about = _muted(self.GAME_ABOUT.get(
+            self.game_box.currentText(), ""))
+        self.game_about.setAccessibleName("What this game is")
+        self.game_about.hide()
+        self.game_box.currentTextChanged.connect(
+            lambda name: self.game_about.setText(self.GAME_ABOUT.get(name, "")))
+        rows.addWidget(self.game_about)
         rows.addWidget(FlowHolder(self.strobe_row))
         # One size for the whole section. Checkboxes, combo boxes, buttons
         # and plain labels each come with their own idea of how big their
@@ -935,6 +969,8 @@ class AudioPane(QWidget):
                 self._decoder = None
                 self.busy.stop()
                 self.spectrum.set_working(None)
+                # Nothing more is coming, the drums' beat included.
+                self.spectrum.set_rhythm(None)
 
         def progress(fraction: float) -> None:
             if alive():
@@ -945,6 +981,7 @@ class AudioPane(QWidget):
         self._cancel_analysis()
         self.busy.start()
         self.spectrum.set_working(0.0)
+        self.spectrum.expect_rhythm()
         def kit(elements) -> None:
             """The drums, which arrive a few seconds after the picture."""
             if alive():
@@ -992,7 +1029,7 @@ class AudioPane(QWidget):
     def _seek(self, value: int) -> None:
         if self._player is not None:
             self._player.setPosition(value)
-            self.spectrum.set_position(value)
+            self.spectrum.seek_to(value)
             self.wave.set_position(value)
             self._show_clock(value)
 
@@ -1045,6 +1082,7 @@ class AudioPane(QWidget):
                 widget.setVisible(on and scene == "Oscilloscope")
             elif widget is self.rider_group:
                 widget.setVisible(on and scene == "Music rider")
+                self.game_about.setVisible(on and scene == "Music rider")
             else:
                 widget.setVisible(on)
         self.strobe_row.invalidate()

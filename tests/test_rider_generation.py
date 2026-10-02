@@ -431,6 +431,35 @@ class TestTheMelodyLeadsThePrizes:
         assert low and high
         assert sum(high) / len(high) > sum(low) / len(low) + 0.8
 
+    def test_runs_and_stairs_of_prizes_follow_it_too(self):
+        """Every coloured block, not only the single ones: each block of a
+        run or a stair in the lane of the note played at its moment."""
+        import trackstyle
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._clock = visualizers.BeatClock(0.5, 0.0)
+        scene._beat = 0.5
+        # A tune that climbs a note every quarter second.
+        lead = [60.0 + i for i in range(40)]
+        scene._harmony = {"lead": lead, "rate": 4.0, "lead_from": 0.0}
+        scene._style = trackstyle.Style()
+        scene._style.sections = [trackstyle.Section(0.0, 10.0, "break", 0.5,
+                                                    False)]
+        for pattern, when in (("run", 3.0), ("stairs", 6.0)):
+            scene._blocks = []
+            scene._shape(pattern, when, grey=False)
+            placed = sorted((b[0], b[1]) for b in scene._blocks)
+            expected = [visualizers.Rider._melody_lane(scene, at, -1)
+                        for at, _lane in placed]
+            assert [lane for _at, lane in placed] == expected, pattern
+            assert -1 not in expected
+        # Without a tune, the figure keeps its own shape.
+        scene._harmony = None
+        scene._blocks = []
+        scene._shape("run", 3.0, grey=False)
+        assert len({b[1] for b in scene._blocks}) == 3
+
 
 class TestTheLevelsRideDifferently:
     def test_a_level_is_kept_through_a_change_of_game_and_back(self):

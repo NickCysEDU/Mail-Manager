@@ -216,7 +216,7 @@ class SpectrumState:
                  "trace", "vector", "calibration", "history",
                  "trace_history", "vector_history", "kit", "tempo",
                  "beat_at", "at", "chart", "moving", "contour", "harmony",
-                 "flux", "rhythm")
+                 "flux", "rhythm", "playing", "jumps", "rhythm_due")
 
     def __init__(self) -> None:
         self.levels: List[float] = []
@@ -274,6 +274,14 @@ class SpectrumState:
         #: went on easing towards the last bass it saw and the room's
         #: position is worked out from that push.
         self.moving = True
+        #: Whether the player is playing, as the pane was told; None where
+        #: nothing has said.
+        self.playing = None
+        #: How many jumps the pane has made (see Spectrum.seek_to), and
+        #: whether the drums' beat is still to come; None where nothing
+        #: says.
+        self.jumps = None
+        self.rhythm_due = None
         #: The track's tempo in beats a minute, or 0 where none was
         #: found, and how far through the current beat the playhead is,
         #: from 0 at the beat to just under 1 at the next.
@@ -647,6 +655,22 @@ class Spectrum(QWidget):
         #: A clock of our own that leans on the playhead. See ``_heard``.
         self._heard_now = None
         self._heard_at = None
+        #: Where the player was last sent, while waiting for it to move on
+        #: from there, and when. See seek_to.
+        self._seek_hold = None
+        self._seek_at = 0.0
+        self._seek_from = None
+        self._was_playing = False
+        #: Started again and not yet heard from since, and closing on the
+        #: player's first word since. See _heard.
+        self._settling = False
+        self._catching = False
+        #: How many times the picture has jumped rather than moved. A scene
+        #: compares it with the last count it saw.
+        self._jumps = 0
+        #: Whether the drums' own beat is still being worked out for this
+        #: track. See expect_rhythm.
+        self._rhythm_due = False
         #: The moment of the music this frame shows, worked out once a
         #: frame from the clock (see _heard and _tick) and read by
         #: everything drawn from the track.
@@ -1424,8 +1448,15 @@ class Spectrum(QWidget):
         self._harmony = harmony
 
     def set_rhythm(self, rhythm) -> None:
-        """The drums' own tempo, beat and pattern, once they are known."""
+        """The drums' own tempo, beat and pattern, once they are known -
+        None when they could not be."""
         self._rhythm = rhythm
+        self._rhythm_due = False
+
+    def expect_rhythm(self) -> None:
+        """The drums' own beat is being worked out and will follow: a scene
+        that counts on it can wait for it rather than start on another."""
+        self._rhythm_due = True
 
     def rhythm(self):
         return self._rhythm
@@ -1513,6 +1544,11 @@ class Spectrum(QWidget):
         self._peak = []
         self._harmony = None
         self._rhythm = None
+        self._rhythm_due = False
+        self._heard_now = None
+        self._seek_hold = None
+        self._said_was = None
+        self._said_at = None
         self._state.history = []
         self._state.trace_history = []
         self._state.vector_history = []
@@ -2009,6 +2045,12 @@ class Spectrum(QWidget):
         # a moment after a pause by design, and this has to be the truth.
         state.moving = (self._moved_at is None
                         or abs(self._position - self._moved_at) > 0)
+        # And whether the player is playing at all, which is known rather
+        # than worked out: our clock eases onto a pause for half a second,
+        # and a scene that read that easing as playing ran on past it.
+        state.playing = bool(self._wanted and not self._idling)
+        state.jumps = self._jumps
+        state.rhythm_due = self._rhythm_due
         self._moved_at = self._position
         # The track's own shape: how loud it is and which way it leans,
         # a few times a second from end to end. Built once, from the
@@ -2086,6 +2128,9 @@ class Spectrum(QWidget):
     #: is corrected each frame.
     SEEK_GAP = 0.30
     PULL = 0.06
+    #: After starting again, the most faster or slower than time the clock
+    #: runs while it closes on the player's first word.
+    CATCH_RATE = 0.25
     #: The most a hit may be taken early for being nearer this frame than
     #: the next: half of a frame at sixty. Half of whatever time had gone
     #: by since the last frame, it was half a second on the first frame of
@@ -2105,83 +2150,95 @@ class Spectrum(QWidget):
     #: inside SEEK_GAP so a stalled source cannot fake a seek.
     STALE_MOST = 0.25
 
+    #: How long after a seek the picture waits for the player to be heard
+    #: moving on from where it was sent, before believing whatever it says;
+    #: and how far past the time since the seek its first report may be.
+    SEEK_SETTLE = 1.0
+    REPORT_SLACK = 0.1
+
+    def seek_to(self, milliseconds: int) -> None:
+        """The player was sent to ``milliseconds``: go there at once, and
+        wait there until the player is heard moving on. Qt's player reports
+        the new position straight away and holds it for most of a tenth of
+        a second while it starts again; run on from the seek, the picture
+        was that far ahead and spent the next second easing back."""
+        import time as _time
+
+        self._seek_from = self._heard_now
+        self._position = max(0, int(milliseconds))
+        self._seek_hold = self._position
+        self._seek_at = _time.monotonic()
+        self._heard_now = self._position / 1000.0
+        self._jumps += 1
+
     def _heard(self) -> float:
-        """The moment the music is at, as a clock rather than as a poll.
-
-        A media player does not report its position continuously: it
-        updates on a timer of its own, so reading it every frame gives the
-        same number several times and then a jump. Anything driven
-        straight off that moves in steps - which is what "the walls look
-        laggy and stuttery" and "xxx xxxx xxxxx xxxxx xxx xxxxxxxxx" both
-        were. The wireframe in the middle of the rave was smooth through
-        all of it because it runs on the frame clock and never touched the
-        playhead.
-
-        So this runs its own clock, at real speed, and leans on the
-        playhead rather than reading it: a small correction each frame
-        towards whatever the player last said. A real seek - anything
-        further out than SEEK_GAP - is taken at once, because that is a
-        jump the picture is supposed to make.
-        """
+        """The moment the music is at: the player's last report, run on
+        from when it landed and eased towards each new one, since it only
+        moves every 50 ms. Exact while paused, held after a seek until the
+        player moves on, and a jump nobody announced is taken at once."""
         import time as _time
 
         now = _time.monotonic()
         said = self._position / 1000.0
-        # A report is a timestamp rather than a level: true at the moment
-        # it lands and stale from then on. Easing towards the raw number
-        # leaves the picture behind by the *average* staleness of the
-        # source, which is half its update interval - and the pull cannot
-        # take that out, because the thing it is pulling towards is
-        # itself behind. Measured against a player that moves its
-        # position every 50 ms, the picture sat 25 ms late; against one
-        # that speaks once a second, 300 ms.
-        #
-        # So the report is run forward from the moment it landed, which
-        # costs nothing and does not depend on how talkative the source
-        # is. Capped, because a player that stops reporting while still
-        # claiming to play would otherwise run the picture away from the
-        # music; and only while playing, because a paused player reports
-        # the same position for ever and that is not staleness, it is a
-        # pause.
-        stale = 0.0 if self._said_at is None else now - self._said_at
-        fresh = stale <= self.STALE_MOST
-        if said != self._said_was:
-            self._said_was = said
-            self._said_at = now
-            stale, fresh = 0.0, True
-        elif self._wanted and not self._idling:
-            said += min(self.STALE_MOST, stale)
         step = 0.0 if self._heard_at is None else max(
             0.0, min(0.25, now - self._heard_at))
         self._heard_at = now
-        if self._heard_now is None or abs(said - self._heard_now) > self.SEEK_GAP:
+        playing = self._wanted and not self._idling
+        # Starting to play: the last word is where it stopped, true as of
+        # now rather than as of the pause.
+        resumed = playing and not self._was_playing
+        word = said != self._said_was
+        if word or resumed:
+            self._said_was = said
+            self._said_at = now
+        if resumed:
+            self._settling = True
+        self._was_playing = playing
+        stale = 0.0 if self._said_at is None else now - self._said_at
+        if self._seek_hold is not None:
+            held = self._seek_hold / 1000.0
+            since = now - self._seek_at
+            # Moved on: just past where it was sent, by no more than the
+            # time since. Still saying where it was sent, or where it was
+            # before (a late word), is waited through; anything else is a
+            # jump of its own.
+            moved_on = (playing
+                        and held < said <= held + since + self.REPORT_SLACK)
+            late = (said == held or (self._seek_from is not None and abs(
+                said - self._seek_from) <= self.SEEK_GAP))
+            if not moved_on and late and since <= self.SEEK_SETTLE:
+                self._heard_now = held
+                return held
+            self._seek_hold = None
+            if not moved_on and abs(said - held) > self.SEEK_GAP:
+                self._jumps += 1
             self._heard_now = said
             return said
-        # Our own clock, pulled gently towards the truth - and only while
-        # there is a truth to move towards.
-        #
-        # It used to run forward whatever the player was doing. Paused,
-        # that is a clock walking away from a playhead that is standing
-        # still, held back only by the pull: the gap settles where the
-        # step and the pull balance, which at sixty frames is 0.278 s
-        # against a SEEK_GAP of 0.30. So it sat on the edge of the snap,
-        # and any frame slower than a sixtieth tipped it over - the clock
-        # jumped back to the playhead and set off again. At thirty frames
-        # the balance is 0.55 s and it snapped every time.
-        #
-        # Every scene reads this, so every scene inherited it. The one
-        # that showed it was the rider, where it is not a texture sliding
-        # but the obstacles: "road continues moving and obstacles xx
-        # xxxxxx xxx xxxxxx xxx xxxxxx xxxx xx xxxxx xxxxxxxx xxxxxxxx
-        # xxx xxxx xx xxxxxx xxx xxxxxx xx x xxxx".
-        # And only while the last thing the source said is still worth
-        # anything. A player that claims to be playing and then stops
-        # reporting is a player that has got stuck, and a picture that
-        # goes on running is a picture that has to be yanked back when it
-        # speaks again. It runs on for STALE_MOST and then waits.
-        if self._wanted and not self._idling and fresh:
+        if not playing or resumed:
+            self._heard_now = said
+            return said
+        run = said + min(self.STALE_MOST, stale)
+        if self._settling and word:
+            # The player's first word since starting again, which restarts
+            # its pipeline as a seek does and can be some way from a clock
+            # run on from the pause: closed at a little faster or slower
+            # than time, never in a jump.
+            self._settling = False
+            self._catching = True
+        if self._heard_now is None or abs(run - self._heard_now) > self.SEEK_GAP:
+            if self._heard_now is not None:
+                self._jumps += 1
+            self._heard_now = run
+            return run
+        if stale <= self.STALE_MOST:
             self._heard_now += step
-        self._heard_now += (said - self._heard_now) * self.PULL
+        gap = run - self._heard_now
+        if self._catching:
+            most = self.CATCH_RATE * step
+            self._heard_now += max(-most, min(most, gap))
+            self._catching = abs(gap) > most
+        else:
+            self._heard_now += gap * self.PULL
         return self._heard_now
 
     def _ahead(self) -> float:

@@ -873,3 +873,93 @@ class TestAChoiceOutlivesARun:
             self._back_to_how_it_was()
             pane.mode_box.setCurrentText("Sweep")
             pane.deleteLater()
+
+
+class TestEachGameSaysWhatItIs:
+    def test_a_line_under_the_controls_for_the_game_chosen(self, qapp):
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        pane.resize(900, 700)
+        pane.show()
+        try:
+            pane.enable_box.setChecked(True)
+            pane.scene_box.setCurrentText("Music rider")
+            qapp.processEvents()
+            assert pane.game_about.isVisible()
+            for game in ("Mono", "Ninja", "Wakeboard", "Puzzle"):
+                pane.game_box.setCurrentText(game)
+                assert pane.game_about.text() == AudioPane.GAME_ABOUT[game]
+            assert len(set(AudioPane.GAME_ABOUT.values())) == 4
+            pane.scene_box.setCurrentText("Rave")
+            qapp.processEvents()
+            assert not pane.game_about.isVisible()
+        finally:
+            pane.game_box.setCurrentText("Mono")
+            pane.close()
+            pane.deleteLater()
+
+
+class TestAPauseIsAPause:
+    """The pane's clock settles onto a paused position over half a second.
+    Read as playing, that ran the road on a quarter of a second past the
+    music, which then had to be met again when it started."""
+
+    def test_the_rider_stops_where_the_music_did(self, qapp):
+        import time
+        from array import array
+
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QImage, QPainter
+
+        import beatmap
+        import visualizers
+        from attachment_widgets import Spectrum
+
+        clock = [5000.0]
+        was = time.monotonic
+        time.monotonic = lambda: clock[0]
+        pane = Spectrum()
+        image = QImage(320, 180, QImage.Format.Format_ARGB32_Premultiplied)
+        painter = QPainter(image)
+        try:
+            pane.set_frames([array("f", [0.4] * 27)] * 3000, 15)
+            kick = beatmap.BeatMap(
+                beats=tuple(beatmap.Beat(at=i * 0.5 + 0.25, strength=1.0)
+                            for i in range(400)), bpm=120.0, locked=True)
+            pane.set_beats({"Kick": kick})
+            pane.set_elements({"Kick": kick})
+            rider = visualizers.Rider()
+            pane.set_scene(rider)
+            pane.set_playing(True)
+            at = 20.0
+
+            reported = [at]
+
+            def frame(position, count):
+                clock[0] += 1.0 / 60.0
+                # As a media player does: a new position every 50 ms, and
+                # the pane's own clock running on between them.
+                if count % 3 == 0:
+                    reported[0] = position
+                pane.set_position(int(reported[0] * 1000))
+                pane._tick()
+                rider.paint(painter, QRectF(0, 0, 320, 180), pane._state)
+
+            for count in range(121):
+                at += 1.0 / 60.0
+                frame(at, count)
+            pane.set_playing(False)
+            at = reported[0]
+            road = rider._at
+            for count in range(60):
+                frame(at, 0)
+            assert abs(rider._heard - at) < 0.03, (
+                f"paused at {at:.3f}s, the rider ran on to "
+                f"{rider._heard:.3f}s")
+            assert rider._at - road < 2.0, (
+                f"the road went on {rider._at - road:.1f} units")
+        finally:
+            painter.end()
+            time.monotonic = was
+            pane.deleteLater()
