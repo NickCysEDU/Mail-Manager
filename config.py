@@ -242,6 +242,11 @@ class Settings:
     help_mode: bool = False
     #: Say where a link from a message goes before opening it.
     warn_on_links: bool = True
+    #: Look on GitHub for a new version, at most once a day. When it last
+    #: looked, and a version the person said to skip.
+    check_updates: bool = True
+    update_checked: float = 0.0
+    skipped_version: str = ""
 
     # Auto reply. Nothing is ever sent; drafts are saved for review.
     auto_reply: bool = False

@@ -2326,6 +2326,14 @@ class SettingsDialog(QDialog):
             "Links in mail open in your browser. With this on, the address "
             "is shown first and nothing opens until you say.")
         form.addRow("", self.links_check)
+        self.updates_check = QCheckBox("Look for new versions")
+        form.addRow("", self.updates_check)
+        updates_note = QLabel(
+            "Once a day the app asks GitHub for the latest version number. "
+            "Nothing else is sent. Help, Check for Updates, asks at any time.")
+        updates_note.setWordWrap(True)
+        updates_note.setProperty("dim", "true")
+        form.addRow("", updates_note)
         form.addRow(_separator())
 
         self.readable_check = QCheckBox("Tune the layout for reading")
@@ -2736,6 +2744,7 @@ class SettingsDialog(QDialog):
         self.readable_check.setChecked(settings.readable)
         self.help_check.setChecked(settings.help_mode)
         self.links_check.setChecked(settings.warn_on_links)
+        self.updates_check.setChecked(settings.check_updates)
         self.help_check.toggled.connect(
             lambda on: self.help_button.setChecked(on))
         self.density_combo.setCurrentIndex(
@@ -2822,6 +2831,7 @@ class SettingsDialog(QDialog):
             density=self.density_combo.currentData() or "comfortable",
             help_mode=self.help_check.isChecked(),
             warn_on_links=self.links_check.isChecked(),
+            check_updates=self.updates_check.isChecked(),
             row_lines=self.rows_spin.value(),
             row_lines_auto=self._settings.row_lines_auto and not self._row_lines_touched,
             auto_reply=self.auto_reply_check.isChecked(),

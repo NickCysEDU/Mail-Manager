@@ -125,7 +125,8 @@ hiddenimports = ["demo_data", "providers", "rules_engine", "rulesets",
                  "lexicon_blob", "widgets", "triage_table", "settings_dialog",
                  "vault", "about", "cryptography", "rider_gl", "rider_sound",
                  "rider_bests", "harmony", "trackstyle", "rider_layout",
-                 "scope_gl", "av_sync"]
+                 "scope_gl", "av_sync", "beat_clock", "link_open",
+                 "updates", "update_dialog"]
 
 # The CA bundle. Without it a frozen app has no certificates at all, because
 # the path Python was compiled with points at a framework the user does not

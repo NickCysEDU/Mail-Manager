@@ -253,6 +253,27 @@ def self_test(offline: bool = False) -> int:
 
     check("encryption at rest", _encryption)
 
+    def _links_and_updates() -> str:
+        """Both imported inside methods, so a bundle could lose them."""
+        import shutil
+
+        import link_open
+        import update_dialog  # noqa: F401
+        import updates
+
+        if (link_open.opens("file:///etc/hosts")
+                or not link_open.opens("https://example.com")):
+            raise RuntimeError("links are not checked in this build")
+        if not updates.newer("2.0.0", "1.0.0"):
+            raise RuntimeError("versions do not compare in this build")
+        missing = [tool for tool in ("codesign", "hdiutil", "ditto")
+                   if shutil.which(tool) is None]
+        if missing:
+            raise RuntimeError(f"{', '.join(missing)} not found")
+        return "links said before opening; updates can install"
+
+    check("links and updates", _links_and_updates)
+
     def _attachment_viewer() -> str:
         """The viewer is reached by a function-level import, so prove it.
 

@@ -69,6 +69,7 @@ from config import (
 from imap_engine import MovePlan, MoveReport
 from models import (
     APP_DISPLAY_NAME,
+    APP_VERSION,
     OTHER_COLOR,
     Disposition,
     FolderPlan,
@@ -1758,6 +1759,11 @@ class MainWindow(QMainWindow):
         shortcuts.triggered.connect(self._show_shortcuts)
         help_menu.addAction(shortcuts)
 
+        check = QAction("Check for &Updates…", self)
+        check.setMenuRole(QAction.MenuRole.ApplicationSpecificRole)
+        check.triggered.connect(lambda: self._look_for_updates(by_hand=True))
+        help_menu.addAction(check)
+
         about = QAction(f"About {APP_DISPLAY_NAME}", self)
         about.setMenuRole(QAction.MenuRole.AboutRole)
         about.triggered.connect(self._about)
@@ -1803,6 +1809,8 @@ class MainWindow(QMainWindow):
             self._first_run_checked = True
             QTimer.singleShot(0, self, self._first_run_check)
             QTimer.singleShot(0, self, self._probe_api_keys)
+            # A little after the window is up, so it never holds it up.
+            QTimer.singleShot(5000, self, self._look_for_updates)
 
     def _unfinished_work(self) -> str:
         """Results that would be lost by quitting, phrased for a person.
@@ -2001,12 +2009,15 @@ class MainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
 
-    def quit_app(self) -> None:
-        """Leave for good, rather than hiding to the menu bar."""
+    def quit_app(self, before=None) -> None:
+        """Leave for good, rather than hiding to the menu bar. ``before`` is
+        done once leaving is certain."""
         if not self._close_settings_first():
             return
         if not self.confirm_quit():
             return
+        if before is not None:
+            before()
         self._quitting = True
         if self.isFullScreen():
             self.setWindowState(
@@ -3558,6 +3569,65 @@ class MainWindow(QMainWindow):
             lambda removed: self._set_status(
                 f"Removed {removed} message(s) from “{folder}”."))
         worker.start()
+
+    # -- new versions ----------------------------------------------------
+    def _look_for_updates(self, by_hand: bool = False) -> None:
+        """Ask GitHub for the latest release, if it is time to - or now, when
+        asked from the menu. See updates."""
+        import updates
+        import update_dialog
+
+        if self.demo or self.dry_run:
+            return
+        if not by_hand and not updates.due(self.settings):
+            return
+        if getattr(self, "_update_look", None) is not None:
+            return
+        look = update_dialog.Look(self)
+        look.found.connect(lambda release: self._update_found(release, by_hand))
+        look.failed.connect(lambda why: self._update_failed(why, by_hand))
+        look.finished.connect(self._update_looked)
+        self._update_look = look
+        look.start()
+
+    def _update_looked(self) -> None:
+        look, self._update_look = getattr(self, "_update_look", None), None
+        if look is not None:
+            look.deleteLater()
+
+    def _update_found(self, release, by_hand: bool) -> None:
+        import time
+
+        import updates
+        from update_dialog import UpdateDialog
+
+        self.settings.update_checked = time.time()
+        self.settings.save()
+        skipped = "" if by_hand else self.settings.skipped_version
+        if updates.offered(release, APP_VERSION, skipped):
+            dialog = UpdateDialog(release, updates.running_app(), self)
+            dialog.skipped.connect(self._skip_version)
+            dialog.restart.connect(self._restart_to_update)
+            self._update_dialog = dialog
+            dialog.open()
+        elif by_hand:
+            QMessageBox.information(
+                self, "Up to date",
+                f"{APP_DISPLAY_NAME} {APP_VERSION} is the newest version.")
+
+    def _update_failed(self, why: str, by_hand: bool) -> None:
+        if by_hand:
+            QMessageBox.warning(self, "Could not check for updates", why)
+
+    def _skip_version(self, version: str) -> None:
+        self.settings.skipped_version = version
+        self.settings.save()
+
+    def _restart_to_update(self, installer, script: str) -> None:
+        """Quit, and have the new version put in place and opened."""
+        from pathlib import Path
+
+        self.quit_app(before=lambda: installer.launch(Path(script)))
 
     def _open_link(self, url: str) -> None:
         """A link from a message: where it goes is said first, unless the

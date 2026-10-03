@@ -302,7 +302,7 @@ That first figure is the one that matters and it must stay at zero.
 
 **Speed.** Rules engine 10.1 ms per message. Lexicon opens in 38 ms using
 1.95 MB, down from 70 ms and 10.5 MB, and neither number now grows with the
-table. Test suite 4,566 tests (with the evaluation sets present) in about five minutes on four workers.
+table. Test suite 4,601 tests (with the evaluation sets present) in about five minutes on four workers.
 
 ---
 
