@@ -122,6 +122,14 @@ class UpdateDialog(QDialog):
         row.addWidget(self.later_button)
         row.addWidget(self.update_button)
         layout.addLayout(row)
+        import touchbar
+
+        touchbar.give(self, [
+            touchbar.Button("skip", "Skip This Version", self.skip_button),
+            touchbar.Space("flexible"),
+            touchbar.Button("later", "Later", self.later_button),
+            touchbar.Button("update", "Update", self.update_button),
+        ], "update")
 
     def _skip(self) -> None:
         self.skipped.emit(self.release.version)

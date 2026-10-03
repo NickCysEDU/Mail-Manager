@@ -416,6 +416,9 @@ class TextPane(QWidget):
 class AudioPane(QWidget):
     """Play it, see it, and read what the file says about itself."""
 
+    #: Playing or not, whenever that changes.
+    playingChanged = Signal(bool)
+
     #: How loud the game's sounds are against the music, out of a hundred,
     #: until somebody moves the slider.
     EFFECTS = 50
@@ -1846,7 +1849,113 @@ class AudioPane(QWidget):
             full.add_control(widget)
         full.add_control(leave)
 
+        import touchbar
+
+        touchbar.give(full, self.touch_bar_items(full), "fullscreen")
         full.showFullScreen()
+
+    # -- the Touch Bar -------------------------------------------------------
+    def touch_bar_items(self, full=None) -> list:
+        """The transport, the scenes, the strobe and the picture, for the
+        viewer's Touch Bar or, given ``full``, the full screen's."""
+        import touchbar
+
+        on = self.enable_box.isChecked
+        caption = lambda holder: holder.layout().itemAt(0).widget().text()
+        items = [
+            touchbar.Button("back", "Back ten seconds",
+                            lambda: self.transport("back"), title="",
+                            image="gobackward.10", priority="low"),
+            touchbar.Button("play", "Play", self.play, title="",
+                            image=lambda: ("pause.fill" if self._playing
+                                           else "play.fill"),
+                            watch=[self.playingChanged], priority="high"),
+            touchbar.Button("forward", "Forward ten seconds",
+                            lambda: self.transport("forward"), title="",
+                            image="goforward.10", priority="low"),
+        ]
+        if full is None:
+            items += [
+                touchbar.Slider("seek", "", self.position, settle=150,
+                                change=self._seek_to, width=240,
+                                when=lambda: not on(),
+                                watch=[self.position.moved,
+                                       self.enable_box.toggled]),
+                touchbar.Toggle("visualiser", "Visualiser", self.enable_box,
+                                when=lambda: not on()),
+            ]
+        items += [
+            touchbar.Choice("scene", "Scene", self.scene_box, style="list",
+                            width=300, priority="high",
+                            when=lambda: on() or full is not None,
+                            watch=[self.enable_box.toggled]),
+            touchbar.Toggle("strobe", "Strobe", self.strobe_box,
+                            when=lambda: on() or full is not None,
+                            watch=[self.enable_box.toggled]),
+            touchbar.Button("flash", "Flash", self._flash_once,
+                            priority="low",
+                            when=self.strobe_box.isChecked),
+            touchbar.Popover("game", "Game", [
+                touchbar.Choice("game-mode", "Game", self.game_box),
+                touchbar.Choice("level", "Level", self.level_box),
+                touchbar.Toggle("sounds", "Sounds", self.sound_box),
+                touchbar.Slider("effects", "Effects", self.effects,
+                                width=110),
+            ], title=lambda: self.game_box.currentText(),
+                when=lambda: on() or full is not None,
+                watch=[self.enable_box.toggled]),
+            touchbar.Popover("beam", "Beam", [
+                touchbar.Choice("beam-mode", "Beam", self.mode_box),
+                touchbar.Slider("glow", "Glow", self.decay, width=140),
+            ], title=lambda: self.mode_box.currentText(),
+                when=lambda: on() or full is not None,
+                watch=[self.enable_box.toggled]),
+            touchbar.Button("colours", "Colours", self.colour_button,
+                            when=lambda: on() or full is not None,
+                            watch=[self.enable_box.toggled]),
+            touchbar.Popover("picture", "Picture", [
+                touchbar.Toggle("picture-on", "Visualiser", self.enable_box),
+                touchbar.Choice("shape", "Shape", self.shape_box,
+                                style="list", width=190),
+                touchbar.Choice("change", "Scene change", self.change_box),
+                touchbar.Choice("source", "Listens to", self.strobe_source,
+                                style="list", width=190),
+                touchbar.Slider("sense", "Sensitivity", self.sense,
+                                width=100, priority="low",
+                                title=lambda: caption(self.sense_box)),
+                touchbar.Slider("rate", "Rate", self.flash, width=100,
+                                priority="low",
+                                title=lambda: caption(self.rate_box)),
+            ], when=lambda: on() or full is not None,
+                watch=[self.enable_box.toggled]),
+        ]
+        if full is None:
+            items += [
+                touchbar.Button("full", "Full screen", self.full_button,
+                                title="",
+                                image="arrow.up.left.and.arrow.down.right",
+                                when=on, watch=[self.enable_box.toggled],
+                                priority="high"),
+                touchbar.Slider("volume", "", self.volume, width=130,
+                                ends=("speaker.fill", "speaker.wave.3.fill"),
+                                when=lambda: not on()),
+            ]
+        else:
+            items.append(touchbar.Button(
+                "leave", "Leave full screen", full.close, title="",
+                image="arrow.down.right.and.arrow.up.left",
+                priority="high"))
+        return items
+
+    def _seek_to(self, value: int) -> None:
+        """Go to ``value``, as dragging the seek bar there does."""
+        self.position.setValue(value)
+        self._seek(value)
+
+    def _flash_once(self) -> None:
+        """One flash of the strobe, as a tap of its key gives."""
+        self.vj("flash")
+        QTimer.singleShot(90, self, lambda: self.vj("unflash"))
 
     def _state(self, *_args) -> None:
         try:
@@ -1855,12 +1964,15 @@ class AudioPane(QWidget):
                        == QMediaPlayer.PlaybackState.PlayingState)
         except Exception:      # noqa: BLE001
             playing = False
+        changed = playing != self._playing
         self._playing = playing
         _name_transport(self.play, playing)
         twin = getattr(self, "_full_play", None)
         if twin is not None and shiboken6.isValid(twin):
             _name_transport(twin, playing)
         self.spectrum.set_playing(playing and self.enable_box.isChecked())
+        if changed:
+            self.playingChanged.emit(playing)
 
     def _error(self, *_args) -> None:
         self.title.setText(self.title.text() + "  (this file will not play)")
@@ -2225,6 +2337,45 @@ class AttachmentViewer(QDialog):
             self.heading.setText("<b>Nothing is attached to this message.</b>")
             for button in (self.save_button, self.save_all, self.info_button):
                 button.setEnabled(False)
+        self._give_touch_bar()
+
+    def _give_touch_bar(self) -> None:
+        """Moving through the list, the pane's own controls, and saving."""
+        import touchbar
+
+        def showing(pane):
+            return lambda: self.stack.currentWidget() is pane
+
+        moved = [self.stack.currentChanged]
+        several = lambda: self.list.count() > 1
+        rows = [self.list.currentRowChanged, self.list.model().rowsInserted]
+        touchbar.give(self, [
+            touchbar.Button("previous", "Previous", lambda: self._step_row(-1),
+                            title="", image="chevron.up", priority="low",
+                            when=several, watch=rows),
+            touchbar.Button("next", "Next", lambda: self._step_row(1),
+                            title="", image="chevron.down", priority="low",
+                            when=several, watch=rows),
+            *touchbar.only_when(self.audio.touch_bar_items(),
+                                showing(self.audio), moved),
+            *touchbar.only_when([
+                touchbar.Button("smaller", "Smaller", self.image.zoom_out,
+                                title="", image="minus.magnifyingglass"),
+                touchbar.Button("larger", "Larger", self.image.zoom_in,
+                                title="", image="plus.magnifyingglass"),
+            ], showing(self.image), moved),
+            touchbar.Button("copy", "Copy image", self.copy_button),
+            *touchbar.only_when([
+                touchbar.Toggle("wrap", "Wrap", self.text.wrap_button),
+            ], showing(self.text), moved),
+            touchbar.Space("flexible"),
+            touchbar.Toggle("info", "Info", self.info_button,
+                            priority="low"),
+            touchbar.Button("save", "Save", self.save_button, title="",
+                            image="square.and.arrow.down", priority="low"),
+            touchbar.Button("add", "Add a track", self.add_button,
+                            title="Add", image="plus"),
+        ], "viewer")
 
     def _add_tracks(self) -> None:
         """Pick sound files and list them as if they had arrived attached."""

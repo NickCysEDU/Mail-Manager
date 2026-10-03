@@ -274,6 +274,19 @@ def self_test(offline: bool = False) -> int:
 
     check("links and updates", _links_and_updates)
 
+    def _touch_bar() -> str:
+        """Imported inside a function, and a missing AppKit message would
+        take the app down rather than fail politely."""
+        import touchbar  # noqa: F401
+        import touchbar_mac
+
+        gaps = touchbar_mac._Runtime().missing()
+        if gaps:
+            raise RuntimeError("AppKit here lacks " + ", ".join(gaps[:4]))
+        return f"{sum(map(len, touchbar_mac.NEEDED.values()))} messages answered"
+
+    check("touch bar", _touch_bar)
+
     def _attachment_viewer() -> str:
         """The viewer is reached by a function-level import, so prove it.
 
@@ -634,6 +647,10 @@ def main(argv: Optional[list] = None) -> int:
     # Every message box, including the ones Qt raises itself, gets text you
     # can select and copy.
     gui.install_selectable_messages(app)
+
+    # Each window's controls on the Touch Bar, on a Mac that has one.
+    import touchbar
+    touchbar.install(app)
 
     store = CredentialStore()
     window = MainWindow(settings, store, demo=args.demo, dry_run=args.dry_run)

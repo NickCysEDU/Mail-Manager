@@ -578,6 +578,54 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.buttons)
 
         self._load_values()
+        self._give_touch_bar()
+
+    #: The Touch Bar's shorter words for some of the settings' choices.
+    TOUCH_SHORT = {
+        "Local rules (no AI)": "Local rules", "On this Mac (Ollama)": "Ollama",
+        "Gemini (Google AI Studio)": "Gemini", "Claude (Anthropic)": "Claude",
+        "OpenAI-compatible": "OpenAI",
+        "Leave in place (recommended)": "Leave in place",
+        "File under Job Search / Needs Review": "Needs Review",
+        "File by topic into the Sorted Mail folders": "By topic",
+        "Match macOS": "Auto", "Always light": "Light", "Always dark": "Dark",
+        "High contrast": "High", "Maximum contrast": "Maximum",
+    }
+
+    def _give_touch_bar(self) -> None:
+        """The page, the main choices on it, Cancel and Save."""
+        import touchbar
+
+        def on_page(index):
+            return lambda: self.tabs.currentIndex() == index
+
+        pages = [self.tabs.currentChanged]
+        short = self.TOUCH_SHORT
+        touchbar.give(self, [
+            touchbar.Choice("pages", "Page", self.tabs, style="menu",
+                            priority="high"),
+            *touchbar.only_when([
+                touchbar.Choice("provider", "Backend", self.provider_combo,
+                                style="menu", short=short),
+                touchbar.Choice("effort", "Effort", self.effort_combo,
+                                style="menu", named=True),
+            ], on_page(1), pages),
+            *touchbar.only_when([
+                touchbar.Choice("routing", "Other mail", self.routing_combo,
+                                style="menu", named=True, short=short),
+            ], on_page(2), pages),
+            *touchbar.only_when([
+                touchbar.Choice("mode", "Appearance", self.mode_combo,
+                                short=short),
+                touchbar.Choice("contrast", "Contrast", self.contrast_combo,
+                                style="menu", named=True, short=short),
+                touchbar.Choice("density", "Density", self.density_combo,
+                                style="menu", named=True),
+                touchbar.Toggle("hover", "Hover help", self.help_check,
+                                priority="low"),
+            ], on_page(4), pages),
+            *touchbar.button_items(self),
+        ], "settings")
 
     # -- tabs ------------------------------------------------------------
     def _build_account_tab(self) -> QWidget:

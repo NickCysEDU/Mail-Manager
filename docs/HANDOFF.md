@@ -11,6 +11,10 @@ describes the app itself.
   (routing, no Qt), `gui.py`, `triage_table.py`, `settings_dialog.py`.
 - **Links and updates:** `link_open.py`; `updates.py` (no Qt) and
   `update_dialog.py`.
+- **Touch Bar:** `touchbar.py` (items bound to Qt controls, one bar per
+  window, no AppKit) and `touchbar_mac.py` (AppKit through ctypes). Each
+  window builds its own in `_give_touch_bar`; any other dialog gets its pages
+  and buttons when it comes forward.
 - **Attachments and the visualiser:** `attachment_view.py` (the window),
   `attachment_widgets.py` (the picture, `Spectrum`, and the GPU canvas),
   `attachment_audio.py` (analysis, in worker processes), `visualizers.py`
@@ -104,6 +108,24 @@ describes the app itself.
 - **Sounds:** bump `rider_sound.VERSION` when a sound changes, or the cached
   file is played. Notes are put off with the pane's own timers.
 
+### The Touch Bar
+
+- **An item drives the window's own control** (click, setCurrentIndex,
+  setValue), so the bar and the window cannot disagree. A press re-sends that
+  item's state, because AppKit has already moved the control under the
+  finger.
+- **Every AppKit message sent is listed in `touchbar_mac.NEEDED`,** checked
+  before anything is drawn; a message a class does not answer ends the
+  process. A test fails if the list and what is sent differ.
+- **No `NSPickerTouchBarItem`, and no `NSSliderTouchBarItem` with a label or
+  width:** both log an AppKit layout complaint. Segmented controls and a
+  plain `NSSlider` beside a label do the same jobs.
+- **ctypes callbacks cannot return structs,** so a scrubber's entries share
+  one width (`_fit`). A scrubber keeps its count until `reloadData`.
+- **The suite cannot see the bar.** `tests/test_touchbar_mac.py` runs on the
+  real platform, natively and under Rosetta, and checks what AppKit holds;
+  `screencapture -b` needs Screen Recording permission.
+
 ### Timing
 
 - `trackstyle.choose_tempo` scores each candidate on the drums' fold on the
@@ -117,7 +139,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 4,601 tests
+./dev test                     # 4,654 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus
@@ -181,3 +203,5 @@ About's security link is a 404 for everyone but the owner.
   on the grid first.
 - **Gatekeeper:** without a paid Developer ID, the first launch needs
   right-click, Open.
+- **The Touch Bar has not been checked by eye,** and macOS's customise
+  palette for the main window's bar is untested.

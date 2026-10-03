@@ -169,6 +169,7 @@ class ColourWindow(QDialog):
         self.reset.clicked.connect(self._reset)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.accept)
+        self._close = buttons.button(QDialogButtonBox.StandardButton.Close)
 
         swatches = QHBoxLayout()
         swatches.addWidget(self.dial)
@@ -195,6 +196,18 @@ class ColourWindow(QDialog):
         self.dial.picked.connect(self._announce)
         self.background.picked.connect(self._announce)
         self.sampler.sampled.connect(self._take)
+        import touchbar
+
+        touchbar.give(self, [
+            touchbar.Button("load", "Load a picture", self.open_button),
+            touchbar.Choice("aim", "Sample to",
+                            [self.to_dial, self.to_background],
+                            short={"Sample to dial": "Dial",
+                                   "Sample to background": "Background"}),
+            touchbar.Button("reset", "Back to red on black", self.reset),
+            touchbar.Space("flexible"),
+            touchbar.Button("close", "Close", self._close),
+        ], "colours")
 
     # -- which frequency each meter reads ---------------------------------
     def _band_box(self):

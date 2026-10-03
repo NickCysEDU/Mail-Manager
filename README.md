@@ -81,6 +81,8 @@ OpenAI-compatible service with your own key, in **Settings → Analysis**.
   it can trigger photosensitive epilepsy.
 - **Links** in a message are listed by where they really go, and the address
   is shown before anything opens.
+- **Touch Bar**: each window's controls are on it, on a MacBook Pro that has
+  one.
 
 ## Privacy
 
@@ -93,7 +95,7 @@ turns that off. See [SECURITY.md](SECURITY.md).
 
 ```bash
 ./dev demo     # the app with sample mail, no setup
-./dev test     # 4,601 tests, about five minutes on four workers
+./dev test     # 4,654 tests, about five minutes on four workers
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 

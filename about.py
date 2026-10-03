@@ -69,6 +69,17 @@ class AboutDialog(QDialog):
         buttons.rejected.connect(self.reject)
         buttons.accepted.connect(self.accept)
         layout.addWidget(buttons)
+        import touchbar
+
+        security, issues, source, copy = self._links
+        touchbar.give(self, [
+            touchbar.Button("security", "Security concern", security),
+            touchbar.Button("bug", "Report a bug", issues),
+            touchbar.Button("source", "Source code", source),
+            touchbar.Button("copy", "Copy build details", copy,
+                            title="Copy details"),
+            *touchbar.button_items(self),
+        ], "about")
 
         # Word-wrapped labels report their height from their width, and a
         # layout only learns the final width once. Without this the first
@@ -243,6 +254,7 @@ class AboutDialog(QDialog):
             "what a bug report needs.")
         copy.clicked.connect(self._copy_build)
         row.addWidget(copy)
+        self._links = (security, issues, source, copy)
         return row
 
     # -- actions ---------------------------------------------------------

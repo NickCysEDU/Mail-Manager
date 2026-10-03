@@ -60,6 +60,7 @@ import profiles
 import providers
 import rulesets
 import scheduler
+import touchbar
 from config import (
     CredentialError,
     CredentialStore,
@@ -241,6 +242,7 @@ class MainWindow(QMainWindow):
             self.menu_bar.show(self.settings.schedule_minutes)
         if self.settings.schedule_minutes and not self.demo:
             self._start_timer(self.settings.schedule_minutes)
+        self._give_touch_bar()
 
     # -- construction ----------------------------------------------------
     def _build_ui(self) -> None:
@@ -725,6 +727,86 @@ class MainWindow(QMainWindow):
         more.triggered.connect(lambda: self.open_settings(tab=1))
         self.model_menu.addAction(more)
         self._refresh_model_button()
+        touchbar.refresh(self)
+
+    # -- the Touch Bar ---------------------------------------------------
+    #: The Show filter's entries, in the few words the Touch Bar has room for.
+    SHOW_SHORT = {"Show: everything": "All", "Show: job mail only": "Job mail",
+                  "Show: everything but job mail": "Not job",
+                  "Show: ticked only": "Ticked"}
+
+    def _give_touch_bar(self) -> None:
+        """Scan, Apply and Undo, the filters, and two panels: the rest of
+        the window's commands, and the quick settings."""
+        busy = self.stop_action.isEnabled
+        ticks = [touchbar.Button(f"ticks-{what}", label,
+                                 lambda w=what: self._ticks(w))
+                 for label, what in (("All shown", "all"),
+                                     ("Confident", "confident"),
+                                     ("None", "none"),
+                                     ("Suggested", "suggested"))]
+        more = [
+            touchbar.Button("visualise", "Visualiser",
+                            self._visualise_a_file, image="waveform"),
+            touchbar.Button("briefing", "Briefing", self._show_briefing),
+            touchbar.Button("find", "Find", self._focus_search, title="",
+                            image="magnifyingglass"),
+            touchbar.Button("links", "Links", self.preview.links_button,
+                            follow=False),
+            touchbar.Button("clear", "Clear filters", self._clear_filters),
+            touchbar.Button("rescan", "Re-analyse all",
+                            self.rescan_everything, priority="low"),
+            touchbar.Button("replies", "Reply rules", self.draft_replies,
+                            priority="low"),
+        ]
+        options = [
+            touchbar.Choice("period", "Period",
+                            list(self.window_buttons.values())),
+            touchbar.Choice("model", "Model", self._model_actions,
+                            style="list", width=360),
+            touchbar.Toggle("help", "Hover help", self.help_button),
+            touchbar.Button("settings", "Settings", self.open_settings,
+                            title="", image="gearshape"),
+        ]
+        touchbar.give(self, [
+            touchbar.Button(
+                "scan", "Scan", self.scan_button,
+                title=lambda: ("Stop" if busy() else
+                               "Reload" if self.demo else "Scan"),
+                image=lambda: "stop.fill" if busy() else "arrow.clockwise",
+                watch=[self.stop_action.changed], priority="high"),
+            touchbar.Button("apply", "Apply", self.apply_button,
+                            title=self._apply_title, follow=False,
+                            watch=[self.model.selectionChanged],
+                            priority="high"),
+            touchbar.Button("undo", "Undo", self.undo_action, title="Undo",
+                            follow=False, priority="low"),
+            touchbar.Space("small"),
+            touchbar.Choice("show", "Show", self.show_combo,
+                            short=self.SHOW_SHORT, priority="high"),
+            touchbar.Choice("category", "Category", self.category_filter,
+                            style="popover"),
+            touchbar.Popover("ticks", "Ticks", ticks),
+            touchbar.Space("flexible"),
+            touchbar.Popover("more", "More", more, title="",
+                             image="ellipsis.circle"),
+            touchbar.Popover("options", "Options", options, title="",
+                             image="slider.horizontal.3"),
+        ], "main", customizable=True)
+
+    def _apply_title(self) -> str:
+        approved = self.model.summary().approved
+        return f"Apply {approved}" if approved else "Apply"
+
+    def _model_actions(self) -> List[QAction]:
+        """The model menu's backends and models, before the rule sets."""
+        found: List[QAction] = []
+        for action in self.model_menu.actions():
+            if action.isSeparator():
+                break
+            if action.menu() is not None:
+                found += [a for a in action.menu().actions() if a.isCheckable()]
+        return found
 
     # -- what gets sorted -------------------------------------------------
     def _rebuild_sorting_menu(self) -> None:
@@ -792,6 +874,7 @@ class MainWindow(QMainWindow):
         more.triggered.connect(lambda: self.open_settings(tab=2))
         self.sorting_menu.addAction(more)
         self._refresh_sorting_button()
+        touchbar.refresh(self)
 
     def _refresh_sorting_button(self) -> None:
         """Say what the current arrangement is, on the button itself."""

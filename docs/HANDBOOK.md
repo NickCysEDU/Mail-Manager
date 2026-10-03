@@ -139,6 +139,14 @@ passwords are not in it.
 maximum) and spacing, and can tune the layout for reading. The ? at the top
 right explains whatever you hover over.
 
+On a MacBook Pro with a Touch Bar, the bar has **Scan** (**Stop** while it
+works), **Apply**, **Undo**, **Show**, the category and the tick shortcuts.
+**More** has the visualiser, Briefing, Find, Links and the rest of the
+commands; the sliders icon has the time window, the model, hover help and
+Settings. Every window has its own: the visualiser's has play, the scenes,
+the strobe, the game's and the scope's settings and the picture's; Settings
+has its pages and their main choices; dialogs have their buttons.
+
 ## Rules
 
 **Settings → Rules.** A rule is a list of conditions and a list of actions.
@@ -261,7 +269,7 @@ See [SECURITY.md](../SECURITY.md) for reporting a problem.
 ./dev dry      # scan for real, with moves disabled
 ./dev fake     # the pipeline in the terminal, offline
 ./dev scan     # the pipeline on real mail, read-only
-./dev test     # 4,601 tests (with the evaluation sets present)
+./dev test     # 4,654 tests (with the evaluation sets present)
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 

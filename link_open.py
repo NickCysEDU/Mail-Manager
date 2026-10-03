@@ -198,6 +198,14 @@ class LinkList(QDialog):
         row.addWidget(close)
         row.addWidget(self.open_button)
         layout.addLayout(row)
+        import touchbar
+
+        touchbar.give(self, [
+            touchbar.Button("copy", "Copy link", self.copy_button),
+            touchbar.Space("flexible"),
+            touchbar.Button("close", "Close", close),
+            touchbar.Button("open", "Open", self.open_button),
+        ], "links")
         if self._links:
             self.list.setCurrentRow(0)
         for button in (self.copy_button, self.open_button):
