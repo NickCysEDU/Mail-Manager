@@ -1,7 +1,5 @@
 """The viewer's newer parts: metadata, cover art, the spectrum, the seek bar.
-
-Every parser here walks bytes a stranger sent, so the tests are mostly about
-what happens when those bytes are wrong.
+The parsers read bytes from strangers, so most tests feed them bad bytes.
 """
 
 from __future__ import annotations
@@ -149,13 +147,9 @@ class TestTheFactsPanel:
 
 
 class TestTheSeekBarStaysWhereItIsPut:
-    """Clicking flashed to the new place and slid back. That was two bugs.
-
-    A QSlider does not move to where you click, and a media player keeps
-    reporting its old position for a moment after a seek. The first version
-    of the guard here cleared as soon as one report landed near the target,
-    which let the next stale one through - so a quick run of clicks still
-    snapped backwards.
+    """A click must not flash to the new place and slide back: a QSlider does
+    not move to where it is clicked, and a player reports its old position
+    for a moment after a seek, out of order.
     """
 
     @staticmethod
@@ -400,11 +394,8 @@ class TestTheSpectrumArrivesAndLeaves:
 
     def test_pausing_keeps_it_moving_and_does_not_start_a_countdown(self,
                                                                     qtbot):
-        """Pausing used to begin a thirty second slide to nothing.
-
-        Whoever was listening then came back to a pane that had changed
-        shape under them, and the seek bar had moved. It idles instead:
-        still drawing, still there, until the tick box says otherwise.
+        """Pausing idles the strip rather than sliding it away; it stays until
+        the tick box says otherwise.
         """
         spectrum = self._loaded(qtbot)
         spectrum.set_playing(True)
@@ -420,10 +411,8 @@ class TestTheSpectrumArrivesAndLeaves:
     def test_it_is_still_there_long_after_it_was_paused(self, qtbot):
         spectrum = self._loaded(qtbot)
         spectrum.set_playing(True)
-        # Let the reveal animation finish rather than forcing a value it
-        # is still animating towards - it would overwrite the forced one a
-        # few milliseconds later and the test would be reading the slide,
-        # not the resting state.
+        # Let the reveal finish rather than forcing a value it is still
+        # animating towards, which it would overwrite moments later.
         qtbot.waitUntil(lambda: spectrum._flow.state()
                         != spectrum._flow.State.Running, timeout=3000)
         tall = spectrum.maximumHeight()
@@ -438,8 +427,7 @@ class TestTheSpectrumArrivesAndLeaves:
             f"{spectrum.maximumHeight()}")
 
     def test_only_the_owner_puts_it_away(self, qtbot):
-        """clear() is the pane putting a file down, and that still hides
-        it - the strip belongs to the file, not to the playback state."""
+        """clear() is the pane putting a file down, and that still hides it."""
         spectrum = self._loaded(qtbot)
         spectrum.set_playing(True)
         spectrum._reveal_changed(1.0)
@@ -522,11 +510,8 @@ class TestTheControlsExplainThemselves:
 
 
 class TestOneConnectionMeansOneRequest:
-    """Two threads on one IMAP socket interleave inside TLS.
-
-    The server answers "bad record mac" and drops the connection, which is
-    not a race that fails quietly: every fetch after it fails too. Prefetch
-    caused it by starting a second thread while the first was mid-request.
+    """Two threads on one IMAP socket interleave inside TLS: the server answers
+    "bad record mac", drops the connection, and every later fetch fails.
     """
 
     def test_the_source_serialises_its_fetches(self):
@@ -629,12 +614,9 @@ class TestPlayBeforeTheAnalysisArrives:
 
 
 class TestTheSpectrumGetsRoomToDrawIn:
-    """It appeared to work and drew nothing, twice.
-
-    Animating only the maximum height leaves the minimum at zero and the
-    size hint at -1, so a layout hands the widget whatever is spare - which
-    in a full pane is nothing. Tests that resized it by hand passed while
-    the real window showed an empty strip.
+    """Animating only the maximum height leaves the minimum at zero and the
+    hint at -1, so a full pane gives the strip nothing. Resizing by hand hid
+    this.
     """
 
     @staticmethod
@@ -666,9 +648,8 @@ class TestTheSpectrumGetsRoomToDrawIn:
         spectrum.set_frames([array("f", [0.5] * 32) for _ in range(60)], 20)
         spectrum.set_playing(True)
         spectrum._reveal_changed(1.0)
-        # Run the layout now. The height is its decision rather than
-        # something forced synchronously, and waiting a fixed number of
-        # milliseconds for it passed here and failed on a slower machine.
+        # Run the layout now: a fixed wait passed here and failed on a slower
+        # machine.
         spectrum.parentWidget().layout().activate()
         assert spectrum.sizeHint().height() == spectrum.HEIGHT
 
@@ -692,7 +673,7 @@ class TestTheSpectrumGetsRoomToDrawIn:
         layout.activate()
 
     def test_it_actually_paints_something(self, qtbot):
-        """A strip with height and nothing in it is the same bug wearing a hat."""
+        """A strip with height and nothing drawn in it is the same bug."""
         from array import array
 
         _host, spectrum = self._in_a_layout(qtbot)
@@ -736,8 +717,8 @@ class TestTheSpectrumGetsRoomToDrawIn:
         spectrum = viewer.audio.spectrum
         assert spectrum.height() == 0, "it was visible before anything played"
 
-        # The visualiser is off by default now, so asking for it is part of
-        # the sequence a person goes through.
+        # The visualiser is off by default, so asking for it is part of the
+        # sequence.
         viewer.audio.enable_box.setChecked(True)
         viewer.audio._toggle()
         qtbot.waitUntil(lambda: spectrum.ready and spectrum.height() > 40,
@@ -767,13 +748,9 @@ class TestTheBandsAreARealEqualiser:
 
     @pytest.mark.parametrize("hertz", [63, 125, 250, 500, 1000, 2000, 4000, 8000])
     def test_a_tone_lands_in_its_own_band(self, hertz):
-        """Within one third-octave, which is the resolution on offer.
-
-        The decoder runs at 48 kHz so the dial scene can show 18 and 22 kHz,
-        and a 2048-point window at that rate is 23 Hz a bin. Two adjacent
-        third-octave bands below 100 Hz are 13 Hz apart, so the lowest of
-        them share bins and the winner between neighbours is not guaranteed.
-        Everything from 100 Hz up lands exactly.
+        """Within one third-octave, the resolution on offer: at 48 kHz a
+        2048-point window is 23 Hz a bin, so the lowest bands share bins.
+        From 100 Hz up they land exactly.
         """
         import math
         from array import array
@@ -804,8 +781,8 @@ class TestTheBandsAreARealEqualiser:
                                   for i in range(rate)])
             frames = attachment_audio.analyse(samples, rate, 1)
             heights.append(max(max(row) for row in frames))
-        # Normalisation pins the loudest to about the same place, which is the
-        # point: the shape is what differs, not the ceiling.
+        # Normalisation pins the loudest near the top: the shape is what
+        # differs.
         assert all(h > 0.7 for h in heights)
 
 
@@ -837,11 +814,9 @@ class TestEveryScenePaints:
 
         spectrum = self._spectrum(qtbot)
         spectrum.set_scene(visualizers.SCENES[index])
-        # Past the warm-up and the fade: a scene is drawn at an opacity
-        # of nothing for its first few frames so that its one-off costs
-        # are paid where nobody can see them, and grabbing it before
-        # that is over grabs the blank on purpose. Each grab paints one
-        # frame; ticking alone only schedules one. See WARM_FRAMES.
+        # Past the warm-up and the fade: a scene's first frames are drawn at no
+        # opacity. Each grab paints one frame; ticking alone only schedules
+        # one. See WARM_FRAMES.
         for _ in range(Spectrum.WARM_FRAMES
                        + int(1.0 / Spectrum.FRESH_STEP) + 2):
             spectrum._tick()
@@ -957,13 +932,9 @@ class TestFullScreenGivesTheWidgetBack:
 
 
 class TestTheBuildKeepsWhatTheViewerNeeds:
-    """QtMultimedia and QtPdf were excluded from the bundle for two releases.
-
-    The spec had them on a list of Qt modules "this app never touches", from
-    before there was an attachment viewer. Audio and PDF therefore said
-    "unavailable in this build" in every shipped copy, while the self-test
-    reported the viewer present - because it only checked that the Python
-    modules imported, which they did.
+    """QtMultimedia and QtPdf must be in the bundle. They were once excluded,
+    and the self-test still passed because it only imported the Python
+    modules.
     """
 
     @staticmethod
@@ -992,19 +963,19 @@ class TestTheBuildKeepsWhatTheViewerNeeds:
         assert f'"{module}"' in self._spec()
 
     def test_the_dial_face_and_its_licence_are_bundled(self):
-        """Every file beside the dial face, into the same place in the
-        bundle that visualizers.dial_face looks in. What stops a build
-        without them is the bundle's self test (main._dial_face); this is
-        the recipe's half."""
+        """Every file beside the dial face goes where visualizers.dial_face
+        looks. The bundle's self-test (main._dial_face) stops a build
+        without them; this is the recipe's half.
+        """
         spec = self._spec()
         assert 'ROOT / "assets" / "fonts"' in spec
         assert '"assets/fonts"' in spec
 
     def test_the_self_test_runs_an_analysis_in_a_worker(self):
-        """In the built app a worker process is the app started again and
-        told to be one - the kind of thing that works from source and not
-        from a bundle - so the self-test that runs inside every build
-        does it for real."""
+        """A built app's worker process is the app started again and told to be
+        one, which works from source and not always from a bundle, so the
+        self-test runs it for real.
+        """
         import inspect
 
         import attachment_audio
@@ -1039,12 +1010,8 @@ class TestTheBuildKeepsWhatTheViewerNeeds:
 
 
 class _FakeClock:
-    """A clock the test moves, for anything paced in seconds.
-
-    The needles take three hundred milliseconds of real time to reach a
-    reading, the way a moving coil does. A test loop calling _tick five
-    times takes microseconds, so without this the meters are measured
-    before they have moved and the answer is always "nothing happened".
+    """A clock the test moves, for anything paced in seconds: the needles take
+    300 ms of real time to reach a reading, longer than a test loop.
     """
 
     def __init__(self, start: float = 1000.0) -> None:
@@ -1058,12 +1025,7 @@ class _FakeClock:
 
 
 class TestWaitingForTheAnalysis:
-    """What the pane does while a track is being read.
-
-    All of this was broken by a block of the constructor that had been
-    pasted into the middle of set_working, and ran on every progress
-    callback for months.
-    """
+    """What the pane does while a track is being read."""
 
     @staticmethod
     def _spectrum(qtbot):
@@ -1074,8 +1036,7 @@ class TestWaitingForTheAnalysis:
         return spectrum
 
     def test_progress_actually_reaches_the_pane(self, qtbot):
-        """It used to be thrown away, so the bar this exists to draw had
-        never once appeared."""
+        """The progress fraction is kept, so the bar is drawn."""
         spectrum = self._spectrum(qtbot)
         spectrum.set_working(0.4)
         assert spectrum._working == pytest.approx(0.4)
@@ -1087,10 +1048,10 @@ class TestWaitingForTheAnalysis:
         assert spectrum._working is None
 
     def test_it_slows_the_clock_down_while_it_waits(self, qtbot):
-        """The analysis and the scenes are both Python, so they take turns
-        holding the interpreter lock. A pane repainting sixty times a
-        second takes the processor away from the thing being waited for -
-        measured at 1.6 times slower."""
+        """While analysing, the pane repaints slowly: the analysis and the
+        scenes share the interpreter lock, and full-rate painting made the
+        analysis 1.6 times slower.
+        """
         spectrum = self._spectrum(qtbot)
         spectrum.set_working(0.1)
         assert spectrum._timer.interval() >= 60
@@ -1098,9 +1059,9 @@ class TestWaitingForTheAnalysis:
         assert spectrum._timer.interval() == spectrum.FRAME_MS
 
     def test_it_does_not_reset_what_the_user_chose(self, qtbot):
-        """It used to put the aspect ratio, the strobe rate, the strobe
-        sensitivity and the source it listens to back to their defaults,
-        several times a second, for as long as a track took to read."""
+        """Progress reports must not reset the aspect ratio or the strobe
+        settings.
+        """
         spectrum = self._spectrum(qtbot)
         spectrum.set_aspect(16 / 9)
         spectrum.set_strobe_rate(0.9)
@@ -1114,9 +1075,9 @@ class TestWaitingForTheAnalysis:
         assert spectrum._strobe_source == "Treble"
 
     def test_it_does_not_throw_the_render_buffer_away(self, qtbot):
-        """Rebuilding the post-processor and dropping the buffer on every
-        progress tick is work done during the one wait the user is
-        actually watching."""
+        """Progress reports must not rebuild the post-processor or drop the
+        buffer.
+        """
         from attachment_widgets import PostProcess
 
         spectrum = self._spectrum(qtbot)
@@ -1207,11 +1168,8 @@ class TestTheMeterScene:
 
     def test_the_needle_takes_about_three_hundred_milliseconds(
             self, qapp, monkeypatch):
-        """Which is what makes it a VU meter rather than a bar graph.
-
-        The standard is 300ms from rest to 99% of a step. Anything much
-        faster is the jumpiness this replaced; much slower and it lags
-        behind the music it is supposed to be reading.
+        """300 ms from rest to 99% of a step, as the VU standard says: faster
+        is jumpy, slower lags the music.
         """
         track = self._step_response(monkeypatch)
         arrived = next((i for i, v in enumerate(track) if v >= 0.99), None)
@@ -1222,9 +1180,9 @@ class TestTheMeterScene:
 
     def test_no_single_frame_throws_it_across_the_face(
             self, qapp, monkeypatch):
-        """The complaint. The rule used to be "instant up, slow down", so
-        a band that jumped ten decibels between two frames moved the
-        needle the whole width of the scale in one of them."""
+        """A ten-decibel jump between two frames must not throw the needle
+        across the scale in one of them.
+        """
         track = self._step_response(monkeypatch)
         biggest = max(abs(track[i + 1] - track[i])
                       for i in range(len(track) - 1))
@@ -1232,9 +1190,9 @@ class TestTheMeterScene:
             f"one frame moved the needle {biggest * 100:.0f}% of the scale")
 
     def test_it_overshoots_a_little_and_not_a_lot(self, qapp, monkeypatch):
-        """A real movement sails just past and comes back - that is the
-        whole character of it. Past a couple of per cent it reads as a
-        wobble, and on the way down it slaps into the zero pin."""
+        """A real movement overshoots slightly and comes back; past a couple of
+        percent it wobbles, and on the way down it slaps the zero pin.
+        """
         track = self._step_response(monkeypatch)
         assert max(track) <= 1.03, f"it overshot to {max(track):.3f}"
         assert abs(track[-1] - 1.0) < 0.01, "it never settled"
@@ -1243,8 +1201,8 @@ class TestTheMeterScene:
         rising = self._step_response(monkeypatch, target=1.0)
         assert min(rising) >= 0.0
         assert max(rising) <= 1.15
-        # And coming back down, where an underdamped needle would swing
-        # below zero and be drawn off the bottom of the scale.
+        # And coming back down, where an underdamped needle would swing below
+        # zero.
         import attachment_widgets
         from attachment_widgets import Spectrum
 
@@ -1262,9 +1220,9 @@ class TestTheMeterScene:
         assert lowest >= 0.0, f"the needle went to {lowest:.3f}"
 
     def test_a_late_frame_does_not_fling_it(self, qapp, monkeypatch):
-        """A stalled window hands back a step measured in seconds. The
-        integrator is only stable while the step is short against the
-        swing, so a big one has to be walked rather than taken."""
+        """A stalled window hands back a step measured in seconds; the
+        integrator is only stable for short steps, so a big one is walked.
+        """
         import attachment_widgets
         from attachment_widgets import Spectrum
 
@@ -1278,11 +1236,10 @@ class TestTheMeterScene:
         clock.pass_time(3.0)
         spectrum._swing([1.0])
         landed = spectrum._dial_level[0]
-        # The gap is clamped to a tenth of a second and then walked in
-        # short pieces, so what comes out is a tenth of a second of
-        # movement - about two thirds of the way. Taken in one piece the
-        # integrator diverges and the needle slams into its end stop,
-        # which is why "still on the face" is not a strong enough check.
+        # The gap is clamped to a tenth of a second and walked in pieces, so
+        # the needle moves about two thirds of the way. Taken whole, the
+        # integrator diverges into the end stop, so "still on the face" is too
+        # weak a check.
         assert 0.2 <= landed <= 0.9, (
             f"a three second gap put the needle at {landed:.2f}, which is "
             "not a tenth of a second of travel")
@@ -1414,11 +1371,8 @@ class TestTheVisualiserControlsAreReachable:
         return viewer
 
     def test_only_the_tick_box_shows_until_the_visualiser_is_on(self, qtbot):
-        """Off means gone, not greyed.
-
-        Half a dozen disabled controls is more to read than none, and none
-        of them can be used. The tick box that turns them on is the only
-        thing worth showing while the visualiser is off.
+        """Off means gone, not greyed: the tick box is the only thing worth
+        showing.
         """
         viewer = self._pane(qtbot)
         assert viewer.audio.visual_holder.isVisible()
@@ -1452,8 +1406,9 @@ class TestTheVisualiserControlsAreReachable:
         viewer._sweep()
 
     def test_a_scenes_own_controls_belong_to_that_scene(self, qtbot):
-        """Colours are for the meters, decay is for the scope, and
-        neither exists while the visualiser is off."""
+        """Colours are for the meters and decay for the scope; neither exists
+        while the visualiser is off.
+        """
         viewer = self._pane(qtbot)
         audio = viewer.audio
         audio.enable_box.setChecked(True)
@@ -1481,12 +1436,8 @@ class TestTheVisualiserControlsAreReachable:
 
 
 class TestAnAnalysisThatOutlivesItsWindow:
-    """The decoder finishes on its own schedule, sometimes after the close.
-
-    Calling into a deleted widget from that callback raises out of Qt's
-    event loop, which in a running app means a traceback and a dead
-    visualiser. Found by a test whose teardown ran while a decode was still
-    going.
+    """The decoder can finish after the window closes; calling into a deleted
+    widget from its callback would raise out of Qt's event loop.
     """
 
     @staticmethod
@@ -1631,21 +1582,10 @@ class TestTheVisualiserCanBeSwitchedOff:
 
 
 def _settle(spectrum, painter, most: int = 500, quiet: int = 70) -> float:
-    """Draw until the pane has decided what resolution it can hold.
-
-    Every timing test below used to draw three or four frames and then
-    start the clock. That was right while the resolution was a fixed
-    number, and it is not now: the pane measures the scene and steps down
-    a rung when a frame will not fit, so the first frames are not the
-    frames anybody sees. A build runner failed exactly this way - the
-    scope measured 29.8 ms against a 27.9 ms budget, at a resolution it
-    would have left within two hundred frames.
-
-    What these tests are for is whether the visualiser holds its frame
-    rate, which is a question about where it ends up. So: draw until the
-    scale has not moved for ``quiet`` frames, then let the caller time it.
-    On a machine that never has to step down this costs the warm-up and
-    no more.
+    """Draw until the pane has settled on a resolution it can hold. The pane
+    steps down a rung when a frame will not fit, so the first frames are not
+    the ones anybody sees; the timing tests time where it ends up. On a
+    machine that never steps down this costs only the warm-up.
     """
     governor = spectrum._sharpness
     still, last = 0, None
@@ -1661,27 +1601,18 @@ def _settle(spectrum, painter, most: int = 500, quiet: int = 70) -> float:
     return last
 
 
-#: What the reference workload below costs on the machine the sixteen
-#: millisecond budget was set on. Measured, not guessed.
+#: What the reference workload costs on the machine the 16 ms budget was set
+#: on, measured.
 REFERENCE_MS = 12.2
 _FACTOR = None
 
 
 def _machine_factor() -> float:
-    """How much slower this machine is than the one the budget was set on.
-
-    A wall-clock budget is not a test of the code when the code runs on
-    both a laptop and a shared virtual machine: the same scene measured
-    5.5 ms here and 22.7 ms on a CI runner, and the gap was not even
-    consistent between scenes. So the budget is scaled by what this
-    machine takes over a fixed workload of the same kind - antialiased
-    strokes and a smooth scaled blit, which is what the scenes spend
-    their time on.
-
-    That keeps the check meaningful as a regression test: a scene that
-    gets slower relative to everything else still fails. It stops being a
-    measure of how fast the runner is, which is not something this
-    repository can fix.
+    """How much slower this machine is than the one the budget was set on. The
+    same scene took 5.5 ms here and 22.7 ms on a CI runner, so budgets are
+    scaled by this machine's time on a fixed workload of the same kind
+    (antialiased strokes and a smooth blit). A scene that slows relative to
+    the rest still fails.
     """
     import math
     import time
@@ -1713,17 +1644,14 @@ def _machine_factor() -> float:
         painter.drawPixmap(QRectF(0, 0, 900, 600), small, QRectF(small.rect()))
     taken = (time.monotonic() - started) / rounds * 1000
     painter.end()
-    # Never below one: a machine faster than the reference still has to
-    # meet the real budget.
+    # Never below one: a faster machine still meets the real budget.
     _FACTOR = max(1.0, taken / REFERENCE_MS)
     return _FACTOR
 
 
 def _scene_count():
-    """Every scene, not the five that existed when this was written.
-
-    The count was hard-coded, so the sixth - which turned out to be the
-    most expensive of the set by a wide margin - was never measured.
+    """Every scene, not a hard-coded count: the one left out was the most
+    expensive.
     """
     import visualizers
 
@@ -1742,8 +1670,7 @@ class TestItHoldsSixtyFramesASecond:
         from attachment_widgets import Spectrum
 
         rate = attachment_audio.DECODE_RATE
-        # Two channels, because the scope plots one against the other and a
-        # mono track leaves it with nothing to draw.
+        # Two channels: the scope plots one against the other.
         pcm = array("h")
         for index in range(rate * 2):
             here = (math.sin(2 * math.pi * 90 * index / rate)
@@ -1755,22 +1682,17 @@ class TestItHoldsSixtyFramesASecond:
                                                     * index / rate)) / 1.95))
         spectrum = Spectrum()
         qtbot.addWidget(spectrum)
-        # The waveform slices as well as the bands, in that order, the way
-        # the viewer hands them over. Without these the oscilloscope falls
-        # back to a shape folded out of the band levels - a hundred and
-        # twenty-eight points instead of a thousand, with no history behind
-        # it - so it measured as one of the cheapest scenes while being by
-        # far the most expensive in the app.
+        # The waveform slices as well as the bands, as the viewer hands them
+        # over; without them the scope draws a cheap fallback and measures as
+        # cheap.
         spectrum.set_traces(
             attachment_audio.traces(pcm, rate, 2),
             attachment_audio.vector_traces(pcm, rate, 2))
         spectrum.set_frames(attachment_audio.analyse(pcm, rate, 2),
                             attachment_audio.RATE)
         spectrum.set_labels([str(c) for c in attachment_audio.CENTRES])
-        # Unbounded, or the strip's own maximum height clamps the widget
-        # and the frame measured is 240 tall however big the numbers in
-        # this call are. This test has been called "at 1080p" since it was
-        # written and had never once drawn a frame that size.
+        # Unbounded, or the strip's maximum clamps the widget and the frame is
+        # 240 tall whatever the size asked for.
         spectrum.set_unbounded(True)
         spectrum.resize(width, height)
         spectrum._reveal_changed(1.0)
@@ -1786,19 +1708,14 @@ class TestItHoldsSixtyFramesASecond:
         return spectrum
 
     def test_the_timer_asks_for_sixty(self, qapp):
-        """qapp, because a QWidget without a QApplication aborts.
-
-        This passed only because something earlier in the file happened to
-        build one first; run on its own it took the process down.
-        """
+        """qapp, because a QWidget without a QApplication aborts."""
         from attachment_widgets import Spectrum
 
         spectrum = Spectrum()
         assert spectrum._timer.interval() <= 17, "that is not sixty a second"
 
-    #: What every scene costs on this machine, measured once. Held so the
-    #: per-scene checks can be about how the scenes compare rather than
-    #: about how fast the machine is.
+    #: What every scene costs on this machine, measured once, so the checks can
+    #: compare scenes rather than machines.
     _COSTS = {}
 
     def _cost_of_every_scene(self, qtbot):
@@ -1832,42 +1749,20 @@ class TestItHoldsSixtyFramesASecond:
         TestItHoldsSixtyFramesASecond._COSTS = found
         return found
 
-    #: How much more than the middle scene any one of them may cost.
+    #: How much more than the median scene any one may cost.
     #:
-    #: A relative check, because an absolute one in milliseconds is a
-    #: measure of the machine rather than of the code. Calibrating it
-    #: against a fixed workload was the previous attempt and it does not
-    #: hold either: the calibration strokes paths, and a scene whose cost
-    #: is arithmetic or fill rate scales differently from one that
-    #: strokes - measured, two scenes came out at 25 and 30 ms on a build
-    #: runner against a budget the calibration put at 24, while on the
-    #: machine they were written on they were the cheapest two of eight.
+    #: Relative, because milliseconds measure the machine: a calibration
+    #: workload did not hold either, since scenes that fill or compute scale
+    #: differently from ones that stroke. Against the median, not the cheapest,
+    #: which moves when a scene gets faster. Loose, because the ordering does
+    #: not survive a change of machine (the stacked hairlines win by different
+    #: amounts):
     #:
-    #: Comparing the scenes with each other cannot drift that way: they
-    #: are all measured in the same session on the same machine, and a
-    #: scene that gets slower relative to its neighbours still fails.
+    #: here a build runner Waterfall 0.70x 2.71x Rave 2.27x 1.70x Ambience
+    #: 1.26x 2.16x
     #:
-    #: Against the middle of them rather than the cheapest, which is the
-    #: correction this needed. The cheapest is one reading, and making a
-    #: scene faster moves it: Waterfall dropped from 41 ms a frame to 8,
-    #: which is a fix, and it would have failed this test by lowering the
-    #: floor that every other scene is held against. The median of eight
-    #: does not move when one of them changes.
-    #:
-    #: The number is loose because the *ordering* turns out not to survive
-    #: a change of machine. A wide line is drawn as a stack of one-pixel
-    #: ones, and how much that wins by depends entirely on how fast the
-    #: raster engine is at short cosmetic lines. Measured on the same
-    #: commit:
-    #:
-    #:                     here      a build runner
-    #:      Waterfall      0.70x           2.71x
-    #:      Rave           2.27x           1.70x
-    #:      Ambience       1.26x           2.16x
-    #:
-    #: So this catches a scene that has become absurd and nothing finer.
-    #: What actually holds the frame rate on a slow machine is the pane
-    #: measuring each scene and choosing a resolution it can hold, which
+    #: This catches an absurd scene. The frame rate on a slow machine is held
+    #: by the pane's resolution choice, which
     #: test_a_scene_too_slow_for_the_screen_really_is_stepped_down covers.
     SPREAD = 3.2
 
@@ -1884,11 +1779,8 @@ class TestItHoldsSixtyFramesASecond:
             + ", ".join(f"{n} {v:.1f}" for n, v in sorted(costs.items())))
 
     def test_the_whole_set_fits_a_frame_on_a_reasonable_machine(self, qtbot):
-        """A loose absolute floor, so "everything got slower" is caught.
-
-        Generous on purpose: this one is allowed to be a statement about
-        the machine, and it only fires when something has gone badly
-        wrong rather than when a runner is having a slow minute.
+        """A loose absolute floor, so everything getting slower is caught; it
+        fires only when something has gone badly wrong.
         """
         costs = self._cost_of_every_scene(qtbot)
         budget = 16.67 * _machine_factor() * 2.5
@@ -1907,10 +1799,9 @@ class TestItHoldsSixtyFramesASecond:
 
         spectrum = self._spectrum(qtbot, 1920, 1080)
         spectrum.set_scene(visualizers.SCENES[index])
-        # Into a surface that is made once, the way the running app paints
-        # into a backing store it already has. grab() allocates a fresh
-        # eight megapixel pixmap every frame, which cost ten milliseconds
-        # here - most of the budget, spent on something the app never does.
+        # Into a surface made once, as the app paints into its backing store;
+        # grab() allocates eight megapixels every frame, which cost ten
+        # milliseconds.
         canvas = QPixmap(1920, 1080)
         canvas.setDevicePixelRatio(spectrum.devicePixelRatioF())
         painter = QPainter(canvas)
@@ -1925,12 +1816,8 @@ class TestItHoldsSixtyFramesASecond:
             each = (time.monotonic() - started) / rounds * 1000
         finally:
             painter.end()
-        # Loose, and deliberately so: the tight check is
-        # test_no_scene_costs_far_more_than_the_others, which compares the
-        # scenes with each other and so cannot be thrown off by the
-        # machine. This one is here to catch a scene that has become
-        # absurd rather than one that is merely slower than its
-        # neighbours.
+        # Loose on purpose: test_no_scene_costs_far_more_than_the_others is the
+        # tight check, and is immune to the machine.
         budget = 16.67 * _machine_factor() * 2.5
         assert each < budget, (
             f"{visualizers.SCENES[index].name} takes {each:.1f} ms a frame, "
@@ -1938,15 +1825,10 @@ class TestItHoldsSixtyFramesASecond:
 
     @pytest.mark.parametrize("decay", [0.03, 0.75, 1.50])
     def test_the_scope_holds_up_at_every_decay(self, qtbot, decay):
-        """The setting that was reported as laggy, at the size it lags at.
-
-        The scene budget above runs each scene at whatever it happens to
-        be set to, which for the scope is the middle of the decay slider.
-        The complaint was about the top of it, and the top of it was the
-        one place the old drawing fell over: it kept every trace of the
-        set persistence and redrew all of them, so a frame cost what the
-        slider said. Measured here it was 18ms with spikes past 30, on a
-        16.7ms budget.
+        """The scope at the top of the decay slider, at the size it lagged at.
+        Keeping and redrawing every trace of the persistence made a frame
+        cost what the slider said: 18 ms with spikes past 30, on a 16.7 ms
+        budget.
         """
         import time
 
@@ -1977,17 +1859,10 @@ class TestItHoldsSixtyFramesASecond:
         finally:
             painter.end()
             scope.set_decay(was)
-        # Against the budget the pane is actually working to, not against
-        # a sixtieth of a second.
-        #
-        # Those stopped being the same thing. The pane measures the scene
-        # and picks a resolution, and at or below the window's own it is
-        # allowed a thirtieth rather than a sixtieth - because below one
-        # buffer pixel per point the picture goes soft, and for scenes
-        # like these soft is worse than thirty frames a second. A test
-        # demanding sixteen milliseconds of a pane deliberately spending
-        # twenty-four is testing something nobody asked for, and a build
-        # runner failed exactly there: 19.8 ms against 17.2.
+        # Against the budget the pane is working to, not a sixtieth of a
+        # second: at or below the window's own resolution it allows itself a
+        # thirtieth, since below one buffer pixel per point the picture goes
+        # soft.
         from attachment_widgets import PostProcess, Sharpness
 
         budget = ((Sharpness.SOFT_MS + PostProcess.BUDGET_MS)
@@ -1995,13 +1870,10 @@ class TestItHoldsSixtyFramesASecond:
         assert each < budget, (
             f"the scope takes {each:.1f} ms a frame at a decay of {decay}, "
             f"against {budget:.1f} ms for this machine")
-        # And the slow frames, because an average inside the budget with a
-        # stutter every second is what somebody actually notices.
-        #
-        # The ninetieth percentile rather than the worst one: on a shared
-        # build machine a single frame gets descheduled and comes back at
-        # forty milliseconds, which says nothing about this code. Ten per
-        # cent of frames over the budget is a stutter; one is weather.
+        # And the slow frames: an average inside the budget with a stutter
+        # every second is what people notice. The ninetieth percentile, not the
+        # worst, since a shared runner descheduling one frame says nothing
+        # about the code.
         spent.sort()
         ninety = spent[int(len(spent) * 0.9)]
         assert ninety < budget * 1.5, (
@@ -2009,11 +1881,8 @@ class TestItHoldsSixtyFramesASecond:
             f"of {decay}, against {budget:.1f} ms")
 
     def test_the_decay_does_not_change_what_a_frame_costs(self, qtbot):
-        """A screen that fades costs the same whatever it is set to.
-
-        This is the shape of the fix, not just its size: the old drawing
-        was linear in the persistence, so every step of the slider was a
-        step slower, and there was no setting at the top that was not.
+        """A screen that fades costs the same whatever it is set to; redrawn
+        traces cost more at every step of the slider.
         """
         import time
 
@@ -2057,11 +1926,9 @@ class TestItHoldsSixtyFramesASecond:
         spectrum = self._spectrum(qtbot, 1920, 1080)
         spectrum._reveal_changed(0.0)
         image = spectrum.grab().toImage()
-        # The widget keeps its size in full screen, so "nothing drawn" has
-        # to be read off the pixels rather than off the height.
-        # Uniform, rather than any particular colour: whatever the widget's
-        # own background happens to be, a scene that drew would not leave
-        # every corner and the middle identical.
+        # The widget keeps its size in full screen, so "nothing drawn" is read
+        # off the pixels: a scene that drew would not leave every corner and
+        # the middle identical.
         sampled = {image.pixelColor(x, y).rgb()
                    for x, y in ((2, 2), (image.width() - 3, 2),
                                 (2, image.height() - 3),
@@ -2073,14 +1940,8 @@ class TestItHoldsSixtyFramesASecond:
 
 
 class TestTheAnalysisStaysOffTheUiThread:
-    """Five and a half seconds of arithmetic used to run on the UI thread.
-
-    analyse() is a pure-Python FFT over the whole track. It was called
-    from the decoder's finished signal, which Qt delivers on the thread
-    that owns the widgets, so a three minute file froze the window solid -
-    grey, beachballing, indistinguishable from a crash - before anything
-    appeared. The module docstring claimed it ran in a worker thread; it
-    did not.
+    """analyse() is a pure-Python FFT over the whole track and must not run on
+    the UI thread, where a three-minute file froze the window.
     """
 
     def test_analyse_can_be_abandoned_partway(self):
@@ -2114,9 +1975,9 @@ class TestTheAnalysisStaysOffTheUiThread:
 
 
 class TestTheVuScaleIsARealOne:
-    """The marks were eyeballed and the per-cent row was a decibel and a
-    half out. A VU movement deflects in proportion to voltage, which fixes
-    every mark on the face, so they are computed rather than placed."""
+    """A VU movement deflects in proportion to voltage, which fixes every mark
+    on the face, so 0 dB and 100 per cent are computed to the same point.
+    """
 
     def test_zero_db_and_one_hundred_per_cent_are_the_same_point(self):
         import visualizers
@@ -2150,27 +2011,24 @@ class TestTheVuScaleIsARealOne:
 
 class TestTheTunnelIsRound:
     def test_bass_swells_the_rings_rather_than_squashing_them(self):
-        """They were drawn as ellipses, up to 18 per cent flatter on a
-        kick, which read as a mistake beside the circular scenes."""
+        """Circles, not ellipses: up to 18 per cent flatter on a kick read as a
+        mistake.
+        """
         import inspect
 
         import visualizers
 
         source = inspect.getsource(visualizers.by_name("Neon tunnel").paint)
-        # Comments only, stripped: the comment explaining the removal says
-        # the word, and checking the prose passes on the bug it describes.
+        # Comments stripped: the comment explaining the removal says the word.
         code = "\n".join(line.split("#", 1)[0] for line in source.splitlines())
         assert "squash" not in code, "the ellipse squash is back"
         assert "drawEllipse(centre, radius, radius)" in code
 
 
 class TestPaintingCannotTakeTheProcessDown:
-    """An exception out of paintEvent is fatal, not merely wrong.
-
-    Qt catches it, prints it, and carries on with a painter still open on
-    the backing store; the next frame then segfaults. A wrong argument
-    type in the polish pass turned into SIGSEGV that way, and only turned
-    up under a stress run that resized the window to one pixel tall.
+    """An exception out of paintEvent is fatal: Qt prints it and carries on
+    with a painter open on the backing store, and the next frame segfaults.
+    A stress run at one pixel tall found one.
     """
 
     def _spectrum(self, qapp):
@@ -2193,10 +2051,8 @@ class TestPaintingCannotTakeTheProcessDown:
 
         widget = self._spectrum(qapp)
         widget.set_post(True)
-        # Through _paint, not _paint_scene: the crash was the QRect that
-        # _paint takes from the widget meeting a QRectF source rectangle,
-        # so a test that hands _paint_scene a QRectF of its own never sees
-        # it and passes on the bug.
+        # Through _paint, not _paint_scene: the crash was _paint's QRect
+        # meeting a QRectF, which a test passing its own QRectF never sees.
         widget.resize(max(1, size[0]), max(1, size[1]))
         canvas = QPixmap(max(1, size[0]), max(1, size[1]))
         for scene in visualizers.SCENES:
@@ -2234,12 +2090,7 @@ class _Recorder:
 
 
 class TestTheVisualiserControlsFitTheirRow:
-    """They overlapped each other and then ran off the pane.
-
-    The row grows and shrinks with what is selected - the colour button
-    only exists for the meters - and a plain QHBoxLayout lays them out in
-    one line however narrow it gets.
-    """
+    """The row wraps rather than overlapping and running off the pane."""
 
     def test_the_row_wraps_instead_of_overflowing(self, qapp):
         from PySide6.QtWidgets import QPushButton, QWidget
@@ -2263,11 +2114,9 @@ class TestTheVisualiserControlsFitTheirRow:
         host.deleteLater()
 
     def test_it_lays_out_inside_its_margins(self, qapp):
-        """A QLayout subclass insets the rectangle by its own contents
-        margins itself; nothing does it for one. This did not, so every
-        margin set on it was ignored - invisible while they were ten
-        pixels, and obvious the moment the control bar wanted room around
-        its panel for a shadow."""
+        """A QLayout subclass must inset its rectangle by its own contents
+        margins.
+        """
         from PySide6.QtWidgets import QPushButton, QWidget
 
         from attachment_widgets import FlowRow
@@ -2288,8 +2137,9 @@ class TestTheVisualiserControlsFitTheirRow:
         host.deleteLater()
 
     def test_the_height_it_asks_for_includes_its_margins(self, qapp):
-        """Counting them in one place and not the other is how a panel
-        ends up shorter than the things inside it."""
+        """Counted in one place and not the other, a panel is shorter than its
+        contents.
+        """
         from PySide6.QtWidgets import QPushButton, QWidget
 
         from attachment_widgets import FlowRow
@@ -2312,9 +2162,9 @@ class TestTheVisualiserControlsFitTheirRow:
         other.deleteLater()
 
     def test_the_full_screen_bar_is_the_size_of_what_is_in_it(self, qapp):
-        """The panel is drawn inside the widget by the shadow's reach, and
-        the controls have to land inside the panel rather than over its
-        edge or floating above its floor."""
+        """The panel is inset by the shadow's reach, and the controls must land
+        inside it.
+        """
         from PySide6.QtWidgets import QPushButton
 
         from attachment_widgets import (FullScreenSpectrum, Spectrum,
@@ -2369,13 +2219,9 @@ class TestTheVisualiserControlsFitTheirRow:
 
 
 class TestTheTransportKeys:
-    """J back ten seconds, K play or pause, L forward ten.
-
-    In full screen these were dead for a while without anybody noticing:
-    the class had two keyPressEvent methods and the later one, which only
-    knew about Escape, quietly replaced the one that knew about J, K and
-    L. A test that called the method and checked it did not raise passed
-    the whole time, because the surviving method does not raise either.
+    """J back ten seconds, K play or pause, L forward ten. A second
+    keyPressEvent once replaced the first and silenced J, K and L, and a
+    test that only checked the method did not raise passed throughout.
     """
 
     def _pane(self, qapp, tmp_path):
@@ -2459,14 +2305,9 @@ class TestTheTransportKeys:
 
 
 class TestTheControlsAreNeverInsideThePicture:
-    """Reported repeatedly, and missed by every check until now.
-
-    The checks were wrong, not the report. They built an AudioPane on its
-    own instead of the dialog it actually lives in, compared rectangles
-    instead of asking what a click would land on, and never tried the
-    shapes - which is where it happened. A tall shape made the strip
-    demand a height the layout could not give, so the transport and the
-    visualiser row were drawn on top of the scene.
+    """The transport and the visualiser row must never be drawn over the scene.
+    Built in the real dialog, asking what a click would land on, across the
+    shapes: a tall shape once demanded more height than the layout had.
     """
 
     def _viewer(self, qapp, tmp_path):
@@ -2495,12 +2336,8 @@ class TestTheControlsAreNeverInsideThePicture:
 
     @staticmethod
     def _reveal(pane, qapp):
-        """Get the strip to its full height without waiting for a decode.
-
-        Everything here only goes wrong once the strip actually occupies
-        space. Left at zero - which is where it sits until a track has been
-        analysed and played - nothing can overlap anything and the checks
-        pass while the bug is sitting there.
+        """Get the strip to its full height without a decode: at zero height
+        nothing can overlap and the checks pass on the bug.
         """
         from array import array
 
@@ -2549,8 +2386,9 @@ class TestTheControlsAreNeverInsideThePicture:
 
     @pytest.mark.timeout(120)
     def test_every_control_can_actually_be_clicked(self, qapp, tmp_path):
-        """childAt, not a rectangle comparison: a widget can be in the
-        right place and still have something on top of it."""
+        """childAt, not a rectangle comparison: a widget can be in place and
+        covered.
+        """
         from attachment_widgets import Spectrum
 
         dialog = self._viewer(qapp, tmp_path)
@@ -2599,14 +2437,9 @@ class TestTheControlsAreNeverInsideThePicture:
 
 
 class TestTheStripGivesWayWhenThereIsNoRoom:
-    """It used to insist on its height and push the transport off the pane.
-
-    The height was forced by setting the minimum and the maximum to the
-    same number. In a pane too short to hold everything the layout then
-    had nowhere to put the controls and drew them over the scene - the
-    scrub bar inside the picture, unclickable. A widget that can shrink
-    cannot do that, so the minimum is a floor and the maximum is what the
-    shape asks for.
+    """The strip gives way rather than pushing the transport off the pane: the
+    minimum is a floor and the maximum is what the shape asks. With both
+    equal the controls were drawn over the scene.
     """
 
     @staticmethod
@@ -2629,9 +2462,7 @@ class TestTheStripGivesWayWhenThereIsNoRoom:
         host.show()
         spectrum.set_frames([array("f", [0.5] * 32) for _ in range(60)], 20)
         spectrum._reveal_changed(1.0)
-        # activate() runs the layout there and then. Waiting a number of
-        # milliseconds for it was enough on one machine and not on a
-        # slower one; this does not depend on the machine at all.
+        # activate() runs the layout now; a fixed wait depended on the machine.
         layout.activate()
         return host, spectrum
 
@@ -2639,9 +2470,8 @@ class TestTheStripGivesWayWhenThereIsNoRoom:
         _host, spectrum = self._in_a_pane(qtbot, 420)
         assert spectrum.height() == spectrum.HEIGHT
 
-    # Down to a host that can still hold its own minimum content. Below
-    # about 150 nothing fits whatever the strip does, and Qt overlaps
-    # because it has been asked for the impossible.
+    # Down to a host that can still hold its own minimum content; below about
+    # 150 nothing fits.
     @pytest.mark.parametrize("host_height", [320, 260, 200, 170])
     def test_it_never_pushes_its_neighbours_off(self, qtbot, host_height):
         host, spectrum = self._in_a_pane(qtbot, host_height)
@@ -2662,11 +2492,8 @@ class TestTheStripGivesWayWhenThereIsNoRoom:
 
 
 class TestOscilloscopeMusic:
-    """Left against right, which is how a scope draws a picture.
-
-    A record cut for an oscilloscope puts the drawing in the difference
-    between the two channels. Decoding to mono threw it away, so the
-    decode asks for two and the scope can plot one against the other.
+    """Left against right, as a scope draws: a record cut for one puts the
+    picture in the difference between the channels, which mono threw away.
     """
 
     @staticmethod
@@ -2722,11 +2549,8 @@ class TestOscilloscopeMusic:
             f"{max(radii):.2f}")
 
     def test_the_points_are_consecutive_samples(self):
-        """Every sample in the window is part of the drawing.
-
-        The sweep takes every eighth sample, which is fine for a waveform
-        and turns a detailed figure into a scribble. A picture cut at
-        audio rate needs all of them.
+        """Every sample in the window is part of the drawing; every eighth
+        turns a detailed figure into a scribble.
         """
         from array import array
 
@@ -2747,14 +2571,8 @@ class TestOscilloscopeMusic:
             f"samples are being skipped: {sorted(steps)[:5]}")
 
     def test_the_beam_curves_rather_than_taking_corners(self, qapp):
-        """"Smooth out the xxxxxxxxxxxx xxxxx, xxxx xxx xxxxxxxx xxx xxxx
-        xxxxx xxxxx."
-
-        A beam is a physical thing with a mass of electrons in it and a
-        deflection coil that cannot change direction instantly, so it
-        rounds every corner it is asked to draw. Joining the samples with
-        straight lines draws the corners the *signal* asks for and not the
-        ones a scope makes.
+        """A beam rounds the corners it is asked to draw, so the trace is
+        curved rather than joined with straight lines.
         """
         import math
 
@@ -2763,14 +2581,9 @@ class TestOscilloscopeMusic:
         import visualizers
 
         scope = visualizers.by_name("Oscilloscope")
-        # A square, walked round with eight samples a side: a corner
-        # every eighth sample, which is the shape of a real figure.
-        #
-        # Not a zig-zag reversing at every sample. Nothing can round that
-        # and nothing should: a signal that changes direction faster than
-        # it is sampled is noise, not a figure, and the smoothing only
-        # claims to draw the corners a beam makes rather than the ones the
-        # samples ask for.
+        # A square walked round with eight samples a side, a corner every
+        # eighth sample. Not a zig-zag reversing every sample: that is noise,
+        # and nothing should round it.
         full = 20000
         corners = ((-full, -full), (full, -full), (full, full), (-full, full))
         trace = []
@@ -2831,11 +2644,8 @@ class TestOscilloscopeMusic:
         assert scope.mode == "X-Y"
 
         state = SpectrumState()
-        # A square, walked round with several samples a side, in the int16
-        # the analysis produces. Several a side rather than four corners
-        # because the beam is drawn as a curve through the samples now,
-        # the way a real one is bent by its own coils - and a curve
-        # through four points is mostly corner.
+        # A square with several samples a side, in the analysis's int16: a
+        # curve through four points is mostly corner.
         full = 32767
         corners = ((-full, -full), (full, -full), (full, full), (-full, full))
         state.vector = []
@@ -2846,17 +2656,16 @@ class TestOscilloscopeMusic:
                 share = step / 8.0
                 state.vector.append(int(x0 + (x1 - x0) * share))
                 state.vector.append(int(y0 + (y1 - y0) * share))
-        # Built in a unit box - the window size and the strobe are a
-        # transform applied when it is drawn, not part of the shape.
+        # Built in a unit box: the window size and the strobe are a transform
+        # applied when drawn.
         path = visualizers.smooth_path(
             scope._points(state.vector, True))
         box = path.boundingRect()
         assert box.width() > 1.7 and box.height() > 1.7, (
             f"the plot is {box.width():.2f} by {box.height():.2f} of a unit "
             f"box, so it is not reaching the corners of the square")
-        # Left against right: at the left edge of the figure the beam
-        # spans the whole height, which a sweep against a clock never
-        # does - there, x is the clock and can only go one way.
+        # Left against right: at the figure's left edge the beam spans the
+        # whole height, which a sweep never does.
         at = [path.pointAtPercent(n / 200.0) for n in range(201)]
         left = [point.y() for point in at if point.x() < -0.7]
         assert left and max(left) - min(left) > 1.2, (
@@ -2865,8 +2674,9 @@ class TestOscilloscopeMusic:
         scope.set_mode("Sweep")
 
     def test_the_shape_does_not_depend_on_the_window(self):
-        """So a resize is a transform rather than a rebuild, and so the
-        screen the trace is burned into can be kept between frames."""
+        """A resize is a transform, so the screen the trace is burned into can
+        be kept between frames.
+        """
         import visualizers
 
         scope = visualizers.by_name("Oscilloscope")
@@ -2878,8 +2688,7 @@ class TestOscilloscopeMusic:
             assert once.elementAt(index).x == twice.elementAt(index).x
 
     def test_the_screen_is_kept_between_frames(self, qapp):
-        """The decay is a screen that fades, not a stack of redrawn
-        traces - which is what made the top of the slider unusable."""
+        """The decay is a screen that fades, not a stack of redrawn traces."""
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QPainter, QPixmap
 
@@ -2901,9 +2710,9 @@ class TestOscilloscopeMusic:
         assert scope._screen.size().width() == 200
 
     def test_a_repeated_trace_is_not_burned_in_twice(self, qapp):
-        """A paused track hands back the same trace every frame. Drawing
-        it again each time piles brightness up until the screen is a
-        solid disc."""
+        """A paused track hands back the same trace every frame; drawing it
+        each time would pile brightness into a solid disc.
+        """
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QPainter, QPixmap
 
@@ -2966,12 +2775,8 @@ class TestTheVisualiserWindowIsItsOwnThing:
 
 
 class TestNothingRunsOffTheEdge:
-    """The pane has to fit the width it is given, not the one it wants.
-
-    The container holding the wrapping row reported a six hundred pixel
-    minimum width, so a narrower window could not shrink it: the layout
-    kept the width it wanted and everything past the right edge was cut,
-    mid-word in the case of the decay label.
+    """The pane fits the width it is given: the wrapping row's container once
+    claimed a 600-pixel minimum, and a narrower window cut the controls off.
     """
 
     def test_the_control_row_has_no_width_of_its_own(self, qapp):
@@ -3057,14 +2862,10 @@ class TestNothingRunsOffTheEdge:
 
 
 class TestTheDialsMatchTheReference:
-    """The face is drawn to numbers taken off the reference photograph,
-    not to taste. These check the numbers are still the ones measured.
-
-    Its cell is 562 by 339 and its arc runs from (55,192) to (500,192)
-    over an apex at y=75: a chord of 445 rising 117, which is a radius of
-    270 and a sweep of 111 degrees. Everything drawn fits in 499 by 269
-    of that cell - 1.85 radii by 1.00 - and the centre of the arc sits
-    1.12 radii below the top of it.
+    """The face is drawn to numbers taken off the reference photograph. Its
+    cell is 562 by 339 and its arc runs from (55,192) to (500,192) over an
+    apex at y=75: radius 270, sweep 111 degrees. The drawing fits 1.85 radii
+    by 1.00, and the arc's centre is 1.12 radii below its top.
     """
 
     #: What the reference measures, in radii.
@@ -3076,24 +2877,24 @@ class TestTheDialsMatchTheReference:
         assert abs(abs(visualizers.Meters.SWEEP) - self.REF_SWEEP) <= 3.0
 
     def test_the_face_is_as_wide_and_as_short_as_the_reference(self):
-        """Being too wide is what made the faces small: the radius is
-        whichever dimension runs out first, so asking for a quarter more
-        width than the face uses throws that quarter away."""
+        """Too wide makes the faces small: the radius is whichever dimension
+        runs out first.
+        """
         import visualizers
 
         meters = visualizers.Meters
         assert abs(meters.FACE_WIDE - self.REF_WIDE) < 0.18, (
             f"{meters.FACE_WIDE} radii wide against {self.REF_WIDE}")
-        # The drawn height is from the top of the dB numbers down to the
-        # frequency, not down to the hinge - nothing is drawn at the hinge.
+        # From the top of the dB numbers to the frequency, not to the hinge,
+        # where nothing is drawn.
         drawn = meters.FACE_DROP - meters.LABEL_AT
         assert abs(drawn - self.REF_TALL) < 0.15, (
             f"{drawn:.2f} radii of drawing against {self.REF_TALL}")
 
     def test_the_shape_it_asks_for_is_the_shape_it_draws(self):
-        """The reserved box and the drawing measure against the same
-        constants, so they cannot disagree - which they did, by a factor
-        of 1.76 in height."""
+        """The reserved box and the drawing use the same constants, so they
+        cannot disagree.
+        """
         import visualizers
 
         meters = visualizers.Meters
@@ -3102,9 +2903,7 @@ class TestTheDialsMatchTheReference:
             "a VU face is much wider than it is tall")
 
     def test_there_is_no_hub(self):
-        """The reference shows none: the needle runs off the bottom of
-        the face and the lowest thing on it is the frequency. Drawing one
-        put the face's bottom edge a sixth of a radius lower."""
+        """No hub: the reference's needle runs off the bottom of the face."""
         import inspect
 
         import visualizers
@@ -3113,8 +2912,9 @@ class TestTheDialsMatchTheReference:
         assert "drawEllipse" not in source, "a hub is being drawn"
 
     def test_the_needle_is_a_radius_of_its_own_arc(self):
-        """Hinging it below the centre made it half as long again and
-        dragged the whole face taller to fit."""
+        """Hinged at the centre: below it, the needle was half as long again
+        and the face taller.
+        """
         import visualizers
         from PySide6.QtCore import QRectF
 
@@ -3133,26 +2933,20 @@ class TestTheDialsMatchTheReference:
             radius = g["radius"]
             shapes.append(((g["centre"].y()) / radius,
                            (g["centre"].x()) / radius))
-        # The centre sits in the same place relative to the radius
-        # whatever the cell is, or the face is being stretched.
+        # The centre sits in the same place relative to the radius whatever the
+        # cell, or the face is stretched.
         first = shapes[0]
         for other in shapes[1:]:
             assert abs(other[0] - first[0]) < 0.05, shapes
 
 
 class TestTheDialsMarkingsMatchTheReference:
-    """Not the size of the face - the marks on it.
-
-    Every number here was measured off the reference rather than chosen.
-    It is a compressed still from a video, so there is a floor on how
-    exactly anything can be read off it; these are the things that could
-    be read clearly, and each one was wrong before it was measured.
+    """The marks on the face, measured off the reference (a compressed video
+    still, so only what could be read clearly).
     """
 
     def test_the_arc_is_as_thin_as_the_reference_s(self):
-        """0.020 radii, which on its 270 pixel radius is 5.3 px. It was
-        drawn at 0.030, and the run above 0 dB at 0.052 - one and a half
-        to two and a half times too heavy."""
+        """0.020 radii, 5.3 px on the reference's 270 px radius."""
         import visualizers
 
         meters = visualizers.Meters
@@ -3161,9 +2955,9 @@ class TestTheDialsMarkingsMatchTheReference:
             "the red zone is heavier than the rest, but only a little")
 
     def test_the_ticks_reach_outward_past_the_arc(self):
-        """Measured at -3, 0, +1, +2 and +3 the ink continues to about
-        1.05 radii and there is none inside. They were drawn from 0.84 to
-        1.00 - the wrong side of the line they mark."""
+        """The ticks run outward to about 1.05 radii, with nothing inside the
+        arc.
+        """
         import visualizers
 
         meters = visualizers.Meters
@@ -3172,9 +2966,9 @@ class TestTheDialsMarkingsMatchTheReference:
         assert meters.TICK_OUT - meters.TICK_IN < 0.15
 
     def test_the_dots_are_few_and_outside(self):
-        """One per decibel from -20 up is twenty-four marks crowded into
-        the left half, which reads as a smear. The reference has eight or
-        nine, evenly spread, and they sit outside the arc."""
+        """Eight or nine ticks, evenly spread outside the arc; one per decibel
+        crowded the left half.
+        """
         import visualizers
 
         meters = visualizers.Meters
@@ -3194,11 +2988,10 @@ class TestTheDialsMarkingsMatchTheReference:
             assert nearest > 0.015, f"a dot sits on a mark at {dot:.3f}"
 
     def test_the_numbers_ask_for_a_squarish_face(self, qapp):
-        """The reference's "0" is a rounded rectangle rather than a
-        circle - the Eurostile family. None of these is on every machine,
-        so it is a list in order of preference rather than one name, and
-        at least one of them has to be here or the face silently falls
-        back to whatever the system default is."""
+        """The reference's "0" is a rounded rectangle (the Eurostile family).
+        The face is shipped, so it does not fall back to the system's
+        default.
+        """
         import visualizers
         from PySide6.QtGui import QFontDatabase
 
@@ -3219,14 +3012,14 @@ class TestTheDialsMarkingsMatchTheReference:
         assert "setAlphaF(0.62)" in source or "inside.setAlphaF" in source
 
     def test_the_dB_numbers_clear_the_arc(self):
-        """At 1.07 radii their bottoms sat on the arc rather than above
-        it, because this face's numerals are a shade taller than the
-        reference's."""
+        """The dB numbers sit clear of the arc: this face's numerals are a
+        shade taller than the reference's.
+        """
         import visualizers
 
         meters = visualizers.Meters
-        # Half the numeral's height below its centre has to clear the
-        # arc's outer edge.
+        # Half the numeral's height below its centre clears the arc's outer
+        # edge.
         bottom = meters.DB_AT_R - meters.DB_TYPE * 0.75
         assert bottom > meters.ARC_AT + meters.ARC_STROKE / 2, (
             f"the numbers reach {bottom:.3f} and the arc's top edge is at "
@@ -3234,28 +3027,18 @@ class TestTheDialsMarkingsMatchTheReference:
 
 
 class TestTheSceneIsDrawnAtTheScreensResolution:
-    """Full screen used to be softer than the window it replaced.
-
-    The whole rule was one number - 600,000 pixels, above which the scene
-    was drawn smaller and stretched - and the number was written on one
-    machine and applied to every screen. Measured against the window's own
-    logical resolution it came out at 0.54 of it at 1920x1080 and 0.64 at
-    a retina full screen, while the same rule in a windowed strip drew at
-    1.81 times logical. That difference is what "fuzzy at full screen"
-    was: not a blur, a genuinely smaller picture stretched up.
-
-    So these are about the floor. Below one buffer pixel per point the
-    picture goes soft, and for scenes like these soft is worse than
-    thirty frames a second.
+    """Full screen must be at least as sharp as the window. A fixed
+    600,000-pixel budget drew 1920x1080 at 0.54 of its logical resolution
+    while a windowed strip got 1.81 times. Below one buffer pixel per point
+    the picture goes soft, which is worse than thirty frames a second.
     """
 
     @staticmethod
     def _settled(governor, cost_at, ratio=2.0, pixels=8_294_400, frames=900,
                  scene=object()):
-        """Run the governor against a cost model until it stops moving.
-
-        ``cost_at(scale)`` says what a frame costs at that scale. Returns
-        the scale it settled on and how many times it changed its mind.
+        """Run the governor against a cost model until it settles.
+        ``cost_at(scale)`` is a frame's cost at that scale; returns the
+        scale and how often it changed its mind.
         """
         moves, last = 0, None
         for _ in range(frames):
@@ -3269,8 +3052,7 @@ class TestTheSceneIsDrawnAtTheScreensResolution:
     def test_a_scene_that_can_hold_it_is_never_drawn_softer_than_the_window(self):
         from attachment_widgets import Sharpness
 
-        # Comfortable at logical (0.5 of a 2x screen's pixels), too slow
-        # above it. The old rule would have put this at 0.27.
+        # Comfortable at logical (0.5 of a 2x screen), too slow above it.
         settled, _ = self._settled(
             Sharpness(), lambda s: 3.0 * (s / 0.5) ** 3)
         assert settled >= 0.5, (
@@ -3278,8 +3060,9 @@ class TestTheSceneIsDrawnAtTheScreensResolution:
             f"window's own resolution")
 
     def test_a_scene_that_cannot_hold_it_gives_up_resolution(self):
-        """The floor is a preference, not a promise. Something has to give
-        when even a thirtieth of a second will not cover it."""
+        """The floor gives way when even a thirtieth of a second will not cover
+        it.
+        """
         from attachment_widgets import Sharpness
 
         settled, _ = self._settled(
@@ -3287,8 +3070,9 @@ class TestTheSceneIsDrawnAtTheScreensResolution:
         assert settled < 0.5, f"stayed at {settled} while costing 90 ms"
 
     def test_below_the_floor_it_buys_frames_before_it_buys_pixels(self):
-        """A scene costing 15 ms at logical keeps the resolution and takes
-        the longer frame, rather than going soft to stay at sixty."""
+        """A scene costing 15 ms at logical keeps the resolution and takes the
+        longer frame rather than going soft.
+        """
         from attachment_widgets import Sharpness
 
         governor = Sharpness()
@@ -3299,10 +3083,10 @@ class TestTheSceneIsDrawnAtTheScreensResolution:
             "second, which fills the event queue rather than drawing them")
 
     def test_a_cold_first_frame_is_not_believed(self):
-        """The first frame of a scene is the fonts and the tiles being
-        built, not the scene. The Equaliser's first came in at 64 ms
-        against the 1.4 it settles at, and one reading like that was
-        enough to convince the governor for good."""
+        """A scene's first frame is fonts and tiles being built (the
+        Equaliser's: 64 ms against 1.4 settled) and must not convince the
+        governor.
+        """
         from attachment_widgets import Sharpness
 
         governor = Sharpness()
@@ -3314,21 +3098,14 @@ class TestTheSceneIsDrawnAtTheScreensResolution:
             f"settled at {scale} because of the first six frames")
 
     def test_it_does_not_walk_between_two_rungs_for_ever(self):
-        """A rung it has measured is not guessed at again.
-
-        This is Waterfall, whose cost no tidy formula predicts: 14 ms at
-        960x540 and 24 at 1267x713, where anything smooth says 18. The
-        rung below looks cheap enough to climb out of and the rung above
-        cannot be held, so a governor that re-guesses each time steps up,
-        finds out, steps down, forgets, and does it again for as long as
-        the scene is on screen.
+        """A measured rung is not guessed at again. Waterfall costs 14 ms at
+        960x540 and 24 at 1267x713, where a smooth model says 18;
+        re-guessing stepped up, found out, stepped down and forgot, forever.
         """
         from attachment_widgets import Sharpness
 
-        # Read off the ladder rather than written out, so that changing
-        # the rungs cannot quietly turn this into a test of nothing: the
-        # cliff is always between the bottom rung and the one above it,
-        # wherever those are.
+        # Read off the ladder, so changing the rungs cannot make this test
+        # nothing.
         rungs = Sharpness()._rungs(2.0)
         bottom, above = rungs[-1], rungs[-2]
         cliff = {bottom: 7.0}
@@ -3346,15 +3123,9 @@ class TestTheSceneIsDrawnAtTheScreensResolution:
             f"it settled at, was too slow: it has {governor._seen}")
 
     def test_a_scene_too_slow_for_the_screen_really_is_stepped_down(self, qtbot):
-        """The real pane, not the cost model, with a scene that is really
-        slow - and slow in the way a scene is, which is in proportion to
-        how many pixels it is asked for.
-
-        This is also what the timing tests below rely on. They used to
-        draw three frames and start the clock, which was right while the
-        resolution was a fixed number; now the first frames are drawn at a
-        resolution the pane is about to leave, and a build runner failed
-        on exactly that.
+        """The real pane with a scene slow in proportion to its pixels. The
+        timing tests below rely on this: the first frames are drawn at a
+        resolution the pane is about to leave.
         """
         import time
 
@@ -3364,9 +3135,9 @@ class TestTheSceneIsDrawnAtTheScreensResolution:
             name, blurb, sharp_pixels = "Slow", "too slow", 0
 
             def paint(self, painter, rect, state):
-                # Charged by area, the way an antialiased scene is: thirty
-                # milliseconds at the screen's own resolution, which is
-                # over the frame however long a frame is allowed to be.
+                # Charged by area, as an antialiased scene is: thirty
+                # milliseconds at the screen's own resolution, over any frame
+                # budget.
                 scale = abs(painter.combinedTransform().m11()) or 1.0
                 time.sleep(0.030 * scale * scale)
 
@@ -3393,12 +3164,9 @@ class TestTheSceneIsDrawnAtTheScreensResolution:
 
 
 class TestAWideLineIsDrawnTheQuickWay:
-    """Qt has a fast path for one-pixel lines and nothing above it.
-
-    Measured on a thousand antialiased curve segments at 1080p: 2.21 ms at
-    pen width 1.0, 58.00 ms at 1.01. That cliff is why the scenes were
-    only ever cheap while they were being drawn small - a 2.4 unit pen in
-    a quarter-size buffer is 1.3 real pixels, under the cliff.
+    """Qt has a fast path for one-pixel lines and nothing above it: a thousand
+    antialiased curves at 1080p took 2.21 ms at pen width 1.0 and 58.00 ms
+    at 1.01.
     """
 
     @staticmethod
@@ -3454,18 +3222,11 @@ class TestAWideLineIsDrawnTheQuickWay:
                 count += 3
         return total / max(1, count)
 
-    #: Widths to check, and the painter scale to check them at. The
-    #: scaled rows are the ones that matter: a pen of width 1.2 in a
-    #: painter scaled by two is 2.4 *real* pixels, and everything here -
-    #: whether to stack at all, how far apart, how faint - is a statement
-    #: about real pixels. Read in painter units instead, the offsets come
-    #: out twice as far apart as they should and the line is drawn half
-    #: again as wide as it was asked for.
-    #:
-    #: 5.0 and 8.0 are past what a ring of hairlines can cover, so they
-    #: are drawn with a real pen. They are here because the first version
-    #: drew them with as much of the ring as fitted, which is a thinner
-    #: line rather than a cheaper one: 47 per cent of the ink at 5.0.
+    #: Widths to check, and the painter scale. The scaled rows matter: a width
+    #: of 1.2 in a painter scaled by two is 2.4 real pixels, and the stacking
+    #: is about real pixels. 5.0 and 8.0 are beyond a ring of hairlines and use
+    #: a real pen; a partial ring drew a thinner line (47 per cent of the ink
+    #: at 5.0).
     SWEEP = [(1.4, 1.0), (2.0, 1.0), (2.4, 1.0), (3.2, 1.0), (5.0, 1.0),
              (8.0, 1.0), (1.2, 2.0), (1.6, 2.0), (2.4, 2.0), (0.8, 2.0)]
 
@@ -3491,17 +3252,15 @@ class TestAWideLineIsDrawnTheQuickWay:
             f"for {width} units at a painter scale of {scale}")
 
     def test_a_line_already_thin_enough_is_drawn_straight(self):
-        """No stacking where there is nothing to gain: a pen under a pixel
-        is already on the fast path, and passing it through the stacker
-        would only make it fainter."""
+        """No stacking under a pixel: that pen is already on the fast path."""
         import visualizers
 
         assert visualizers._hair_spots(0.0) == ((0.0, 0.0),)
 
     def test_a_line_too_thick_to_stack_is_drawn_with_a_real_pen(self):
-        """The backstop, and it has to be all or nothing: a ring cut off
-        where it stopped fitting draws a line as wide as the last ring
-        that fitted."""
+        """All or nothing: a ring cut off where it stopped fitting draws a
+        thinner line.
+        """
         import visualizers
 
         assert visualizers._hair_spots(2.0) == ()
@@ -3509,15 +3268,10 @@ class TestAWideLineIsDrawnTheQuickWay:
 
 
 class TestTheKeysThatPlayIt:
-    """Numbers for scenes, S for the strobe, A and D for what it hears,
-    M for nothing at all, and F for the strobe by hand.
-
-    Everything here goes through the pane's own controls rather than
-    straight at the widget, because a key that changes the picture and
-    leaves the box in front of it saying something else is worse than no
-    key. The transport keys were dead in full screen for a while and a
-    test that only checked nothing raised passed the whole time, so none
-    of these check that nothing raised.
+    """Numbers for scenes, S for the strobe, A and D for what it hears, M for
+    nothing, and the hand-strobe key. Each goes through the pane's own
+    controls, so the boxes show what is happening, and each test checks the
+    effect, not merely that nothing raised.
     """
 
     @staticmethod
@@ -3530,12 +3284,7 @@ class TestTheKeysThatPlayIt:
 
     @staticmethod
     def _feed(spectrum):
-        """Something to draw, so the frame loop actually runs.
-
-        Without it ``_tick`` returns before it reaches the strobe at all -
-        there is no row to interpolate - and a test of what the strobe
-        does measures nothing.
-        """
+        """Something to draw, so the frame loop reaches the strobe."""
         from array import array
 
         import attachment_audio
@@ -3579,8 +3328,8 @@ class TestTheKeysThatPlayIt:
             assert pane.scene_box.currentText() == visualizers.SCENES[index].name
 
     def test_a_number_past_the_last_scene_does_nothing(self, qtbot):
-        """There are nine number keys and eight scenes, so one of them
-        lands past the end of the list."""
+        """Nine number keys and fewer scenes, so one key lands past the list.
+        """
         import visualizers
         from PySide6.QtCore import Qt as _Qt
 
@@ -3665,11 +3414,8 @@ class TestTheKeysThatPlayIt:
 
     @staticmethod
     def _flash_key():
-        """Whichever key the pane says flashes by hand.
-
-        Read rather than written out. These used to name F, which was also
-        the key that leaves full screen, and naming it again would hide the
-        same clash next time.
+        """Whichever key the pane says flashes by hand, read rather than
+        written out, so a clash with another key cannot hide.
         """
         from PySide6.QtCore import Qt as _Qt
 
@@ -3696,9 +3442,9 @@ class TestTheKeysThatPlayIt:
         assert pane.spectrum._state.hit == 0.0, "the light stayed on"
 
     def test_reaching_for_the_strobe_switches_it_on(self, qtbot):
-        """Pressing the strobe key with the strobe off used to do nothing
-        at all, because the tick box is what the scenes ask before they
-        light up."""
+        """The strobe key ticks the strobe on: the scenes ask the tick box
+        before they light up.
+        """
         from PySide6.QtCore import Qt as _Qt
 
         pane, window = self._full(qtbot)
@@ -3708,8 +3454,9 @@ class TestTheKeysThatPlayIt:
         assert pane.spectrum._state.strobe
 
     def test_holding_a_key_down_is_not_a_stream_of_presses(self, qtbot):
-        """The keyboard repeats a held key at its own rate. A held strobe
-        that switches itself off thirty times a second is a strobe."""
+        """The keyboard repeats a held key; a held light must not switch itself
+        off at that rate.
+        """
         from PySide6.QtCore import QEvent, Qt as _Qt
         from PySide6.QtGui import QKeyEvent
 
@@ -3733,8 +3480,9 @@ class TestTheKeysThatPlayIt:
         assert pane.position.value() < 120_000
 
     def test_the_bar_says_what_the_keys_did(self, qtbot):
-        """A key that changes the picture and leaves the box in front of
-        it saying something else is worse than no key."""
+        """A key that changes the picture must change the box in front of it
+        too.
+        """
         from PySide6.QtCore import Qt as _Qt
         from PySide6.QtWidgets import QCheckBox, QComboBox
 
@@ -3760,21 +3508,16 @@ class TestTheKeysThatPlayIt:
 
 
 class TestTheSunInTheVaporwaveScene:
-    """"Xxx xxxxxxxxxx xxxx xx xxxxx xx xxx xxx look off."
-
-    They were. Each was drawn from one edge of the sun's *bounding box*
-    to the other, so they carried on out past the glow and lay across the
-    skyline as dark rectangles. And there was nothing for them to belong
-    to: the sun was a soft radial glow with no edge anywhere, so bars
-    across it could only read as rectangles on top of the picture.
+    """The bars across the vaporwave sun stay inside the disc. Drawn across its
+    bounding box, they ran past the glow over the skyline, and a glow with
+    no edge left them nothing to belong to.
     """
 
     W, H = 900, 520
     HORIZON = 280.0
     BASS, FLASH = 0.5, 0.0
-    #: A gap is painted at alpha 225 over whatever is behind it, so where
-    #: there is one the pixel is nearly the gap's own near-black. The glow
-    #: only ever adds light, so nothing else in this scene gets near it.
+    #: A gap is painted at alpha 225, so its pixels are near-black; the glow
+    #: only adds light.
     DARK = 70
 
     def _drawn(self, bass=None, flash=None):
@@ -3786,10 +3529,8 @@ class TestTheSunInTheVaporwaveScene:
         scene = visualizers.by_name("Vaporwave city")
         image = QImage(self.W, self.H,
                        QImage.Format.Format_ARGB32_Premultiplied)
-        # A flat background brighter than any gap and a colour nothing in
-        # the sun is near, so "dark here" can only mean a gap. Plain green
-        # was too dark: averaged over the channels it came out under the
-        # threshold, and every untouched pixel read as a bar.
+        # A background brighter than any gap and unlike the sun's colours, so
+        # dark can only mean a gap. Plain green averaged under the threshold.
         image.fill(QColor(60, 200, 60))
         painter = QPainter(image)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -3819,13 +3560,8 @@ class TestTheSunInTheVaporwaveScene:
         return runs
 
     def test_no_bar_reaches_past_the_edge_of_the_sun(self):
-        """The whole complaint: each bar ran the full width of the sun's
-        bounding box, so above and below the middle of the disc it carried
-        on out past the glow and lay across the skyline.
-
-        The glow is allowed out there - that is what makes it a sunset
-        rather than a circle on a background - so this asks only where the
-        *dark* is, and the dark is only ever a gap.
+        """Each bar stays within the disc. The glow may spill past it, so only
+        where the dark is matters, and the dark is only ever a gap.
         """
         import math
 
@@ -3862,25 +3598,23 @@ class TestTheSunInTheVaporwaveScene:
             f"the bar nearest the horizon is {lowest}px and the highest is "
             f"{highest}px, which is not a gradient")
 
-    #: The top of the disc that has to stay unbroken, as a fraction of
-    #: the radius. A number of its own on purpose: reading BAR_TOP here
-    #: and checking above it is a test that moves wherever the code moves,
-    #: and it passed with the bars running the whole way up.
+    #: The top of the disc that stays unbroken, as a fraction of the radius: a
+    #: number of its own, since reading BAR_TOP would move with the code.
     CAP = 0.92
 
     def test_the_top_of_the_sun_is_whole(self):
         _scene, image, radius = self._drawn()
         cap = self.HORIZON - radius * self.CAP
-        # From a little below the very top, where the disc's own
-        # antialiased edge against the background is dark for a pixel.
+        # From just below the top, where the disc's antialiased edge is dark
+        # for a pixel.
         runs = self._bar_runs(image, self.W // 2,
                               self.HORIZON - radius + 4, cap, self.DARK)
         assert runs == [], f"the cap is cut by {len(runs)} bars"
 
     def test_the_sun_has_an_edge_rather_than_fading_away(self):
-        """A glow with no edge is what left the bars nothing to belong
-        to. Just inside the top of the disc is bright; just outside is
-        the sky."""
+        """The disc has an edge: just inside its top is bright, just outside is
+        sky.
+        """
         _scene, image, radius = self._drawn()
         centre = self.W // 2
         inside = image.pixelColor(centre, int(self.HORIZON - radius) + 4)
@@ -3892,15 +3626,9 @@ class TestTheSunInTheVaporwaveScene:
             f"different, so the disc has no edge")
 
     def test_a_flash_flares_it_rather_than_inflating_it(self):
-        """The strobe belongs to the sun in this scene - but it used to
-        belong to the sun's *radius*, which grew by 0.85 of the horizon in
-        the single frame a hit lands on and sprang back over the six after
-        it. That is what "xxx xxxxxxxxx xxx xx xxxx xx xxxxxxx xxx xxxxxx
-        xxxxxxx, xx xxxx xxxxx xxxx xxx xx xxxx xx xxxxxx xxxxxxxx" was.
-
-        A flare is light. The disc may swell a little - a real one does,
-        because the glow spills over its edge - and the rest of it has to
-        arrive as brightness.
+        """The vaporwave sun's strobe is light, not size: its radius used to
+        grow by 0.85 of the horizon on a hit and spring back. The disc may
+        swell a little; the rest arrives as brightness.
         """
         import visualizers
 
@@ -3911,30 +3639,20 @@ class TestTheSunInTheVaporwaveScene:
             f"a full strobe takes the sun from {quiet:.0f} to {hit:.0f}, "
             f"which is a size change rather than a flare")
 
-        # In the air *above* the disc, where only the glow reaches. Not
-        # over the disc itself: the sun does swell a little, so a brighter
-        # region there can be a bigger sun rather than a brighter one, and
-        # measuring it that way passed with the brightening taken out. Not
-        # over the whole frame either - the sun covers a sixth of this
-        # picture, so doubling it moves the total by seven per cent.
+        # In the air above the disc, where only the glow reaches: over the disc
+        # a bigger sun reads as a brighter one, and the whole frame dilutes it.
         centre = self.W // 2
 
         def ink(drawn):
-            # Each sampled against its *own* radius, at the same fraction
-            # of it. The glow is drawn at 1.55 radii, so it grows with the
-            # disc: a band at a fixed distance gets brighter when the sun
-            # swells, whether or not anything brightened, and measuring it
-            # that way passed with the brightening taken out.
+            # Each sampled at the same fraction of its own radius: the glow
+            # grows with the disc, so a fixed distance brightens when the sun
+            # swells.
             _scene, image, reach = drawn
             rows = range(int(self.HORIZON - reach * 1.45),
                          int(self.HORIZON - reach * 1.25))
             columns = range(int(centre - reach * 0.3),
                             int(centre + reach * 0.3))
-            # The mean, not the total. The region is measured in radii, so
-            # a sun a sixth wider is sampled over a third more pixels and
-            # the sum rises by a third with nothing having brightened at
-            # all - which is how this passed with every flash term taken
-            # out of the glow.
+            # The mean, not the total: a wider sun is sampled over more pixels.
             seen = [sum(image.pixelColor(x, y).getRgb()[:3])
                     for y in rows for x in columns]
             return sum(seen) / max(1, len(seen))
@@ -3946,8 +3664,9 @@ class TestTheSunInTheVaporwaveScene:
             f"{lit / max(1, dark):.2f} times as bright")
 
     def test_the_flare_is_smoothed_before_it_reaches_the_sun(self):
-        """One frame at full height and five coming down is a glitch, not
-        a flash. The same envelope Ambience uses."""
+        """One frame at full height and five coming down is a glitch; this is
+        the envelope Ambience uses.
+        """
         import visualizers
         from attachment_widgets import SpectrumState
 
@@ -3965,9 +3684,8 @@ class TestTheSunInTheVaporwaveScene:
             f"it was {reached[0]:.2f} on the first frame and past three "
             f"quarters by frame {frames}")
 
-        # And the scene has to actually put the hit through it. The
-        # envelope existing proves nothing: paint() reached past it for
-        # the raw step for as long as this was written the other way.
+        # And the scene must put the hit through it: the envelope existing
+        # proves nothing.
         scene._bloom = 0.0
         state.levels = [0.4] * 48
         state.hit = 1.0
@@ -3997,14 +3715,9 @@ class TestTheSunInTheVaporwaveScene:
 
 
 class TestTheStrobeInAmbienceIsSmooth:
-    """"Xxxxxx xxxxxx xxxxxx xxxxxxx xxx xxxxxxxx."
-
-    The hit every scene is handed is a step: full height in one frame,
-    then a linear decay over six. That is right for a scene made of bars.
-    Ambience is made of long curves, and it put the step straight into
-    their geometry - the ribbons jumped half their height outwards and
-    snapped back inside a tenth of a second, which reads as the scene
-    glitching rather than as a beat.
+    """Ambience's strobe. The hit every scene is handed is a step (full in one
+    frame, gone in six), right for bars; put straight into Ambience's long
+    curves it made the ribbons jump and snap back.
     """
 
     W, H = 360, 200
@@ -4072,19 +3785,14 @@ class TestTheStrobeInAmbienceIsSmooth:
             shots.append(self._frame(scene, state))
         return shots
 
-    #: Where the beat lands in the run, so the frames before it are a
-    #: sample of what an ordinary frame costs the picture.
+    #: Where the beat lands in the run, so the frames before it show an
+    #: ordinary frame's cost.
     BEAT = 5
 
     def test_the_light_comes_up_over_several_frames_and_not_in_one(self):
-        """Not "the beat is small" - a beat is meant to be seen, and in a
-        scene this still a quiet frame moves the picture by 0.7 of one
-        channel step, so anything visible is thirty times a quiet frame
-        and always will be.
-
-        What makes it smooth is that it arrives over several frames
-        instead of all at once. The raw hit is at full height on the frame
-        it lands.
+        """A beat is meant to be seen, and a quiet frame here moves the picture
+        by 0.7 of a channel step; what makes it smooth is arriving over
+        several frames.
         """
         scene, state = self._scene(), self._state(hit=1.0)
         reached = [scene._ease(state) for _ in range(12)]
@@ -4096,19 +3804,10 @@ class TestTheStrobeInAmbienceIsSmooth:
             f"it never gets there: {reached[-1]:.2f} after twelve frames")
 
     def test_it_settles_instead_of_springing_back(self):
-        """What looked wrong was not the beat, it was the frames after it.
-
-        Not how *far* the picture moves - a light that fades over a third
-        of a second has to keep moving, and the field behind it is
-        drifting the whole time anyway. What tells a settle from a spring
-        is whether it goes somewhere or goes out and comes back. So:
-        add up how far the picture travels frame by frame, and compare it
-        with how far it actually ended up from where it started. A settle
-        is a short path to a distant place; a spring is a long path back
-        to nearly the same one.
-
-        Measured on the code this replaces: a path of 92.8 for a net of
-        35.0, a ratio of 2.6. Now 35.5 for 25.3, which is 1.4.
+        """The frames after the beat: a settle goes somewhere, a spring goes
+        out and comes back. So compare the path travelled frame by frame
+        with the net distance. Before: 92.8 for 35.0, a ratio of 2.6. Now
+        35.5 for 25.3, 1.4.
         """
         shots = self._run()
         low, high = self.BEAT + 2, self.BEAT + 16
@@ -4120,9 +3819,9 @@ class TestTheStrobeInAmbienceIsSmooth:
             f"where it started, which is going out and coming back")
 
     def test_the_light_outlasts_the_beat(self):
-        """The hit is gone in seven frames. A strobe that is over before
-        anybody has seen it is not a strobe, so the scene keeps its own
-        envelope and lets it fall away slowly."""
+        """The hit is gone in seven frames, too soon to be seen, so the scene
+        keeps its own slower envelope.
+        """
         scene, state = self._scene(), self._state(hit=1.0)
         scene._ease(state)
         state.hit = 0.0
@@ -4132,16 +3831,9 @@ class TestTheStrobeInAmbienceIsSmooth:
         assert held[-1] < held[0], "it never comes down"
 
     def test_it_lights_the_ribbons_rather_than_moving_them(self):
-        """A scene of long curves shows a beat by brightening, not by
-        changing shape - the same thing the waterfall had to learn.
-
-        With the field behind them turned off, because it brightens with
-        the strobe too and this is a question about the ribbons. Left on,
-        the topmost bright pixel is sometimes a patch of *background* that
-        has just crossed the threshold, which reads as the ribbons having
-        moved half way up the frame. That passed here and failed on a
-        build runner, which is the whole of what is wrong with measuring
-        one thing by looking at another.
+        """Long curves show a beat by brightening, not reshaping. With the
+        background field off: it brightens too, and a background patch
+        crossing the threshold read as the ribbons moving.
         """
         class Nothing:
             def paint(self, *args, **kwargs):
@@ -4185,22 +3877,12 @@ class TestTheStrobeInAmbienceIsSmooth:
 
 
 class TestTheScopesTimeBase:
-    """"Xxx xxxxxx xxx x xxx xxxxx, xxxxx xxx xxx xxxx xxx xxxxx. Xxxx
-    xxxxxx xx xxxx XXX xxxx xxxxxxxx, whether xx xxxxxxxx xx xxxx
-    xxxxxxxxxx, xxx xx xxxxxxxxxxxx xx xxxx xxxx xxxxx."
-
-    The first thing anybody does with a real scope is turn the time base
-    until the figure stands still. Nothing here was doing that. A trace
-    was 512 consecutive samples - about eleven milliseconds - taken once
-    every sixty-seven, and a record written for a scope draws a figure in
-    twenty. So every frame drew between a third and a half of a drawing, a
-    different part each time, and the phosphor stacked four unrelated
-    fragments on top of each other.
-
-    Measured on the record this came from: the figures repeat at 50 Hz
-    over most of it, with passages at 10, 22 and 194. So there is no fixed
-    window that is right - a 1024 sample one is a whole figure at 50 Hz
-    and four of them at 194, which looked worse than what it replaced.
+    """The scope's time base. A real scope's time base is turned until the
+    figure stands still. A trace was 512 samples (eleven milliseconds) taken
+    every sixty-seven, and a scope record draws a figure in twenty, so each
+    frame drew part of a drawing, a different part each time. On the
+    reference record the figures repeat at 50 Hz with passages at 10, 22 and
+    194, so no fixed window is right.
     """
 
     @staticmethod
@@ -4226,9 +3908,8 @@ class TestTheScopesTimeBase:
                                             + 0.7)))
         return pcm, rate
 
-    #: Figure lengths to measure, in samples. Awkward numbers on purpose:
-    #: they fall between the rungs of the coarse search, which is where
-    #: the answer has to be refined rather than rounded.
+    #: Figure lengths, in samples, between the rungs of the coarse search,
+    #: where the answer must be refined rather than rounded.
     LENGTHS = (241, 317, 480, 641, 953, 1201, 1607, 2099)
 
     @staticmethod
@@ -4250,22 +3931,12 @@ class TestTheScopesTimeBase:
 
     @pytest.mark.parametrize("period", LENGTHS)
     def test_it_measures_how_long_one_figure_takes(self, period):
-        """To better than two per cent, and it has to be *one* figure.
-
-        A figure that really repeats lies on top of itself at every
-        multiple of its period, and every one of those fits exactly as
-        well. Taking the best-scoring lag therefore picks whichever
-        multiple a floating point comparison happens to favour: a figure
-        of 953 samples came back as 2859 and one of 241 as 1687, which
-        draw three figures and seven. The shortest lag that is as good as
-        the best is taken instead.
-
-        Two per cent is also what makes the refinement worth its cost. The
-        coarse search runs on a copy decimated by four and steps its lag
-        geometrically, so near a lag of a thousand its rungs are
-        twenty-five samples apart; looking only a few either side of the
-        winner leaves the answer 2.2 per cent out, and looking across half
-        the gap to the next rung brings it to 1.15.
+        """To better than two per cent, and one figure. A repeating figure fits
+        equally well at every multiple of its period, so the shortest lag as
+        good as the best is taken (the best alone gave 2859 for 953). The
+        coarse search is decimated by four with geometric steps; refining
+        across half the gap to the next rung brings the error from 2.2 to
+        1.15 per cent.
         """
         import attachment_audio
 
@@ -4280,8 +3951,9 @@ class TestTheScopesTimeBase:
                if lag > period * 1.5 else ""))
 
     def test_one_trace_holds_one_figure(self):
-        """Not half of one, which is what 512 samples was, and not four,
-        which is what a fixed 1024 would be at 194 Hz."""
+        """One figure: not half, as 512 samples was, nor four, as a fixed 1024
+        is at 194 Hz.
+        """
         import attachment_audio
 
         for hertz in (25.0, 50.0, 120.0):
@@ -4296,9 +3968,7 @@ class TestTheScopesTimeBase:
                 f"{points}")
 
     def test_the_figure_closes(self):
-        """The test that says it is really one figure: draw it and the
-        beam comes back to where it started. A trace holding half a figure
-        ends half way round; one holding four ends anywhere."""
+        """Draw one figure and the beam comes back to where it started."""
         import attachment_audio
 
         pcm, rate = self._figure(50.0, seconds=2.0)
@@ -4307,8 +3977,7 @@ class TestTheScopesTimeBase:
         count = len(trace) // 2
         start = (trace[0], trace[1])
         end = (trace[(count - 1) * 2], trace[(count - 1) * 2 + 1])
-        # Against the size of the figure, so this is "a twentieth of the
-        # way across the picture" rather than a number of counts.
+        # Against the figure's size: a twentieth of the way across the picture.
         width = max(abs(trace[i * 2]) for i in range(count)) or 1
         height = max(abs(trace[i * 2 + 1]) for i in range(count)) or 1
         apart = max(abs(start[0] - end[0]) / width,
@@ -4318,9 +3987,7 @@ class TestTheScopesTimeBase:
             f"away from where it started")
 
     def test_a_record_with_no_figure_in_it_is_left_alone(self):
-        """Noise, a cymbal, silence: there is no figure, so a span taken
-        from the lag would be an arbitrary number. The fixed window is
-        used, which is what it always was."""
+        """Noise, a cymbal, silence: no figure, so the fixed window is used."""
         import attachment_audio
 
         pcm, rate = self._figure(seconds=1.2, noise=True)
@@ -4334,9 +4001,9 @@ class TestTheScopesTimeBase:
             f"{attachment_audio.VECTOR_POINTS // 2}")
 
     def test_a_slow_figure_is_thinned_and_not_cut_short(self):
-        """A whole figure at half the samples is still the figure; half a
-        figure at every sample is not. This is also what keeps the memory
-        where it was - a trace never holds more points than it used to."""
+        """A whole figure at half the samples is still the figure, and a trace
+        never holds more points than before.
+        """
         import attachment_audio
 
         pcm, rate = self._figure(11.0, seconds=2.4)
@@ -4355,9 +4022,9 @@ class TestTheScopesTimeBase:
             f"a {lag} sample figure")
 
     def test_it_follows_the_rate_as_it_changes(self):
-        """The rate is a property of the passage rather than of the
-        record: measured across one, it went 25 Hz, 200, 132, 123, 25,
-        104, 10.6, 50.5."""
+        """The rate belongs to the passage: across one record it went 25 Hz,
+        200, 132, 123, 25, 104, 10.6, 50.5.
+        """
         from array import array
 
         import attachment_audio
@@ -4369,11 +4036,9 @@ class TestTheScopesTimeBase:
             rows = attachment_audio.vector_traces(pcm, rate, 2)
             return len(rows[len(rows) // 2]) // 2
 
-        # Against what each rate gives on its own, rather than against
-        # each other. A slow figure is *thinned* to stay inside the point
-        # cap, so the number of points is not the span: 25 Hz comes back
-        # as 960 points of every second sample and 100 Hz as 480 of every
-        # one, which is four times the span and twice the points.
+        # Against each rate alone, since a slow figure is thinned to stay under
+        # the point cap: 25 Hz gives 960 points of every second sample, 100 Hz
+        # 480 of every one.
         want_slow, want_fast = alone(slow), alone(fast)
         both = array("h")
         both.extend(slow)
@@ -4392,11 +4057,9 @@ class TestTheScopesTimeBase:
 
 
 class TestTheRaveIsARoom:
-    """"Xxxxxx xxx xxxx xxxxx xx xx xxxxxxxx, xxxx xxxxxxx xxx xxxxxxx."
-
-    It was a floor and a ceiling with the dark showing between them: two
-    planes and nothing at the sides, every line the same weight, and the
-    corridor stopping dead at a rectangle the eye reads as a wall.
+    """The rave is a room: walls as well as floor and ceiling, lines of
+    different weights, and a corridor that does not stop at a flat
+    rectangle.
     """
 
     W, H = 640, 360
@@ -4414,14 +4077,8 @@ class TestTheRaveIsARoom:
 
     @staticmethod
     def _rave():
-        """A new one, not the scene the picker hands round.
-
-        It keeps a world in it - how far down the corridor you are, which
-        rings and beams are still alive - and every other test that paints
-        it moves that world on. Sharing it made these measurements depend
-        on what had run before them, which with a shuffled suite means
-        they depend on nothing at all: the same assertion passed alone and
-        failed in the full run, 1.44 against a bar of 1.5.
+        """A new scene, not the shared one: it keeps a world that every paint
+        moves on, and sharing it made results depend on test order.
         """
         import visualizers
 
@@ -4429,14 +4086,8 @@ class TestTheRaveIsARoom:
 
     @staticmethod
     def _pinned(scene):
-        """Put the room back where it started.
-
-        This scene keeps a world, and it moves it on by the *clock* every
-        time it paints. So two renders taken to compare one thing differ
-        by however long the first took as well - which is not a control,
-        it is a second variable. Measured: removing the walls entirely
-        still "changed" 825 pixels down the left of the room, all of them
-        the corridor having travelled.
+        """Put the room back where it started: the scene moves by the clock
+        every paint, so two renders differ by elapsed time as well.
         """
         scene._z = 4.0
         scene._spin = 1.0
@@ -4470,18 +4121,14 @@ class TestTheRaveIsARoom:
         return total
 
     def test_the_room_has_sides(self):
-        """The change that matters most: it is a room now rather than two
-        planes with the dark showing between them."""
+        """It is a room, not two planes with the dark between them."""
         scene = self._rave()
         walls = self._drawn(scene)
 
-        # The same scene with the two side surfaces taken away, which is
-        # what it used to be. A control rather than a remembered number:
-        # any threshold written down here would be a statement about this
-        # machine's antialiasing.
+        # The same scene without the side surfaces, as a control, rather than a
+        # threshold tied to this machine's antialiasing.
         whole = scene._surfaces
-        # Floor and ceiling only, which is what this was: two planes with
-        # the dark showing between them.
+        # Floor and ceiling only.
         scene._surfaces = lambda lift, span: tuple(
             row for row in whole(lift, span) if row[1] < 0.1)
         try:
@@ -4489,10 +4136,8 @@ class TestTheRaveIsARoom:
         finally:
             scene._surfaces = whole
 
-        # Where the two differ, rather than how much light is in each.
-        # The haze is most of the light in this frame, so a wall drawn
-        # over it moves the total by a sixth and hides in the noise;
-        # counting the pixels it changed does not.
+        # Where the two differ, not how much light each has: the haze dominates
+        # the light, while the changed pixels show the wall.
         def changed(left, right):
             count = 0
             for y in range(int(self.H * 0.36), int(self.H * 0.64), 2):
@@ -4509,23 +4154,14 @@ class TestTheRaveIsARoom:
             assert side > 400, (
                 f"taking the walls away changed {side} pixels down the "
                 f"{name} of the room, which is not a wall")
-        # No control region to compare against: a wall runs from beside
-        # you to the vanishing point, so it is *in* the middle of the
-        # frame as well as at the edges. The first version of this took
-        # the middle as a control and failed once the two walls became one
-        # surface, having been right about the walls the whole time.
+        # No control region: a wall runs from beside you to the vanishing
+        # point.
 
     def test_the_grid_fades_into_the_distance(self):
-        """Drawn at one weight, a grid stops wherever the loop stops. The
-        cross lines are drawn in depth bands so the near ones are heavy
-        and the far ones dissolve.
-
-        Against the same scene with the banding turned off, not against
-        the near floor. Comparing the two ends of the corridor sounds like
-        the same question and is not: the lines bunch up towards the
-        vanishing point and the haze is brightest there, so the far end is
-        the *brighter* of the two whether it fades or not, and a test
-        written that way passed with the fade taken out.
+        """At one weight a grid stops wherever the loop stops; the cross lines
+        are drawn in depth bands. Compared with banding turned off, not near
+        against far: the far end is brighter anyway, where the lines bunch
+        and the haze peaks.
         """
         import visualizers
 
@@ -4536,12 +4172,9 @@ class TestTheRaveIsARoom:
             flat = self._drawn()
         finally:
             visualizers.Rave.BANDS = was
-        # The pixels it changes, not the light in a region. The far rows
-        # are squeezed into a thin strip at the vanishing point, where the
-        # air is at its brightest - so dimming them moves a region's total
-        # by a sixth of a per cent while being plainly a different
-        # picture. Two versions of this measured regions and could not
-        # tell the two apart at all.
+        # The pixels it changes, not the light in a region: the far rows are a
+        # thin strip where the air is brightest, so dimming them barely moves a
+        # total.
         changed = 0
         for y in range(self.H):
             for x in range(0, self.W, 2):
@@ -4554,16 +4187,10 @@ class TestTheRaveIsARoom:
             f"not doing anything")
 
     def test_the_dimmer_bands_are_the_further_ones(self):
-        """That the banding does something is not enough: it has to do it
-        with distance.
-
-        It was written ``range(band, DEPTH, BANDS)``, which walks the
-        whole corridor taking every fourth row - so the four "depth bands"
-        were four interleaved sets spread from your feet to the vanishing
-        point, and dimming one dimmed a quarter of the lines *everywhere*.
-        It read as a faint texture rather than as distance, and the test
-        above cannot tell the two apart because both change the same
-        number of pixels.
+        """The banding must follow distance. Written as ``range(band, DEPTH,
+        BANDS)``, the four bands were interleaved sets spread over the whole
+        corridor, a faint texture rather than distance, which the pixel
+        count above cannot tell apart.
         """
         import visualizers
 
@@ -4582,30 +4209,24 @@ class TestTheRaveIsARoom:
         finally:
             visualizers.Rave._beam = staticmethod(real)
 
-        # The first surface drawn is the floor: one path of lines running
-        # away from you, then one path per band of lines across it.
+        # The floor is drawn first: one path of lines running away, then one
+        # path per band of lines across it.
         bands = seen[1:1 + visualizers.Rave.BANDS]
         assert len(bands) == visualizers.Rave.BANDS, "the floor drew no bands"
         brightest = max(bands)
         dimmest = min(bands)
-        # A slice of the corridor has a top and a bottom of its own. Four
-        # interleaved sets each span the whole of it, so their boxes sit
-        # on top of one another and this cannot be true of them.
+        # Each band is a slice of the corridor with its own top and bottom;
+        # interleaved sets would overlap.
         assert brightest[1] > dimmest[2], (
             f"the brightest band runs from y={brightest[1]:.0f} and the "
             f"dimmest ends at y={dimmest[2]:.0f}, so they are spread "
             f"through each other rather than one being nearer")
 
     def test_the_air_keeps_its_colour_at_full_screen(self):
-        """"X xxxx xxx xxx xxxx xxxxxxxxxx xxx xxxx xxxxxxx xx xxxxxxxx
-        xxxx. Xxxx xxx xxxx xxxxxxx xx full screen to get this effect."
-
-        The room has a fixed number of lines in it, so a big frame has
-        more bare air between them - and a lamp that keeps the same share
-        of the frame fills that air with one smooth gradient and flattens
-        the colour right out. Measured as the spread of hue over the
-        frame: 0.175 small and 0.170 full with the lamp the same size,
-        which is the flattening, against 0.178 and 0.285 with it shrunk.
+        """The rave's lamp takes a smaller share of a larger frame, keeping the
+        colour's variety at full screen. Spread of hue over the frame: 0.175
+        small and 0.170 full with the lamp unchanged, against 0.178 and
+        0.285 with it shrunk.
         """
         import statistics
 
@@ -4639,17 +4260,10 @@ class TestTheRaveIsARoom:
             f"{full:.3f} at full screen, so it flattens out")
 
     def test_the_far_end_is_lit_rather_than_a_hole(self):
-        """A closed corridor fading to nothing has a hole in it: the lines
-        run out and what is left is a dark rectangle the eye reads as a
-        wall.
-
-        How dark the darkest part of it gets, not how much light is there
-        in total. The lines all converge on the vanishing point, so that
-        corner of the frame has more of them in it than anywhere else and
-        comes out brighter either way - it was brighter than its
-        surroundings with the haze turned nearly off, while plainly having
-        a hole in it. What the haze changes is the gaps *between* the
-        lines: they bottom out at 162 of 765 with it and at 13 without.
+        """The corridor's end is haze, not a dark rectangle that reads as a
+        wall. Its darkest gaps, not its total light: the lines converge
+        there, so it is bright either way. The gaps bottom out at 162 of 765
+        with haze and 13 without.
         """
         image = self._drawn()
         darkest = sorted(
@@ -4662,8 +4276,9 @@ class TestTheRaveIsARoom:
             f"corridor ends in a hole rather than in air")
 
     def test_there_are_frames_down_the_corridor(self):
-        """A grid says where the floor is; a truss says how far down the
-        room you are looking."""
+        """A grid says where the floor is; a truss says how far down the room
+        you are.
+        """
         scene = self._rave()
         with_them = self._drawn(scene)
         whole = scene._trusses
@@ -4672,11 +4287,8 @@ class TestTheRaveIsARoom:
             without = self._drawn(scene)
         finally:
             scene._trusses = whole
-        # The pixels they change, not the light they add. A truss is a
-        # thin frame on a corridor that is now brightly lit from end to
-        # end, so it moves the total by one per cent while being plainly
-        # visible - which is a statement about the corridor, not about the
-        # truss.
+        # The pixels they change, not the light they add: on a brightly lit
+        # corridor a plainly visible truss moves the total by one per cent.
         changed = 0
         for y in range(int(self.H * 0.3), int(self.H * 0.7), 2):
             for x in range(0, self.W, 2):
@@ -4689,13 +4301,13 @@ class TestTheRaveIsARoom:
             f"not a truss")
 
     def test_the_walls_are_not_drawn_as_densely_as_the_floor(self):
-        """The corridor is about eight times wider than it is tall, so the
-        floor's line count on a side wall puts them a twentieth of a unit
-        apart and it reads as hatching."""
+        """The corridor is about eight times wider than tall, so the floor's
+        line count on a wall would space them a twentieth of a unit apart,
+        like hatching.
+        """
         surfaces = self._rave()._surfaces(0.55, 4.5)
         floor_lines = next(n for place, shift, n in surfaces if shift == 0.0)
-        # The two walls are one surface with two faces, so its line count
-        # covers both of them.
+        # The two walls are one surface with two faces; its count covers both.
         wall_lines = next(n for place, shift, n in surfaces
                           if shift > 0.1) / 2.0
         assert wall_lines < floor_lines / 2, (
@@ -4704,9 +4316,7 @@ class TestTheRaveIsARoom:
 
 
 class TestTheListOfPlayingKeys:
-    """Keys nobody can find are not keys, and a panel explaining them is
-    the opposite of playing with them. So it is hidden, and ? opens it.
-    """
+    """The keys list is hidden, and ? opens it."""
 
     @staticmethod
     def _full(qtbot):
@@ -4757,9 +4367,8 @@ class TestTheListOfPlayingKeys:
         import visualizers
 
         listed = " ".join(f"{k} {w}" for k, w in _KeysCard.KEYS if k)
-        # The scene keys are named as a range, so the two ends of it are
-        # what the list has to carry. Written out, this said "8" and went
-        # stale the moment a ninth scene was added.
+        # The scene keys are named as a range, so the list carries both ends;
+        # written out, it went stale when a scene was added.
         last = str(len(visualizers.SCENES))
         for key in ("1", last, "S", "A", "D", "M", AudioPane.BY_HAND_KEY,
                     "J", "K", "L", "space", "esc"):
@@ -4774,23 +4383,18 @@ class TestTheListOfPlayingKeys:
 
     @staticmethod
     def _counting(window):
-        """Count the calls that wake the bar.
-
-        The call rather than the bar: waking it starts a fade, and the
-        widget only becomes visible when that animation ticks, so nothing
-        about the bar itself changes inside a key press. A test reading
-        the bar's visibility passes whether the key woke it or not, which
-        is how the first version of this passed against the very code it
-        was written to reject.
+        """Count the calls that wake the bar, not the bar's visibility: waking
+        starts a fade, so the bar only shows when the animation ticks, and a
+        visibility check passed on the code it was meant to reject.
         """
         woke = []
         window._show_controls = lambda: woke.append(1)
         return woke
 
     def test_the_playing_keys_do_not_bring_the_bar_up(self, qtbot):
-        """They exist so the scene can be played without the furniture.
-        Waking the bar was the first thing the key handler did, so every
-        number slid a strip of controls over the picture."""
+        """The playing keys must not wake the bar: each number would slide the
+        controls over the picture.
+        """
         from PySide6.QtCore import Qt as _Qt
 
         _pane, window = self._full(qtbot)
@@ -4804,8 +4408,8 @@ class TestTheListOfPlayingKeys:
             assert woke == [], f"{chr(key)} brought the control bar back"
 
     def test_the_transport_keys_still_bring_it_up(self, qtbot):
-        """Those move the playhead, and the bar is where the playhead
-        is."""
+        """The transport keys do: they move the playhead, which the bar shows.
+        """
         from PySide6.QtCore import Qt as _Qt
 
         pane, window = self._full(qtbot)
@@ -4817,19 +4421,10 @@ class TestTheListOfPlayingKeys:
 
 
 class TestTheDialsAreLetteredInTheirOwnFace:
-    """"Xxx xxxx xxxx xxx xxxxx xx xxx xxxxxx. Xxxxxx xxxxx xxx xxxxxxx
-    xxxxxxxxx."
-
-    They were not. The face was asked for by name with a fallback list -
-    Eurostile, Microgramma, Square721, Bank Gothic, then Verdana - and
-    none of the first four ships with macOS or with a build runner.
-    Measured over the 181 families installed here, nothing installed has
-    square digits at all. So Qt silently took the first name it knew,
-    which was Verdana: round where the reference is square, and a
-    different face again on Linux.
-
-    A fallback list was never going to fix that, because the fallback does
-    not exist anywhere. The face ships with the app now.
+    """The dial face ships with the app. Asked for by name, with Eurostile,
+    Microgramma, Square721 and Bank Gothic as fallbacks, none was installed
+    (of 181 families, none has square digits), so Qt fell back to Verdana,
+    round where the reference is square.
     """
 
     def test_the_face_is_beside_the_code(self):
@@ -4882,8 +4477,8 @@ class TestTheDialsAreLetteredInTheirOwnFace:
 
 
 class TestTheRackOfDials:
-    """The layout complaints: a meter alone on the bottom row, the bottom
-    row running off the screen, and the strobe stopping at a cell edge.
+    """The meters' layout: no meter alone on the bottom row, no row off the
+    screen, and no strobe stopping at a cell edge.
     """
 
     @staticmethod
@@ -4921,11 +4516,9 @@ class TestTheRackOfDials:
         return rows
 
     def test_nothing_runs_off_the_bottom(self, qtbot):
-        """It did, and by six per cent of a cell: the reserved height was
-        1.02 radii where the drawing needs 1.17, because the needle hinges
-        below the arc and swings past the frequency label. Every row
-        overflowed by fourteen pixels and the last row overflowed into
-        nothing."""
+        """Each meter fits its cell: the reserved height was 1.02 radii where
+        the drawing needs 1.17, and every row overflowed by fourteen pixels.
+        """
         image = self._drawn()
         rows = self._ink_rows(image)
         assert rows, "nothing was drawn at all"
@@ -4934,8 +4527,9 @@ class TestTheRackOfDials:
         assert min(rows) > 2, f"there is ink on row {min(rows)}"
 
     def test_the_face_fits_what_is_reserved_for_it(self, qtbot):
-        """The constants and the drawing have to agree, or the one that
-        is wrong is only found by looking at a screenshot."""
+        """The constants and the drawing must agree, or only a screenshot finds
+        the wrong one.
+        """
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -4975,14 +4569,10 @@ class TestTheRackOfDials:
             f"{visualizers.Meters.FACE_TALL} is reserved")
 
     def test_the_numbers_do_not_touch_the_scale(self, qtbot):
-        """"Numbers overlap with the arc."
-
-        Measured off the font rather than off a screenshot: a label is
-        drawn centred on DB_AT_R, so its inner edge is half its own height
-        in from there, and what it has to clear is whichever of the arc
-        and the ticks reaches further out. The ticks do - 1.052 radii
-        against the arc's 0.978 - and the first attempt at this cleared
-        the arc only, which put every number on a tick tip.
+        """The dB numbers clear the arc and the ticks, measured off the font: a
+        label is centred on DB_AT_R, so its inner edge is half its height
+        in, and the ticks reach further out (1.052 radii) than the arc
+        (0.978).
         """
         from PySide6.QtGui import QFont, QFontMetricsF
 
@@ -5011,8 +4601,9 @@ class TestTheRackOfDials:
             f"arc from underneath")
 
     def test_no_meter_is_left_alone_on_the_bottom_row(self, qtbot):
-        """Ten three across is 3, 3, 3 and 1, and that single meter under
-        the rack reads as a mistake rather than as a layout."""
+        """Ten three across is 3, 3, 3 and 1, and the single meter reads as a
+        mistake.
+        """
         from PySide6.QtCore import QRectF
 
         import visualizers
@@ -5028,10 +4619,10 @@ class TestTheRackOfDials:
                     f"{columns} across and {rows} down, leaving one alone")
 
     def test_the_backlight_is_not_cut_off_at_a_cell_edge(self, qtbot):
-        """Each lamp used to be filled inside its own cell, and a lamp
-        reaches half a radius past the face - so it stopped dead with a
-        straight line down it and the next meter's face was drawn over
-        what had spilled."""
+        """A lamp reaches half a radius past its face; filled inside its own
+        cell, it stopped dead in a straight line and the next face was drawn
+        over it.
+        """
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -5057,10 +4648,8 @@ class TestTheRackOfDials:
 
         middle = lit(cell.center().x(), cell.center().y())
         assert middle > 30, "the lamp did not light its own meter"
-        # A lamp reaches about half a radius past the face. Clipped to the
-        # cell it stops dead at the edge, and the next meter's face is
-        # then drawn over whatever spilled - which is the strobe
-        # "clipping behind other meters". Light does not belong to a cell.
+        # Light does not belong to a cell: clipped to the cell, a lamp stops
+        # dead at its edge.
         spread = [(x, y) for y in range(0, side, 3)
                   for x in range(0, side, 3) if lit(x, y) > 4]
         assert spread, "the lamp lit nothing"
@@ -5080,11 +4669,10 @@ class TestTheRackOfDials:
 
 
 class TestTheRaveIsWiredToTheKit:
-    """"Xxxx xxxx xxxx xxxxx xxx xxxxxxxx xxxxx xxxxxxx xxxx xxxxxx.
-    Xxxx xxxxxxxxx xxx xxxxx xx xxxxx xx xx xxxxxxx xxx xxxxxx. Xxx
-    xxxxxxxxxx colour xxxxxx xxx xxxxxxx xx xxx xxxxx. Xxxx xxxx xxx
-    xxxxxx geometry wireframe go crazy. It doesn't xxxx xxxx xxxx x
-    xxxxxxxxxx xxxx xxxxxxx xxxx xx xxxxx xx xxxxxxx."
+    """The rave, reworked: smoother but still energetic. The bass speeds the
+    walk through the tunnel, the snare moves the colour, the hats work the
+    wireframe in the middle, and it walks forward steadily with nothing
+    playing.
     """
 
     @staticmethod
@@ -5138,8 +4726,7 @@ class TestTheRaveIsWiredToTheKit:
             f"times as far as silence")
 
     def test_it_walks_forward_at_a_steady_pace_with_nothing_playing(self):
-        """"It doesn't xxxx xxxx xxxx x xxxxxxxxxx xxxx xxxxxxx xxxx xx
-        xxxxx xx xxxxxxx." Every step the same, on a steady clock."""
+        """With nothing playing, every step is the same, on a steady clock."""
         scene = self._scene()
         was = self._walk(scene, self._state(), frames=40)
         steps = [b - a for a, b in zip(was, was[1:])]
@@ -5148,10 +4735,9 @@ class TestTheRaveIsWiredToTheKit:
             f"steps run from {min(steps):.4f} to {max(steps):.4f}")
 
     def test_the_trusses_keep_their_own_time(self):
-        """They rode the grid's offset, which wraps every *row*: a truss
-        crept back one row's worth and then jumped forward five, sixty
-        times a minute. It is the only thing in the room with a length to
-        it, so when it stutters the walk stutters."""
+        """The trusses rode the grid's offset, which wraps every row: they
+        crept back a row and jumped forward five, sixty times a minute.
+        """
         import inspect
 
         import visualizers
@@ -5162,8 +4748,9 @@ class TestTheRaveIsWiredToTheKit:
             "times as often as they recur")
 
     def test_a_snare_moves_the_colour_on_and_leaves_it_there(self):
-        """"The background colour xxxxxx xxx xxxxxxx xx xxx xxxxx." Not a
-        flash that returns: each one puts the colour somewhere new."""
+        """Each snare puts the colour somewhere new, rather than flashing and
+        returning.
+        """
         scene = self._scene()
         state = self._state()
         scene._advance(state)
@@ -5177,10 +4764,10 @@ class TestTheRaveIsWiredToTheKit:
             "the colour drifted back, so it is a flash rather than a change")
 
     def test_the_kick_shakes_the_thing_in_the_middle(self):
-        """And the bass moves the room. They were both doing a bit of
-        both, which is why neither read as itself: a kick and a loud
-        bassline arrive together most of the time, so two effects sharing
-        them look like one effect."""
+        """The bass moves the room; the kick shakes the shape. Shared, the two
+        read as one effect, since a kick and a loud bassline mostly arrive
+        together.
+        """
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -5206,13 +4793,9 @@ class TestTheRaveIsWiredToTheKit:
         import statistics
 
         def ragged(lit):
-            """How uneven the shape is: the spread of how far it reaches
-            in sixteen directions, over how far it reaches on average.
-
-            Not how *wide* it gets. The hats swell the wireframe as well
-            as shaking it, so a width measurement cannot tell one from the
-            other - it passed with the shake taken out and only the swell
-            left.
+            """How uneven the shape is: the spread of its reach in sixteen
+            directions over the mean. Width cannot tell a shake from a
+            swell.
             """
             reach = []
             for step in range(16):
@@ -5235,9 +4818,9 @@ class TestTheRaveIsWiredToTheKit:
             f"{ragged(shaken):.2f} on a kick, which is not a shake")
 
     def test_the_kick_and_the_bass_do_different_things(self):
-        """The one that matters: a kick shakes the shape in the middle and
-        the bass drives the room past you, and you can tell which is
-        which."""
+        """A kick shakes the shape in the middle while the bass drives the room
+        past, and the two can be told apart.
+        """
         scene = self._scene()
         self._walk(scene, self._state(Kick=1.0), frames=20)
         kicked = scene._z
@@ -5261,9 +4844,9 @@ class TestTheRaveIsWiredToTheKit:
             f"bass, which is not a difference either")
 
     def test_the_room_is_pushed_by_the_kick_rather_than_kicked(self):
-        """The kick moved the horizon, the focal length, the walls and
-        every line width in the single frame it landed on, and back over
-        the six after it. What a kick does to a room is push it."""
+        """A kick pushes the room; it no longer moves the horizon, the focal
+        length, the walls and every line width for a frame.
+        """
         scene = self._scene()
         state = self._state(Kick=1.0)
         reached = []
@@ -5278,12 +4861,8 @@ class TestTheRaveIsWiredToTheKit:
 
 
 class TestTheRibbonsAreCurvesNotPolygons:
-    """"Xxxxxx xxx xxx xxxxx xx xxxxxxxx, xxxx xxxx sectioned and
-    straight in places."
-
-    Forty-four straight segments across a 1080p frame is one every
-    forty-four pixels, and at a ribbon's peak - where the direction
-    changes fastest - that reads as a corner.
+    """Ambience's ribbons are curves, not polylines: forty-four straight
+    segments across 1080p turn into a visible corner at a ribbon's peak.
     """
 
     @staticmethod
@@ -5304,10 +4883,8 @@ class TestTheRibbonsAreCurvesNotPolygons:
 
     @staticmethod
     def _sharpest(path, samples=600):
-        """The biggest change of direction anywhere along the path.
-
-        In degrees between consecutive chords. A polyline turns all of its
-        corner in one step; a curve spreads the same turn over many.
+        """The biggest change of direction along the path, in degrees between
+        consecutive chords: a polyline turns its whole corner in one step.
         """
         import math
 
@@ -5318,9 +4895,8 @@ class TestTheRibbonsAreCurvesNotPolygons:
         for first, second, third in zip(at, at[1:], at[2:]):
             one = QPointF(second.x() - first.x(), second.y() - first.y())
             two = QPointF(third.x() - second.x(), third.y() - second.y())
-            # A real chord, not a rounding difference: two samples a
-            # thousandth of a pixel apart have a direction made of noise,
-            # and one of them read as a 180 degree turn.
+            # A real chord: two samples a thousandth of a pixel apart have a
+            # direction made of noise.
             if (math.hypot(one.x(), one.y()) < 0.5
                     or math.hypot(two.x(), two.y()) < 0.5):
                 continue
@@ -5337,9 +4913,8 @@ class TestTheRibbonsAreCurvesNotPolygons:
         points = self._points()
         smooth = visualizers.Ambience._smooth(points)
 
-        # The same points joined by straight lines, which is what this
-        # was. A control rather than a remembered number: how sharp a
-        # corner is depends on the shape, and the shape is the point.
+        # The same points joined by straight lines, as a control rather than a
+        # remembered number.
         polygon = QPainterPath()
         polygon.moveTo(points[0])
         for point in points[1:]:
@@ -5353,8 +4928,9 @@ class TestTheRibbonsAreCurvesNotPolygons:
             f"the smoothed ribbon turns {curved:.1f} degrees in one step")
 
     def test_it_passes_through_the_music_rather_than_near_it(self):
-        """A smoothing that wanders is a different shape, not the same
-        shape drawn properly. The curve has to stay on the ribbon."""
+        """The curve stays on the ribbon: smoothing that wanders is a different
+        shape.
+        """
         import math
 
         import visualizers
@@ -5384,13 +4960,8 @@ class TestTheRibbonsAreCurvesNotPolygons:
 
 
 class TestTheScenesSitOnTheBeat:
-    """"Xxxx xxxx xxx xxxxxxxxx xxxx xx xxxxx xx xxxx."
-
-    Both had something travelling towards you - the rave's trusses, the
-    vaporwave's floor lines - and both moved them on a free-running clock
-    that the bass sped up a little. On a record with a tempo that is the
-    one thing you can see is wrong: the marks march *past* the beat, which
-    reads as the scene ignoring the music it is drawn from.
+    """The rave's trusses and the vaporwave floor lines march on the beat, not
+    on a free-running clock that drifts past it.
     """
 
     @staticmethod
@@ -5419,17 +4990,15 @@ class TestTheScenesSitOnTheBeat:
         spectrum.set_frames(
             [array("f", [0.4] * bands) for _ in range(120)],
             attachment_audio.RATE)
-        # The first beat is *not* at zero, and that is the point: a track
-        # has an intro, so a grid counted from the start of the file is
-        # wrong by however long it was.
+        # The first beat is not at zero: a grid counted from the top of the
+        # file is wrong by the length of the intro.
         beats = tuple(beatmap.Beat(at=0.3 + n * 0.5, strength=0.9)
                       for n in range(20))
         spectrum.set_beats({"Kick": beatmap.BeatMap(beats=beats, bpm=120.0,
                                                     locked=True)})
-        # Jumps, not steps: each of these is further than SEEK_GAP, so
-        # the pane takes it at once rather than drifting towards it. That
-        # is the behaviour being checked here - where the beat is after a
-        # seek. How it behaves *between* seeks is the next test.
+        # Jumps further than SEEK_GAP, taken at once rather than drifted
+        # towards: this checks where the beat is after a seek. Between seeks is
+        # the next test.
         for position, wanted in ((300, 0.0), (1050, 0.5), (1675, 0.75),
                                  (2425, 0.25)):
             spectrum.set_position(position)
@@ -5441,16 +5010,9 @@ class TestTheScenesSitOnTheBeat:
 
     def test_a_player_that_reports_in_steps_still_gives_a_smooth_beat(
             self, qtbot, monkeypatch):
-        """"The walls just look so laggy and stuttery", and the same of
-        the vaporwave grid.
-
-        A media player does not report its position continuously: it
-        updates on a timer of its own, so reading it every frame gives the
-        same number several times and then a jump. Anything driven
-        straight off that moves in steps - and both of those scenes now
-        drive their travel from the beat. The wireframe in the middle of
-        the rave was smooth through all of it because it runs on the frame
-        clock and never touched the playhead.
+        """The beat-driven walls and grid move smoothly. A player updates its
+        position on a timer, so read every frame it repeats and then jumps;
+        travel driven straight off it moved in steps.
         """
         import time
         from array import array
@@ -5471,13 +5033,12 @@ class TestTheScenesSitOnTheBeat:
             beats=tuple(beatmap.Beat(at=n * 0.5, strength=0.9)
                         for n in range(40)),
             bpm=120.0, locked=True)})
-        # Playing, as the pane says it is whenever the player is: a clock
-        # told nothing runs only on the player's word, which is the pause.
+        # Playing, as the pane is told whenever the player plays: a clock told
+        # nothing runs only on the player's reports.
         spectrum.set_playing(True)
 
-        # A player that only moves every fourth frame, which is what a
-        # hundred millisecond notify interval looks like at sixty frames
-        # a second.
+        # A player that moves every fourth frame: a 100 ms notify interval at
+        # sixty frames a second.
         seen = []
         for frame in range(120):
             clock[0] += 1 / 60.0
@@ -5500,9 +5061,9 @@ class TestTheScenesSitOnTheBeat:
 
     def test_the_clock_leans_on_the_playhead_rather_than_running_free(
             self, qtbot, monkeypatch):
-        """A clock of its own that never checks the music would be smooth
-        and wrong. Frames get dropped and machines run warm, so the two
-        drift - and what a scene is sitting on is the *music*."""
+        """A clock that never checks the music would be smooth and wrong:
+        frames drop and machines run warm, and the two drift.
+        """
         import time
         from array import array
 
@@ -5523,8 +5084,8 @@ class TestTheScenesSitOnTheBeat:
                         for n in range(60)),
             bpm=120.0, locked=True)})
 
-        # Frames arriving slower than the music, as they do when a
-        # machine is struggling: four fifths of real time.
+        # Frames arriving slower than the music, as on a struggling machine:
+        # four fifths of real time.
         played = 0.0
         for _ in range(600):
             clock[0] += (1 / 60.0) * 0.8
@@ -5552,9 +5113,9 @@ class TestTheScenesSitOnTheBeat:
         assert spectrum._state.tempo == 0.0
 
     def test_a_truss_arrives_on_every_beat(self):
-        """The rave's corridor is locked to the grid: the distance
-        travelled in a beat is exactly one truss, whatever the bass is
-        doing."""
+        """The rave's corridor is locked to the grid: a beat's travel is
+        exactly one truss, whatever the bass.
+        """
         import visualizers
 
         for bass in (0.0, 0.5, 1.0):
@@ -5572,20 +5133,17 @@ class TestTheScenesSitOnTheBeat:
                     f"and a truss is {visualizers.Rave.TRUSS}")
 
     def test_the_bass_changes_how_the_beat_is_spent(self):
-        """Locked distance, but not locked motion: under a heavy bass most
-        of the beat's travel happens at the start of it, which is a lunge
-        on the beat and a coast before the next."""
+        """Locked distance, not locked motion: under heavy bass most of a
+        beat's travel comes at its start, a lunge then a coast.
+        """
         import visualizers
 
         def through(bass, part):
             scene = visualizers.Rave()
             scene._last = None
-            # The push behind the room follows the bass rather than being
-            # it, so that a band wobbling frame to frame moves how fast
-            # the room is going and not where it is. That means the bass
-            # has to have been playing for a moment before it is pushing:
-            # the beat stands still here while it arrives, so nothing
-            # travels during the warm-up.
+            # The push follows the bass rather than being it, so a wobbling
+            # band changes speed, not position; the beat stands still here
+            # while the push builds.
             for _ in range(60):
                 scene._advance(self._state(beat_at=0.0, bass=bass))
             start = scene._z
@@ -5625,9 +5183,8 @@ class TestTheScenesSitOnTheBeat:
 
 
 def _drum_track(seconds: float, lean: float = 0.0, rate: int = 48000):
-    """Stereo 16-bit PCM: a kick every half second over a quiet tone.
-
-    ``lean`` puts it towards one side, -1 hard left to +1 hard right.
+    """Stereo 16-bit PCM: a kick every half second over a quiet tone. ``lean``
+    places it from -1 (left) to +1 (right).
     """
     import math
     from array import array
@@ -5648,9 +5205,7 @@ def _drum_track(seconds: float, lean: float = 0.0, rate: int = 48000):
 def _analysed(qapp, pcm, cancel_after=None, workers=None, timeout=90.0,
               while_waiting=None, harmony=False):
     """Run the real analysis on ``pcm`` and collect what it says, in order.
-
-    ``while_waiting`` is called on the GUI thread every pass of the wait,
-    which is how a test watches what the GUI thread could do meanwhile.
+    ``while_waiting`` runs on the GUI thread each pass of the wait.
     """
     import time
 
@@ -5701,30 +5256,18 @@ def _analysed(qapp, pcm, cancel_after=None, workers=None, timeout=90.0,
 
 
 class TestTheAnalysisTakesNothingFromThePicture:
-    """"If I click play once the xxxxxxxxxx xx xxxxxxxx xxxxxxx, xx xxxxx
-    xxxx xxxx xxxxx xxxxxxxxx xxx."
-
-    The analysis was Python arithmetic on a thread, and Python runs one
-    thread's arithmetic at a time. After the picture came up the rest of
-    it - the scope's traces, then the drums - went on for half a minute
-    on a long track, taking turns with the thread drawing the picture:
-    21 to 26 frames a second with a hitch every second, against 60 and
-    none once it had finished. Worse, the card's governor read those
-    frames as the card being slow and gave up the resolution for the
-    rest of the session. It runs in processes of its own now.
+    """Playback is smooth as soon as the picture is up. The analysis ran as
+    Python on a thread, sharing the interpreter with the drawing for half a
+    minute on a long track (21 to 26 frames a second with a hitch every
+    second), and the card's governor took that for a slow card. It runs in
+    processes now.
     """
 
     @staticmethod
     def _off_the_gui_thread(qapp, workers):
-        """CPU this process spent off the GUI thread during an analysis.
-
-        Which is exactly what takes turns with the picture: Python runs
-        one thread's arithmetic at a time, so every second of it spent on
-        another thread of this process is a second the thread drawing the
-        picture has to share. Counted in CPU time rather than timed
-        frames, because a frame's wall-clock cost also measures whatever
-        else the machine is doing - four test processes, in the suite -
-        and CPU time does not.
+        """CPU this process spent off the GUI thread during an analysis: what
+        takes turns with the picture. CPU time rather than frame time, which
+        also measures whatever else the machine does.
         """
         import resource
         import time
@@ -5739,10 +5282,9 @@ class TestTheAnalysisTakesNothingFromThePicture:
         return (after[0] - before[0]) - (after[1] - before[1])
 
     def test_the_arithmetic_is_not_done_in_this_process(self, qapp):
-        """Measured on the thread the analysis used to run on, a frame of
-        the rider cost 2.9 times its own cost while a track was analysed,
-        and 8 times at the ninetieth percentile; in workers, 1.2 and 1.3.
-        What made the difference is where the arithmetic is done."""
+        """On the analysis's old thread a rider frame cost 2.9 times its own (8
+        times at the 90th percentile); in workers, 1.2 and 1.3.
+        """
         here = self._off_the_gui_thread(qapp, workers=False)
         away = self._off_the_gui_thread(qapp, workers=True)
         assert away < here * 0.15, (
@@ -5751,8 +5293,9 @@ class TestTheAnalysisTakesNothingFromThePicture:
             f"{here:.2f} s doing all of it on a thread")
 
     def test_it_gives_the_same_answer_as_working_it_out_here(self, qapp):
-        """A worker that returned something else would be a faster way
-        to be wrong."""
+        """A worker that returned something else would only be faster at being
+        wrong.
+        """
         import attachment_audio
         import beatmap
 
@@ -5777,16 +5320,18 @@ class TestTheAnalysisTakesNothingFromThePicture:
             fine, attachment_audio.ONSET_RATE)
 
     def test_the_drums_are_never_handed_over_before_the_bands(self, qapp):
-        """They run side by side now, and can finish first - but the pane
-        has nothing to hang them on until it has the frames."""
+        """The drums can finish first, but the pane has nothing to hang them on
+        until it has the frames.
+        """
         got = _analysed(qapp, _drum_track(6.0))
         order = [kind for kind, _ in got["said"]]
         assert "elements" in order, order
         assert order.index("bands") < order.index("elements"), order
 
     def test_the_drums_are_kept_whichever_arrives_first(self, qapp):
-        """The beat maps used to replace the table the kit lives in, which
-        was only safe while the kit always came last."""
+        """The beat maps add to the kit's table rather than replacing it, which
+        was only safe while the kit came last.
+        """
         from attachment_widgets import Spectrum
 
         pane = Spectrum()
@@ -5799,9 +5344,10 @@ class TestTheAnalysisTakesNothingFromThePicture:
 
     @pytest.mark.parametrize("workers", [True, False])
     def test_the_beats_come_straight_after_the_bands(self, qapp, workers):
-        """The game lays its road on them. They are read off the bands in
-        milliseconds, and sent after the scope's traces they left the ride
-        with no tempo for the seconds those took."""
+        """The drums go out early: the game lays its road on them, and sent
+        after the scope's traces they left the ride with no tempo for
+        seconds.
+        """
         got = _analysed(qapp, _drum_track(6.0), workers=workers)
         order = [kind for kind, _ in got["said"]]
         assert order.index("bands") < order.index("beats") < order.index(
@@ -5829,9 +5375,7 @@ class TestTheAnalysisTakesNothingFromThePicture:
         assert found["key"]["tonic"] == 2 and found["key"]["mode"] == "major"
 
     def test_nobody_asking_for_the_harmony_is_not_worked_out(self, qapp):
-        """Not started at all - a process of its own is a core of the
-        machine for as long as it runs - rather than worked out and its
-        answer dropped on the way back."""
+        """Not started at all, since a process takes a core while it runs."""
         got = _analysed(qapp, _drum_track(4.0))
         assert not any(kind == "harmony" for kind, _ in got["said"])
         names = [process.name for process in got["workers"]]
@@ -5843,8 +5387,9 @@ class TestTheAnalysisTakesNothingFromThePicture:
         assert "mail-manager-harmony" in names, names
 
     def test_with_no_workers_it_still_arrives(self, qapp):
-        """A machine that will not start a process - a sandbox, a broken
-        install - analyses on a thread, as it always used to."""
+        """A machine that will not start a process (a sandbox, a broken
+        install) analyses on a thread instead.
+        """
         got = _analysed(qapp, _drum_track(4.0), workers=False)
         order = [kind for kind, _ in got["said"]]
         assert "bands" in order and "done" in order, order
@@ -5862,10 +5407,9 @@ class TestTheAnalysisTakesNothingFromThePicture:
 
 
 class TestTheRoadIsWholeWhenThePictureIs:
-    """The road's bends came from the scope's traces, which arrive
-    seconds after the picture - so a road that had been dead straight
-    began to bend under the rider mid-song when they did. The lean is
-    read off the samples with the bands now, and the shape is final."""
+    """The lean is read off the samples with the bands, so the road's bends are
+    final from the start rather than arriving mid-song with the traces.
+    """
 
     def test_a_mix_to_one_side_leans_that_way_from_the_start(self, qapp):
         got = _analysed(qapp, _drum_track(6.0, lean=-0.8))
@@ -5887,8 +5431,8 @@ class TestTheRoadIsWholeWhenThePictureIs:
             pane.set_traces([array("f", [0.0] * 8)] * 90,
                             [array("h", [0, 0])] * 90)
             pane.set_frames(frames, 15)
-            # What the pane does every frame: build the state the scene
-            # reads, rebuilding the shape if it thinks it has to.
+            # What the pane does every frame: build the scene's state,
+            # rebuilding the shape if it thinks it must.
             pane._clock(pane._state)
             assert pane._state.contour is shape, (
                 "the road's shape was thrown away when the traces came")
@@ -5896,8 +5440,9 @@ class TestTheRoadIsWholeWhenThePictureIs:
             pane.deleteLater()
 
     def test_the_same_frames_again_do_not_empty_the_picture(self, qapp):
-        """The rest of the analysis hands the same frames over a second
-        time. Starting over zeroed every level mid-song."""
+        """The rest of the analysis hands the same frames over again; starting
+        over would zero every level mid-song.
+        """
         from array import array
 
         from attachment_widgets import Spectrum
@@ -5914,18 +5459,15 @@ class TestTheRoadIsWholeWhenThePictureIs:
 
 
 class TestThePictureArrivesBeforeTheAnalysisFinishes:
-    """"Xxxxxxx xxxxxxxxxx xxxxxxxxxxx xx xxxxxx xxxxx xxx xxxxx."
-
-    Most of that wait was the pane having everything it needed and being
-    told nothing. Seven of the eight scenes draw from the bands alone, and
-    the two passes after them - the waveform for the sweep and the X-Y
-    traces for the figures - take another two thirds as long again.
+    """The bands go out as soon as they exist: most scenes draw from them
+    alone, and the passes after them take two thirds as long again.
     """
 
     def test_the_bands_go_out_as_soon_as_they_exist(self, qapp):
-        """Before the waveform and the X-Y traces are worked out - and
-        with the road's whole shape, so nothing about the road changes
-        when the rest arrives. Run for real, through the workers."""
+        """Before the waveform and the X-Y traces, and with the road's whole
+        shape, so the road does not change when the rest arrives. Through
+        the real workers.
+        """
         got = _analysed(qapp, _drum_track(6.0))
         order = [kind for kind, _ in got["said"]]
         assert order.index("bands") < order.index("done"), order
@@ -5933,8 +5475,9 @@ class TestThePictureArrivesBeforeTheAnalysisFinishes:
         assert frames and shape and len(shape["lean"]) == len(shape["loud"])
 
     def test_the_pane_draws_from_them(self, qtbot, qapp, monkeypatch):
-        """And stops saying it is working. Through the callback the pane
-        itself hands the analysis, with what the analysis really sends."""
+        """And stops saying it is working, through the callback the pane hands
+        the analysis, with what the analysis really sends.
+        """
         from pathlib import Path
 
         import attachment_audio
@@ -5964,9 +5507,9 @@ class TestThePictureArrivesBeforeTheAnalysisFinishes:
             pane._decoder = None
 
     def test_a_cancelled_analysis_hands_nothing_over(self, qapp):
-        """The early signal is one more thing that can arrive after the
-        caller has gone away. Cancelled the moment it starts, nothing at
-        all is handed over, and no worker is left running."""
+        """Cancelled at once, nothing is handed over and no worker is left
+        running.
+        """
         got = _analysed(qapp, _drum_track(20.0), cancel_after=0.05)
         assert got["said"] == [], [kind for kind, _ in got["said"]]
         assert not any(p.is_alive() for p in got["workers"]), (
@@ -5974,13 +5517,8 @@ class TestThePictureArrivesBeforeTheAnalysisFinishes:
 
 
 class TestTheHandStrobeSaysWhichKey:
-    """"I still don't xxxx xxx xxxxxx xxx xxxxxx xx xxxxxx xxxx, xxxx
-    xxxx xxxxxxx xxxxxxxxx."
-
-    Choosing "Manual" turns the automatic strobe off and left nothing on
-    screen to say what turns it on. It was in the full screen key card,
-    behind ?, which is no use to somebody who has just chosen it from a
-    menu and is waiting for something to happen.
+    """The hand-strobe key is shown where Manual is chosen; before, it was only
+    in the full-screen key card, behind ?.
     """
 
     @staticmethod
@@ -6063,24 +5601,18 @@ class TestTheHandStrobeSaysWhichKey:
 
 
 class TestTheRingSweepsPastYou:
-    """"I don't xxx xxx xxx xxxxxx xxxxxx xxxxx xx xxx xxxxxxx xxxx xxxxx
-    xxxx xx xx."
-
-    It was there. A ring's apparent size goes as one over its distance,
-    and it was moving through the room at a steady speed - so it sat far
-    away looking tiny for a second and then did the whole of its
-    expansion in the last tenth of one. It was over before you could see
-    it.
+    """The rings are seen growing. Moving at a steady speed, a ring's apparent
+    size goes as one over its distance, so it sat tiny for a second and did
+    all its growing in the last tenth of one.
     """
 
     W, H = 640, 360
 
     def _run(self, monkeypatch, frames=110):
-        """Every frame of one ring's life, as the radius it would draw.
-
-        A ring is fired by the room getting louder than it has been - see
-        ``TestTheRingsMarkBigMoments`` - so this holds a quiet passage long
-        enough to be believed and then lifts it.
+        """Every frame of one ring's life, as the radius it would draw. A ring
+        fires on the room getting louder than it has been (see
+        TestTheRingsMarkBigMoments), so this holds a quiet passage and then
+        lifts it.
         """
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
@@ -6111,10 +5643,8 @@ class TestTheRingSweepsPastYou:
         focal = min(self.W, self.H) * 0.62
         quiet = int((visualizers.Rave.RING_SETTLE + 0.2) * 60)
         seen = []
-        # One ring, followed by identity. A moment sends several, staggered
-        # down the room, so reading _rings[0] each frame hops from one to
-        # the next as the front one leaves - which shows up as the radius
-        # jumping backwards and has nothing to do with how a ring travels.
+        # One ring, followed by identity: a moment sends several, and reading
+        # _rings[0] hops between them.
         tracked = None
         try:
             for step in range(quiet + frames):
@@ -6133,12 +5663,10 @@ class TestTheRingSweepsPastYou:
         return seen
 
     def test_no_single_drum_fires_one(self, monkeypatch):
-        """This used to read the other way round: a snare fired a ring and
-        nothing else did. A snare is every other beat in most tracks, so
-        the ring signified nothing, which is "I am not sure what's xxxxx xx
-        xxxx xxx xxxxxx xxxx gets bigger". What fires one now is the room
-        getting louder than it has been, and
-        ``TestTheRingsMarkBigMoments`` is where that is held to."""
+        """A snare no longer fires a ring: in most tracks that is every other
+        beat. Rings mark the room getting louder (see
+        TestTheRingsMarkBigMoments).
+        """
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -6162,8 +5690,8 @@ class TestTheRingSweepsPastYou:
                     state.synth = 0.3
                     state.kit = {"Kick": 0.0, "Snare": 0.0, "Hats": 0.0,
                                  "Synth": 0.0}
-                    # Hit on every other beat, at full force, over a level
-                    # that does not change.
+                    # Hit on every other beat at full force, over a level that
+                    # does not change.
                     state.kit[part] = 0.95 if step % 30 == 0 else 0.0
                     image.fill(QColor(0, 0, 0))
                     scene.paint(painter, QRectF(0, 0, self.W, self.H), state)
@@ -6174,10 +5702,9 @@ class TestTheRingSweepsPastYou:
                 f"rings over a passage that never gets louder")
 
     def test_it_grows_evenly_rather_than_all_at_the_end(self, monkeypatch):
-        """Moving at a steady speed through the room, a ring doubles in
-        apparent size in its last few frames and hardly changes before
-        that. Closing by a share of its own distance instead makes every
-        frame's growth the same."""
+        """Closing by a share of its own distance, a ring grows by the same
+        amount every frame; at a steady speed it doubled in its last few.
+        """
         radii = self._run(monkeypatch)
         steps = [b / a for a, b in zip(radii, radii[1:]) if a > 0]
         assert len(steps) > 40
@@ -6195,27 +5722,16 @@ class TestTheRingSweepsPastYou:
 
 
 class TestTheAirIsColouredByTheBass:
-    """"Xxxx xxxx xxxxxxxxxx xxxx xxxxxxx xx full screen xxx xxxx xx x
-    xxxxxx xxxx xxxxxx. Xx xxx xxx xxxxxxxx xx xxxx xxxxxx. In full screen
-    xxx xxxxxxxxxx xx xxxxxx xxxx xxx xxx xxxx coloured. Maybe xxxx xx xxx
-    xxxx xxxxxxxxx xxxx xxxx xxxx?"
-
-    Both halves of that were the same fault. The air's brightness ran from
-    nearly black to over the ceiling and clamped: quiet passages were too
-    dark for a colour to show, and loud ones were pinned at the top where
-    every colour goes to white. Both ends read as grey.
+    """The rave's air is vibrant at full screen without being blinding. Its
+    brightness ran from nearly black to past the ceiling: quiet passages too
+    dark for colour, loud ones clamped to white, both reading as grey.
     """
 
     @staticmethod
     def _air(width, height, bass=0.5, flash=0.0):
-        """What the room looks like, as saturation and brightness.
-
-        On a clock this file controls. The room travels by however long
-        the last frame took, so on a slower machine it moves further
-        between the six frames drawn here and different lines land in
-        different places - which moved the brightest twentieth of the
-        frame from 0.77 here to 0.88 on a build runner, and failed a
-        bound that had nothing to do with the machine.
+        """What the room looks like, as saturation and brightness, on a clock
+        this file controls: the room travels by the last frame's length, and
+        the wall clock made this a measure of the machine.
         """
         import statistics
         import time
@@ -6259,8 +5775,9 @@ class TestTheAirIsColouredByTheBass:
                 values[int(len(values) * 0.95)])
 
     def test_a_bass_hit_floods_it_with_colour(self):
-        """The one thing a smooth wash of light can do that reads as loud
-        without simply being brighter."""
+        """The one thing a wash of light can do that reads as loud without
+        simply being brighter.
+        """
         for width, height in ((640, 360), (1920, 1080)):
             quiet = self._air(width, height, bass=0.15)[0]
             loud = self._air(width, height, bass=0.95)[0]
@@ -6269,14 +5786,12 @@ class TestTheAirIsColouredByTheBass:
                 f"it is quiet and {loud:.2f} on a bass hit")
 
     def test_it_never_gets_blinding(self):
-        """It used to reach a brightness of 1.24 and clamp, which is a
-        white room."""
+        """It reached a brightness of 1.24 and clamped: a white room."""
         for bass, flash in ((0.95, 0.0), (0.95, 1.0), (1.0, 1.0)):
             for width, height in ((640, 360), (1920, 1080)):
                 _sat, mean, top = self._air(width, height, bass, flash)
-                # 0.88 with the peak measuring 0.82: the strobe is
-                # allowed to be bright, and what this catches is the old
-                # range, which reached 0.91 even without one.
+                # 0.88 with the peak at 0.82: the strobe may be bright; the old
+                # range reached 0.91 without one.
                 assert top < 0.88, (
                     f"at bass {bass} and flash {flash}, the brightest "
                     f"twentieth of a {width}x{height} frame is at {top:.2f}")
@@ -6284,8 +5799,9 @@ class TestTheAirIsColouredByTheBass:
                     f"the whole frame averages {mean:.2f} bright")
 
     def test_a_quiet_passage_still_has_colour_in_it(self):
-        """The other end of the same fault: too dark to see a colour is
-        as grey as too bright to have one."""
+        """The other end: too dark to see a colour is as grey as too bright for
+        one.
+        """
         for width, height in ((640, 360), (1920, 1080)):
             sat, mean, _top = self._air(width, height, bass=0.15)
             assert mean > 0.12, (
@@ -6296,10 +5812,9 @@ class TestTheAirIsColouredByTheBass:
 
 
 class TestTheLampIsRoundAtAnySize:
-    """"Ensure the rave background xx xxxxx xxxxx xxxxxxxx xxxx xx xx xx
-    xxxxxxxx xxxx, xxx xx xxxx xxxx xx xx xxx." The air was laid out as a
-    strip and stretched to the frame, and a lamp laid out round in a strip
-    stretched to a full screen was twice as tall as it was wide."""
+    """The lamp is round at every size: laid out in a strip and stretched to a
+    full screen, it was twice as tall as wide.
+    """
 
     @pytest.mark.parametrize("size", [(906, 270), (1440, 900), (2880, 1800),
                                       (600, 900)])
@@ -6320,44 +5835,23 @@ class TestTheLampIsRoundAtAnySize:
 
 
 class TestTheAirIsAsVividAtFullScreenAsInAWindow:
-    """"Xxx xxxxxxxxxx xx xxxx xxxxx xxxxxxx xx xxxxxxxx xxx xx xxxxx xxxx
-    xxx xxxxxxxxxxx full screen. X xxxx xx xx xx xx xxxxxxx xx xxxxxxxx."
-
-    The lamp at the far end is shrunk on a big frame, which is what gives
-    the air its variety there - see
-    ``test_the_air_keeps_its_colour_at_full_screen``. It is also most of
-    the light in the room, so shrinking it left the frame dark, and a
-    colour you cannot see is grey.
-
-    What is counted here is saturation times brightness, per pixel. Either
-    one alone says nothing: the full-screen frame was *more* saturated than
-    the window while looking far greyer, because it was too dark for the
-    saturation to show. It is their product that is how much colour is
-    actually in a region.
+    """Full screen keeps the window's colour. The lamp is shrunk on a big frame
+    for variety (see test_the_air_keeps_its_colour_at_full_screen), which
+    left the frame dark, and an unseen colour is grey. Counted as saturation
+    times brightness per pixel: either alone misleads, since a dark frame
+    can be more saturated and look greyer.
     """
 
-    #: Both frames are of the same room, and a window was never the thing
-    #: that looked wrong, so "as vibrant as windowed" is the bar. A
-    #: fifteenth of slack now rather than a twenty-fifth, because a later
-    #: report asked for the window's *dark* back at full screen as well -
-    #: "X xxxx xxx xxxxx xx xxxxx xxxx xxxxx xxxxxxx xx xxx xxxxxxxxxx xx
-    #: xxxx xx xxxxxxxx xxxx, X xxxx xxxx xx xxxxxxxxxx xx xxxx" - and
-    #: those two pull against each other. Filling the bare air with enough
-    #: light to match the window exactly lifts the darkest tenth of the
-    #: frame from 0.216 to 0.247, which is the dark being asked for.
-    #:
-    #: At the setting that keeps it, full screen holds 0.275 of colour
-    #: against a window's 0.289 and is still the more colourful of the two
-    #: over the outer thirds, where the complaint began.
+    #: Within a fifteenth of the window: matching it exactly also lifts the
+    #: darkest tenth of the frame from 0.216 to 0.247, losing the dark the
+    #: window has. At this setting full screen holds 0.275 against the window's
+    #: 0.289, and more over the outer thirds.
     SLACK = 0.93
 
     @staticmethod
     def _frame(width, height, bass=0.95):
-        """The room, on a clock this file controls.
-
-        The same reason as in ``TestTheAirIsColouredByTheBass._air``: the
-        room travels by however long the last frame took, so left on the
-        wall clock this measures the build runner.
+        """The room on a clock this file controls; see
+        TestTheAirIsColouredByTheBass._air.
         """
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
@@ -6416,12 +5910,9 @@ class TestTheAirIsAsVividAtFullScreenAsInAWindow:
             f"the two")
 
     def test_a_big_frame_keeps_its_dark(self):
-        """"X xxxx xxx xxxxx xx xxxxx xxxx xxxxx xxxxxxx xx xxx xxxxxxxxxx
-        xx xxxx xx xxxxxxxx xxxx. X xxxx xxxx xx xxxxxxxxxx xx xxxx."
-
-        Measured as the darkest tenth of the frame. Filling the bare air
-        until a full screen matched a window for colour took that from
-        0.216 to 0.247: the corners the room sits in were lit.
+        """Full screen keeps some black, as the window has: the darkest tenth
+        of the frame. Filling the air to match the window's colour took it
+        from 0.216 to 0.247.
         """
         import statistics
 
@@ -6439,16 +5930,10 @@ class TestTheAirIsAsVividAtFullScreenAsInAWindow:
             f"screen {full:.3f}, so full screen has lost the dark")
 
     def test_the_edges_hold_as_much_colour_as_the_middle_does(self):
-        """Where the fault actually was, and the reason the whole-frame
-        number above understates it.
-
-        Measured in sixths across the frame, full screen held *more*
-        colour than the window down the middle two columns - 0.40 against
-        0.35 - and much less down the outer four, 0.13 against 0.22 at the
-        far left. The room was never uniformly grey; it was lit in the
-        middle and bare at the edges, and the edges are most of a wide
-        frame. A change that lifted the middle would pass the test above
-        and leave what was complained about exactly as it was.
+        """By sixths across the frame: full screen held more colour than the
+        window in the middle (0.40 against 0.35) and much less at the edges
+        (0.13 against 0.22 at the far left), and the edges are most of a
+        wide frame. A whole-frame number misses that.
         """
         window = self._colour(self._frame(640, 360), sides=True)
         full = self._colour(self._frame(1920, 1080), sides=True)
@@ -6457,16 +5942,15 @@ class TestTheAirIsAsVividAtFullScreenAsInAWindow:
             f"window and {full:.3f} at 1920x1080")
 
     # -- against the strip the window actually shows --------------------
-    #: The pane as it sits in a 1300 wide viewer, and a 16:10 full screen.
+    #: The pane as it sits in a 1300-wide viewer, and a 16:10 full screen.
     STRIP = (906, 270)
     SCREEN = (1440, 900)
 
     @staticmethod
     def _hue_spread(image) -> float:
-        """How far the hues in the coloured part of the frame range.
-
-        The circular standard deviation, as a share of the wheel, over
-        every pixel with enough colour in it to have a hue worth naming.
+        """How far the hues in the coloured part of the frame range: the
+        circular standard deviation, as a share of the wheel, over pixels
+        with a hue worth naming.
         """
         import cmath
         import math
@@ -6491,11 +5975,10 @@ class TestTheAirIsAsVividAtFullScreenAsInAWindow:
             for x in range(0, image.width(), 6))
 
     def test_a_full_screen_has_the_strip_s_variety(self):
-        """"Xxxx xxxxx xxxxxxx xxx xxxxxxxxx xx xxxxxxxx xxxx xxx xxxxx
-        xxxx xxxxxxxx xx xxxx xxxxxx." The earlier rounds measured full
-        screen against a 640x360 window; the window anybody sees is a
-        strip. Laid out for a 16:10 frame the lamp covered most of it in
-        one gradient: 0.104 of hue spread against the strip's 0.176."""
+        """Compared with the strip the window really shows: laid out for 16:10,
+        the lamp covered most of the frame in one gradient (0.104 of hue
+        spread against the strip's 0.176).
+        """
         strip = self._hue_spread(self._frame(*self.STRIP))
         screen = self._hue_spread(self._frame(*self.SCREEN))
         assert screen > strip * 0.85, (
@@ -6503,14 +5986,14 @@ class TestTheAirIsAsVividAtFullScreenAsInAWindow:
             f"against the strip's {strip:.3f}")
 
     def test_a_full_screen_is_no_paler_than_the_strip(self):
-        """The light added to a big frame's bare air carried the colour
-        towards white, which is a pastel: brighter and less saturated at
-        once. Measured on a real track, 0.746 of brightness against the
-        window's 0.633."""
+        """Light added to a big frame's bare air pushed the colour towards
+        white, a pastel: 0.746 of brightness against the window's 0.633 on a
+        real track.
+        """
         strip = self._frame(*self.STRIP)
         screen = self._frame(*self.SCREEN)
-        # The scene on its own, before the polish: 0.411 against 0.365
-        # with the extra light, 0.362 without it.
+        # The scene alone, before the polish: 0.411 against 0.365 with the
+        # extra light, 0.362 without.
         assert self._brightness(screen) < self._brightness(strip) + 0.02, (
             f"full screen is {self._brightness(screen):.3f} bright against "
             f"the strip's {self._brightness(strip):.3f}")
@@ -6519,9 +6002,9 @@ class TestTheAirIsAsVividAtFullScreenAsInAWindow:
             f"{self._colour(strip):.3f}")
 
     def test_the_strip_itself_is_left_alone(self):
-        """The strip was the one that looked right, so its air is laid out
-        exactly as it always was: stretching only ever happens to a frame
-        taller than it."""
+        """The strip's air is laid out as it always was; only a taller frame is
+        stretched.
+        """
         from PySide6.QtCore import QPointF, QRectF
 
         import visualizers
@@ -6534,18 +6017,11 @@ class TestTheAirIsAsVividAtFullScreenAsInAWindow:
 
 
 class TestTheBufferGoesUpByWholePixels:
-    """"Rave full screen xxxxxxxxxx xxxxx xx xxx xx xxxxxxx xx xx xx xx
-    xxxxxxxx xxxx."
-
-    It was not the colour. A scene that will not fit the frame budget is
-    drawn into a smaller buffer and stretched, and the stretch was
-    smoothed, which for a picture made of thin bright lines on a dark
-    ground is most of what it looks like. Measured at 1512x982 on a 2x
-    display, saturation times brightness came out at 0.452 against a
-    window's 0.456 - near enough identical, which is why no measure of
-    colour ever found this - while the mean step in brightness from one
-    pixel to the next came out at 0.0015 against 0.0026. The picture had
-    lost 42 per cent of its edge, and a soft picture reads as a grey one.
+    """Full screen is as sharp as the window. A scene over budget is drawn
+    smaller and stretched, and the smoothed stretch made it soft: at
+    1512x982 on a 2x display, colour was identical (0.452 against 0.456)
+    while the mean step between neighbouring pixels fell from 0.0026 to
+    0.0015. A soft picture reads as a grey one.
     """
 
     @staticmethod
@@ -6608,8 +6084,9 @@ class TestTheBufferGoesUpByWholePixels:
             f"{soft:.4f}, so the whole-number case is being smoothed too")
 
     def test_an_uneven_stretch_is_still_smoothed(self, qapp):
-        """Not smoothing 2.5x would double some pixels and not their
-        neighbours, and the unevenness crawls as the scene moves."""
+        """Not smoothing at 2.5x would double some pixels and not their
+        neighbours, and the unevenness crawls as the scene moves.
+        """
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -6633,11 +6110,8 @@ class TestTheBufferGoesUpByWholePixels:
         assert seen[2.5] is True, "a 2.5x stretch was left unsmoothed"
 
     def test_every_rung_divides_into_one(self, qapp):
-        """Which is what makes the crisp path reachable at all.
-
-        The ladder used to have 0.80, 0.67 and 0.40 on it. Those stretch
-        by 1.25, 1.49 and 2.5, so a scene sitting on one of them could
-        never be put up crisply however cheap it was.
+        """Only whole-number rungs, or a scene on 0.80, 0.67 or 0.40 could
+        never be put up crisply.
         """
         from attachment_widgets import Sharpness
 
@@ -6650,20 +6124,15 @@ class TestTheBufferGoesUpByWholePixels:
 
 
 class TestThePlayingKeysDoNotCollide:
-    """"Xxxx xxxxxx xxxxxx xx xxxxxxxxx xxxx. X xx xxxxxxx xxxxxxxxxx."
-
-    It was, in two places: the viewer registers F as a shortcut and the
-    button's own tip said "Full screen (F)". So the one key somebody who
-    picks Manual has to know was also the key that left the room.
+    """The hand-strobe key is not F, which is full screen in the viewer and on
+    the button's tip.
     """
 
     @staticmethod
     def _shortcut_keys():
-        """The single letters the viewer binds as window shortcuts.
-
-        Read out of the source rather than by building a viewer, because
-        what matters is the binding, and a viewer needs a window, a file
-        and a media player before it has any.
+        """The single letters the viewer binds as shortcuts, read from the
+        source: what matters is the binding, and a viewer needs a window, a
+        file and a player.
         """
         import re
         from pathlib import Path
@@ -6695,8 +6164,9 @@ class TestThePlayingKeysDoNotCollide:
             f"works a window shortcut, so pressing it does two things")
 
     def test_the_key_the_labels_promise_is_the_key_that_flashes(self):
-        """Three places name it: the label under the box, the tip on the
-        box, and the list of playing keys."""
+        """Named in three places: the label under the box, its tip, and the key
+        list.
+        """
         from PySide6.QtCore import Qt
 
         import attachment_widgets
@@ -6715,27 +6185,19 @@ class TestThePlayingKeysDoNotCollide:
 
 
 class TestTheRaveRigFiresIntoTheRoom:
-    """"Xxxxx xxx xxxx xxxxxx xxxxx xxxxxx xxxx xxx xxxxxxxxx xxxxxxxxxxxx
-    xx xxxx, xxx xxxx."
-
-    There were. A hat threw one line from the vanishing point at an angle
-    taken from the spin and a length taken from nothing, so one would go
-    up through the ceiling, the next across the walls, and none of them
-    belonged to any surface. The thing in the middle sits at the vanishing
-    point, which is why they looked like they came out of it.
+    """No stray beams from the rave's wireframe: a hat threw a line from the
+    vanishing point at an angle from the spin and a length from nothing,
+    belonging to no surface.
     """
 
-    #: One run, shared. It plays a quiet passage and then a loud one,
-    #: because the rig only comes on for a drop - see
-    #: ``TestTheLaserRigRunsThroughTheDrop``.
+    #: One run, shared: a quiet passage then a loud one, since the rig only
+    #: comes on for a drop (see TestTheLaserRigRunsThroughTheDrop).
     _run: dict = {}
 
     @classmethod
     def _asked(cls, frames=900):
-        """Every point the rig asks to have projected, as (x, y, z).
-
-        Collected only while the loud passage is playing, which is the
-        only time there is a rig to look at.
+        """Every point the rig asks to have projected, as (x, y, z), during the
+        loud passage, when there is a rig.
         """
         if frames in cls._run:
             return cls._run[frames]
@@ -6813,8 +6275,9 @@ class TestTheRaveRigFiresIntoTheRoom:
             "the room")
 
     def test_no_beam_starts_at_the_vanishing_point(self):
-        """Which is where the thing in the middle is, and where every one
-        of them used to start."""
+        """Where the shape in the middle is, and where every beam used to
+        start.
+        """
         seen, _scene = self._asked()
         from_middle = [p for p in seen if abs(p[0]) < 1e-9 and abs(p[1]) < 1e-9]
         assert not from_middle, (
@@ -6843,21 +6306,15 @@ class TestTheRaveRigFiresIntoTheRoom:
 
 
 class TestTheRingsMarkBigMoments:
-    """"I am not sure what's xxxxx xx xxxx xxx xxxxxx xxxx gets xxxxxx xx
-    xxxx. Xxxx xxxxx xxxxxxx xxx xxxx xxxxxxxxxx xx xxxxxxx xxx xxxxxxx xx
-    x xxxx."
-
-    A ring used to fire on any snare over 0.75, which in most tracks is
-    every other beat, so it signified nothing. What fires one now is the
-    room getting louder than it has been.
+    """Rings mark big changes. On any snare over 0.75 they fired every other
+    beat and meant nothing; now they fire on the room getting louder than it
+    has been.
     """
 
     FPS = 60
 
-    #: One replay per length, shared by the tests below. Each one is 2400
-    #: painted frames and they all ask the same question of the same
-    #: deterministic run, so playing it five times only made the suite
-    #: slower.
+    #: One replay per length, shared: 2400 painted frames of a deterministic
+    #: run, asked the same question.
     _replays: dict = {}
 
     @staticmethod
@@ -6937,11 +6394,8 @@ class TestTheRingsMarkBigMoments:
                 f"a ring fired at {when}s, and the track lifts at {at}s")
 
     def test_a_long_loud_passage_is_one_moment(self):
-        """Not a ring every time the wait runs out.
-
-        The slow average takes seconds to climb, so while it was climbing
-        the room stayed louder than it had been: measured before this was
-        seen to, one drop sent three rings 0.45 apart.
+        """Not a ring every time the wait runs out: the slow average climbs for
+        seconds, and one drop sent three rings 0.45 apart.
         """
         fired, _snares = self._played()
         apart = [b - a for a, b in zip(fired, fired[1:])]
@@ -6950,8 +6404,9 @@ class TestTheRingsMarkBigMoments:
             f"counted more than once")
 
     def test_nothing_fires_before_it_has_heard_anything(self):
-        """A slow average starting at zero makes the first sound of any
-        track louder than everything before it."""
+        """A slow average starting at zero makes any track's first sound louder
+        than everything before it.
+        """
         fired, _snares = self._played()
         assert not [at for at in fired if at < 5.0], (
             f"a ring fired at {fired[0]}s, during the quiet intro")
@@ -6966,15 +6421,11 @@ class TestTheRingsMarkBigMoments:
 
 
 class TestTheRoomTravelsSteadily:
-    """"Xxxx xx xxxxx x xxx xxxxxxx, xxxx xx xxxxxxxx xxx xxxx xxx xxxxxx."
-
-    The room is locked to the tempo: a fixed distance per beat, with the
-    bass deciding how that distance is spent within the beat, so that a
-    heavy bass reads as a lunge on the beat and a coast before the next
-    one. The curve doing the front-loading was ``t ** (1 / (1 + bass *
-    SURGE))``, whose slope at the start of a beat is not 2.6 times the
-    average, it is infinite - so the whole lunge landed in one frame and
-    the rest of the beat crawled.
+    """The rave travels smoothly with energy. The room moves a fixed distance
+    per beat, and the bass decides how it is spent within the beat. The
+    curve ``t ** (1 / (1 + bass * SURGE))`` had an infinite slope at the
+    start of a beat, so the whole lunge landed in one frame and the rest
+    crawled.
     """
 
     FPS = 60
@@ -7009,8 +6460,8 @@ class TestTheRoomTravelsSteadily:
             for frame in range(int(seconds * self.FPS)):
                 clock[0] += 1 / self.FPS
                 at = frame / self.FPS
-                # A bass that moves the way a tracked band does: a slow
-                # swell with per-frame noise on top of it.
+                # A bass that moves as a tracked band does: a slow swell with
+                # per-frame noise.
                 swell = 0.45 + 0.35 * math.sin(at * 1.3)
                 bass = max(0.0, min(1.0, swell + noise * math.sin(at * 47.0)))
                 state.bass = bass
@@ -7033,8 +6484,7 @@ class TestTheRoomTravelsSteadily:
         return steps
 
     def test_the_room_never_travels_backwards(self):
-        """Which it did, twice in eight seconds, and a room that goes
-        backwards for a frame is the jitter itself."""
+        """Never backwards for a frame, which is the jitter itself."""
         steps = self._travel()
         back = [step for step in steps if step < 0.0]
         assert not back, (
@@ -7043,7 +6493,8 @@ class TestTheRoomTravelsSteadily:
 
     def test_the_lunge_is_as_hard_as_it_says_and_no_harder(self):
         """SURGE is a multiple of the average speed, so the fastest frame
-        of a beat should be about that multiple and not seven times it."""
+        should be about that multiple, not seven times.
+        """
         import statistics
 
         import visualizers
@@ -7057,8 +6508,7 @@ class TestTheRoomTravelsSteadily:
             f"{1.0 + visualizers.Rave.SURGE:.1f}")
 
     def test_it_still_lunges(self):
-        """The point of the curve. A room that travels evenly is smooth
-        and has no energy in it."""
+        """The point of the curve: an even room is smooth and has no energy."""
         import statistics
 
         steps = self._travel()
@@ -7068,8 +6518,9 @@ class TestTheRoomTravelsSteadily:
             f"median, so the beat has been smoothed flat")
 
     def test_a_bass_that_wobbles_does_not_shake_the_room(self):
-        """The curve is chosen by the bass, so an unsmoothed bass moves
-        where the room *is* rather than how fast it is going."""
+        """The curve follows a smoothed bass, or the bass moves where the room
+        is rather than how fast it goes.
+        """
         import statistics
 
         quiet = self._travel(noise=0.0)
@@ -7085,33 +6536,25 @@ class TestTheRoomTravelsSteadily:
 
 
 class TestTheSceneGivesWayToTheControls:
-    """"Xxxxxxxx xx xxxxxx xxx xxxx xxx xx xxxxx xx xxxxxxxxxx."
-
-    The pane paces itself to spend almost all of a sixtieth of a second
-    painting - 8.5 ms for the scene and 6.5 for the polish out of 16 -
-    which leaves about a millisecond a frame for the cursor, the bar
-    fading in and a button lighting up under the pointer. That is enough
-    while nothing else is happening.
+    """Bringing up the cursor and the control bar in full screen stays smooth.
+    The pane spends most of each sixtieth of a second painting (8.5 ms
+    scene, 6.5 ms polish), leaving about a millisecond for the cursor and
+    the bar.
     """
 
     @staticmethod
     def _full(qapp, qtbot):
-        """Both widgets handed to qtbot, the way the other full-screen
-        tests do it.
-
-        A FullScreenSpectrum reparents the pane it is given. Closing the
-        window leaves the pane parented to a closed one with its frame
-        timer still running, and the session's widget reaper then deletes
-        the pair in whatever order it finds them: on a build runner that
-        aborted the whole worker from inside the teardown.
+        """Both widgets handed to qtbot: a FullScreenSpectrum reparents the
+        pane, and the reaper deleting the pair in the wrong order aborted a
+        worker.
         """
         from PySide6.QtWidgets import QVBoxLayout, QWidget
 
         from attachment_widgets import FullScreenSpectrum, Spectrum
 
-        # In a holder, so that closing the full-screen window has somewhere
-        # to put the spectrum back. With no parent it went back to being a
-        # window of its own and outlived the test.
+        # In a holder, so closing the full-screen window has somewhere to put
+        # the spectrum back; with no parent it became a window that outlived
+        # the test.
         home = QWidget()
         layout = QVBoxLayout(home)
         spectrum = Spectrum()
@@ -7160,8 +6603,9 @@ class TestTheSceneGivesWayToTheControls:
 
     def test_the_cursor_is_shown_once_and_not_on_every_mouse_move(
             self, qapp, qtbot):
-        """Asking Qt to change a cursor walks the widget tree and tells the
-        window system. This ran on every mouse move event."""
+        """Changing a cursor walks the widget tree and tells the window system;
+        this ran on every mouse move.
+        """
         from attachment_widgets import FullScreenSpectrum
 
         spectrum, full = self._full(qapp, qtbot)
@@ -7185,14 +6629,9 @@ class TestTheSceneGivesWayToTheControls:
 
 
 class TestLeavingFullScreenLeavesNothingBehind:
-    """A build runner aborted its worker from inside the session's widget
-    reaper, three runs in a row, in whichever test happened to be running.
-
-    The full-screen window takes the spectrum out of whatever was holding
-    it. On the way back it puts it where it came from, and when there was
-    nowhere to put it back, it called show() on a widget with no parent.
-    That is a new top-level window, made during teardown, that outlives
-    everything that knew about it.
+    """With nowhere to go back to, the spectrum is not shown: show() on a
+    parentless widget during teardown made a top-level window that outlived
+    everything, and aborted workers in the reaper.
     """
 
     def test_a_spectrum_with_nowhere_to_go_back_to_is_not_left_on_screen(
@@ -7236,15 +6675,9 @@ class TestLeavingFullScreenLeavesNothingBehind:
 
 
 class TestTheLaserRigRunsThroughTheDrop:
-    """"I like the laser effects xxx xxxx xxxxx xxxx xxxx xxxxxx xxxxx.
-    Xxxxx xxxxx xxx xxxx, xxxx xxxx xxxx xxxxxxxxxx xxx xxx xxxxxxx xxxx,
-    xxxx xxxx xx xxxx xx xxxx look xxxx xxxxxxxxxxx, xxx xxxx xxxx xxxxxx
-    xx xxxx xxxx 0X."
-
-    Each hat threw one line. Two lines appearing and going out again read
-    as random however carefully each one is placed, because nothing
-    connects one to the next. The rig is a fan now: eleven beams a side
-    leaving one lamp together and sweeping together.
+    """The rave's lasers are a rig, not random lines: a fan of eleven beams a
+    side from one lamp, sweeping together, long enough to read as 3D and
+    steady through a drop.
     """
 
     FPS = 60
@@ -7344,8 +6777,9 @@ class TestTheLaserRigRunsThroughTheDrop:
         return rows
 
     def test_it_stays_on_for_the_whole_drop(self):
-        """What "consistent for the dubstep drop" means. The measure the
-        rings use reads a change, and dies about two seconds in."""
+        """The rig stays on through the drop; the rings' measure reads a change
+        and dies about two seconds in.
+        """
         rows = self._played()
         drop = [lit for at, lit, _n, _l in rows if 15 <= at <= 27]
         assert drop, "the arrangement has no drop in it"
@@ -7372,8 +6806,7 @@ class TestTheLaserRigRunsThroughTheDrop:
             f"the rig stayed at {max(gone):.2f} through the breakdown")
 
     def test_there_are_enough_of_them_to_read_as_a_rig(self):
-        """"Xxxx xxxx xx xxxx xx xxxx look more intentional." One line per
-        hat was two on screen at a time."""
+        """More beams: one line per hat was two on screen at a time."""
         import visualizers
 
         rows = self._played()
@@ -7385,11 +6818,9 @@ class TestTheLaserRigRunsThroughTheDrop:
             f"{min(lit)} beams is not a fan")
 
     def test_the_beams_are_long(self):
-        """"Xxxx xxxx xxxxxx xx xxxx xxxx 0X."
-
-        Length on screen, not in the room. A beam from z 8.5 to z 6.5
-        crosses two metres and draws 151 pixels, because both ends are far
-        away. The lamps stay deep and the feet land in front of the eye.
+        """Long on screen, not in the room: a beam from z 8.5 to 6.5 draws 151
+        pixels because both ends are far. The lamps stay deep and the feet
+        land near the eye.
         """
         rows = self._played()
         lengths = [one for _at, _lit, _n, batch in rows for one in batch]
@@ -7427,14 +6858,9 @@ class TestTheFullScreenControlsWork:
         return pane
 
     def test_the_seek_bar_follows_the_player(self, qapp, qtbot):
-        """"Full screen xxxx xxx xxxx xxx xxxx xxx xxxx xxx xxxx."
-
-        SeekBar.report sets the value with signals blocked, so that a
-        position coming back from the player is not mistaken for somebody
-        dragging the handle. The full-screen bar followed valueChanged,
-        which therefore never fired while a track played. It moved again
-        after a few trips in and out because the transport keys set the
-        value the ordinary way, which does emit.
+        """The full-screen seek bar moves while a track plays. SeekBar.report
+        sets the value with signals blocked, so valueChanged never fires
+        during playback and the bar must follow ``moved``.
         """
         pane = self._pane(qtbot)
         pane._go_full_screen()
@@ -7468,8 +6894,9 @@ class TestTheFullScreenControlsWork:
             qapp.processEvents()
 
     def test_the_pane_says_where_the_picture_went(self, qapp, qtbot):
-        """"There is no message that states so, which xxxxx xxx xxxx
-        xxxxxx xxxxxx xxx xxx xxxx." """
+        """The window says where the picture went while it is full screen
+        elsewhere.
+        """
         pane = self._pane(qtbot)
         pane._go_full_screen()
         qapp.processEvents()
@@ -7498,8 +6925,9 @@ class TestTheFullScreenControlsWork:
             "the stand-in card was left in the pane")
 
     def test_a_click_brings_the_controls_back(self, qapp, qtbot):
-        """On a trackpad the pointer can already be where the bar faded
-        from, and the first thing anybody does then is click."""
+        """On a trackpad the pointer can be where the bar faded from, and the
+        first thing anybody does is click.
+        """
         from PySide6.QtCore import QPoint, QPointF, Qt as _Qt
         from PySide6.QtGui import QMouseEvent
 
@@ -7520,21 +6948,14 @@ class TestTheFullScreenControlsWork:
 
 
 class TestTheTwoStrobeKeys:
-    """"Xxxx xxx xxxxxx xxxxxx xxxxxx xx xxxx X xxxx xxxxx xxxx xxxxxxx.
-    Xx xxx xxxx xxxx X xxxx xxx X xxx xxxx xxx xxxxxx xx XX xxxxxx xx xxxx
-    xxx xxx xxxx xxxxxx xxxxxx, xx maybe xxx xxxxxx xxxxxxx, xxx xxx xxxxxx
-    xxx xxx xxxxx xxx xxxxx?"
-
-    One key cannot be both, so there are two: G holds a light on, H fires
-    over and over.
+    """Two strobe keys: G holds a light on (as on the VU meters), H fires over
+    and over.
     """
 
     @staticmethod
     def _pane(qtbot):
-        """A pane with something to draw.
-
-        Without frames ``_tick`` returns before it reaches the strobe at
-        all, and a test of what the strobe does measures nothing.
+        """A pane with something to draw: without frames _tick returns before
+        the strobe.
         """
         from array import array
 
@@ -7554,12 +6975,9 @@ class TestTheTwoStrobeKeys:
 
     @staticmethod
     def _seconds(pane, seconds, before=None, step=1 / 60.0):
-        """Tick for that long on a clock this test owns, keeping the light.
-
-        On the wall clock sixty tight ticks take about a millisecond, and
-        the rapid-fire key is paced in seconds now - so a loop of ticks
-        that never moves the clock measures a strobe that was never given
-        time to fire.
+        """Tick for that long on a clock the test owns, keeping the light: the
+        rapid-fire key is paced in seconds, and sixty tight ticks take a
+        millisecond of wall clock.
         """
         import attachment_widgets
 
@@ -7601,8 +7019,7 @@ class TestTheTwoStrobeKeys:
             f"for about {wanted:.0f}")
 
     def test_the_rapid_key_is_not_a_held_light(self, qtbot):
-        """The whole point of having two: this one has to go dark between
-        flashes or it is the other one."""
+        """The rapid one goes dark between flashes, or it is the other one."""
         pane = self._pane(qtbot)
         seen = self._seconds(pane, 1.0, before=lambda: pane.vj("spam", 1))
         pane.vj("unspam", 1)
@@ -7618,8 +7035,7 @@ class TestTheTwoStrobeKeys:
             f"it kept firing after the key went up: {max(after):.2f}")
 
     def test_both_keys_work_in_a_window(self, qtbot):
-        """"Manual strobe doesn't work in windowed mode." It did not: the
-        keys were read only by the full-screen window."""
+        """The strobe keys work in the window too, not only in full screen."""
         from PySide6.QtCore import Qt as _Qt
         from PySide6.QtGui import QKeyEvent
         from PySide6.QtCore import QEvent
@@ -7646,12 +7062,9 @@ class TestTheTwoStrobeKeys:
 
 
 class TestTheScenesStartFresh:
-    """"Xxxx xxxx xxxxx xxxxx xx xx xxxxx xxx xxx elements xxx xxxxxxx,
-    xxxxxxxxx xxxxxx, xxx xx xxxx doesn't look like it xxxxxx xxxxx,
-    xxxxxxxxxx xxxx x xxxx xxxx xxxxxx xxxx."
-
-    There is one of each scene for the whole session - see SCENES - so a
-    scene that keeps state keeps it between one track and the next.
+    """A scene starts fresh for each track: there is one of each for the
+    session (see SCENES), so state kept from the last track showed at the
+    start of the next.
     """
 
     def test_a_scene_forgets_what_the_last_track_left(self):
@@ -7699,8 +7112,9 @@ class TestTheScenesStartFresh:
             "a new track got the room as the last one left it")
 
     def test_every_scene_can_be_reset(self):
-        """It is on the base class, so this is about the ones that
-        override __init__ and might not survive being rebuilt."""
+        """reset is on the base class, so this is about scenes that override
+        __init__.
+        """
         import visualizers
 
         for scene in visualizers.SCENES:
@@ -7708,14 +7122,9 @@ class TestTheScenesStartFresh:
 
 
 class TestTheWaterfallIsTheSameLengthEverywhere:
-    """"Xxxxxxxxx xx xxxxxx xx xxx xxxxxxxx xxxx xxxxxxxx xx xxx xxxxxxxxxx
-    xxxx."
-
-    It was not shorter in time, it was shorter on screen. A big frame draws
-    every other row of the history, and the offset that leans each row back
-    was worked out over the rows there would have been rather than the rows
-    there are - so 21 was divided by 43 and the landscape stopped half way
-    back.
+    """Waterfall reaches as far back at full screen. A big frame draws every
+    other history row, and the lean was worked out over the rows there would
+    have been (21 divided by 43), so the landscape stopped half way.
     """
 
     @staticmethod
@@ -7756,12 +7165,8 @@ class TestTheWaterfallIsTheSameLengthEverywhere:
 
 
 class TestTheMetersAreNotPixelated:
-    """"XX xxxxxx xxxxx xxxxxxx xxx xxxxx xxxxxxxx pixelated xx xxxx
-    xxxxxx. XXXX xxx xxx xx pixelation, everything else is perfect."
-
-    A stretched buffer is put up without smoothing, which is right for a
-    picture made of thin bright lines and wrong for one made of arcs and
-    lettering.
+    """The meters' stretched buffer is smoothed: doubling suits thin bright
+    lines, not arcs and lettering.
     """
 
     def test_the_dials_ask_to_be_smoothed(self):
@@ -7803,8 +7208,8 @@ class TestTheMetersAreNotPixelated:
 
 
 class TestTheLasersAnswerTheStrobe:
-    """"Xxxx xxxxxx xxxxxx xxxxx xxxx xxxxxx xx xxxxxxx, xx xxx xx xxxxx
-    xxxxxxxx xxxxxxxxx." """
+    """The rave's lasers flash with the strobe, on top of what they already do.
+    """
 
     @staticmethod
     def _drawn(hit):
@@ -7870,12 +7275,8 @@ class TestTheLasersAnswerTheStrobe:
 
 
 class TestTheCityIsReflectedWithItsLightsOn:
-    """"Xx xxxxxxxxx X xxxx xxx xxxxxx xx xxx xxxxxxxxx xx xxx xxxxxx.
-    Xxxxx xxx xxxx xxxxxx xxx xxxxxxx xx xxx xxxxxxxxx?"
-
-    The towers were reflected as solid blocks and the lit windows were
-    not, so the reflection was a silhouette of a city whose lights were
-    all out.
+    """The vaporwave reflection shows the lit windows, not a silhouette of a
+    city with its lights out.
     """
 
     @staticmethod
@@ -7917,13 +7318,10 @@ class TestTheCityIsReflectedWithItsLightsOn:
 
 
 class TestTheMusicRiderIsAGame:
-    """A playable scene: three lanes, and the chart is the song.
-
-    What makes it a rhythm game rather than a scene with keys is that the
-    obstacles are laid out *ahead* of the playhead. ``state.kit`` says what
-    is happening now, which is too late to put a wall in front of somebody:
-    a wall has to leave the horizon a second and a half before its beat so
-    that it arrives on it.
+    """A playable scene: three lanes, and the chart is the song. Obstacles are
+    laid ahead of the playhead: a wall must leave the horizon a second and a
+    half before its beat to arrive on it, and state.kit only says what is
+    happening now.
     """
 
     @staticmethod
@@ -7984,9 +7382,9 @@ class TestTheMusicRiderIsAGame:
         """The shape that forces a move."""
         scene = self._rider()
         scene._shape("wall", 4.0)
-        # The wall itself. A wall also lays a trail of coins in a lane
-        # it is about to close, earlier than the wall and gone before
-        # it: see TestTheCoinsBesideTheObstacles.
+        # The wall itself. A wall also lays coins in a lane it is about to
+        # close, earlier and gone before it: see
+        # TestTheCoinsBesideTheObstacles.
         lanes = sorted(block[1] for block in scene._blocks
                        if block[2] == "wall")
         assert len(lanes) == scene.LANES - 1, (
@@ -7994,8 +7392,8 @@ class TestTheMusicRiderIsAGame:
         assert len(set(lanes)) == len(lanes), "a wall closed a lane twice"
 
     def test_the_chart_is_laid_ahead_of_the_playhead(self):
-        """A wall has to leave the horizon before the beat it belongs to,
-        or it arrives after it."""
+        """A wall leaves the horizon before its beat, or it arrives after it.
+        """
         scene = self._rider()
         chart = {"Kick": tuple(2.0 + i * 0.5 for i in range(20))}
         scene._heard = 0.0
@@ -8005,9 +7403,9 @@ class TestTheMusicRiderIsAGame:
         assert soonest > scene._heard, (
             f"the first block is for {soonest:.2f}s and the playhead is at "
             f"{scene._heard:.2f}s, so it is already late")
-        # All of the road, at the slowest tempo anybody plays, where a beat
-        # is longest and so is the stretch held back to choose the heaviest
-        # drum in (see ``commit`` in _lay).
+        # All of the road at the slowest tempo played, where a beat is longest,
+        # and so the stretch held back to choose the heaviest drum (see commit
+        # in _lay).
         slow = self._rider()
         slow._heard = 0.0
         slow._beat = 1.0
@@ -8018,7 +7416,7 @@ class TestTheMusicRiderIsAGame:
             f"road is {slow.LOOK_BEATS:.0f} beats - {road:.1f}s - long")
 
     def test_a_passage_with_no_hits_has_no_obstacles(self):
-        """"Silence and xxxxx-xxx xxxxxx xxxx xx xxxxxxxxx." """
+        """Silence and build-ups have no obstacles."""
         scene = self._rider()
         scene._heard = 0.0
         scene._lay(self._state({"Kick": (30.0, 30.5)}))
@@ -8050,30 +7448,25 @@ class TestTheMusicRiderIsAGame:
     def test_sitting_in_a_wall_is_a_hit(self, qapp):
         """And the streak goes with it."""
         scene = self._rider()
-        # Three walls that all leave the *same* lane open, so the other
-        # two are shut for the whole run and sitting in one is a hit.
-        # Which lane a wall opens comes from its time (see _shape), so the
-        # times are searched for rather than written down.
+        # Three walls leaving the same lane open, so the other two are shut and
+        # sitting in one is a hit. A wall's open lane comes from its time (see
+        # _shape), so the times are searched for.
         want = 0
         times = [when / 100.0 for when in range(200, 600)
                  if int((when / 100.0) * 977) % 3 == want]
         chart = {"Kick": tuple(times[:3])}
         assert len(chart["Kick"]) == 3, "found no three walls alike"
         scene._lane = (want + 1) % scene.LANES
-        # The bumper would shatter the first grey harmlessly (see
-        # SHIELD_BACK); this is about the hit, so it is held down for
-        # the whole run rather than zeroed once and left to recharge.
+        # The bumper would shatter the first grey harmlessly (see SHIELD_BACK),
+        # so it is held down for the whole run.
         got = self._play(scene, chart,
                          steer=lambda scene, at: setattr(scene, "_shield", 0.0))
         assert got["hits"] >= 1, (
             f"sat in a closed lane for three walls and was never hit: {got}")
 
     def _slid(self, fps, seconds=1.0):
-        """How long a lane change takes, in milliseconds, at that rate.
-
-        Measured off the scene's own lane position frame by frame, from
-        the frame the input was given on to the frame it is nine tenths
-        of the way there.
+        """How long a lane change takes, in milliseconds, at that frame rate:
+        from the input's frame to nine tenths of the way there.
         """
         scene = self._rider()
         seen = []
@@ -8091,20 +7484,19 @@ class TestTheMusicRiderIsAGame:
         return (got - start) * 1000.0
 
     def test_a_dodge_lands_inside_the_blueprints_window(self, qapp):
-        """"An incredibly tight interpolation window, roughly 50ms-70ms."
-        A dodge begun on the beat has to land on the beat: at the old
-        rate it was nine tenths done after 140 ms, which at twelve units
-        of road a second is two units of ground spent arriving."""
+        """A dodge begun on the beat lands on it: 50 to 70 ms. At the old rate
+        it was nine tenths done after 140 ms, two units of road spent
+        arriving.
+        """
         got = self._slid(60)
         assert 45.0 <= got <= 70.0, (
             f"a lane change at 60 fps took {got:.0f} ms")
 
     def test_a_dodge_is_the_same_length_at_any_frame_rate(self, qapp):
-        """The lane slide is a share of the remaining distance, and a
-        share *per frame* is a different game on every machine: the same
-        dodge took 167 ms on a pane managing 30 and 25 ms on one running
-        at 120. Written as milliseconds rather than off SNAP, because
-        SNAP is the thing under test."""
+        """The same at every frame rate: a share per frame took 167 ms at 30
+        frames and 25 at 120. Written in milliseconds, since SNAP is under
+        test.
+        """
         got = {fps: self._slid(fps) for fps in (30, 60, 120, 144)}
         for fps, took in got.items():
             assert 45.0 <= took <= 70.0, (
@@ -8117,12 +7509,9 @@ class TestTheMusicRiderIsAGame:
             + ", ".join(f"{k}: {v:.0f}ms" for k, v in got.items()))
 
     def test_a_stopped_track_slides_nowhere(self, qapp):
-        """The lane is on the track's clock like everything else.
-
-        Played first and then stopped, because a pause is eased rather
-        than switched - a scene that has never seen a playhead move
-        cannot know the track is stopped, and the coast into the stop is
-        the point of easing it.
+        """The lane follows the track's clock. Played first and then stopped: a
+        pause is eased, and a scene that never saw the playhead move cannot
+        know it stopped.
         """
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
@@ -8158,10 +7547,10 @@ class TestTheMusicRiderIsAGame:
             f"of the way towards the lane it was asked for")
 
     def test_dodging_the_grey_keeps_you_clean(self, qapp):
-        """A kick lays a grey obstacle - Audiosurf's Mono mode is grey
-        against colour, and dodging is what the grey is for. It does not
-        score; keeping the run clean is worth a third of the whole tally
-        at the end of it."""
+        """A kick lays a grey obstacle (in Mono, grey is against colour, and
+        dodging is what grey is for). It scores nothing; a clean run is
+        worth a third of the tally.
+        """
         scene = self._rider()
         chart = {"Kick": (2.0,)}
         open_lane = int(2.0 * 977) % 3
@@ -8173,8 +7562,7 @@ class TestTheMusicRiderIsAGame:
             f"dodging two walls left a streak of {got['streak']}")
 
     def test_it_runs_without_a_chart(self, qapp):
-        """The analysis lands a few seconds after playback starts, and the
-        game has to be on screen before then."""
+        """The game is on screen before the analysis lands."""
         scene = self._rider()
         got = self._play(scene, {}, seconds=2.0)
         assert got["hits"] == 0
@@ -8202,16 +7590,11 @@ class TestTheMusicRiderIsAGame:
 
 
 class TestThePolishPassIsOneBlit:
-    """"Xxx xxxxxxxxxxx xxx xxxxxx xxxxx xxx xxxxxx, xxxxxxxx xxxxxxxxxxx
-    xxxx xxxxxxx."
-
-    The polish pass was costing 4.8 to 6.9 ms on every scene, often as much
-    as the scene itself. Measured at 1512x982 with a buffer at logical
-    size: the final blit alone is 1.92 ms, bloom adds 1.68 and the colour
-    fringing 2.79, because each of the three put the small blurred copy up
-    across the whole frame. Composing them in the halo's own space - a
-    sixty-fourth of the area - and putting the result up once turns three
-    full-size blits into one.
+    """The polish pass composes in the halo's own space. It cost 4.8 to 6.9 ms
+    on every scene; at 1512x982 the blit was 1.92 ms, bloom 1.68 and
+    fringing 2.79, each putting the halo across the whole frame. Composed at
+    a sixty-fourth of the area and put up once, three full-size blits become
+    one.
     """
 
     @staticmethod
@@ -8258,13 +7641,8 @@ class TestThePolishPassIsOneBlit:
         return statistics.median(times), len(big)
 
     def test_bloom_and_fringing_share_one_blit(self, qapp):
-        """Counted rather than timed.
-
-        A wall-clock bound here is a statement about the machine: this
-        pass measured 4.98 ms where it was written and 14.28 on a build
-        runner, which failed a bound of 12 that had nothing to do with the
-        code. How many times the pass puts the frame up is the thing that
-        changed, and it is the same number everywhere.
+        """Counted, not timed: this pass took 4.98 ms here and 14.28 on a build
+        runner. How many times it puts the frame up is the same everywhere.
         """
         import visualizers
 
@@ -8302,13 +7680,9 @@ class TestThePolishPassIsOneBlit:
         return out
 
     def test_the_fringing_still_happens(self, qapp):
-        """Cheaper is not the point if it stopped doing anything.
-
-        Measured on the picture rather than on the clock: the fringing is
-        now done in the halo's own space and costs almost nothing, so a
-        test that timed it would pass whether it happened or not. A bar on
-        black is spread sideways by it, so the pixels either side of the
-        bar are the ones to look at.
+        """The fringing still happens: measured on the picture, since it now
+        costs almost nothing. A bar on black is spread sideways, so the
+        pixels beside it are checked.
         """
         import visualizers
 
@@ -8319,12 +7693,8 @@ class TestThePolishPassIsOneBlit:
         without = self._picture(recipe)
 
         def beside(image):
-            """How much light lands just outside the bar.
-
-            Close to it: the blur here is the downscale to an eighth, so
-            the bloom reaches about eight pixels and the fringing about
-            two. A window ninety pixels wide finds nothing but black and
-            passes whatever the pass does.
+            """How much light lands just outside the bar: the bloom reaches
+            about eight pixels and the fringing two, so the window is close.
             """
             return sum(image.pixelColor(x, 200).valueF()
                        for x in list(range(265, 280))
@@ -8337,10 +7707,8 @@ class TestThePolishPassIsOneBlit:
 
 
 class TestTheRiderIsPlayable:
-    """"Xxxx xxx xxxxxxx xxx xxx xxxx xxx it's unplayable."
-
-    Every kick and hat in a 128 bpm house track is six hits a second. The
-    first version put a block on each of them.
+    """Blocks come at a playable rate: every kick and hat in a 128 bpm track is
+    six hits a second.
     """
 
     #: A house track: kicks on the beat, hats on the eighths.
@@ -8365,10 +7733,8 @@ class TestTheRiderIsPlayable:
         while scene._heard < seconds:
             scene._heard += 0.25
             scene._lay(state)
-        # The figures the chart laid. A coin trail is three things a
-        # sixth of a second apart on purpose - it is one figure's worth
-        # of reward, not three more things to react to - so it is not
-        # what "how fast are they hitting" is asking about.
+        # The figures the chart laid. A coin trail is three things a sixth of a
+        # second apart on purpose, one figure's reward, so it is not counted.
         return sorted({block[0] for block in scene._blocks
                        if block[2] in ("wall", "block", "run")}), scene
 
@@ -8377,8 +7743,8 @@ class TestTheRiderIsPlayable:
 
         times, scene = self._laid()
         assert times, "nothing was laid at all"
-        # Inside a run the blocks are close on purpose; between figures
-        # they are not.
+        # Inside a run the blocks are close on purpose; between figures they
+        # are not.
         figures = [t for i, t in enumerate(times)
                    if i == 0 or t - times[i - 1] > scene.RUN_GAP + 0.01]
         gaps = [b - a for a, b in zip(figures, figures[1:])]
@@ -8387,8 +7753,9 @@ class TestTheRiderIsPlayable:
             f"{scene.GAP}s")
 
     def test_there_are_not_dozens_of_them_a_second(self):
-        """Figures, not blocks. A run is three blocks and one thing to
-        react to, so counting blocks says the road is busier than it is."""
+        """Figures, not blocks: a run is three blocks and one thing to react
+        to.
+        """
         times, scene = self._laid()
         figures = [t for i, t in enumerate(times)
                    if i == 0 or t - times[i - 1] > scene.RUN_GAP + 0.01]
@@ -8403,34 +7770,32 @@ class TestTheRiderIsPlayable:
             f"only {len(times)} blocks over twelve seconds")
 
     def test_a_block_that_has_gone_past_is_not_drawn(self):
-        """They were clamped to the near end instead, which stacked
-        everything that had already gone by against the bottom of the
-        frame at the size of a house."""
+        """Gone once passed: clamped to the near end, they piled up at the
+        bottom of the frame.
+        """
         import visualizers
 
         scene = visualizers.Rider()
         assert scene.GONE > 0.0
         scene._heard = 10.0
-        # Where the road has got to at that moment. Everything is
-        # measured against it now, so a test that moves the playhead has
-        # to move the road with it.
+        # Where the road has got to: a test that moves the playhead moves the
+        # road too.
         scene._at = scene._world(scene._heard)
         # A block due five seconds ago is a long way behind the rider.
         assert scene._where(5.0) < scene.GONE
 
     def test_the_eye_is_above_the_road(self):
-        """"Xxx xxxxxxx xxxxxx xxxxx xxxx xxxx xx xxxx xx xxx what's
-        xxxxxx xx xx xxxx xxxxxx xxx xxxxxx." """
+        """What is coming stays visible from the camera."""
         import visualizers
 
         assert visualizers.Rider.EYE_UP >= 1.5
         assert visualizers.Rider.EYE_BACK > 0.0
 
     def test_the_road_does_not_jump_when_the_music_comes_in(self):
-        """The first note after a silence always reads as the loudest
-        yet, and the road's bends were scaled by the loudness directly:
-        a second into a song the whole road jumped sideways in one frame.
-        Measured on the frames either side of the music coming in."""
+        """The first note after silence reads as the loudest yet, and with
+        bends scaled by loudness directly the road jumped sideways a second
+        into a song.
+        """
         from attachment_widgets import SpectrumState
         import visualizers
 
@@ -8454,16 +7819,14 @@ class TestTheRiderIsPlayable:
         finally:
             visualizers.time.monotonic = was
         jumps = [abs(b - a) for a, b in zip(ahead, ahead[1:])]
-        # 0.785 of a unit in one frame when the bends followed the
-        # loudness itself; 0.043 following it slowly, which is the road's
-        # own movement picking up speed with the passage.
+        # 0.785 of a unit in one frame with the bends following loudness
+        # itself; 0.043 following it slowly.
         assert max(jumps) < 0.1, (
             f"the road ten units ahead moved {max(jumps):.3f} of a unit in "
             f"one frame when the music came in")
 
     def test_the_road_bends_and_climbs_a_long_way(self):
-        """"Xxxx xxx xxxxx xxxxx xxx xx xx xxx xxxx xxxxxx xxxx
-        xxxxxxxxxxxx." """
+        """The track curves and climbs dramatically."""
         import visualizers
 
         scene = visualizers.Rider()
@@ -8477,14 +7840,10 @@ class TestTheRiderIsPlayable:
             f"the road rises and falls {max(up) - min(up):.1f}")
 
     def test_the_speed_follows_the_bass(self):
-        """"Xxxx xxx xxxxxx xxxxx xxxxxx xxxxxx xxxx xxxx xx xxxx."
-
-        Within the beat, not across it. The road covers exactly one
-        beat's worth of ground every beat - that is what puts a block
-        under the rider on its beat - so the bass cannot change how far
-        it goes. What it changes is *when* inside the beat it goes there:
-        at full bass the road lunges onto the beat and coasts before the
-        next one.
+        """The bass changes the ground speed within the beat, not across it:
+        the road covers exactly one beat of ground every beat, which puts a
+        block under the rider on its beat, so at full bass it lunges onto
+        the beat and coasts.
         """
         import statistics
 
@@ -8505,9 +7864,9 @@ class TestTheRiderIsPlayable:
             f"bass is not being felt")
 
     def test_an_empty_chart_does_not_throw_the_road_away(self):
-        """A track with no chart yet handed over a new empty table every
-        frame, which read as a new chart and cleared the road sixty times
-        a second."""
+        """A track with no chart yet handed over a new empty table every frame,
+        which cleared the road sixty times a second.
+        """
         import visualizers
         from attachment_widgets import SpectrumState
 
@@ -8526,12 +7885,9 @@ class TestTheRiderIsPlayable:
 
 
 class TestANewSceneFadesIn:
-    """"Xx xxx xxx xxxxxxx xxxxx xxxxx at xxx xxxx xxxx xx xxxxx
-    xxxxxxxxxxx, don't, xxx xxxx xxxx xx xx xx xxx xxxx xxxx xxx xxxxxx."
-
-    Building all nine scenes costs 0.007 ms and 0.3 KiB each, and only the
-    one on screen is ever painted, so there is nothing to defer. What there
-    was not is the fade.
+    """Picking a scene starts it faded out. Building every scene costs 0.007 ms
+    and 0.3 KiB each, and only the one on screen paints, so nothing is
+    deferred; the fade is what was missing.
     """
 
     def test_picking_a_scene_starts_it_faded_out(self, qtbot):
@@ -8556,8 +7912,8 @@ class TestANewSceneFadesIn:
         pane = Spectrum()
         qtbot.addWidget(pane)
         pane.set_scene(visualizers.by_name("Music rider"))
-        # The fade waits for a scene to fade *in*, so there has to be
-        # something to draw. See test_it_waits_for_the_analysis.
+        # The fade waits for a scene to fade in, so there must be something to
+        # draw. See test_it_waits_for_the_analysis.
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -8565,10 +7921,8 @@ class TestANewSceneFadesIn:
         pane.set_frames([array("f", [0.4] * bands) for _ in range(60)],
                         attachment_audio.RATE)
         pane.resize(320, 200)
-        # Painted rather than only ticked: the fade waits for the scene
-        # to have been *drawn* a few times, because a scene's first
-        # frames cost several times its later ones and the fade used to
-        # run over exactly those. See Spectrum.WARM_FRAMES.
+        # Painted, not only ticked: the fade waits for a scene to have been
+        # drawn a few times. See Spectrum.WARM_FRAMES.
         image = QImage(320, 200, QImage.Format.Format_ARGB32_Premultiplied)
         painter = QPainter(image)
         try:
@@ -8583,11 +7937,8 @@ class TestANewSceneFadesIn:
             f"the fade stalled at {pane._fresh:.2f}")
 
     def test_it_waits_for_the_analysis(self, qtbot):
-        """"Xxxxx xxxxx xxxx xx xxxxxx xxxxx xxxx xxx xxxxxx xxxxx xxxxx,
-        xxx xxxx xxx xxxxxxxxx xxxxxx xx xx."
-
-        While a track is being analysed the pane shows a progress ring
-        instead of the scene, and the fade ran out behind it.
+        """Music rider fades in once the scene itself appears, not behind the
+        progress ring shown during analysis.
         """
         import visualizers
         from attachment_widgets import Spectrum
@@ -8616,7 +7967,7 @@ class TestANewSceneFadesIn:
 
 
 class TestBothStrobeKeysAreNamed:
-    """"Xxxx xxx xxxx xxxxx xxxx xxxxxx xxxx xx xxxx." """
+    """The label names both strobe keys."""
 
     def test_the_label_names_both(self, qtbot):
         from attachment_view import AudioPane
@@ -8646,15 +7997,10 @@ class TestBothStrobeKeysAreNamed:
 
 
 class TestNothingShowsThroughFromTheLastFrame:
-    """"There's a box xx xxx xxx xxxx xxxx xxxxx xxxx x xxxxxx xxxxxx xx
-    xxx xxxxxxxxxx. Xxxx xx xxxxxxx xx xxx visualizers in windowed mode."
-
-    The pane sets neither WA_OpaquePaintEvent nor autoFillBackground, so
-    Qt does not clear it between paints: whatever the backing store held
-    is still there when the next one begins. Three paths do not cover the
-    whole widget - the early return while the strip is closed, the reveal,
-    and the fade a newly chosen scene comes up through - and all three
-    then leave or blend over the frame before them.
+    """No ghost of the last frame in a windowed pane. Neither
+    WA_OpaquePaintEvent nor autoFillBackground is set, so the backing store
+    keeps the last frame, and three paths that do not cover the widget (the
+    closed strip, the reveal, the fade-in) left or blended over it.
     """
 
     @staticmethod
@@ -8702,8 +8048,9 @@ class TestNothingShowsThroughFromTheLastFrame:
             "the frame before is still on screen with the strip closed")
 
     def test_a_scene_fading_up_does_not_blend_with_the_last_frame(self, qapp):
-        """The fade: it is meant to come up out of the background, not out
-        of whatever was there before."""
+        """The fade comes up out of the background, not out of what was there
+        before.
+        """
         def half(pane):
             pane._reveal = 1.0
             pane._fresh = 0.35
@@ -8728,12 +8075,9 @@ class TestNothingShowsThroughFromTheLastFrame:
 
 
 class TestTheRiderIsOnTheBeat:
-    """"Right now the obstacles xx xxx xxxx xx xxxx xx xxx."
-
-    They were early, every one of them, by the same amount. A block's
-    distance down the road was worked out so that it reached the *end* of
-    the road at its beat, and the rider sits three units short of that -
-    0.39 s early at these settings.
+    """Obstacles land on the beat. A block's distance was worked out to reach
+    the end of the road on its beat, and the rider sits three units short of
+    that: 0.39 s early at these settings.
     """
 
     BPM = 128.0
@@ -8747,13 +8091,9 @@ class TestTheRiderIsOnTheBeat:
     @classmethod
     def ride(cls, bass=0.6, seconds=4.0, tempo=128.0, chart=None,
              stop_at=None, fps=60):
-        """Run the scene on a clock this test owns, frame by frame.
-
-        Gives back a row per frame: where the road has got to, how fast
-        it was going, and how far through the beat the track was. Every
-        test of how the world moves reads these rather than calling
-        ``_advance`` once and looking at a number, because the road's
-        speed is a thing it does *within* a beat.
+        """Run the scene on a clock the test owns, frame by frame: a row per
+        frame of where the road has got to, its speed, and the beat phase,
+        since the road's speed changes within a beat.
         """
         import visualizers
         from attachment_widgets import SpectrumState
@@ -8803,9 +8143,8 @@ class TestTheRiderIsOnTheBeat:
         while scene._heard < seconds:
             scene._heard += 0.5
             scene._lay(state)
-        # The figures the chart laid. A coin trail is deliberately
-        # three things a sixth of a second apart, beside an obstacle
-        # rather than on the beat, so it is not one of them.
+        # The figures the chart laid; a coin trail is three things beside an
+        # obstacle, not on the beat, so it is left out.
         laid = [b for b in scene._blocks if b[2] in ("wall", "block", "run")]
         times = sorted({block[0] for block in laid})
         shapes = {round(block[0], 4): block[2] for block in laid}
@@ -8814,9 +8153,9 @@ class TestTheRiderIsOnTheBeat:
         return figures, [shapes[round(t, 4)] for t in figures], scene
 
     def test_a_block_is_level_with_the_rider_on_its_beat(self):
-        """Exactly on it. The road's position is a function of the beat
-        and a block's place is the same function of its own beat, so the
-        two meet at the beat rather than near it."""
+        """Exactly on the beat: the road's position and a block's place are the
+        same function of the beat.
+        """
         import visualizers
 
         scene = visualizers.Rider()
@@ -8834,13 +8173,9 @@ class TestTheRiderIsOnTheBeat:
                 f"{scene.RIDER_AT}")
 
     def test_the_road_and_the_blocks_move_at_one_speed(self):
-        """"Xxx xxxxxxxxxxxx xxxx xxxxxx xxxx xxx obstacles xx xxx xxxx.
-        Xxx xxxx xxxxxxx xxxxx xxxxxx xxxx xxx obstacles."
-
-        They did: the ground ran at 6 to 23 units a second with the bass
-        while a block's distance was worked out from its time and came to
-        a flat 6.5 whatever the track was doing. There is one clock now,
-        so this compares the two by measuring them.
+        """The streetlights, the road surface and the obstacles move together:
+        the ground ran at 6 to 23 units a second with the bass while blocks
+        came at a flat 6.5. One clock now; this measures both.
         """
         import visualizers
 
@@ -8858,8 +8193,8 @@ class TestTheRiderIsOnTheBeat:
             scene._at = scene._world(scene._heard)
             seen.append((scene._at - was_road, was_road and
                          scene._where(due)))
-        # How far the road moved between two frames, against how far the
-        # block moved towards the rider over the same two frames.
+        # How far the road moved between two frames, against how far the block
+        # moved towards the rider.
         blocks = [abs(b - a) for a, b in zip(
             [row[1] for row in seen[1:]], [row[1] for row in seen[2:]])]
         ground = [row[0] for row in seen[2:]]
@@ -8888,8 +8223,9 @@ class TestTheRiderIsOnTheBeat:
             f"two figures {min(gaps):.2f}s apart against {wanted:.2f}")
 
     def test_four_to_the_floor_is_not_the_same_wall_over_and_over(self):
-        """The kick wins every slot on this music, so without a pool of
-        shapes every figure was a wall."""
+        """The kick wins every slot on this music, so without a pool of shapes
+        every figure was a wall.
+        """
         import collections
 
         _figures, shapes, _scene = self._figures()
@@ -8899,13 +8235,9 @@ class TestTheRiderIsOnTheBeat:
             f"{dict(mix)}: one shape is nearly all of them")
 
     def test_the_ground_stops_when_the_track_is_paused(self):
-        """"Xxxxxx xxxxxx xxxxxx xxxx xxxx xxxxxx."
-
-        On a clock this file controls. The road moves by however long the
-        last frame took, and two hundred tight loop iterations take about
-        a millisecond of real time - so left on the wall clock the ground
-        hardly moves whether it is paused or not, and the test passes
-        against the very code it was written to reject.
+        """The ground stops when paused. On a controlled clock: two hundred
+        tight loop iterations take a millisecond, so on the wall clock the
+        ground barely moved either way and the test passed against the bug.
         """
         import visualizers
         from attachment_widgets import SpectrumState
@@ -8940,11 +8272,9 @@ class TestTheRiderIsOnTheBeat:
             f"a paused track, against {moving:.1f} while it was playing")
 
     def test_the_speed_lunges_but_never_stops(self):
-        """"Xxxxxx xxxxx xx x xxx xxxxxxxxxx xxxxxxx xxx xxx xxxxx
-        xxxxx", and "I don't xxxx xxx xxx xxxx xxxxxx xxxxx xxxxxxx
-        xxxxx". Both, which is what the mix of lunge and even run is
-        for: it reaches nearly twice its own pace into a beat and never
-        drops below half of it coming out."""
+        """A big range of speed without stopping between beats: nearly twice
+        its pace into a beat, never below half coming out.
+        """
         import statistics
 
         rows = self.ride(bass=1.0)[60:]
@@ -8957,11 +8287,11 @@ class TestTheRiderIsOnTheBeat:
             f"it never coasts: the slowest it ran was {min(speeds):.1f} "
             f"against a mean of {mean:.1f}")
         assert min(speeds) > mean * 0.30, (
-            f"xxx xxxx xxxxxx xxxxx xxxxxxx xxxxx: {min(speeds):.2f} units "
+            f"the road slows to {min(speeds):.2f} units "
             f"a second against a mean of {mean:.1f}")
 
     def test_a_hit_slows_the_road_and_throws_pieces_off(self):
-        """"Xxx xxx xxxxxxx xxx xxxxxxxx xxxx an obstacle is hit." """
+        """A hit shows and slows the road."""
         import visualizers
 
         scene = visualizers.Rider()
@@ -8969,15 +8299,14 @@ class TestTheRiderIsOnTheBeat:
         scene._lane = 1
         scene._lane_here = scene._lane_at(1)
         scene._heard = 5.0
-        # The bumper is down, so this is a hit rather than the one grey
-        # a run gets for free. See SHIELD_BACK.
+        # The bumper is down, so this is a hit, not the free grey (see
+        # SHIELD_BACK).
         scene._shield = 0.0
         scene._blocks = [[4.0, 1, "wall", False, True]]
         scene._collide()
         assert scene._hits == 1, "the block missed"
-        # A literal, not the constant this is about: written as
-        # `<= scene.SLOW` it passes when SLOW is 1.0, which is the change
-        # it exists to reject.
+        # A literal, not the constant: ``<= scene.SLOW`` passes when SLOW is
+        # 1.0, the change this rejects.
         assert scene._slow < 0.8, (
             f"the road is still at {scene._slow:.2f} of speed after a hit")
         assert len(scene._sparks) >= 8, (
@@ -9000,19 +8329,18 @@ class TestTheRiderIsOnTheBeat:
             f"the road is still at {scene._slow:.2f} two seconds later")
 
     def test_the_camera_follows_the_road(self):
-        """"Xxxxxx xx xxx xxxx xxx xxxxx." It stayed pointed straight
-        ahead while the road swung away from it."""
+        """The camera follows the road rather than staying pointed ahead as it
+        swings away.
+        """
         import visualizers
 
         assert visualizers.Rider.AIM > 0.0
         assert visualizers.Rider.AIM_PULL > 0.0
 
     def test_the_chart_keeps_its_density_at_every_tempo(self):
-        """The gap is a length of time and the beats are a grid, and the
-        two do not divide. At 90 bpm two beats is 1.333 s against the
-        0.80 the gap asks for, so the kick that lands exactly on the gap
-        is short of it by a hair - and rejecting it costs the whole slot,
-        because the next candidate is a beat later.
+        """The gap is a time and the beats a grid, and they do not divide: at
+        90 bpm two beats is 1.333 s against the 0.80 asked, so a kick a hair
+        short must not cost the whole slot.
         """
         import statistics
 
@@ -9038,10 +8366,9 @@ class TestTheRiderIsOnTheBeat:
             times = sorted({block[0] for block in scene._blocks})
             figures = [t for i, t in enumerate(times)
                        if i == 0 or t - times[i - 1] > scene.RUN_GAP + 0.01]
-            # Two beats apart over thirty seconds is 30 / (2 * beat)
-            # figures. A seventh of slack, which is enough for the ends of
-            # the run and not enough to hide a whole slot being dropped:
-            # at 90 bpm that is 26 figures against 18.
+            # Two beats apart over thirty seconds is 30 / (2 * beat) figures; a
+            # seventh of slack covers the ends without hiding a dropped slot
+            # (26 against 18 at 90 bpm).
             wanted = 30.0 / (scene.GAP_BEATS * beat) * 0.85
             assert len(figures) >= wanted, (
                 f"at {bpm:.0f} bpm the chart laid {len(figures)} figures "
@@ -9055,20 +8382,10 @@ class TestTheRiderIsOnTheBeat:
 
 
 class TestThePolishPassCoversTheWholeFrame:
-    """"Xx xxxxx xxxx xxx xxxx xxxxxxxxxx xxxxx xx xxxxx xxx xx xxx xxx
-    xxxx xxxxxx." And, from the report before it, "a box xx xxx xxx xxxx
-    xxxx xxxxx xxxx x xxxxxx xxxxxx xx xxx xxxxxxxxxx, present in all
-    visualizers in windowed mode."
-
-    Both are the same thing. QPixmap.scaled keeps the source's device
-    pixel ratio, so on a 2x display the small blurred copy of the frame
-    claimed to be half the size it really was. Composing it into a pixmap
-    of the same real size put the picture in the top-left quarter and left
-    the other three empty; stretching that over the frame put the whole
-    polish pass in the corner.
-
-    It only showed in a window because full screen shrinks the buffer to
-    logical size, which makes the ratio 1.
+    """The polish fills the frame in a window. QPixmap.scaled keeps the device
+    pixel ratio, so on a 2x display the halo claimed half its size and the
+    polish landed in the top-left quarter; full screen hid it, its ratio
+    being 1.
     """
 
     @staticmethod
@@ -9099,8 +8416,9 @@ class TestThePolishPassCoversTheWholeFrame:
             f"middle and {far:.2f} at the far edge, so it is in a box")
 
     def test_it_is_the_same_at_every_buffer_ratio(self, qapp):
-        """A window and a full screen differ only in the ratio, and the
-        polish should not be able to tell."""
+        """Window and full screen differ only in the ratio, which the polish
+        must not notice.
+        """
         plain = self._glow_at(1.0)
         retina = self._glow_at(2.0)
         for image, name in ((plain, "1x"), (retina, "2x")):
@@ -9127,16 +8445,11 @@ class TestThePolishPassCoversTheWholeFrame:
 
 
 class TestTheRiderSnapsToTheGrid:
-    """"Xxxxx xxxxx xxxxx xxxx xxx xxxx xxxxxxxx xxx obstacles xxxx
-    xxxxxx xxx xxx xxxxxxx xx xxx xxxxx."
-
-    Choosing the heaviest drum in a slot puts figures on the *right*
-    drums. It cannot put them on the beat, because the drums themselves
-    are not on it: a detector reports where the transient rose, which on
-    real music is a few tens of milliseconds either side of the grid and
-    not the same amount twice. Every test below the first feeds a chart
-    that is off the beat on purpose, because a chart written exactly on
-    it cannot tell snapping from no snapping.
+    """Music rider's figures land on the beat. Choosing the heaviest drum per
+    slot picks the right drums, but detected drums sit tens of milliseconds
+    either side of the grid, unevenly, so they are snapped. Charts below are
+    off the beat on purpose: one written on it cannot tell snapping from
+    none.
     """
 
     BPM = 128.0
@@ -9154,10 +8467,7 @@ class TestTheRiderSnapsToTheGrid:
 
     @classmethod
     def _jittered(cls, spread=0.04, seconds=40.0):
-        """A house chart with every hit nudged off the beat.
-
-        Deterministic: the same nudges on every machine and every run,
-        because a flaky rhythm test is worse than none.
+        """A house chart with every hit nudged off the beat, deterministically.
         """
         import random
 
@@ -9202,8 +8512,9 @@ class TestTheRiderSnapsToTheGrid:
                 for t in figures]
 
     def test_the_grid_is_the_next_beat_the_track_reports(self):
-        """Where the grid comes from: the playhead and the beat phase,
-        which is what every other scene lights on."""
+        """The grid comes from the playhead and the beat phase, as every
+        scene's does.
+        """
         import visualizers
 
         scene = visualizers.Rider()
@@ -9218,8 +8529,9 @@ class TestTheRiderSnapsToTheGrid:
         assert scene._beat == pytest.approx(self.BEAT)
 
     def test_a_figure_lands_on_the_grid_when_the_drums_do_not(self):
-        """The whole point. Without snapping the figures inherit the
-        detector's scatter; with it they are on the beat."""
+        """Without snapping the figures inherit the detector's scatter; with it
+        they are on the beat.
+        """
         import statistics
 
         chart = self._jittered()
@@ -9245,8 +8557,7 @@ class TestTheRiderSnapsToTheGrid:
             "the figures are not on a grid that starts at 0.137s")
 
     def test_a_figure_never_moves_to_a_beat_it_did_not_come_from(self):
-        """Snapping is a correction, not a re-write: half a beat is the
-        furthest anything may travel."""
+        """A correction, not a rewrite: nothing moves more than half a beat."""
         import visualizers
 
         scene = visualizers.Rider()
@@ -9277,11 +8588,8 @@ class TestTheRiderSnapsToTheGrid:
         assert scene._snap(4.321) == 4.321
 
     def test_the_figures_of_a_real_detection_pass_are_on_the_beat(self):
-        """End to end, on audio rather than on a written chart.
-
-        The hits here are whatever the element detector reports off a
-        synthesised house track - its real scatter, not a number chosen
-        by this test - fed in exactly as ``_clock`` feeds them.
+        """End to end on audio: the hits are the element detector's real output
+        for a synthesised house track, fed in as _clock feeds them.
         """
         import statistics
 
@@ -9298,8 +8606,7 @@ class TestTheRiderSnapsToTheGrid:
                  for name in found if found[name].beats}
         assert chart.get("Kick"), "the detector found no kick to chart"
 
-        # What the detector itself is off by, which is what snapping has
-        # to absorb. Not asserted on: it is the input, not the result.
+        # What the detector itself is off by: the input, not asserted on.
         heard = self._off(list(chart["Kick"]), beat=beat)
 
         scene = visualizers.Rider()
@@ -9322,12 +8629,9 @@ class TestTheRiderSnapsToTheGrid:
             f"{statistics.median(off):.0f} ms off it")
 
     def test_how_far_off_the_beat_a_hit_is_counts_from_the_grid(self):
-        """The tiebreak that picks between two drums of the same weight.
-
-        Counting beats from the start of the file assumes the first beat
-        is at 0:00. On a grid that starts anywhere else, a hit exactly on
-        a beat scores as badly off and a hit on the eighth scores as near
-        perfect, so the tiebreak picks the wrong one of the pair.
+        """The tiebreak between two drums of equal weight counts from the
+        grid's first beat, not 0:00, or a hit on the beat scores as off and
+        one on the eighth as on.
         """
         import visualizers
 
@@ -9348,18 +8652,11 @@ class TestTheRiderSnapsToTheGrid:
 
 
 class TestTheRoadIsAlwaysARoad:
-    """"Xxxxxx xxxxx xxxxx xxx xx xxxxxxxx."
-
-    It had one, and it was in the projection. The eye sat a fixed height
-    above the world floor while the whole road rose and fell under it, so
-    a passage that lifted the road by nearly that much brought it up to
-    eye level - where the road from here to the horizon lands within a
-    few pixels of one row, and past that point the far end draws *below*
-    the near end and the road folds over on itself.
-
-    Everything here sweeps every phase of the hill, the bend and the roll
-    rather than checking one frame, because the fault only appeared at
-    some of them and a scene with a pose it cannot hold is not fixed.
+    """The road never folds over itself. The eye sat a fixed height above the
+    floor while the road rose and fell, so a lift of nearly that height
+    brought the road to eye level, where the far end drew below the near
+    end. Every phase of the hill, bend and roll is swept, since the fault
+    showed at only some.
     """
 
     SIZES = ((640, 360), (900, 500), (1512, 982), (1920, 1080), (3024, 1964))
@@ -9405,8 +8702,8 @@ class TestTheRoadIsAlwaysARoad:
             f"and the road is folded over")
 
     def test_the_near_edge_runs_off_the_bottom_of_every_frame(self, qapp):
-        """Otherwise the road stops in the picture with a hard edge
-        straight across it."""
+        """Otherwise the road stops in the picture with a hard edge across it.
+        """
         import math
 
         for width, height in self.SIZES:
@@ -9416,9 +8713,8 @@ class TestTheRoadIsAlwaysARoad:
                 horizon, focal, tilt = self._camera(scene, width, height)
                 edge = scene.LANE_WIDE * scene.LANES / 2.0
                 for across in (-edge, 0.0, edge):
-                    # Where the road actually starts this frame, which
-                    # is a fixed distance in front of the eye and moves
-                    # with the spring the eye is on.
+                    # Where the road starts this frame: a fixed distance before
+                    # the eye, on the eye's spring.
                     point = scene._eye(horizon, focal, across, 0.0,
                                        scene._near)
                     dx = point.x() - horizon.x()
@@ -9435,8 +8731,7 @@ class TestTheRoadIsAlwaysARoad:
                 f"of the road is {highest:.0f}px inside the frame")
 
     def test_the_camera_follows_the_hill(self, qapp):
-        """"Xxx xxxxxxx xxxxx xxxxx xx xxxxxxxxx xx xxx xxxx xxxxx xx
-        xxxxx." The road ahead has to stay in one part of the frame."""
+        """Going up hills, the road ahead stays in one part of the frame."""
         import statistics
 
         import visualizers
@@ -9463,8 +8758,9 @@ class TestTheRoadIsAlwaysARoad:
             f"held still, which is no better")
 
     def test_the_camera_does_not_give_the_frame_away_to_a_hill(self, qapp):
-        """The follow is clamped, so a wilder road cannot put the road in
-        the sky."""
+        """The follow is clamped, so a wilder road cannot put the road in the
+        sky.
+        """
         import visualizers
 
         width, height = 900, 500
@@ -9487,12 +8783,9 @@ class TestTheRoadIsAlwaysARoad:
 
 
 class TestTheViewLeansIntoTheBend:
-    """"Xxxx xxxxxx xxxx xxxx xxxxx xxx xx xxxxx xxx, xxxx xx xxxxxxxxx."
-
-    Leaning right tips the camera's up-vector to the right, so the world
-    turns the other way and the right-hand end of the horizon comes up.
-    Qt's positive rotation takes it down, so the sign here is the whole
-    test: the wrong one leans out of every turn.
+    """The camera leans into turns. Leaning right tips the up-vector right, so
+    the right end of the horizon comes up; Qt's positive rotation takes it
+    down, so the sign is the test.
     """
 
     class Bendy:
@@ -9547,8 +8840,8 @@ class TestTheViewLeansIntoTheBend:
         eye = cls.Watched(painter)
         try:
             for step in range(frames):
-                # The playhead has to move, or the scene is paused and
-                # the camera is quite right not to settle anywhere.
+                # The playhead moves, or the scene is paused and the camera
+                # rightly does not settle.
                 state.at = 1.0 + step / 60.0
                 image.fill(QColor(0, 0, 0))
                 scene.paint(eye, QRectF(0, 0, size[0], size[1]), state)
@@ -9594,22 +8887,16 @@ class TestTheViewLeansIntoTheBend:
 
 
 class TestTheShakeIsAKnockNotADrop:
-    """"Decrease screenshake."
-
-    A kick moved the whole frame by three per cent of its width, which on
-    a track with a kick on every beat is a camera being dropped four
-    times a bar.
+    """Less screen shake: a kick moved the frame three per cent of its width,
+    four times a bar.
     """
 
     W, H = 640, 360
 
     @classmethod
     def _shaken(cls, shake):
-        """How far the shake alone moves the picture, at its widest.
-
-        Against a settled camera rather than against the middle of the
-        frame: the aim and the hill move the horizon too, and measuring
-        from the centre measures all three.
+        """How far the shake alone moves the picture at its widest, against a
+        settled camera: aim and hill move the horizon too.
         """
         import visualizers
         from PySide6.QtCore import QRectF
@@ -9623,11 +8910,8 @@ class TestTheShakeIsAKnockNotADrop:
         for _ in range(400):
             settled, _f, _t = scene._camera(box, 0.0, 0.0)
         scene._shake = shake
-        # The wobble runs on its own clock, in sixtieths of a second
-        # rather than in frames, and that clock is kept by _advance -
-        # which the rig is being driven without here. A frame's worth of
-        # it, so this walks every phase of the wobble rather than
-        # measuring one.
+        # The wobble's clock is kept by _advance, not driven here, so a frame's
+        # worth is set and every phase walked.
         scene._went = 1 / 60.0
         most = 0.0
         for _ in range(400):
@@ -9639,15 +8923,12 @@ class TestTheShakeIsAKnockNotADrop:
 
     def test_a_kick_knocks_the_frame_rather_than_dropping_it(self, qapp):
         most, _where = self._shaken(1.0)
-        # A real floor, not "more than nothing": the camera is still
-        # easing towards the road while this runs, so a scene with the
-        # shake cut out entirely still moves a few thousandths of a pixel.
+        # A real floor: the camera is still easing, so a scene without shake
+        # still moves a few thousandths of a pixel.
         assert most > self.W * 0.003, (
             f"a full shake moves the frame {most:.2f}px, which is nothing")
-        # "X xxxxxx xxxx xxxxxx xxxxx xx xxxx." It moved 0.64 per cent
-        # of the width at a full shake and moves 0.42 now; the ceiling
-        # is set just above that rather than at the old headroom, so it
-        # cannot drift back up without saying so.
+        # 0.64 per cent of the width at a full shake before, 0.42 now; the
+        # ceiling sits just above, so it cannot drift back up unnoticed.
         assert most < self.W * 0.006, (
             f"a full shake moves the frame {most:.1f}px of {self.W}, which "
             f"is {most / self.W * 100:.2f} per cent of its width")
@@ -9659,25 +8940,18 @@ class TestTheShakeIsAKnockNotADrop:
 
 
 class TestTheRiderIsDecorated:
-    """"Xxxxxxxx xxx xxxx xxx xx xxxxx xxxxx. Xxxxxxxxx xxxxxx xx xxxxxx.
-    Xxxxxxxxx xxxxxx xx xxxxxx."
-
-    Each of these renders the same frame twice, once with a piece of the
-    decoration drawn and once with it stubbed out, and asks where the
-    difference landed. A count of lit pixels would pass on decoration
-    scattered anywhere at all; these check the lane lines are between the
-    lanes, the gates are off the road, and a block's reflection is under
-    the block.
+    """Music rider's decoration lands where it belongs. Each test renders a
+    frame with and without a piece and asks where the difference is: lane
+    lines between the lanes, gates off the road, reflections under their
+    blocks. A count of lit pixels would pass on decoration anywhere.
     """
 
     W, H = 900, 500
 
     @staticmethod
     def _flat(drop=(), **over):
-        """A rider on a straight, level road, with pieces optionally cut.
-
-        Straight and level so that the bank, the hill and the aim are all
-        zero and the two frames differ by exactly the piece under test.
+        """A rider on a straight, level road, with pieces optionally cut, so
+        the two frames differ by exactly the piece under test.
         """
         import visualizers
 
@@ -9708,8 +8982,8 @@ class TestTheRiderIsDecorated:
         state.synth = 0.3
         state.kit = {}
         state.at = 1.0
-        # A chart the scene already believes it has read, so that laying
-        # it does not throw away the blocks this test placed by hand.
+        # A chart the scene believes it has read, so laying it keeps the
+        # hand-placed blocks.
         state.chart = {"Kick": ()}
         scene._chart_from = state.chart
         scene._laid = scene._heard + scene.READ + 1.0
@@ -9749,8 +9023,7 @@ class TestTheRiderIsDecorated:
         return scene._eye(horizon, focal, across, 0.0, at)
 
     def test_the_lanes_are_marked_between_the_lanes(self, qapp):
-        """"Xxx xxxxxxx xxxxx xxxxxxx xxx xxxxx xx xxxxx xxxxx." Without
-        them the road is one slab and which lane you are in is a guess."""
+        """Lines between the lanes, so the lane you are in is clear."""
         import visualizers
 
         with_lines = self._frame(self._flat())
@@ -9759,16 +9032,15 @@ class TestTheRiderIsDecorated:
         assert len(changed) > 150, (
             f"the lane lines put {len(changed)} pixels on the road")
 
-        # Where the boundaries between the lanes actually are, measured
-        # off the scene rather than guessed.
+        # Where the lane boundaries are, measured off the scene.
         gauge = self._flat()
         self._frame(gauge)
         wide = visualizers.Rider.LANE_WIDE
         rows = {}
         for x, y in changed:
             rows.setdefault(y, []).append(x)
-        # Down at the near end the two lines are far apart and easy to
-        # place: every changed pixel there has to be on one of them.
+        # At the near end the two lines are far apart: every changed pixel
+        # there must be on one of them.
         for y in sorted(rows)[-12:]:
             at = None
             for step in range(1, 400):
@@ -9816,12 +9088,11 @@ class TestTheRiderIsDecorated:
             f"road rather than beside it")
 
     def test_a_block_is_mirrored_in_the_road_under_it(self, qapp):
-        """What makes the blocks stand on the road rather than hover
-        over it."""
+        """Reflections make the blocks stand on the road rather than hover."""
         import visualizers
 
-        # Two seconds out, which the playhead at 1.0s puts two thirds of
-        # the way down the road.
+        # Two seconds out, two thirds of the way down the road with the
+        # playhead at 1.0 s.
         block = (2.0, 1, "wall", False, True)
         with_pool = self._frame(self._flat(), blocks=(block,))
         without = self._frame(self._flat(MIRROR=0.0), blocks=(block,))
@@ -9856,16 +9127,12 @@ class TestTheRiderIsDecorated:
 
 
 class TestTheTrackHasAShapeAboveTheSeekBar:
-    """"Xxx x xxxxxxxxxx xxxxx xxxxxxxx xxxxx xxx xxxx xxx xx xxxxxxxx
-    xxxx xx xxx xxxxxxxx xxxx."
-
-    A seek bar says where you are and nothing about what is there. The
-    shape says where the drop is, where the break is and where the track
-    stops, so seeking is aiming rather than guessing.
+    """The track's shape shows where the drop and the break are, so seeking is
+    aiming rather than guessing.
     """
 
-    #: A calibration that undoes to plain decibels, so a frame can be
-    #: written at a level this test knows: db = shown * 55 - 55.
+    #: A calibration that undoes to plain decibels, so frames can be written at
+    #: known levels: db = shown * 55 - 55.
     PLAIN = {"floor": 0.0, "reach": 1.0, "gamma": 1.0, "range_db": 55.0}
 
     @classmethod
@@ -9875,10 +9142,10 @@ class TestTheTrackHasAShapeAboveTheSeekBar:
         return array("f", [(db + 55.0) / 55.0])
 
     def test_the_shape_is_amplitude_not_the_stretched_display(self):
-        """The frames are stretched to fill the strip of bars, which is
-        right for the strip and wrong here: drawn straight, a limited
-        dance track comes out at 0.88 of full height everywhere, which is
-        a solid block."""
+        """The frames are stretched to fill the bars, which suits the strip and
+        not this: a limited dance track would be 0.88 of full height
+        everywhere, a solid block.
+        """
         import attachment_audio
 
         frames = ([self._at_db(0.0)] * 50 + [self._at_db(-20.0)] * 50)
@@ -9892,12 +9159,8 @@ class TestTheTrackHasAShapeAboveTheSeekBar:
             f"when a tenth of the amplitude is a tenth of the height")
 
     def test_it_is_the_loudest_moment_in_a_column_not_the_average(self):
-        """What makes a waveform readable is the transients.
-
-        Two columns of the same ten frames: one is a single hit in
-        silence, the other is loud the whole way through. A drum track is
-        the first kind, and averaged it draws at a tenth of the height of
-        a held chord that is no louder.
+        """Transients make a waveform readable: a single hit in silence must
+        not draw at a tenth of a held chord that is no louder.
         """
         import attachment_audio
 
@@ -9910,9 +9173,9 @@ class TestTheTrackHasAShapeAboveTheSeekBar:
             f"throughout, so the hit has been averaged away")
 
     def test_a_quiet_recording_still_fills_the_bar(self):
-        """Every track is drawn at the height it has, not at the height
-        it was mastered to: a podcast that never goes near full scale is
-        otherwise a flat line."""
+        """Each track at the height it has, not the one it was mastered to, or
+        a quiet podcast is a flat line.
+        """
         import attachment_audio
 
         frames = ([self._at_db(-20.0)] * 60 + [self._at_db(-40.0)] * 40)
@@ -9946,8 +9209,9 @@ class TestTheTrackHasAShapeAboveTheSeekBar:
             0.0, 0.0, 0.0, 0.0]
 
     def test_a_real_track_is_not_one_flat_bar(self):
-        """End to end on written audio with real dynamics in it: a swung
-        jazz pattern, which is the one style here with no limiter on."""
+        """End to end on written audio with real dynamics: a swung jazz
+        pattern, the one style here with no limiter.
+        """
         import statistics
 
         import attachment_audio
@@ -9987,12 +9251,11 @@ class TestTheWaveformWidget:
 
         image = QImage(bar.width(), bar.height(),
                        QImage.Format.Format_ARGB32_Premultiplied)
-        # Transparent, not black: filled with an opaque colour every pixel
-        # has an alpha of 1 and "was anything drawn here" is always yes.
+        # Transparent, not black: an opaque fill makes "was anything drawn
+        # here" always yes.
         image.fill(QColor(0, 0, 0, 0))
-        # Without the window background, for the same reason: render()
-        # fills the whole widget with it by default, and then every
-        # column is full height whatever was drawn on it.
+        # Without the window background too: render() fills the widget with it
+        # by default, making every column full height.
         bar.render(image, QPoint(),
                    QRegion(QRect(0, 0, bar.width(), bar.height())),
                    QWidget.RenderFlag.DrawChildren)
@@ -10010,13 +9273,11 @@ class TestTheWaveformWidget:
 
     def test_the_part_already_played_is_drawn_apart_from_the_rest(self,
                                                                  qapp):
-        """Which is the whole reason it is above the seek bar and not
-        somewhere else."""
+        """Which is why it sits above the seek bar."""
         bar = self._made([0.9] * 200, span=100_000, at=50_000)
         image = self._drawn(bar)
         middle = bar.height() // 2
-        # On a bar rather than in the gap after one: the columns are
-        # STEP apart and BAR wide, so only some x are drawn on.
+        # On a bar, not the gap: columns are STEP apart and BAR wide.
         step = int(bar.STEP)
         early = image.pixelColor(step * 7, middle)
         late = image.pixelColor(bar.width() - step * 7, middle)
@@ -10074,16 +9335,11 @@ class TestTheWaveformWidget:
 
 
 class TestSeekingOnTheWaveform:
-    """"Xxxxxxx xxxx xxx xxxx, xxx xxxxxxxx xxxx xxx xxxxx xx xxx audio
-    progresses xxx xxxxxxxx xx xx xxxx xxxxxxx."
-
-    Clearing the shape - which every analysis does as it starts - also
-    zeroed how long the track was. The player says that once, when the
-    track loads, so switching the visualiser on after a track had loaded
-    left a waveform with no length: nothing ever shaded, and every click
-    was turned into a seek to nowhere and dropped. Every existing test of
-    the bar built one and handed it a length directly, which is the one
-    thing the real sequence never does again.
+    """The waveform keeps the track's length when its shape is cleared. Every
+    analysis clears the shape, and that zeroed the length the player reports
+    only once, so switching the visualiser on after loading left a bar that
+    never shaded and ignored clicks. Earlier tests handed the bar a length
+    directly, which the real sequence never does again.
     """
 
     def test_it_keeps_the_track_when_it_loses_the_shape(self, qapp):
@@ -10118,8 +9374,9 @@ class TestSeekingOnTheWaveform:
 
     def test_a_click_moves_the_track_with_the_visualiser_switched_on_late(
             self, qapp, tmp_path):
-        """The real dialog and the real player, in the order a person
-        does it: open the track, then switch the visualiser on."""
+        """The real dialog and player, in the order a person goes: open the
+        track, then switch the visualiser on.
+        """
         import math
         import struct
         import time
@@ -10192,9 +9449,9 @@ class TestTheWaveformIsInTheWindowedPane:
 
     def test_it_takes_the_seek_bar_s_place_in_the_transport(self, qapp,
                                                             tmp_path):
-        """"Maybe xxxxxxx xxxx xxxx xxxx xxxx xxxxxxxx xxxxx xxxxxxx xxx
-        xxxx xxxxxx / xxxxx xxxx xxxxxxx." It sits where the slider sat,
-        between the play button and the clock."""
+        """The waveform replaces the seek bar, between the play button and the
+        clock.
+        """
         from attachment_view import AudioPane
 
         pane = AudioPane()
@@ -10261,14 +9518,9 @@ class TestTheWaveformIsInTheWindowedPane:
 
 
 class TestThePlayedStrobeHasARateAndAShape:
-    """"Xx xxxxxx xxxx, X xxxx xxxxxx xxxx xxxxxx xx xxxxxxx xxx xxxx xxx
-    xxxxxx xxxxxxx xxx xxxx xxxxxx xxxxxxxx xxxxxx xxx xxxxx xxxx, xxxx
-    xxxx xxxxx xxxxxxx xxxxx xx xxx xxx xxx xxxxx xxxxxx xx xxx xxx."
-
-    Manual is the one mode where nothing fires by itself, which is what
-    made both sliders inert there: "what counts as a hit" has nothing to
-    count and "how soon another may follow" has nothing to follow. In
-    Manual they take the two things a hand strobe does have.
+    """In Manual the rate slider sets how fast the strobe repeats and the
+    sensitivity slider its rise and fall, from instant on and off to a fade.
+    Nothing fires by itself in Manual, so the sliders were inert there.
     """
 
     @staticmethod
@@ -10278,8 +9530,8 @@ class TestThePlayedStrobeHasARateAndAShape:
         from attachment_widgets import Spectrum
 
         spectrum = Spectrum()
-        # A flat, quiet track: enough for the frame loop to run, not
-        # enough for anything to fire by itself.
+        # A flat, quiet track: enough for the frame loop, not enough to fire
+        # anything.
         spectrum.set_frames([array("f", [0.05] * 27)] * 400, 15)
         spectrum.set_position(0)
         spectrum.set_strobe_source(source)
@@ -10291,12 +9543,9 @@ class TestThePlayedStrobeHasARateAndAShape:
 
     @staticmethod
     def _run(spectrum, frames, before=None, step=1 / 60.0):
-        """Tick the scene, on a clock this test owns, and keep the light.
-
-        ``before`` runs once the clock is pinned. Anything that notes the
-        time - pressing the rapid-fire key does - has to happen on the
-        same clock as the ticks that follow it, or the two are hours
-        apart and nothing ever comes round again.
+        """Tick on a clock the test owns and keep the light. ``before`` runs
+        once the clock is pinned, so a key press notes the same clock as the
+        ticks after it.
         """
         import attachment_widgets
 
@@ -10317,8 +9566,9 @@ class TestThePlayedStrobeHasARateAndAShape:
 
     # -- the rate ---------------------------------------------------------
     def test_manual_starts_at_the_rate_it_always_had(self, qapp):
-        """"Set these to ... current strobe setting by default." Twelve a
-        second is what the rapid-fire key has always run at."""
+        """The default is twelve a second, the rate the rapid-fire key always
+        used.
+        """
         spectrum = self._made()
         assert 1.0 / spectrum.hand_every() == pytest.approx(12.0, abs=0.1), (
             f"Manual starts at {1.0 / spectrum.hand_every():.1f} flashes a "
@@ -10334,8 +9584,9 @@ class TestThePlayedStrobeHasARateAndAShape:
             "the fast end asks for more flashes than a frame can carry")
 
     def test_the_rapid_fire_key_fires_at_the_rate_asked_for(self, qapp):
-        """Measured by counting flashes over a second of ticks, not by
-        reading the setting back."""
+        """Measured by counting flashes over a second of ticks, not by reading
+        the setting back.
+        """
         for rate, wanted in ((0.0, 4.8), (0.5, 12.0), (1.0, 30.0)):
             spectrum = self._made(rate=rate, shape=0.0)
             lit = self._run(spectrum, 120,      # two seconds at sixty
@@ -10426,8 +9677,9 @@ class TestThePlayedStrobeHasARateAndAShape:
 
 
 class TestTheStrobeSlidersSayWhatTheyDo:
-    """A slider captioned "sens" that sets the shape of a flash is worse
-    than no caption at all."""
+    """The captions change in Manual: a slider named for sensitivity that sets
+    a flash's shape misleads.
+    """
 
     @staticmethod
     def _caption(holder):
@@ -10482,16 +9734,10 @@ class TestTheStrobeSlidersSayWhatTheyDo:
 
 
 class TestTheScopeIsATube:
-    """"Xxxxxxxxx xx xxxxxx xxxxxxxxxxxx xxxx xxxxxxx. X xxxx xx xx xxxx
-    xx play xxx xxxx xxxxxxxxxxxx xxxxx xx xxx xxxx xxxxxxx xx Xxxxxxxx
-    Xxxxxxxxx videos."
-
-    The thing that makes oscilloscope music look like oscilloscope music
-    is that a beam deposits energy at a rate. Where the signal moves
-    slowly - a turning point, the corner of a figure, anywhere the beam
-    reverses - the phosphor is struck hard and glows white; where it
-    crosses the screen quickly it barely marks it. A trace stroked at one
-    alpha is a line drawing whatever else is done to it.
+    """The scope behaves like an analog one: a beam deposits energy at a rate,
+    so where the signal moves slowly (turning points, corners) the phosphor
+    glows white, and fast crossings barely mark it. A trace stroked at one
+    alpha is a line drawing.
     """
 
     POINTS = 512
@@ -10509,22 +9755,17 @@ class TestTheScopeIsATube:
             out.append(int(max(-1.0, min(1.0, y)) * 32000))
         return out
 
-    #: Where the slow figure sits, as a share of the frame from its
-    #: middle, and where the fast strokes are.
+    #: Where the slow figure sits, as a share of the frame from its middle, and
+    #: where the fast strokes are.
     SLOW_AT = 0.45
     SLOW_WIDE = 0.35
 
     @classmethod
     def _fast_then_slow(cls):
-        """A figure in the lower half, with fast strokes over the upper.
-
-        Mostly figure, because the reference is a step from the middle of
-        the trace: a trace that is mostly flight has no slow part to be
-        measured against and every level comes out the same.
-
-        The fast strokes do not cross each other, because a stroke laid
-        over another stroke is two strokes' worth of light and would read
-        as dwell that is not there.
+        """A figure in the lower half with fast strokes over the upper. Mostly
+        figure, since the reference is the trace's middle step. The fast
+        strokes do not cross, which would double their light and read as
+        dwell.
         """
         import math
 
@@ -10534,12 +9775,11 @@ class TestTheScopeIsATube:
         def place(t):
             index = int(t * cls.POINTS)
             if index >= slow:
-                # Seven strokes straight across the top half, one after
-                # another, each drawn once.
+                # Seven strokes across the top half, each drawn once.
                 step = index - slow
                 line, along = divmod(step, 16)
-                # Positive here is up the screen: the scope flips the
-                # sign, the way a scope does.
+                # Positive is up the screen: the scope flips the sign, as a
+                # scope does.
                 return (-0.9 + 1.8 * (along / 15.0),
                         0.30 + line * 0.09)
             turn = index / slow * math.tau
@@ -10604,8 +9844,9 @@ class TestTheScopeIsATube:
             f"it flies, which is a line drawing rather than a phosphor")
 
     def test_a_beam_that_stops_still_draws(self, qapp):
-        """A parked beam is the brightest thing on a scope, and Qt
-        strokes nothing at all for a stretch of zero length."""
+        """A parked beam is the brightest thing on a scope, and Qt strokes
+        nothing for a zero-length stretch.
+        """
         import visualizers
 
         scene = self._scene()
@@ -10620,19 +9861,18 @@ class TestTheScopeIsATube:
 
     def test_the_moving_part_of_a_mostly_silent_trace_is_not_the_dimmest(
             self, qapp):
-        """Silence, a held note and the gap between two figures all park
-        the beam for more than half the trace. Measured from the middle
-        step, the reference is then zero and every moving part of the
-        trace falls to the faintest level there is."""
+        """Silence, a held note and the gap between figures park the beam for
+        over half the trace; a reference from the middle step is then zero
+        and everything moving falls to the faintest level.
+        """
         import visualizers
 
         import math
 
         scene = self._scene()
 
-        # Parked for three fifths of the trace, so the middle step is
-        # squarely zero and only a reference taken from further up the
-        # order has anything in it.
+        # Parked for three fifths of the trace, so only a reference from
+        # further up the order has anything in it.
         def place(t):
             if t < 0.6:
                 return (0.5, -0.25)       # parked
@@ -10650,8 +9890,9 @@ class TestTheScopeIsATube:
             f"is, because the trace is parked for more than half its length")
 
     def test_a_figure_is_shaded_whatever_size_it_is(self, qapp):
-        """The reference is the trace's own speed, which is a person
-        turning the intensity up until the figure is right."""
+        """The reference is the trace's own speed, like turning the intensity
+        up until the figure looks right.
+        """
         import math
 
         scene = self._scene()
@@ -10667,12 +9908,9 @@ class TestTheScopeIsATube:
                 f"({used}), so nothing in it is shaded")
 
     class Watched:
-        """A painter that notes every pen the beam is struck with.
-
-        And how many times each one was drawn with: a wide beam is a
-        stack of one-pixel lines nudged around a circle (see ``stroke``),
-        so the width of the beam is the size of the stack, not the width
-        of the pen.
+        """A painter that notes every pen the beam is struck with, and how
+        often: a wide beam is a stack of hairlines (see stroke), so its
+        width is the stack's size.
         """
 
         def __init__(self, painter):
@@ -10715,11 +9953,8 @@ class TestTheScopeIsATube:
         return eye.pens
 
     def test_the_hottest_stretches_wash_towards_white(self, qapp):
-        """A phosphor struck hard stops being green.
-
-        Read off the pens rather than off the picture: a faint stroke
-        composited against black is a nearly black pixel, and a nearly
-        black pixel has almost no saturation whatever colour drew it.
+        """A phosphor struck hard stops being green; read off the pens, since a
+        faint stroke on black has almost no saturation whatever drew it.
         """
         pens = self._struck(self._fast_then_slow())
         assert len(pens) >= 2, f"the beam was struck {len(pens)} times"
@@ -10733,9 +9968,9 @@ class TestTheScopeIsATube:
             f"{faint[3]}, so the beam does not spread when driven hard")
 
     def test_the_trace_is_a_handful_of_stretches_not_hundreds(self, qapp):
-        """A level per sample cuts an ordinary stereo mix - which is
-        noise, not a figure - into eight hundred stretches, each one a
-        subpath with two ends to cap. That was 154 ms a frame."""
+        """A level per sample cut an ordinary stereo mix (noise, not a figure)
+        into eight hundred capped subpaths: 154 ms a frame.
+        """
         import random
 
         from PySide6.QtGui import QPainterPath
@@ -10761,11 +9996,9 @@ class TestTheScopeIsATube:
             f"{subpaths} stretches")
 
     def test_the_beam_never_goes_over_the_hairline_cliff(self, qapp):
-        """Qt's raster engine falls off a thirty-six fold cliff at
-        exactly one pixel of pen, and a trace - hundreds of reversals,
-        a join at every one - is the worst thing to take over it.
-        Measured on the worst trace in a real record at full screen: one
-        wide pen over that path was 880 ms and the hairline stack 3."""
+        """The trace uses hairline stacks: a wide pen over the worst trace in a
+        real record took 880 ms at full screen, the stack 3.
+        """
         import visualizers
 
         pens = self._struck(self._fast_then_slow())
@@ -10778,14 +10011,9 @@ class TestTheScopeIsATube:
 
 
 class TestTheRaveRoomTravelsForwards:
-    """The corridor was flying backwards.
-
-    One truss passes you every beat - that is what fixing the distance
-    per beat is for - but the offset every row was placed at counted
-    *up*, so a row's distance rose with it. Measured over one beat at 128
-    bpm, the nearest truss went from z 2.78 out to 3.33 and then snapped
-    back to 0.65: the room crawling away from you and jumping forward
-    once a beat.
+    """The corridor flies forward. The row offset counted up, so a row's
+    distance rose: over one beat at 128 bpm the nearest truss went from z
+    2.78 to 3.33, then snapped to 0.65.
     """
 
     class Watched:
@@ -10851,8 +10079,9 @@ class TestTheRaveRoomTravelsForwards:
                 f"{[round(w) for w in widest]}")
 
     def test_the_next_one_takes_its_place_at_the_far_end(self, qapp):
-        """Across the wrap, not within a beat: the truss that was on top
-        of you is gone and the one behind it is where it was."""
+        """Across the wrap: the truss that was on you is gone and the one
+        behind is where it was.
+        """
         scene = self._scene()
         before = max(box.width() for box in self._trusses(scene, 24.96))
         after = max(box.width() for box in self._trusses(scene, 25.04))
@@ -10863,18 +10092,14 @@ class TestTheRaveRoomTravelsForwards:
 
 
 class TestTheRaveRoomIsShapedLikeTheBar:
-    """"Make rave obstacles react to music as well."
-
-    The trusses are the only things in the room with a length, and every
-    one of them was the same size whatever the track did. One passes you
-    every beat, so the one five slots down the room is the beat five
-    beats from now - and the chart the analysis found already says what
-    is on it.
+    """The rave's trusses react to the music: one passes every beat, so the
+    truss five slots down is the beat five beats away, and the chart says
+    what is on it.
     """
 
     BEAT = 60.0 / 128.0
     #: Half time: a kick on one and three, a snare on three, hats on the
-    #: eighths. Plenty of beats with nothing on them.
+    #: eighths; many beats are empty.
     CHART = {
         "Kick": tuple(b * (60.0 / 128.0) for b in range(400) if b % 4 in (0, 2)),
         "Snare": tuple(b * (60.0 / 128.0) for b in range(400) if b % 4 == 2),
@@ -10901,18 +10126,14 @@ class TestTheRaveRoomIsShapedLikeTheBar:
         assert not off.get("Kick"), (
             f"a beat with no kick on it reads {off}")
 
-    # Two positions, because at 20.0 the nearest truss is beat 4 and the
-    # kicks fall on the first, third and fifth frames in view - which is
-    # also where they fall if the trusses do not know which beat they are
-    # and count from zero. At 22.0 the nearest is beat 5 and they do not.
+    # Two positions: at 20.0 the kicks fall on the frames they would also hit
+    # if the trusses counted from zero; at 22.0 they do not.
     @pytest.mark.parametrize("at_z", [20.0, 22.0])
     def test_the_frame_on_a_kick_is_bigger_than_one_with_nothing_on_it(
             self, qapp, at_z):
-        """The corridor ahead of you has the shape of the bar coming.
-
-        Each frame against the same frame with no chart at all, because
-        the frames are at different distances and comparing them with
-        each other compares perspective.
+        """The corridor ahead has the shape of the bar to come. Each frame
+        against the same frame with no chart, since frames at different
+        distances differ in perspective.
         """
         import math
 
@@ -10927,8 +10148,8 @@ class TestTheRaveRoomIsShapedLikeTheBar:
         assert len(with_music) == len(without) >= 4, (
             f"{len(with_music)} frames against {len(without)}")
 
-        # One truss a beat, the nearest belonging to the beat after the
-        # one the room has reached.
+        # One truss a beat, the nearest belonging to the beat after the one
+        # reached.
         first = math.ceil(at_z / visualizers.Rave.TRUSS)
         swell = visualizers.Rave.TRUSS_SWELL
         for offset, (lit, flat) in enumerate(zip(with_music, without)):
@@ -10945,8 +10166,9 @@ class TestTheRaveRoomIsShapedLikeTheBar:
                     f"is {ratio:.3f} of its plain size")
 
     def test_two_trusses_the_same_distance_apart_differ(self, qapp):
-        """A kick truss and the beat after it are one slot apart, so
-        anything that is only perspective cancels."""
+        """A kick truss and the next beat's are one slot apart, so perspective
+        cancels.
+        """
         scene = self._scene()
         scene._beats_now = 0.0
         scene._said = 0.0
@@ -10970,19 +10192,10 @@ class TestTheRaveRoomIsShapedLikeTheBar:
 
 
 class TestTheRiderRunsOnOneClock:
-    """"Xxx xxxxxxxxxxxx xxxx xxxxxx xxxx xxx obstacles xx xxx xxxx. Xxx
-    xxxx xxxxxxx xxxxx xxxxxx xxxx xxx obstacles. This does not feel
-    right."
-
-    There were two clocks. The ground, the lane dashes and the gates all
-    moved by ``_at``, which advanced at 6 to 23 road units a second with
-    the bass; a block's distance was worked out from its *time* against a
-    fixed look-ahead and came to a flat 6.5 whatever the track was doing.
-    So the road slid under the blocks and the gates overtook them.
-
-    One clock now: the road's position is a function of the beat, and a
-    block laid on beat n sits at n beats' worth of road. Everything moves
-    together because there is only one thing moving.
+    """One clock for the road and the blocks. The ground, dashes and gates
+    moved with the bass at 6 to 23 units a second while blocks came at a
+    flat 6.5, so the road slid under them. Now the road's position is a
+    function of the beat and a block on beat n sits n beats down it.
     """
 
     BEAT = 60.0 / 128.0
@@ -10992,8 +10205,9 @@ class TestTheRiderRunsOnOneClock:
         return TestTheRiderIsOnTheBeat.ride(**kwargs)
 
     def test_the_gates_keep_pace_with_the_blocks(self, qapp):
-        """Both are placed against the road's position, so this measures
-        the thing that used to differ: how far each moves in a frame."""
+        """Both are placed against the road's position; this measures how far
+        each moves in a frame.
+        """
         import visualizers
 
         scene = visualizers.Rider()
@@ -11008,8 +10222,7 @@ class TestTheRiderRunsOnOneClock:
             scene._heard = 4.0 * self.BEAT + step * 0.012
             scene._at = scene._world(scene._heard)
             block = scene._where(due)
-            # A gate sits at a fixed place on the road, exactly as
-            # ``_pillars`` draws it.
+            # A gate sits at a fixed place on the road, as _pillars draws it.
             here = gate - scene._at
             if block_was is not None:
                 assert (block_was - block) == pytest.approx(
@@ -11019,9 +10232,9 @@ class TestTheRiderRunsOnOneClock:
             block_was, gate_was = block, here
 
     def test_the_road_runs_faster_than_it_used_to(self, qapp):
-        """"Increase obstacle speed." The blocks used to cross the road
-        at a flat 6.5 units a second; this is what they cross it at
-        now."""
+        """The speed blocks cross the road at now; it was a flat 6.5 units a
+        second.
+        """
         import statistics
 
         rows = self._ride(bass=0.5)[60:]
@@ -11031,8 +10244,9 @@ class TestTheRiderRunsOnOneClock:
             f"the blocks managed before")
 
     def test_the_look_ahead_is_a_musical_length(self, qapp):
-        """Three beats, not 2.6 seconds: a length of time is a different
-        musical distance at every tempo."""
+        """Three beats, not 2.6 seconds: a time is a different musical distance
+        at every tempo.
+        """
         import visualizers
 
         scene = visualizers.Rider()
@@ -11053,13 +10267,9 @@ class TestTheRiderRunsOnOneClock:
                 f"at {tempo:.0f} bpm the block three beats out is at "
                 f"{scene._where(due):.2f} and the road ends at {scene.FAR}")
 
-    def test_nothing_xxxxx_xxxxx_xxx_xxxxx_xx_xxxxxxx(self, qapp):
-        """"Xxxxx xxxxx xxxx xxxxxxxx xxxx xxxxxx: xxxx xxxxxxxxx xxxxxx
-        xxx obstacles xx xxxxxx xxx xxxxxx xxx xxxxxx xxxx xx xxxxx
-        xxxxxxxx xxxxxxxx xxx xxxx xx xxxxxx xxx xxxxxx xx x xxxx."
-
-        The music clock used to creep forward on its own and get yanked
-        back whenever it drifted a third of a second from the playhead,
+    def test_a_stopped_track_holds_everything_still(self, qapp):
+        """Paused, the road stays still. The music clock crept forward on its
+        own and was yanked back whenever it drifted a third of a second,
         over and over.
         """
         rows = self._ride(bass=1.0, seconds=6.0, stop_at=2.0)
@@ -11074,8 +10284,9 @@ class TestTheRiderRunsOnOneClock:
             f"seconds of a stopped track")
 
     def test_the_music_clock_does_not_creep_and_snap(self, qapp):
-        """The loop itself: the playhead stands still and the scene's own
-        clock walks away from it and is pulled back."""
+        """The loop: the playhead stands still while the clock walks away and
+        is pulled back.
+        """
         rows = self._ride(bass=1.0, seconds=6.0, stop_at=2.0)
         scene = rows[-1]["scene"]
         assert scene._heard == pytest.approx(2.0, abs=0.05), (
@@ -11099,14 +10310,10 @@ class TestTheRiderRunsOnOneClock:
             state.at = at
             state.beat_at = (at % self.BEAT) / self.BEAT
             scene._advance(state)
-        # The road is measured from an origin, not from the start of the
-        # file, so what a seek has to hold is the *relationship*: the
-        # moment the playhead is at is the moment under the rider. Held
-        # by a monotone road that only ever goes forwards, a backward
-        # seek would freeze it until the track caught up - eighteen
-        # hours at this tempo.
-        # Onto a beat, so the lunge is at neither end of its curve and
-        # the answer is exact rather than "within a beat's worth".
+        # The road is measured from an origin, so a seek must keep the moment
+        # under the rider equal to the playhead. A road that only went forwards
+        # would freeze after a backward seek until the track caught up. Onto a
+        # beat, so the answer is exact.
         state.at = 9 * self.BEAT
         state.beat_at = 0.0
         scene._advance(state)
@@ -11115,9 +10322,8 @@ class TestTheRiderRunsOnOneClock:
             f"after seeking from 40s to {state.at:.1f}s the moment under "
             f"the rider is at {scene._where(scene._heard):.2f} rather than "
             f"{scene.RIDER_AT}")
-        # And it is not frozen there: a monotone road would have to wait
-        # for the track to catch up, which at this tempo is eighteen
-        # hours.
+        # And not frozen there: a forward-only road would wait eighteen hours
+        # at this tempo.
         was = scene._at
         for step in range(1, 6):
             state.at = 9 * self.BEAT + step * 0.01
@@ -11128,16 +10334,10 @@ class TestTheRiderRunsOnOneClock:
 
 
 class TestThePaneClockStopsWithTheTrack:
-    """The creep-and-snap loop, at its source.
-
-    The pane runs its own clock because a media player reports its
-    position a few times a second and anything driven straight off that
-    moves in steps. That clock used to run forward whatever the player
-    was doing. Paused, it is a clock walking away from a playhead that is
-    standing still, held back only by the pull towards it - and the gap
-    settles where the step and the pull balance, which at sixty frames is
-    0.278 s against a SEEK_GAP of 0.30. It sat on the edge of the snap,
-    and any frame slower than a sixtieth tipped it over.
+    """The creep-and-snap at its source. The pane's clock ran forward whatever
+    the player did; paused, it walked away from a still playhead, held back
+    only by the pull, settling at 0.278 s against a SEEK_GAP of 0.30 at
+    sixty frames, so any slow frame tipped it over.
     """
 
     @staticmethod
@@ -11154,12 +10354,9 @@ class TestThePaneClockStopsWithTheTrack:
 
     @classmethod
     def _clock(cls, playing, frames=240, step=1 / 60.0, reports_every=0):
-        """What the pane's clock says, frame by frame, at a fixed rate.
-
-        ``reports_every`` is how often the player hands over a new
-        position, in frames - a real one manages a few a second, which is
-        the whole reason the pane runs a clock of its own. Zero means the
-        position never changes, which is what a stopped track looks like.
+        """The pane's clock frame by frame at a fixed rate. ``reports_every``
+        is how often the player hands over a position, in frames; zero means
+        a stopped track.
         """
         import attachment_widgets
 
@@ -11187,8 +10384,7 @@ class TestThePaneClockStopsWithTheTrack:
             f"and settled at {seen[-1]:.3f} rather than on the playhead")
 
     def test_it_never_snaps_backwards_while_stopped(self, qapp):
-        """The loop itself: forward a little, then back to the playhead,
-        over and over."""
+        """The loop: forward a little, back to the playhead, over and over."""
         seen = self._clock(playing=False)
         backwards = [b - a for a, b in zip(seen, seen[1:]) if b < a - 1e-6]
         assert not backwards, (
@@ -11196,25 +10392,23 @@ class TestThePaneClockStopsWithTheTrack:
             f"by {min(backwards):.3f} s")
 
     def test_a_slow_frame_does_not_tip_it_over_either(self, qapp):
-        """Where it was worst. At thirty frames a second the balance sat
-        at 0.55 s, well past the 0.30 that counts as a seek."""
+        """Worst at thirty frames a second, where the balance sat at 0.55 s."""
         seen = self._clock(playing=False, frames=120, step=1 / 30.0)
         assert max(seen) - min(seen) < 0.01, (
             f"at thirty frames the clock wandered "
             f"{max(seen) - min(seen):.3f} s with the track stopped")
 
     def test_a_playing_track_still_gets_a_smooth_clock(self, qapp):
-        """Which is the whole reason the clock exists: the player reports
-        a few times a second and a picture driven off that steps."""
-        # The player hands over a position six times a second, which is
-        # about what one manages.
+        """The reason the clock exists: a picture driven off reports a few
+        times a second steps.
+        """
+        # A position six times a second, about what a player manages.
         seen = self._clock(playing=True, reports_every=10)
         assert seen[-1] > seen[0] + 3.5, (
             f"the clock only advanced {seen[-1] - seen[0]:.2f} s over four "
             f"seconds of playing")
-        # Never stalled between reports and never jumped on one: the
-        # correction is gentle, so every frame is within half and double
-        # a frame of real time rather than nothing-nothing-nothing-jump.
+        # Never stalled between reports nor jumping on one: every frame moves
+        # between half and double a frame of real time.
         moves = [b - a for a, b in zip(seen, seen[1:])]
         frame = 1 / 60.0
         assert min(moves) > frame * 0.4, (
@@ -11226,30 +10420,20 @@ class TestThePaneClockStopsWithTheTrack:
 
 
 class TestThePictureSitsOnTheMusic:
-    """How far behind the music the picture is, which was not nothing.
-
-    The pane runs its own clock and leans on whatever the player last
-    said. A report is a *timestamp* - true at the moment it lands and
-    stale from then on - and easing towards the raw number leaves the
-    picture behind by the average staleness of the source, which is half
-    its update interval. The pull cannot take that out, because the
-    thing it is pulling towards is itself behind.
-
-    Measured against the real player here, which moves its position
-    every 50 ms: the picture sat 25 ms late. Against a source that
-    speaks once a second it was 300 ms late, which is a third of a beat
-    at 130 bpm and the difference between a road that hits the beat and
-    one that follows it.
+    """The picture is not behind the music. A report is a timestamp, stale from
+    the moment it lands, so easing towards the raw number left the picture
+    behind by half the update interval: 25 ms against the real player (50 ms
+    reports), 300 ms against a once-a-second source, a third of a beat at
+    130 bpm.
     """
 
     @staticmethod
     def _lag(reports_every_ms, frames=600, step=1 / 60.0, playing=True,
              stalls_after=None, speed=1.0):
         """How far the pane's clock is from the truth, frame by frame.
-
-        ``reports_every_ms`` is how often the source hands over a new
-        position. ``stalls_after`` is a moment, in seconds, past which it
-        stops reporting at all while still claiming to play.
+        ``reports_every_ms`` is how often the source reports;
+        ``stalls_after`` is when it stops reporting while still claiming to
+        play.
         """
         from array import array
 
@@ -11260,11 +10444,8 @@ class TestThePictureSitsOnTheMusic:
         pane.set_frames([array("f", [0.3] * 27)] * 600, 15)
         pane.set_position(0)
         pane.set_playing(playing)
-        # The module's own name for the clock is not enough: the methods
-        # that read it import it again inside themselves, and a local
-        # import binds from sys.modules and walks straight past a name
-        # somebody swapped. The attribute on the module object is what
-        # both of them see.
+        # Patched on the module object: the methods import the clock again
+        # inside themselves, and a local import walks past a swapped name.
         was = attachment_widgets._time.monotonic
         now = [5_000.0]
         attachment_widgets._time.monotonic = lambda: now[0]
@@ -11284,10 +10465,9 @@ class TestThePictureSitsOnTheMusic:
         return seen
 
     def test_the_picture_sits_on_the_music(self, qapp):
-        """Written as milliseconds rather than off PULL or STALE_MOST.
-
-        The numbers on the right are what each one measured before the
-        report was treated as a timestamp.
+        """In milliseconds rather than off PULL or STALE_MOST; the right-hand
+        numbers are what each measured before reports were treated as
+        timestamps.
         """
         for gap, was in ((50, 25), (100, 50), (250, 125)):
             seen = self._lag(gap)
@@ -11300,9 +10480,9 @@ class TestThePictureSitsOnTheMusic:
                 f"{-was} ms and the aim is nothing")
 
     def test_it_does_not_get_ahead_of_the_music_either(self, qapp):
-        """Running a report forward is a guess, and a guess that
-        overshoots is worse than one that lags: the beat would land
-        before the sound."""
+        """Running a report forward is a guess, and overshooting is worse than
+        lagging: the beat would land before the sound.
+        """
         seen = self._lag(50)
         ahead = max((heard - at) * 1000.0 for at, heard in seen if at > 3.0)
         assert ahead < 8.0, (
@@ -11310,18 +10490,14 @@ class TestThePictureSitsOnTheMusic:
 
     def test_a_source_that_stops_talking_cannot_run_the_picture_away(
             self, qapp):
-        """A player that claims to be playing and then says nothing.
-
-        The clock may run on for a moment - that is the whole point -
-        but it may never get so far ahead that its own seek test fires,
-        because that would be a picture that jumps back every time the
-        source is slow.
+        """A player that claims to play and says nothing: the clock may run on
+        briefly but never far enough to trigger its own seek test, or the
+        picture jumps back whenever the source is slow.
         """
         seen = self._lag(50, stalls_after=2.0, frames=900)
         heard = [h for _at, h in seen]
         after = [h for at, h in seen if at > 2.5]
-        # A quarter of a second of running on, and then it waits: the
-        # last thing a stuck player said is worth about that much.
+        # A quarter of a second of running on, then it waits.
         ahead = max(after) - 2.0
         assert ahead < 0.30, (
             f"the clock ran {ahead:.2f} s past the last thing the player "
@@ -11336,10 +10512,9 @@ class TestThePictureSitsOnTheMusic:
             f"player was quiet, the worst by {min(backwards):.3f} s")
 
     def test_a_stopped_track_is_not_a_stale_report(self, qapp):
-        """A paused player reports the same position for ever, which
-        looks exactly like a source that has stopped talking. It is not,
-        and the picture must not run on through a pause: "xxxxxx xxxxx
-        xxx xxxxxxxxxx xxxxxx xxxx xxxx xxxxx xxxxx xx xxxxxx"."""
+        """A paused player repeats its position forever, like a stopped source;
+        the picture must not run on through a pause.
+        """
         seen = self._lag(50, playing=False, frames=300, stalls_after=0.0)
         heard = [h for _at, h in seen]
         assert max(heard) - min(heard) < 0.01, (
@@ -11347,15 +10522,9 @@ class TestThePictureSitsOnTheMusic:
             f"stopped track")
 
     def test_it_follows_the_player_rather_than_replacing_it(self, qapp):
-        """A clock of its own is not the same as a clock instead.
-
-        Sound cards do not run at exactly the rate they claim and frame
-        steps do not add up to exactly the time that passed, so a clock
-        that only ever runs forward drifts away from the music and never
-        comes back. This one leans on every report it gets. Measured
-        against a player whose position runs two per cent fast, which is
-        far more than any real card is out by and diverges visibly
-        inside a minute.
+        """The clock leans on every report: sound cards and frame steps never
+        add up exactly, so a forward-only clock drifts away for good.
+        Against a player two per cent fast, far more than any real card.
         """
         seen = self._lag(50, frames=3600, speed=1.02)
         drift = [(heard - at) * 1000.0 for at, heard in seen if at > 5.0]
@@ -11392,14 +10561,9 @@ class TestThePictureSitsOnTheMusic:
             f"a seek to 90 s put the clock at {landed:.2f}")
 
 class TestTheRiderCameraIsOnABoom:
-    """"Improve the camera a bit more: it's hard to see obstacle patterns
-    in some angles."
-
-    Four things were wrong with the rig, and the Audiosurf blueprint
-    names all four: the camera sat at world zero instead of on the track
-    spline, the road rolled on a phase of its own instead of banking into
-    its turn, the field of view did not move with the music, and the eye
-    was welded to the ship instead of trailing it on a spring.
+    """The rider's camera: on the track spline rather than at world zero,
+    banking into the road's turn, field of view moving with the music, and
+    trailing the ship on a spring rather than welded to it.
     """
 
     W, H = 900, 500
@@ -11427,9 +10591,9 @@ class TestTheRiderCameraIsOnABoom:
 
     # -- the road banks into its turn --------------------------------------
     def test_the_road_banks_into_its_own_turn(self, qapp):
-        """It used to roll on a third sine on a third phase, which tumbles
-        the world independently of where the road goes - so at some
-        phases it leaned one way while turning the other."""
+        """It rolled on a phase of its own, tumbling the world independently of
+        the road, leaning one way while turning the other.
+        """
         import visualizers
 
         scene = self._posed()
@@ -11440,9 +10604,8 @@ class TestTheRiderCameraIsOnABoom:
             there = scene._road(at + 0.05)[0]
             turns.append(there - here)
             rolls.append(scene._road(at)[2])
-        # Every one of them, not on average: a bank that agreed with the
-        # turn most of the time would still tumble at the phases where it
-        # did not.
+        # Every one, not on average: agreeing most of the time still tumbles at
+        # the phases where it does not.
         for turn, roll in zip(turns, rolls):
             if abs(turn) > 1e-4:
                 assert turn * roll < 0.0 or abs(roll) < 1e-6, (
@@ -11450,9 +10613,10 @@ class TestTheRiderCameraIsOnABoom:
                     f"which is a lean away from the turn")
 
     def test_the_road_runs_straight_behind_the_rider(self, qapp):
-        """The road is drawn from behind the rider so its near edge stays
-        off the bottom of the frame, and at that distance the projection
-        multiplies whatever is there by two hundred."""
+        """The road is drawn from behind the rider so its near edge stays off
+        the bottom of the frame, where the projection multiplies everything
+        by two hundred.
+        """
         scene = self._posed()
         here = scene._road(scene.RIDER_AT)[0]
         for at in (scene.NEAR, -1.0, 0.0, scene.RIDER_AT - 0.01):
@@ -11462,10 +10626,9 @@ class TestTheRiderCameraIsOnABoom:
 
     # -- the eye rides the spline ------------------------------------------
     def test_the_eye_sits_on_the_road_not_beside_it(self, qapp):
-        """"Hard-centred to the track spline." The eye used to sit at
-        world zero while the road wandered left and right past it, so a
-        bend dragged the whole road across the frame instead of curving
-        away ahead."""
+        """Centred on the road: at world zero, a bend dragged the whole road
+        across the frame instead of curving away.
+        """
         for phase in (0.0, 0.8, 1.9, 3.4, 5.0):
             scene = self._posed(phase=phase, loud=0.8)
             horizon, focal, _tilt = self._settled(scene)
@@ -11475,8 +10638,9 @@ class TestTheRiderCameraIsOnABoom:
                 f"{here.x() - horizon.x():+.0f}px off the eye's own line")
 
     def test_the_near_edge_keeps_its_distance_from_the_eye(self, qapp):
-        """The eye is on a spring; measured from the rider, the road's
-        near edge came into frame whenever it slid back."""
+        """The eye is on a spring; measured from the rider, the road's near
+        edge came into frame whenever it slid back.
+        """
         import visualizers
 
         for loud in (0.0, 0.5, 1.0):
@@ -11490,8 +10654,9 @@ class TestTheRiderCameraIsOnABoom:
 
     # -- the rig follows the music -----------------------------------------
     def test_the_view_opens_up_in_a_loud_passage(self, qapp):
-        """Audiosurf drives the field of view from the vehicle's speed,
-        and its speed is the song's amplitude."""
+        """The field of view follows the craft's speed, which is the song's
+        amplitude.
+        """
         quiet = self._posed(loud=0.0)
         loud = self._posed(loud=1.0)
         _h, narrow, _t = self._settled(quiet)
@@ -11501,8 +10666,7 @@ class TestTheRiderCameraIsOnABoom:
             f"{wide:.0f} in a loud one, which is not an opening")
 
     def test_the_eye_is_dragged_back_by_a_loud_passage(self, qapp):
-        """"Xxx xxxxxx xxxxxxxxxxxxx xxxx xxxxxx xxx x xxxxxxxx xx x
-        xxxxxx, xxxxxxxxxx xxx follow distance." """
+        """The camera lags a fraction of a second, lengthening the follow."""
         import visualizers
 
         quiet = self._posed(loud=0.0)
@@ -11535,12 +10699,8 @@ class TestTheRiderCameraIsOnABoom:
 
 
 class TestTheWholeScreenFeelsAHit:
-    """"Xxxx xxx xxxxxx xxxxxx xxxxx xx xx obstacle hit."
-
-    A shake says something happened to the camera. A frame that goes red
-    from its edges in, with the light dropped out of everything under it
-    and the view thrown, says something happened to *you* - which is the
-    blueprint's stun shake, and which is what a hit is.
+    """A hit is felt by the whole screen: red from the edges in, the light
+    dropped out of everything under it, and the view thrown.
     """
 
     W, H = 640, 360
@@ -11615,8 +10775,9 @@ class TestTheWholeScreenFeelsAHit:
             f"and {self._redness(struck):.2f} hit")
 
     def test_it_reaches_the_corners_not_just_the_road(self, qapp):
-        """The road is a slab up the middle; a reaction that only touched
-        it would be a reaction of the road, not of the screen."""
+        """The road is a slab up the middle; a reaction confined to it would be
+        the road's, not the screen's.
+        """
         calm = self._frame(hurt=0.0)
         struck = self._frame(hurt=1.0)
         for x, y in ((12, 12), (self.W - 12, 12), (12, self.H - 12),
@@ -11650,8 +10811,8 @@ class TestTheWholeScreenFeelsAHit:
         scene._lane = 1
         scene._lane_here = scene._lane_at(1)
         scene._heard = 5.0
-        # The bumper is down, so this is a hit rather than the one grey
-        # a run gets for free. See SHIELD_BACK.
+        # The bumper is down, so this is a hit, not the free grey (see
+        # SHIELD_BACK).
         scene._shield = 0.0
         scene._blocks = [[4.0, 1, "wall", False, True]]
         scene._collide()
@@ -11684,13 +10845,10 @@ class TestTheWholeScreenFeelsAHit:
 
 
 class TestTheRoadIsBuiltFromTheSong:
-    """The Audiosurf pre-pass: the track is read once, before anything is
-    drawn, and the song becomes the road.
-
-    Amplitude is the incline - a chorus runs downhill and a breakdown
-    climbs - and the balance between the two channels is the curve. The
-    same track then draws the same road every time it is played, which a
-    free-running sine could never do.
+    """The pre-pass: the track is read once before anything is drawn, and the
+    song becomes the road. Loudness is the incline (a chorus runs downhill,
+    a breakdown climbs) and the channel balance is the curve, so a track
+    draws the same road every time.
     """
 
     RATE = 48000
@@ -11778,8 +10936,9 @@ class TestTheRoadIsBuiltFromTheSong:
                 attachment_audio.CONTOUR_RATE)}
 
     def test_the_bass_line_is_where_the_bass_is(self):
-        """The low bands across the track, so the road can run fastest
-        where the bass is heaviest."""
+        """The low bands across the track, so the road runs fastest where the
+        bass is heaviest.
+        """
         import attachment_audio
 
         quiet = [0.05] * 3 + [0.5] * 24
@@ -11809,8 +10968,7 @@ class TestTheRoadIsBuiltFromTheSong:
             f"half and {right:+.2f} through the right-panned one")
 
     def test_the_same_track_draws_the_same_road(self, qapp):
-        """Which is the whole point of reading it once, and what a
-        free-running sine could never do."""
+        """Read once, so the same track gives the same road."""
         shape = self._contour()
         first = self._scene(shape)
         second = self._scene(shape)
@@ -11827,15 +10985,14 @@ class TestTheRoadIsBuiltFromTheSong:
 
     # -- the colour and the crowd ------------------------------------------
     def test_the_colour_runs_from_purple_to_red(self, qapp):
-        """"Xxxx-xxxxxx xxxxxxxxx xxxxxxx xxxxxx xxx environment to hot
-        colours and low-energy segments to cool ones." """
+        """Busy, loud passages turn the road hot; quiet ones cool."""
         import visualizers
 
         scene = visualizers.Rider()
         quiet = scene._tier(0.0, 0.0)
         loud = scene._tier(1.0, 0.0)
-        # Against the colours, not against TIERS: written in terms of the
-        # constant, this passes with every tier set to the same hue.
+        # Against the colours, not TIERS: in terms of the constant this passes
+        # with every tier the same hue.
         assert 0.55 <= quiet <= 0.90, (
             f"the quietest passage is at hue {quiet:.2f}, which is not the "
             f"blue-to-purple end of the wheel")
@@ -11845,8 +11002,7 @@ class TestTheRoadIsBuiltFromTheSong:
         assert 0.20 <= middle <= 0.45, (
             f"halfway is at hue {middle:.2f}, which is not the green "
             f"between them")
-        # And through the tiers in order on the way, not by the short way
-        # round the wheel.
+        # Through the tiers in order, not the short way round the wheel.
         seen = [scene._tier(step / 20.0, 0.0) for step in range(21)]
         for before, after in zip(seen, seen[1:]):
             assert after <= before + 1e-9, (
@@ -11855,7 +11011,7 @@ class TestTheRoadIsBuiltFromTheSong:
 
     def test_the_figures_come_thicker_where_there_is_more_going_on(self,
                                                                    qapp):
-        """"High-energy transient density increases block spawning." """
+        """Busy passages lay more blocks."""
         import visualizers
 
         scene = self._scene(self._contour())
@@ -11868,16 +11024,15 @@ class TestTheRoadIsBuiltFromTheSong:
             visualizers.Rider.GAP_MOST
 
     def test_a_loud_passage_really_gets_more_figures(self, qapp):
-        """Not just a smaller number out of ``_apart``: the chart has to
-        use it."""
+        """The chart must use the shorter spacing, not just _apart return it.
+        """
         import visualizers
 
         shape = self._contour()
         laid = {}
-        # Windows well inside each passage, and the figures counted by
-        # where they landed rather than by how many were laid: the chart
-        # reads five seconds ahead, so a run that starts in one passage
-        # finishes in the next.
+        # Windows well inside each passage, counted by where figures landed:
+        # the chart reads five seconds ahead, so a run can start in one passage
+        # and end in the next.
         for name, first, last in (("quiet", 2.0, 6.0),
                                   ("chorus", 10.0, 14.0)):
             scene = self._scene(shape)
@@ -11907,15 +11062,10 @@ class TestTheRoadIsBuiltFromTheSong:
 
 
 class TestMonoScoring:
-    """Audiosurf's Mono mode: grey against colour.
-
-    A grey block is an obstacle to be dodged and a coloured one is a
-    prize to be driven into. The scoring is a chain rather than a tally -
-    the first colour is worth one and every one after it four more, up to
-    two hundred - and a grey breaks it. What that does to how it plays is
-    the whole point: a run of forty clean blocks is worth far more than
-    four runs of ten, so a grey costs much more than the points it does
-    not give you.
+    """Mono: grey blocks are obstacles to dodge and coloured ones prizes. The
+    score is a chain (the first colour worth one, each after four more, up
+    to two hundred) and a grey breaks it, so forty clean blocks are worth
+    far more than four runs of ten.
     """
 
     @staticmethod
@@ -11931,10 +11081,8 @@ class TestMonoScoring:
 
     @classmethod
     def _take(cls, scene, count, grey=False, lane=1, shielded=False):
-        """Drive through that many blocks in the rider's own lane.
-
-        With the bumper down unless asked otherwise: a run gets one grey
-        for free, and most of these are about what the next one costs.
+        """Drive through that many blocks in the rider's lane, with the bumper
+        down unless asked: a run gets one free grey.
         """
         if not shielded:
             scene._shield = 0.0
@@ -11943,9 +11091,9 @@ class TestMonoScoring:
         scene._collide()
 
     def test_the_chain_steps_by_four(self, qapp):
-        """1, 5, 9, 13, 17, 21 - so the running total is 1, 6, 15, 28,
-        45, 66. Written out rather than worked out from the constants:
-        taken from those, this passes with the step set to zero."""
+        """1, 5, 9, 13, 17, 21, so the totals are 1, 6, 15, 28, 45, 66. Written
+        out: from the constants, this passes with the step at zero.
+        """
         scene = self._scene()
         seen = []
         for _ in range(6):
@@ -11955,8 +11103,9 @@ class TestMonoScoring:
             f"six prizes in a row scored {seen}")
 
     def test_the_chain_is_capped_at_two_hundred(self, qapp):
-        """The fiftieth block would be worth 197 and the fifty-first 201,
-        so the cap bites there and never lets go."""
+        """The fiftieth block is worth 197 and the fifty-first 201, so the cap
+        holds from there.
+        """
         scene = self._scene()
         self._take(scene, 60)
         before = scene._score
@@ -11982,8 +11131,9 @@ class TestMonoScoring:
             f"the chain starts again at one")
 
     def test_a_clean_run_is_worth_a_third_again(self, qapp):
-        """Thirty per cent, written out: taken from the constant this
-        passes with the bonus set to nothing."""
+        """Thirty per cent, written out: from the constant, this passes with no
+        bonus.
+        """
         scene = self._scene()
         self._take(scene, 4)
         plain = scene._score
@@ -12008,8 +11158,7 @@ class TestMonoScoring:
         assert scene._streak == 1, "dodging did not count as a dodge"
 
     def test_missing_a_prize_costs_nothing(self, qapp):
-        """It is a prize, not an obstacle: going past one is a shame and
-        not a penalty."""
+        """A prize, not an obstacle: missing one costs nothing."""
         scene = self._scene()
         scene._blocks = [[10.0, 0, "block", False, False]]
         scene._collide()
@@ -12017,9 +11166,9 @@ class TestMonoScoring:
         assert scene._chain == 0 and scene._score == 0
 
     def test_the_obstacles_are_the_minority(self, qapp):
-        """A road of nothing but obstacles is a road you cannot score on,
-        which is what tying them to the kick gave: on four to the floor
-        the kick wins every slot."""
+        """Not all obstacles: tied to the kick, four-to-the-floor music gave a
+        road with nothing to score.
+        """
         import visualizers
         from attachment_widgets import SpectrumState
 
@@ -12047,10 +11196,8 @@ class TestMonoScoring:
             f"{greys / total:.0%}")
 
     def test_the_two_kinds_do_not_look_alike(self, qapp):
-        """They have to be told apart at the far end of the road.
-
-        Off the drawn frame rather than off the constants: read from
-        those, this passes with the two drawn in the same colour.
+        """Told apart at the far end of the road, read off the drawn frame:
+        from the constants this passes with both the same colour.
         """
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
@@ -12091,9 +11238,8 @@ class TestMonoScoring:
             finally:
                 painter.end()
                 visualizers.time.monotonic = was
-            # Sampled where the block is, worked out the way the scene
-            # works it out. The brightest thing in the frame is the
-            # rider's own nose, which is the same either way.
+            # Sampled where the block is, as the scene works it out; the
+            # brightest thing in the frame is the rider's nose either way.
             horizon, focal, _tilt = scene._camera(
                 QRectF(0, 0, side, side), scene._loudness, state.bass)
             at = scene._where(2.0)
@@ -12106,18 +11252,10 @@ class TestMonoScoring:
 
 
 class TestTheMonoBumper:
-    """Mono's side bumper: the first grey is shattered, not hit.
-
-    Guidelines §5. What it is for is the chain. A chain of forty is
-    worth far more than four chains of ten, so one grey late in a long
-    run costs a fortune - and a run that can never survive one is a run
-    played cautiously, which is the opposite of what Audiosurf is for.
-    One free grey, and then eight seconds of playing without a net:
-    the bumper does not make the run safer, it makes the eight seconds
-    after it tense.
-
-    It saves the chain. It does not save the clean finish - shattering
-    a grey is still touching one.
+    """Mono's side bumper: the first grey is shattered, not hit. It protects
+    the chain, so a long run is not played cautiously: one free grey, then
+    eight seconds without a net. It does not save the clean finish;
+    shattering a grey is still touching one.
     """
 
     @staticmethod
@@ -12159,8 +11297,8 @@ class TestTheMonoBumper:
         was = visualizers.time.monotonic
         visualizers.time.monotonic = lambda: clock[0]
         try:
-            # One more frame than seconds times fps: the first has nothing
-            # before it, so it is the gaps between frames that are time.
+            # One more frame than seconds times fps: the gaps between frames
+            # are the time.
             for frame in range(int(seconds * fps) + 1):
                 clock[0] += 1.0 / fps
                 state.at = 5.0 + (frame / fps if playing else 0.0)
@@ -12192,8 +11330,9 @@ class TestTheMonoBumper:
             f"the bumper shattered a grey and is still at {got['shield']:.0%}")
 
     def test_shattering_a_grey_still_ends_the_clean_run(self, qapp):
-        """It is a bumper, not a dodge. Worth a third of the tally at
-        the end, so this is the price of being saved."""
+        """A bumper, not a dodge: the clean finish, a third of the tally, is
+        the price.
+        """
         scene = self._scene()
         self._chain(scene, 3)
         assert scene.report()["clean"] is True
@@ -12202,8 +11341,7 @@ class TestTheMonoBumper:
             "a shattered grey left the run counting as clean")
 
     def test_a_shattered_grey_does_not_wash_the_screen(self, qapp):
-        """A hit throws the picture about and goes red. Shattering one
-        is a knock, not a hit, and has to read as the lesser thing."""
+        """Shattering is a knock, not a hit, and reads as the lesser thing."""
         scene = self._scene()
         self._into(scene)
         shattered = (scene._hurt, scene._shake, scene._slow)
@@ -12222,8 +11360,9 @@ class TestTheMonoBumper:
             f"to {hit[2]:.2f}")
 
     def test_the_bumper_only_covers_one_grey(self, qapp):
-        """The second one inside the eight seconds is a hit like any
-        other: chain gone, streak gone, on the tally."""
+        """A second grey inside the eight seconds is an ordinary hit: chain and
+        streak gone, on the tally.
+        """
         scene = self._scene()
         self._chain(scene, 10)
         self._into(scene)
@@ -12236,8 +11375,9 @@ class TestTheMonoBumper:
             f"a grey with the bumper down left the chain running: {got}")
 
     def test_the_bumper_comes_back_over_eight_seconds(self, qapp):
-        """Written as times rather than off SHIELD_BACK: read from the
-        constant, this passes with the bumper coming back instantly."""
+        """Written as times: from SHIELD_BACK this passes with an instant
+        bumper.
+        """
         marks = {}
         for seconds in (2.0, 4.0, 8.0):
             scene = self._scene()
@@ -12252,9 +11392,7 @@ class TestTheMonoBumper:
             f"eight seconds of playing brought back {marks[8.0]:.0%}")
 
     def test_the_bumper_does_not_come_back_under_a_stopped_track(self, qapp):
-        """Everything on the track's clock, the bumper with it: three
-        seconds of paused would otherwise be three eighths of a free
-        grey for nothing."""
+        """On the track's clock: three seconds paused must not recharge it."""
         scene = self._scene()
         scene._shield = 0.0
         self._run(scene, 3.0, playing=False)
@@ -12271,7 +11409,8 @@ class TestTheMonoBumper:
 
     def test_the_card_says_when_the_bumper_is_down(self, qapp):
         """Up is the quiet state and says nothing; anything less is a
-        number, because the eight seconds are what you are playing."""
+        countdown.
+        """
         scene = self._scene()
         said = {}
         for name, shield in (("up", 1.0), ("spent", 0.0), ("half", 0.5)):
@@ -12317,9 +11456,9 @@ class TestTheMonoBumper:
         return recorder.said
 
     def test_the_bumper_shows_on_the_craft(self, qapp):
-        """Up or down is something to see rather than remember, so the
-        two states draw differently around the ship. Off the frame:
-        read off the card, this passes with the bars deleted."""
+        """The two states draw differently round the ship, read off the frame:
+        from the card, this passes with the bars deleted.
+        """
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -12351,8 +11490,8 @@ class TestTheMonoBumper:
                 painter.end()
                 visualizers.time.monotonic = was
             drawn[name] = image.copy()
-        # The lower half only: the card is at the top and its own text
-        # changes with the bumper, which would pass this on its own.
+        # The lower half only: the card at the top changes its own text with
+        # the bumper.
         moved = sum(
             1
             for y in range(side // 2, side)
@@ -12363,15 +11502,10 @@ class TestTheMonoBumper:
             f"({moved} pixels apart)")
 
 class TestThePuzzleGrid:
-    """Audiosurf's matrix, and the half of the game the road is the other
-    half of.
-
-    A collected block is worth nothing on its own: it drops into a grid
-    three columns wide and six deep, and three or more of a colour
-    touching each other clear it and pay. Cluster values are quadratic in
-    the size, so one run of six is worth twice two runs of three - which
-    is what makes the fuse window worth playing for rather than clearing
-    on sight.
+    """The puzzle grid: a collected block drops into three columns six deep,
+    and three or more of a colour touching clear and pay. Clusters pay
+    quadratically, so six together beat two threes, and growing a cluster
+    inside the fuse window is worth playing for.
     """
 
     @staticmethod
@@ -12397,11 +11531,9 @@ class TestThePuzzleGrid:
         assert scene._clusters() == []
 
     def test_corner_to_corner_does_not_join(self, qapp):
-        """"Blocks must share flat edges. Xxxxxxxx xxxxxxx xxxx xxx xxxx
-        x xxxxx." """
-        # A staircase: (0,0), (1,1), (2,2) all the same colour, each
-        # touching the next only at a corner. The filler under them is
-        # two different colours, or the filler itself would match.
+        """Blocks match only along flat edges; corners do not count."""
+        # A staircase of one colour touching only at corners, on filler of two
+        # other colours that cannot match itself.
         scene = self._grid([[1], [2, 1], [3, 0, 1]])
         assert scene._clusters() == [], (
             f"a diagonal staircase matched: {scene._clusters()}")
@@ -12422,8 +11554,9 @@ class TestThePuzzleGrid:
         assert all(scene._cells), "it cleared before the fuse ran out"
 
     def test_growing_the_cluster_gives_the_window_back(self, qapp):
-        """"Xx xxx xxxxxx xxxxxxxx xxxxxxx xxxxxxxx block xxxxxx xxxx
-        xxxxxx, xx xxxxxx xxxx xxx xxxxxxx xxx xxxxxx xxx timer." """
+        """A matching block added during the fuse joins the cluster and resets
+        the timer.
+        """
         import visualizers
 
         scene = self._grid()
@@ -12456,9 +11589,9 @@ class TestThePuzzleGrid:
         assert scene._score == 270, f"three greens paid {scene._score}"
 
     def test_one_big_cluster_beats_two_small_ones(self, qapp):
-        """"Xxxxxxxx xxx xxxxxx xxxxxxx xx 0 xxxxxxxxx xxxxxx xxxxxx
-        xxxxxxxxxxxxx xxxx xxxxxx xxxx xxxxxxxx xxx xxxxxxxx 0-xxxxx
-        xxxxxxxxx xx xxx xxxx colour." """
+        """One cluster of six pays more than two separate threes of the same
+        colour.
+        """
         big = self._grid([[1, 1], [1, 1], [1, 1]])
         big._burn(0.0)
         big._fuse_up()
@@ -12475,7 +11608,7 @@ class TestThePuzzleGrid:
 
     # -- gravity -----------------------------------------------------------
     def test_what_is_left_falls(self, qapp):
-        """"Xxx xxxxxx xxxxxxxx xxxxx xxxx xxxx xxxx xxxxxxxxxx." """
+        """Blocks above a cleared cluster drop down."""
         scene = self._grid([[2, 4], [2], [2]])
         scene._fuse_up()
         scene._burn(visualizers_fuse() + 0.1)
@@ -12483,11 +11616,9 @@ class TestThePuzzleGrid:
             f"the block above the cluster ended up at {scene._cells}")
 
     def test_a_fall_that_matches_clears_again(self, qapp):
-        """Cascades: the block that falls can land on its own colour.
-
-        A column of three greens with a yellow on top, and a yellow
-        either side of it on the floor. The yellows are not touching
-        until the greens go.
+        """Cascades: a falling block can land on its own colour. Three greens
+        with a yellow on top, and a yellow either side on the floor,
+        touching only once the greens go.
         """
         scene = self._grid([[2, 2, 2, 4], [4], [4]])
         assert scene._clusters() == [(2, [(0, 0), (0, 1), (0, 2)])], (
@@ -12504,9 +11635,9 @@ class TestThePuzzleGrid:
 
     # -- overfill ----------------------------------------------------------
     def test_an_eighth_block_locks_the_grid(self, qapp):
-        """"Xx xxx xxxxxx xxxxxxxx xx 0xx xxxxx, xxx xxxx xxxxx
-        xxxxxxxxxx." Six deep here, so the seventh is the one that does
-        it."""
+        """A column overfilled locks the grid; six deep here, so the seventh
+        does it.
+        """
         import visualizers
 
         scene = self._grid()
@@ -12566,8 +11697,7 @@ class TestThePuzzleGrid:
         assert scene.report()["cells"] == [[], [], []]
 
     def test_the_colour_comes_from_the_passage(self, qapp):
-        """"Base point values scale xxxxxxxxx xx xxx xxxxxxxxx xxxxxxxxx
-        xxxx xx xxx xxxx xxxxxxx." """
+        """A block's base value follows the tier of the passage."""
         import visualizers
 
         scene = self._grid()
@@ -12589,13 +11719,9 @@ def visualizers_fuse():
 
 
 class TestTheRiderUnderAPlaythrough:
-    """The rider run the way the pane runs it, and watched.
-
-    These came out of playing real records through it headless and
-    measuring what happened. Every one of them was a fault found that
-    way rather than a property thought of in advance, which is why they
-    are together: the frame-by-frame run is the instrument, and each
-    assertion is one thing it caught.
+    """The rider run as the pane runs it, and watched. Each assertion is a
+    fault found by playing real records through it headless; the
+    frame-by-frame run is the instrument.
     """
 
     W, H = 640, 360
@@ -12650,9 +11776,8 @@ class TestTheRiderUnderAPlaythrough:
     @classmethod
     def _play(cls, got, seconds=12.0, stop_from=None, stop_to=None,
               keep=(), hurt_at=None):
-        """Run it frame by frame and hand back what was watched.
-
-        ``keep`` names the frames to copy out, as seconds.
+        """Run it frame by frame and return what was watched. ``keep`` names
+        frames to copy out, in seconds.
         """
         import attachment_audio
         import visualizers
@@ -12710,10 +11835,9 @@ class TestTheRiderUnderAPlaythrough:
                 state.kit = {"Kick": state.bass, "Snare": state.mid,
                              "Hats": state.high, "Bass": state.bass}
                 if hurt_at is not None and frame == int(hurt_at * 60):
-                    # Something hit, just before the track stops: the
-                    # wash, the shake and the pieces thrown off it all
-                    # have clocks of their own, and a pause that only
-                    # stopped the road would leave those running.
+                    # Something hit just before the track stops: the wash, the
+                    # shake and the pieces have clocks of their own, and a
+                    # pause must stop them too.
                     scene._hurt = 1.0
                     scene._shake = 1.0
                     scene._burst(scene._lane_at(1))
@@ -12725,9 +11849,8 @@ class TestTheRiderUnderAPlaythrough:
                 for mark in keep:
                     if frame == int(mark * 60):
                         watched["shots"][mark] = image.copy()
-                        # And what the scene held at that moment: the
-                        # run carries on after the stop, and a block hit
-                        # on the way out would put a fresh wash on it.
+                        # And what the scene held at that moment: a block hit
+                        # on the way out would add a fresh wash.
                         watched["held"][mark] = {
                             "hurt": scene._hurt,
                             "sparks": len(scene._sparks),
@@ -12739,24 +11862,19 @@ class TestTheRiderUnderAPlaythrough:
         return watched
 
     # -- what stops when the track stops -----------------------------------
-    def xxxx_xxxxxxx_xx_xxxxxx_xxxxx_xxxxx_xxx_xxxxx_xx_xxxxxxx(self, qapp):
-        """"Xxxxxx xxxxx xxx xxxxxxxxxx xxxxxx xxxx xxxx xxxxx xxxxx xx
-        xxxxxx."
-
-        Every pixel, not a sample. Four separate clocks were still
-        running under a stopped track: the camera's easing, the field
-        behind the road, the envelope followers that decide how loud the
-        passage is, and the correction that keeps the road's origin on
-        the beat - and that last one walked the road ten units a second.
+    def test_a_stopped_track_holds_the_screen_still(self, qapp):
+        """Everything stops when the rider is paused, every pixel. Four clocks
+        kept running under a stopped track: the camera's easing, the field
+        behind the road, the loudness followers, and the beat correction,
+        which walked the road ten units a second.
         """
         got = self._analysed()
-        # Soon after the stop, because what a hit leaves behind is over
-        # in about a beat: marks a second later would find it expired
-        # whether its clock had been stopped or not. The first is far
-        # enough in for the ease to a halt to have finished.
+        # Soon after the stop: a hit's effects are over in about a beat, so
+        # later marks would find them expired either way. The first is past the
+        # ease to a halt.
         marks = (7.6, 8.4, 9.2)
-        # Hit just before it stops, so the wash, the shake and the
-        # pieces are all mid-flight when it does.
+        # Hit just before it stops, so the wash, the shake and the pieces are
+        # mid-flight.
         watched = self._play(got, stop_from=6.9, stop_to=11.0, keep=marks,
                              hurt_at=6.85)
         shots = [watched["shots"][mark] for mark in marks]
@@ -12768,14 +11886,9 @@ class TestTheRiderUnderAPlaythrough:
             assert moved == 0, (
                 f"{moved} sampled pixels changed between two frames a "
                 f"second apart with the track stopped")
-        # And not by having run to a standstill before the first of them:
-        # a wash that expired and pieces that had landed would hold just
-        # as still. Whatever was in flight when the track stopped has to
-        # still be in flight when it starts again.
-        # A hit is over in about a beat and the pieces it throws are out
-        # in a second, so two seconds after one there should be nothing
-        # left of it - unless its clock stopped with the track, which is
-        # the whole point.
+        # And not by running down before the first mark: what was in flight at
+        # the stop must still be in flight when play resumes. Two seconds after
+        # a hit nothing should remain unless its clock stopped with the track.
         last = watched["held"][marks[-1]]
         assert last["hurt"] > 0.5, (
             f"the hit faded to {last['hurt']:.2f} over two seconds of a "
@@ -12788,15 +11901,14 @@ class TestTheRiderUnderAPlaythrough:
             f"stopped")
 
     def test_the_beat_grid_stands_still_too(self, qapp):
-        """The correction that keeps the road's origin on the beat is an
-        easing towards a phase error, and with the track stopped there is
-        nothing to correct towards - but the error stays where it is, so
-        the easing had somewhere to go for ever. The road is measured
-        from that origin, so it crept ten units a second."""
+        """The beat correction eases towards a phase error; stopped, the error
+        stays, so the easing went on forever and the road crept ten units a
+        second.
+        """
         got = self._analysed()
         watched = self._play(got, stop_from=6.9, stop_to=11.0)
-        # Through the stop, from after the ease to a halt to just before
-        # the track starts again.
+        # Through the stop, from after the ease to a halt to just before play
+        # resumes.
         held = [grid for grid in watched["grids"][int(7.6 * 60):
                                                   int(10.9 * 60)]
                 if grid is not None]
@@ -12807,10 +11919,9 @@ class TestTheRiderUnderAPlaythrough:
 
     @pytest.mark.parametrize("phase", [0.0, 0.17, 0.33, 0.5, 0.66, 0.83])
     def test_the_grid_holds_at_every_phase_of_a_beat(self, qapp, phase):
-        """The correction is an easing towards a phase error, and where
-        that error is near half a beat it does not settle - it is pushed
-        away. Stopping on a beat and calling it fixed tests the one
-        phase where it was never broken."""
+        """Near half a beat the phase error is pushed away rather than settled,
+        so stopping on a beat tests the one phase that always worked.
+        """
         import visualizers
         from attachment_widgets import SpectrumState
 
@@ -12850,9 +11961,7 @@ class TestTheRiderUnderAPlaythrough:
 
     def test_the_road_stands_still_while_the_track_is_stopped(self, qapp):
         got = self._analysed()
-        # Stopped between two beats rather than on one: the correction
-        # that walked the road was an easing towards a phase error, and
-        # on a beat there is no error to ease away from.
+        # Stopped between beats, where there is an error to ease away from.
         watched = self._play(got, stop_from=6.9, stop_to=11.0)
         roads = watched["roads"]
         # From well after the stop, so the ease-out has finished.
@@ -12863,11 +11972,9 @@ class TestTheRiderUnderAPlaythrough:
 
     # -- how it moves when it does -----------------------------------------
     def test_the_road_never_stops_between_beats(self, qapp):
-        """"I don't xxxx xxx xxx xxxx xxxxxx xxxxx xxxxxxx xxxxx."
-
-        The lunge used to be all of the travel, and the slope of that
-        curve at the end of a beat is zero however hard it lunges: the
-        last frames of every beat ran at a two-hundredth of the average.
+        """The road never nearly stops between beats: with the lunge as all of
+        the travel, the last frames of each beat ran at a two-hundredth of
+        the average.
         """
         import statistics
 
@@ -12892,13 +11999,9 @@ class TestTheRiderUnderAPlaythrough:
 
     # -- what you can see --------------------------------------------------
     def test_a_block_stands_out_from_what_is_around_it(self, qapp):
-        """"Xxx xxxxxx xxx xxxxxxxxxx xx xxx xxxxxxxxx xxxx xxx xxxxxx
-        xxx xxxxxxxxxx xx."
-
-        They were: a block and the road it stood on differed in hue and
-        not in brightness, and the lamp at the end of the road washed out
-        exactly the part of it where a block has to be read while there
-        is still time to move.
+        """Blocks stay visible against the background: a block and its road
+        differed in hue, not brightness, and the lamp washed out the far end
+        where blocks are read in time to move.
         """
         import statistics
 
@@ -12911,17 +12014,16 @@ class TestTheRiderUnderAPlaythrough:
             shot = watched["shots"].get(mark)
             if shot is None:
                 continue
-            # The sky well above the road, which is the brightest thing a
-            # block at the far end has to be read against.
+            # The sky well above the road, the brightest thing a far block is
+            # read against.
             sky = statistics.median(
                 self._light(shot, x, y)
                 for y in range(int(self.H * 0.12), int(self.H * 0.28), 4)
                 for x in range(int(self.W * 0.3), int(self.W * 0.7), 4))
             worst = sky if worst is None else max(worst, sky)
         assert worst is not None
-        # Measured: 0.065 with the lamp a glow at the end of the road,
-        # 0.093 at half again its reach and 0.112 at the sky-sized one it
-        # used to be.
+        # 0.065 with the lamp a glow at the road's end, 0.093 at half again its
+        # reach, 0.112 sky-sized.
         assert worst < 0.085, (
             f"the brightest part of the sky behind the road is at a "
             f"luminance of {worst:.3f}; a block cannot be read against it")
@@ -12934,21 +12036,11 @@ class TestTheRiderUnderAPlaythrough:
 
 
 class TestASceneIsNotShownUntilItIsUpToSpeed:
-    """"Xxx xxxxxxxxxxx xxx xxxxx xxxx xxxxx xxxxxx."
-
-    They did, and measurably: at 1440x810 the equaliser's first frame
-    cost 168 ms against 6 ms for every frame after it, the neon tunnel
-    had a 56 ms frame in its first second, and the VU meters 27 ms. Ten
-    dropped frames at the exact moment a scene appears.
-
-    Two causes, two fixes. Most of it was the font machinery - the first
-    piece of text drawn in a process makes Qt populate its font
-    database, resolve the family and load the face - and that is now
-    paid on a worker thread before anything animates. The rest is
-    one-off work inside the scenes themselves, plus Sharpness measuring
-    before it can decide how big to draw, and the fade used to run
-    straight through it. The frames are still drawn, at an opacity of
-    nothing, so the cost is paid where nobody can see it.
+    """Scenes open smoothly. At 1440x810 the equaliser's first frame cost 168
+    ms against 6 after, the neon tunnel had a 56 ms frame in its first
+    second. Most was the font machinery, now paid on the GUI thread before
+    anything animates; the rest, the scenes' one-off work and Sharpness's
+    measuring, is drawn at no opacity before the fade.
     """
 
     @staticmethod
@@ -13016,9 +12108,8 @@ class TestASceneIsNotShownUntilItIsUpToSpeed:
             f"scene is still at an opacity of {pane._fresh}")
 
     def test_it_is_drawn_while_it_is_hidden_rather_than_skipped(self, qapp):
-        """The whole point. Skipping the frames would hide the roughness
-        by moving it: the first frame anybody sees would then be the
-        first frame that costs anything.
+        """Skipping the frames would only move the roughness to the first frame
+        seen.
         """
         from attachment_widgets import Spectrum
 
@@ -13037,8 +12128,9 @@ class TestASceneIsNotShownUntilItIsUpToSpeed:
             f"the scene settled at an opacity of {pane._fresh}")
 
     def test_changing_scene_waits_again(self, qapp):
-        """A scene switch is a first open: the new one has its own
-        one-off costs and Sharpness starts its measuring again."""
+        """A scene switch is a first open: new one-off costs, and Sharpness
+        measures again.
+        """
         from attachment_widgets import Spectrum
 
         pane = self._pane(self.Counter())
@@ -13051,9 +12143,9 @@ class TestASceneIsNotShownUntilItIsUpToSpeed:
             "the second scene was shown before it had warmed up")
 
     def test_choosing_the_same_scene_again_does_not_hide_it(self, qapp):
-        """Nothing changed, so there is nothing to fade in - and a scene
-        that blinked every time the box was touched would be worse than
-        one that was rough once."""
+        """Nothing changed, so nothing fades in; blinking at every touch of the
+        box would be worse.
+        """
         scene = self.Counter()
         pane = self._pane(scene)
         self._run(pane, 90)
@@ -13063,28 +12155,22 @@ class TestASceneIsNotShownUntilItIsUpToSpeed:
 
     # -- the font machinery ------------------------------------------------
     def test_the_glyph_cache_is_warmed_once(self, qapp):
-        """Once per process, and on this thread.
-
-        Doing it on a worker was tried, because 145 ms is a long time to
-        hold the GUI thread, and it segfaults:
-        QCoreTextFontDatabase::populateFamilyAliases is not safe off the
-        GUI thread and races the GUI thread doing the same thing. A
-        stall is a nuisance and a crash is not a trade.
+        """Once per process, on this thread: on a worker,
+        QCoreTextFontDatabase::populateFamilyAliases races the GUI thread
+        and segfaults.
         """
         import attachment_widgets
 
         attachment_widgets.warm_the_glyphs()
         assert attachment_widgets._WARMED is True
-        # And asking again is free: the app builds several panes, and
-        # the cost is paid by whichever one is first.
+        # Asking again is free: whichever pane is first pays.
         attachment_widgets.warm_the_glyphs()
         assert attachment_widgets._WARMED is True
 
     def test_no_font_work_is_handed_to_another_thread(self, qapp):
-        """The crash this cost. Qt's font database is populated the
-        first time anything is lettered, and populating it off the GUI
-        thread took the whole process down with a segmentation fault in
-        QCoreTextFontDatabase."""
+        """Populating the font database off the GUI thread crashed the process
+        in QCoreTextFontDatabase.
+        """
         import inspect
 
         import attachment_widgets
@@ -13094,9 +12180,9 @@ class TestASceneIsNotShownUntilItIsUpToSpeed:
             "the glyph warm-up is being handed to a thread again")
 
     def test_warming_the_glyphs_draws_text(self, qapp):
-        """Not a mock: the thread's own body, run here, has to put
-        glyphs through Qt rather than merely exist. Read off the image it
-        draws into - a body that drew nothing would leave it empty."""
+        """Not a mock: the body puts glyphs through Qt, read off the image it
+        draws.
+        """
         from PySide6.QtGui import QColor, QImage, QPainter
         from PySide6.QtCore import QRectF
 
@@ -13121,23 +12207,11 @@ class TestASceneIsNotShownUntilItIsUpToSpeed:
 
 
 class TestTheCoinsBesideTheObstacles:
-    """"Collectable coins xxxxxxxxxxx xxx xxxxxx xx xxx xxxxx xx
-    obstacles."
-
-    The problem they solve is that dodging is free. Three lanes, one
-    obstacle, two ways past it - and the two are worth exactly the same,
-    so the best play is to sit in the far lane and wait, which is the
-    least interesting thing a game can ask for. Audiosurf 2 answers it
-    in Ninja mode with "a special set of bonuses for successfully
-    dodging" rather than for merely not being hit.
-
-    So a short trail of coins sits in the lane *next to* an obstacle,
-    spanning the moment it passes. The far lane is safe and pays
-    nothing; the near lane pays three coins to anybody who will hold it
-    while a grey goes past an arm's length away. Each coin is worth more
-    than the one before it and missing one puts the row back to nothing,
-    so a trail is worth holding the lane for rather than clipping the
-    end of.
+    """Coins beside obstacles make dodging close worth something. With two ways
+    past an obstacle worth the same, the best play is to wait in the far
+    lane. So a short trail sits in the lane next to an obstacle, spanning
+    the moment it passes: each coin worth more than the last, and missing
+    one resets the row.
     """
 
     @staticmethod
@@ -13180,9 +12254,9 @@ class TestTheCoinsBesideTheObstacles:
             f"lane {lane}, which is not beside it")
 
     def test_the_trail_spans_the_moment_the_obstacle_passes(self, qapp):
-        """Before, on, and after. A trail that sat entirely after the
-        obstacle could be taken by swerving in once it was safely by,
-        which is the behaviour this exists to stop."""
+        """Before, on and after the obstacle, or the trail could be taken by
+        swerving in once safely past.
+        """
         scene = self._laid("block", when=4.0)
         times = sorted(b[0] for b in self._coins(scene))
         assert times[0] < 4.0 < times[-1], (
@@ -13191,16 +12265,10 @@ class TestTheCoinsBesideTheObstacles:
 
     def test_a_wall_puts_its_coins_in_a_lane_it_is_about_to_close(
             self, qapp):
-        """A wall closes two lanes of three, so there is no lane beside
-        it to be brave in: the one way through is the one way through,
-        and a coin in it would pay for having nowhere else to go.
-
-        So the trail goes in a lane the wall is about to *close*, and
-        ends before it gets there. You ride the doomed lane, take what
-        is in it and leave. This is not a corner case: measured on a
-        real record, walls are two thirds of every figure laid, and a
-        coin that only ever sat beside a single obstacle appeared once
-        in a minute of music.
+        """A wall closes two lanes of three, leaving no lane beside it to be
+        brave in, so the trail goes in a lane the wall is about to close and
+        ends before it. Walls are two thirds of all figures on a real
+        record; coins beside single obstacles alone appeared once a minute.
         """
         import visualizers
 
@@ -13221,16 +12289,15 @@ class TestTheCoinsBesideTheObstacles:
             f"4.00, which leaves {(4.0 - last) * 1000:.0f} ms to get out")
 
     def test_there_is_time_to_get_out_of_the_doomed_lane(self, qapp):
-        """The trail is only fair if the lane change fits in the gap it
-        leaves. Measured against the craft's own slide rather than
-        against the constant that sets it."""
+        """The trail is fair only if the lane change fits the gap it leaves,
+        measured against the craft's own slide.
+        """
         import visualizers
 
         lead = visualizers.Rider.COIN_LEAD
         scene = visualizers.Rider()
         scene._last = None
-        # How long the craft takes to be nine tenths of the way across,
-        # at sixty frames a second.
+        # How long the craft takes to get nine tenths across, at sixty frames.
         here, moved = 0.0, 0.0
         while here < 0.9:
             here += (1.0 - here) * scene._slide(1 / 60.0)
@@ -13241,19 +12308,15 @@ class TestTheCoinsBesideTheObstacles:
             f"enough to be fair")
 
     def test_a_prize_gets_no_coins(self, qapp):
-        """They are a reward for being near an *obstacle*, in either
-        shape it comes in."""
+        """A reward for being near an obstacle, in either of its shapes."""
         assert not self._coins(self._laid("block", grey=False))
         assert not self._coins(self._laid("wall", grey=False))
         assert not self._coins(self._laid("run", grey=False))
 
     def test_no_coin_is_laid_where_something_already_is(self, qapp):
-        """A coin a player cannot take without being hit is not a
-        reward, and one inside a prize is a coin nobody can see.
-
-        The lane is asked for rather than assumed: where a trail goes
-        comes from the time, so blocking a lane picked by hand would be
-        blocking whichever lane that happened to be.
+        """Not in a lane that cannot be entered without a hit, nor inside a
+        prize. The lane is asked for, since a trail's lane comes from the
+        time.
         """
         # Which lane this figure's coins want, on a clear road.
         clear = self._laid("block", when=4.0)
@@ -13272,16 +12335,16 @@ class TestTheCoinsBesideTheObstacles:
         """Drive through that many coins, taking or missing them."""
         scene._lane_here = scene._lane_at(lane if on_it else
                                           (lane + 1) % scene.LANES)
-        # A trail, spaced as the game spaces one: a coin a good while
-        # after the last is a new row. See COIN_ROW_GAP.
+        # A trail spaced as the game spaces one; a coin long after the last
+        # starts a new row (see COIN_ROW_GAP).
         scene._blocks = [[10.0 + step * scene.COIN_GAP, lane, "coin", False,
                           False] for step in range(count)]
         scene._collide()
 
     def test_each_coin_is_worth_more_than_the_one_before(self, qapp):
-        """25, 50, 75, 100 - so the running total is 25, 75, 150, 250.
-        Written out rather than worked out from the constants: taken
-        from those, this passes with the step set to zero."""
+        """25, 50, 75, 100, so the totals are 25, 75, 150, 250. Written out:
+        from the constants this passes with the step at zero.
+        """
         scene = self._scene()
         seen = []
         for _ in range(4):
@@ -13291,8 +12354,9 @@ class TestTheCoinsBesideTheObstacles:
             f"four coins in a row scored {seen}")
 
     def test_the_row_is_capped(self, qapp):
-        """The eighth coin would be worth 200 and the ninth 225, so the
-        cap bites there and never lets go."""
+        """The eighth coin is worth 200 and the ninth 225, so the cap holds
+        from there.
+        """
         scene = self._scene()
         self._take(scene, 8)
         was = scene._score
@@ -13315,8 +12379,7 @@ class TestTheCoinsBesideTheObstacles:
             f"rather than starting again at 25")
 
     def test_a_missed_coin_is_not_a_hit(self, qapp):
-        """It costs the row and nothing else: coins are a bonus, not a
-        second way to lose."""
+        """A missed coin costs the row and nothing else."""
         scene = self._scene()
         self._take(scene, 2, on_it=False)
         got = scene.report()
@@ -13343,9 +12406,9 @@ class TestTheCoinsBesideTheObstacles:
         assert got["coins"] == 6, f"{got['coins']} coins were counted"
 
     def test_a_coin_never_goes_into_the_puzzle_grid(self, qapp):
-        """The grid is the puzzle game's pressure - it overfills and
-        locks - and coins would be free blocks in it. They pay straight
-        into the score in both games instead."""
+        """In the puzzle game coins pay straight into the score rather than
+        filling the grid.
+        """
         scene = self._scene(mode="Puzzle")
         self._take(scene, 3)
         got = scene.report()
@@ -13355,11 +12418,10 @@ class TestTheCoinsBesideTheObstacles:
 
     # -- what they look like -----------------------------------------------
     def test_a_coin_reads_against_the_road_it_is_on(self, qapp):
-        """The road runs from purple at its quietest to red at its
-        loudest and a coin has to read against every part of that - at a
-        chorus the road is already gold. Off the drawn frame: read off
-        the constants, this passes with a coin drawn in the road's own
-        colour."""
+        """The road runs from purple to red and is gold at a chorus, so a coin
+        is read off the frame against all of it: from the constants this
+        passes with a coin in the road's own colour.
+        """
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -13394,8 +12456,8 @@ class TestTheCoinsBesideTheObstacles:
                 scene._blocks = []
                 image.fill(QColor(0, 0, 0))
                 scene.paint(painter, QRectF(0, 0, side, side), state)
-                # A moment that lands the coin half way down the road,
-                # worked out from the scene's own mapping.
+                # A moment that lands the coin half way down the road, from the
+                # scene's own mapping.
                 want = min((abs(scene._where(w / 100.0) - 8.0), w / 100.0)
                            for w in range(1, 400))[1]
                 scene._blocks = [[want, 1, "coin", False, False]]
@@ -13426,8 +12488,9 @@ class TestTheCoinsBesideTheObstacles:
             f"road around it")
 
     def test_a_coin_is_smaller_than_the_obstacle_it_sits_beside(self, qapp):
-        """It is a reward for being in a lane rather than something to
-        steer at, and one the size of a block would hide the obstacle."""
+        """Small: a reward for a lane, not a target, and a block-sized coin
+        would hide the obstacle.
+        """
         import visualizers
 
         assert visualizers.Rider.COIN_SIZE < visualizers.Rider.LANE_WIDE * 0.4
@@ -13435,9 +12498,8 @@ class TestTheCoinsBesideTheObstacles:
     @staticmethod
     def _close_coin(turn=0.0, ground=None, image_out=None):
         """The lit pixels of one coin just past the craft, on a 2x screen.
-
-        ``turn`` is how far round it has spun from face on, in radians;
-        ``ground`` is what it is drawn over, black if nothing is said.
+        ``turn`` is its spin from face on, in radians; ``ground`` is what it
+        is drawn over.
         """
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
@@ -13488,15 +12550,10 @@ class TestTheCoinsBesideTheObstacles:
                 if image.pixelColor(x, y).lightnessF() > 0.3]
 
     def test_a_coin_close_up_on_a_retina_screen_is_round(self, qapp):
-        """A disc, not a ring of points joined by straight lines.
-
-        Ten points were round enough while the frame was drawn at half
-        the screen's resolution. Drawn at all of it, a coin passing the
-        craft is ninety pixels across and its ten flats are three pixels
-        deep each, which reads as a ten-sided shape. Measured off the
-        drawn coin as how far its rim strays from the ellipse that best
-        fits it: 6.0 per cent as ten points, 1.5 as an ellipse, which is
-        what whole pixels leave of a perfect one.
+        """A disc, not ten points joined by lines: at full resolution a passing
+        coin is ninety pixels across and ten flats read as a polygon. Its
+        rim strays 6.0 per cent from the best-fit ellipse as ten points, 1.5
+        as an ellipse.
         """
         import math
 
@@ -13509,9 +12566,8 @@ class TestTheCoinsBesideTheObstacles:
         syy = sum((y - my) ** 2 for _, y in lit) / count
         sxy = sum((x - mx) * (y - my) for x, y in lit) / count
         det = sxx * syy - sxy * sxy
-        # The rim's distance from the middle in every direction, measured
-        # in the ellipse's own terms, so a perfect one is the same all
-        # the way round.
+        # The rim's distance from the middle in every direction, in the
+        # ellipse's own terms, so a perfect one is constant.
         rim = [0.0] * 72
         for x, y in lit:
             dx, dy = x - mx, y - my
@@ -13526,9 +12582,9 @@ class TestTheCoinsBesideTheObstacles:
             f"up has flat sides")
 
     def test_a_coin_is_ringed_in_dark_whatever_it_is_over(self, qapp):
-        """A coin is white, and at a chorus the road is already gold, so
-        what a coin is read against is its own dark silhouette, drawn a
-        little bigger than it - the same one every block gets."""
+        """A white coin on a gold road is read against its own dark silhouette,
+        a little larger, as every block has.
+        """
         from PySide6.QtGui import QColor
 
         # Where the face is, found on black where nothing else is lit.
@@ -13545,8 +12601,8 @@ class TestTheCoinsBesideTheObstacles:
 
         def dark_run(edge, outward):
             x = edge + outward
-            # Past the face's own antialiased edge, which is part face
-            # and part ring.
+            # Past the face's antialiased edge, which is part face and part
+            # ring.
             for _ in range(2):
                 if image.pixelColor(x, y).lightnessF() >= 0.15:
                     x += outward
@@ -13563,9 +12619,9 @@ class TestTheCoinsBesideTheObstacles:
             f"has no edge")
 
     def test_a_coin_turns_and_never_turns_to_nothing(self, qapp):
-        """Side on is narrow, and never so narrow it vanishes: a disc
-        exactly edge-on is one pixel wide and reads as a coin that is
-        not there."""
+        """Never so narrow it vanishes: exactly edge-on, a disc is one pixel
+        wide.
+        """
         import math
 
         def across(lit):
@@ -13582,23 +12638,11 @@ class TestTheCoinsBesideTheObstacles:
 
 
 class TestTheRoadTurnsOverAtTheBigMoments:
-    """Corkscrews, and the powerups that come with them.
-
-    Audiosurf 2 puts "corkscrew loops and powerups timed perfectly with
-    big moments in your music", and what counts as a big moment is
-    already measured here: the loudness contour the road's hill is cut
-    from. So the road turns over where the track is at its loudest and
-    nowhere else, which on most records means the drops and the last
-    chorus, and the same record turns over in the same places every time
-    it is played.
-
-    A whole turn, still at both ends and quickest through the middle,
-    so the moment a corkscrew ends is not a moment anything jumps: one
-    turn brings the world back to where it started. Nothing to dodge
-    inside one - half way round, left has stopped meaning left, and an
-    obstacle there is not a thing you failed to dodge but a thing nobody
-    could have. The corkscrew is the spectacle; the power block in it is
-    what it pays.
+    """Corkscrews and their power blocks. The road turns over where the
+    loudness contour peaks, which on most records is the drops and the last
+    chorus, and in the same places every play. A whole turn, still at both
+    ends, so nothing jumps when it ends. Nothing to dodge inside one: half
+    way round, left no longer means left.
     """
 
     @staticmethod
@@ -13623,9 +12667,8 @@ class TestTheRoadTurnsOverAtTheBigMoments:
 
     # -- where they go -----------------------------------------------------
     def test_the_road_turns_over_at_the_loudest_moments(self, qapp):
-        # Spaced well past TWIST_APART, because two drops closer
-        # together than that are deliberately one corkscrew - which is
-        # what test_they_are_kept_well_apart is for.
+        # Spaced past TWIST_APART: closer drops are one corkscrew on purpose
+        # (see test_they_are_kept_well_apart).
         scene = self._scene(self._drops(10.0, 45.0, 80.0))
         assert len(scene._twists) == 3, (
             f"three drops gave {len(scene._twists)} corkscrews: "
@@ -13635,9 +12678,9 @@ class TestTheRoadTurnsOverAtTheBigMoments:
                 f"a drop at {wanted}s gave a corkscrew at {got:.2f}s")
 
     def test_a_track_with_no_big_moments_never_turns_over(self, qapp):
-        """A share of the peak alone is met by every reading of a track
-        with no dynamics in it, and a wall of noise has no big moments -
-        it is all one moment."""
+        """A share of the peak alone is met everywhere on a track with no
+        dynamics, and a wall of noise has no big moments.
+        """
         scene = self._scene([0.7] * 400)
         assert scene._twists == (), (
             f"a flat track got {len(scene._twists)} corkscrews")
@@ -13646,8 +12689,7 @@ class TestTheRoadTurnsOverAtTheBigMoments:
         assert self._scene(())._twists == ()
 
     def test_they_are_kept_well_apart(self, qapp):
-        """A corkscrew is an event. Three in a row is a fairground
-        ride."""
+        """A corkscrew is an event; three in a row is a fairground ride."""
         import visualizers
 
         # A drop that runs for twenty seconds without a break.
@@ -13673,8 +12715,7 @@ class TestTheRoadTurnsOverAtTheBigMoments:
         assert turn(0.5) == pytest.approx(0.5)
 
     def test_it_starts_and_stops_turning_gently(self, qapp):
-        """A linear sweep starts and stops the world spinning in one
-        frame, which is a cut rather than a corkscrew."""
+        """A linear sweep starts and stops the spin in one frame: a cut."""
         import visualizers
 
         turn = visualizers.Rider._turned
@@ -13690,9 +12731,10 @@ class TestTheRoadTurnsOverAtTheBigMoments:
 
     @staticmethod
     def _flat_frame(twisted, monkeypatch):
-        """One flat frame, a second and a quarter into a corkscrew (half
-        way round) or with none, from the same state either way, on a
-        stopped clock so that the two differ by the corkscrew alone."""
+        """One flat frame 1.25 s into a corkscrew (half way round), or without
+        one, from the same state on a stopped clock, so the two differ by
+        the corkscrew alone.
+        """
         import time as real_time
 
         from PySide6.QtCore import QRectF
@@ -13722,10 +12764,9 @@ class TestTheRoadTurnsOverAtTheBigMoments:
 
     def test_the_world_turns_round_the_road_not_the_road(self, qapp,
                                                          monkeypatch):
-        """The craft went round the frame with everything else and was
-        at the top of it halfway through. Half way round now, the world
-        behind the road is upside down and the craft is where it always
-        is."""
+        """The craft stays put while the world behind the road turns upside
+        down; it used to go round the frame with everything else.
+        """
         plain, before = self._flat_frame(False, monkeypatch)
         _again, repeat = self._flat_frame(False, monkeypatch)
         turned, after = self._flat_frame(True, monkeypatch)
@@ -13735,8 +12776,8 @@ class TestTheRoadTurnsOverAtTheBigMoments:
         assert a is not None and b is not None
         assert abs(a.x() - b.x()) < 0.5 and abs(a.y() - b.y()) < 0.5, (
             f"the craft moved on the glass from {a} to {b}")
-        # And the world did turn: the frame is not the same frame, where
-        # the same frame again is exactly the same.
+        # And the world did turn: the frame differs, where the same frame again
+        # is identical.
         def changed(one, other):
             return sum(1 for y in range(0, 400, 2) for x in range(0, 640, 2)
                        if abs(one.pixelColor(x, y).valueF()
@@ -13745,14 +12786,12 @@ class TestTheRoadTurnsOverAtTheBigMoments:
         assert changed(before, repeat) == 0, "the frame is not repeatable"
         assert changed(before, after) > 100, (
             f"only {changed(before, after)} points changed half way round")
-        # And the craft is drawn where it was - read off the picture, not
-        # off the sum that says where it should be.
+        # The craft is drawn where it was, read off the picture.
         box = [(x, y) for y in range(int(a.y()) - 40, int(a.y()) + 30, 2)
                for x in range(int(a.x()) - 60, int(a.x()) + 60, 2)
                if 0 <= x < 640 and 0 <= y < 400]
-        # Its own points, by their colour: the craft is grey and white,
-        # and what is lit round it - the road's lines, and half way round
-        # a corkscrew the tunnel it is in - is the passage's colours.
+        # Its own points by colour: the craft is grey and white, while the
+        # lines and the tunnel round it are the passage's colours.
         craft = [(x, y) for x, y in box
                  if before.pixelColor(x, y).valueF() > 0.3
                  and before.pixelColor(x, y).saturationF() < 0.3]
@@ -13764,10 +12803,9 @@ class TestTheRoadTurnsOverAtTheBigMoments:
             f"they were half way round")
 
     def test_the_road_is_not_moved_to_make_room_for_it(self, qapp):
-        """Turning the road about a horizon above the middle of the frame
-        swung it out of the picture, so the horizon used to ride down to
-        the middle through one. With the road left where it is, the
-        horizon is too."""
+        """The horizon stays put too: turning the road about a horizon above
+        the middle swung it out of the picture.
+        """
         from PySide6.QtCore import QRectF
 
         import visualizers
@@ -13828,11 +12866,10 @@ class TestTheRoadTurnsOverAtTheBigMoments:
                 f"off the beat")
 
     def test_taking_one_doubles_the_next_prize(self, qapp):
-        """"Xxxxxxxxxx xx xxxxxxxxx xxxxxxx xxx xxxxx xxxxx xx xxxxxxxx
-        xxxxxx xxx xxxxxxxxx xxxx" - the blueprint. Here it doubles the
-        next thing that pays and is spent when it does. Written out:
-        the first prize is worth 1 and the second 5, so doubling the
-        second is 10 and the total is 11."""
+        """A power block doubles the next thing that pays and is spent there.
+        The first prize is worth 1 and the second 5, so doubled the total is
+        11.
+        """
         import visualizers
 
         scene = visualizers.Rider()
@@ -13873,9 +12910,9 @@ class TestTheRoadTurnsOverAtTheBigMoments:
         assert got["double"] == 1.0 and got["hits"] == 0, got
 
     def test_it_doubles_a_cluster_in_the_puzzle_game(self, qapp):
-        """Which is where it is worth carrying: a cluster of six is
-        worth four times a cluster of three, so a doubled six is the
-        biggest thing in the game."""
+        """Best carried to a cluster: six are worth four times three, so a
+        doubled six is the biggest thing in the game.
+        """
         import visualizers
 
         scene = visualizers.Rider()
@@ -13887,8 +12924,7 @@ class TestTheRoadTurnsOverAtTheBigMoments:
         for got, double in ((plain, 1.0), (scene, 2.0)):
             got._cells = [[2, 2], [2], []]
             got._double = double
-            # Light the fuse and run it out, which is what clears a
-            # cluster: see FUSE.
+            # Light the fuse and run it out, which clears a cluster: see FUSE.
             got._fuse_up()
             assert got._fuse > 0.0, "three of a colour did not light a fuse"
             got._burn(got._fuse + 0.01)
@@ -13900,21 +12936,11 @@ class TestTheRoadTurnsOverAtTheBigMoments:
 
 
 class TestTheRoadActuallyTurns:
-    """It did not. Measured over the whole visible length of road on a
-    real record, it moved eight thousandths of a lane sideways and was
-    straight a hundred per cent of the time.
-
-    The curve is the stereo lean *summed* along the road, because a lean
-    is a direction and a road is where following one gets you. But a mix
-    has a bias - that record averaged -0.0097 - and summing a biased
-    signal gives a ramp: a road that turns constantly in one direction
-    at a near-constant rate. Since the camera is pinned to the road,
-    a constant rate is exactly what straight looks like.
-
-    A mix that sits slightly left for a whole song is not a road that
-    turns left for ever. It is a road that goes straight, because every
-    part of it leans the same way. What turns a road is one part leaning
-    further than the rest.
+    """The road curves. Over the visible road on a real record it moved eight
+    thousandths of a lane sideways and was straight throughout: the curve
+    sums the stereo lean, and a mix's bias (-0.0097 on that record) sums to
+    a steady turn, which with the camera pinned to the road looks straight.
+    What turns a road is one part leaning further than the rest.
     """
 
     @staticmethod
@@ -13935,8 +12961,9 @@ class TestTheRoadActuallyTurns:
 
     @classmethod
     def _swing(cls, scene, over=11):
-        """How far the road moves sideways over its visible length, in
-        lane widths, at every point of the track."""
+        """How far the road moves sideways over its visible length, in lane
+        widths, at every point of the track.
+        """
         curve = scene._curve
         if len(curve) <= over:
             return [0.0]
@@ -13966,8 +12993,9 @@ class TestTheRoadActuallyTurns:
             f"of a lane")
 
     def test_a_mix_that_leans_one_way_for_ever_is_a_straight_road(self, qapp):
-        """The bug, as a test. Every part of it leans the same way, so
-        no part of it leans further than the rest."""
+        """Every part leans the same way, so no part leans further than the
+        rest.
+        """
         scene = self._road([-0.25] * 1200)
         swings = self._swing(scene)
         assert max(swings) < 0.01, (
@@ -13986,8 +13014,9 @@ class TestTheRoadActuallyTurns:
             f"out of {len(steps)}")
 
     def test_a_narrow_mix_turns_as_much_as_a_wide_one(self, qapp):
-        """Otherwise a nearly-mono record gets a road with no corners in
-        it, which is the records most likely to need the help."""
+        """Otherwise a nearly mono record, which needs it most, gets no
+        corners.
+        """
         import statistics
 
         wide = self._road(self._wobbly(spread=0.20))
@@ -13999,9 +13028,10 @@ class TestTheRoadActuallyTurns:
             f"{two:.3f}")
 
     def test_one_freak_reading_cannot_throw_the_road_across(self, qapp):
-        """The lean has a long tail: one reading on a real record sits
-        thirteen spreads out on its own, and unclamped it swung the
-        visible road three and a half lanes, which is a hairpin."""
+        """The lean has a long tail: one reading on a real record sits thirteen
+        spreads out, and unclamped it swung the road three and a half lanes,
+        a hairpin.
+        """
         import visualizers
 
         lean = [0.0] * 1200
@@ -14024,19 +13054,8 @@ class TestTheRoadActuallyTurns:
 
 
 class TestNinjaIsTheSameRoadWithMoreToDodge:
-    """Audiosurf 2's third monocolour mode.
-
-    "The final monocolor mode is Ninja Mode, which contains a much
-    larger collection of obstacles and a special set of bonuses for
-    successfully dodging them." The bonuses are already on this road - a
-    coin trail goes beside every obstacle - so more obstacles is more to
-    dodge *and* more to be paid for dodging, which is the shape the mode
-    is meant to have.
-
-    What it pays for getting through untouched is bigger too. Audiosurf
-    2 has Mono's clean finish at 10 per cent and Ninja's stealth bonus
-    at "20 per cent or more": twice as much, for the mode with the
-    spikes in it.
+    """Ninja: Mono with far more obstacles, each with its coin trail, so more
+    to dodge and more paid for dodging. The clean finish pays twice Mono's.
     """
 
     BEAT = 60.0 / 128.0
@@ -14069,8 +13088,9 @@ class TestNinjaIsTheSameRoadWithMoreToDodge:
             f"the games are {visualizers.Rider.MODES}")
 
     def test_choosing_it_sticks(self, qapp):
-        """A reset rebuilds the scene from a new one of itself, which
-        puts the mode back - so the mode is set again afterwards."""
+        """A reset rebuilds the scene, which puts the mode back, so it is set
+        again.
+        """
         import visualizers
 
         scene = visualizers.Rider()
@@ -14085,12 +13105,9 @@ class TestNinjaIsTheSameRoadWithMoreToDodge:
             f"{len(mono)}, which is not much larger a collection")
 
     def test_the_figures_come_no_faster_than_in_mono(self, qapp):
-        """What changes is how many of them are obstacles, not how often
-        one lands. Putting them closer together as well was tried: the
-        gap has a floor in seconds, so at 128 bpm both games quantise to
-        the same two beats and nothing happens, and at slower tempos it
-        pushes under the floor that "xxxx xxx xxxxxxx xxx xxx xxxx xxx
-        it's unplayable" put there.
+        """What changes is how many are obstacles, not how often one lands: the
+        gap has a floor in seconds, so closer spacing either changes nothing
+        at 128 bpm or goes under the playable floor at slower tempos.
         """
         import statistics
 
@@ -14105,10 +13122,9 @@ class TestNinjaIsTheSameRoadWithMoreToDodge:
             f"{gaps('Mono'):.2f}s")
 
     def test_there_is_still_something_to_score_on(self, qapp):
-        """A road of nothing but obstacles is a road nobody can score
-        on, which is why Ninja takes four slots in seven and not all of
-        them. Measured off what gets laid rather than off the pool, so
-        it holds however the pool is written."""
+        """Not all obstacles, or nothing scores: four slots in seven, measured
+        off what is laid.
+        """
         scene = self._laid("Ninja")
         figures = [b for b in scene._blocks
                    if b[2] in ("wall", "block", "run")]
@@ -14120,9 +13136,9 @@ class TestNinjaIsTheSameRoadWithMoreToDodge:
             f"there is nothing to score on")
 
     def test_it_is_still_a_road_somebody_can_get_down(self, qapp):
-        """More to dodge is not the same as nothing to dodge *into*.
-        Whatever the chart does, every moment has to leave a lane open -
-        in either game, but Ninja is where it could go wrong."""
+        """Every moment leaves a lane open, in either game, whatever the chart
+        does.
+        """
         for mode in ("Mono", "Ninja"):
             scene = self._laid(mode)
             shut = {}
@@ -14134,8 +13150,8 @@ class TestNinjaIsTheSameRoadWithMoreToDodge:
                 f"{mode} closed all {scene.LANES} lanes at once")
 
     def test_dodging_all_of_it_is_worth_more_than_it_is_in_mono(self, qapp):
-        """Written out rather than worked out: a hundred points clean is
-        130 in Mono and 160 in Ninja."""
+        """Written out: a hundred points clean is 130 in Mono and 160 in Ninja.
+        """
         import visualizers
 
         for mode, wanted in (("Mono", 130), ("Ninja", 160)):
@@ -14158,9 +13174,7 @@ class TestNinjaIsTheSameRoadWithMoreToDodge:
             assert scene.report()["worth"] == 100
 
     def test_more_obstacles_means_more_coins(self, qapp):
-        """Which is the point of putting the coins beside them: the mode
-        with the most to dodge is the mode that pays most for dodging
-        it."""
+        """The mode with most to dodge pays most for dodging it."""
         mono = [b for b in self._laid("Mono")._blocks if b[2] == "coin"]
         ninja = [b for b in self._laid("Ninja")._blocks if b[2] == "coin"]
         assert len(ninja) > len(mono), (
@@ -14168,12 +13182,8 @@ class TestNinjaIsTheSameRoadWithMoreToDodge:
 
 
 class TestTheGameBoxPicksTheGame:
-    """The control a player actually uses to choose between the games.
-
-    Nothing tested it at all, which is how a game could be added to the
-    scene and never reach anybody: the box is built from the scene's own
-    list of games, so the wiring is easy to believe in and worth
-    checking once.
+    """The game box offers every game the scene has; it is built from the
+    scene's own list, so the wiring is checked once.
     """
 
     @staticmethod
@@ -14207,18 +13217,16 @@ class TestTheGameBoxPicksTheGame:
                 f"{rider.mode}")
 
     def test_it_is_only_shown_for_the_rider(self, qtbot):
-        """It is the rider's control. On any other scene it is a box
-        that does nothing, which is worse than no box."""
+        """It is the rider's control; on any other scene it would do nothing.
+        """
         pane = self._pane(qtbot)
         pane.enable_box.setChecked(True)
         for scene, shown in (("Music rider", True), ("Rave", False),
                              ("Oscilloscope", False)):
             pane.scene_box.setCurrentText(scene)
             pane._show_visual_controls(True)
-            # Against the pane rather than isVisible: Qt calls a widget
-            # invisible when any ancestor is, and this pane is never
-            # shown in a test. The rider's own controls come and go as a
-            # group, and the box is inside it.
+            # Against the pane rather than isVisible: the pane is never shown
+            # in a test, and the rider's controls come and go as a group.
             seen = pane.game_box.isVisibleTo(pane)
             assert seen is shown, (
                 f"with {scene} showing, the game box is "
@@ -14226,19 +13234,11 @@ class TestTheGameBoxPicksTheGame:
 
 
 class TestWakeboardLeavesTheRoad:
-    """Audiosurf 2's fourth mode: "like mono but puts you on a surfboard
-    that can leap off the track, gaining more points for jumping at a
-    peak".
-
-    The road already has peaks - it is cut from the track's own
-    amplitude - so a crest is where the music is about to drop away, and
-    a jump taken there is worth everything while one off the flat is
-    worth nothing at all. It is the one thing on this road that is not
-    locked to it: the blueprint's "the vehicle is completely locked to
-    the 3D spline" holds for every other game here.
-
-    Nothing is collected in the air and nothing can hit you there
-    either, so a jump is a trade rather than a way past the hard parts.
+    """Wakeboard: Mono, but the craft can leap off the road, scoring most for a
+    jump from a crest, where the music is about to drop away; from the flat
+    it scores nothing. Every other game is locked to the road. Nothing is
+    collected or hit in the air, so a jump is a trade, not a way past the
+    hard parts.
     """
 
     @staticmethod
@@ -14273,8 +13273,7 @@ class TestWakeboardLeavesTheRoad:
         assert "Wakeboard" in visualizers.Rider.MODES
 
     def test_only_this_game_can_leave_the_road(self, qapp):
-        """Every other game here is locked to the spline, which is what
-        the blueprint asks for."""
+        """Every other game is locked to the road."""
         import visualizers
 
         for mode in ("Mono", "Ninja", "Puzzle"):
@@ -14303,9 +13302,9 @@ class TestWakeboardLeavesTheRoad:
         assert 0 < up < len(seen) - 1, "there is no arc, only a jump"
 
     def test_it_is_in_the_air_for_about_a_figure(self, qapp):
-        """Long enough to be a decision, short enough not to be a way of
-        sitting out the hard parts. Written as a time rather than off
-        the push and the gravity that make it."""
+        """Long enough to be a decision, short enough not to sit out the hard
+        parts; written as a time.
+        """
         scene = self._board()
         scene.jump()
         seen = self._flight(scene)
@@ -14313,8 +13312,7 @@ class TestWakeboardLeavesTheRoad:
         assert 0.45 < air < 0.9, f"a jump lasts {air:.2f}s"
 
     def test_a_stopped_track_stops_the_jump_too(self, qapp):
-        """Everything on this road runs on the track's own clock, and
-        the step this is driven with is already gated on it."""
+        """On the track's own clock, as everything on this road is."""
         scene = self._board()
         scene.jump()
         scene._fly(1 / 60.0)
@@ -14327,7 +13325,7 @@ class TestWakeboardLeavesTheRoad:
 
     # -- what it pays ------------------------------------------------------
     def test_a_jump_off_the_flat_is_worth_nothing(self, qapp):
-        """"More points for jumping at a peak" cuts both ways."""
+        """The crest bonus cuts both ways: off the flat, nothing."""
         scene = self._board()
         scene.jump()
         self._flight(scene)
@@ -14335,8 +13333,8 @@ class TestWakeboardLeavesTheRoad:
         assert got["score"] == 0 and got["airs"] == 0, got
 
     def test_a_jump_off_a_crest_pays(self, qapp):
-        """A crest is where the road ahead falls away from the road
-        under you."""
+        """A crest is where the road ahead falls away from the road underneath.
+        """
         import visualizers
 
         scene = self._board(hill=lambda at: 0.0 if at < 4.0 else 1.0)
@@ -14349,8 +13347,7 @@ class TestWakeboardLeavesTheRoad:
         assert got["airs"] == 1 and got["best_air"] == got["score"]
 
     def test_what_it_pays_follows_the_peak(self, qapp):
-        """Half a crest is half the points: it is a measurement, not a
-        switch."""
+        """Half a crest is half the points: a measurement, not a switch."""
         import visualizers
 
         full = visualizers.Rider.CREST_FULL
@@ -14370,8 +13367,7 @@ class TestWakeboardLeavesTheRoad:
         scene = self._board(hill=lambda at: 0.0 if at < 4.0 else 1.0)
         scene.jump()
         assert scene._air_from == pytest.approx(1.0)
-        # The road goes flat while it is in the air; the jump is still
-        # the jump it was.
+        # The road goes flat mid-air; the jump stays what it was.
         scene._road = lambda at: (0.0, 0.0, 0.0)
         self._flight(scene)
         assert scene.report()["score"] > 0, (
@@ -14416,8 +13412,9 @@ class TestWakeboardLeavesTheRoad:
             "the obstacle flown over was collected on landing")
 
     def test_it_is_drawn_off_the_road(self, qapp):
-        """Off the frame: read off the height, this passes with the
-        craft drawn flat on the road."""
+        """Off the frame: from the height, this passes with the craft drawn
+        flat on the road.
+        """
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -14455,9 +13452,8 @@ class TestWakeboardLeavesTheRoad:
                 painter.end()
                 visualizers.time.monotonic = was
             drawn[name] = image.copy()
-        # Where the two frames differ is where the craft moved, and the
-        # only thing that moved is the craft. Below the card, which is
-        # at the top and says different things in the two.
+        # Where the frames differ is where the craft moved, the only thing that
+        # did. Below the card, which says different things in the two.
         moved = [y for y in range(side // 4, side)
                  for x in range(0, side, 2)
                  if drawn["up"].pixelColor(x, y)
@@ -14469,22 +13465,12 @@ class TestWakeboardLeavesTheRoad:
 
 
 class TestTheBeatHitsHardEnoughToFeel:
-    """"Make the beat hit harder."
-
-    It was not hitting at all, and the frame says so. Played the same
-    128 bpm track through every scene and measured what a beat does to
-    the picture: the rider swung its brightness 0.026 and changed 7 per
-    cent of the frame, where the rave swung 0.140 and changed 97. The
-    weakest beat of the three by a long way.
-
-    The reason is the road. Everything it is made of is held near the
-    floor on purpose - a block is read against the road, the lamp and
-    the sky behind it, and brightening any of those is exactly how
-    blocks became invisible the first time. So the beat hits where
-    nothing is read against anything: the frame's own edge, and a halo
-    on the craft in the foreground. Neither is ever behind a block, and
-    the measured contrast of a block against the road is the same on the
-    beat as off it.
+    """The rider's beat hits harder. Through the same 128 bpm track, a beat
+    swung the rider's brightness 0.026 and changed 7 per cent of the frame,
+    against the rave's 0.140 and 97. The road stays dark so blocks can be
+    read against it, so the beat hits the frame's edge and a halo on the
+    craft, never behind a block; a block's contrast is the same on the beat
+    as off it.
     """
 
     W, H = 240, 135
@@ -14557,9 +13543,9 @@ class TestTheBeatHitsHardEnoughToFeel:
         return moved
 
     def test_a_beat_moves_a_good_share_of_the_frame(self, qapp):
-        """The number this was written for. Seven per cent was the
-        measurement that said it was not being felt; a fifth is the
-        floor, and it measures about twice that now."""
+        """The floor: 7 per cent was too little to feel; a fifth is the
+        minimum, and it measures about twice that.
+        """
         import statistics
 
         import visualizers
@@ -14574,11 +13560,8 @@ class TestTheBeatHitsHardEnoughToFeel:
             f"was the measurement that said the beat was not being felt")
 
     def test_a_track_with_no_kick_in_it_does_not_flash(self, qapp):
-        """It is the beat that hits, not the clock.
-
-        With the answers to play silenced: taking a prize lights the
-        frame's edge too, on purpose, and has tests of its own. This is
-        about whether the *beat* pulses without a drum under it.
+        """It is the beat that hits, not the clock, with the play sounds
+        silenced (a prize lights the edge too, tested elsewhere).
         """
         import statistics
 
@@ -14587,14 +13570,11 @@ class TestTheBeatHitsHardEnoughToFeel:
         scene = visualizers.Rider()
         scene._last = None
         scene._pop = lambda *args, **kwargs: None
-        # No kick and the playhead pinned between beats: nothing should
-        # be pulsing.
+        # No kick and the playhead pinned between beats: nothing should pulse.
         shots = self._played(scene, kicks=False)
         live = [s for s in shots if s[0] > 1.0]
-        # The top two corners, which are the only part of the frame
-        # nothing else draws in: the road runs up the middle, the
-        # pillars sweep the sides at road height, and the rim is the
-        # only thing that ever lights a corner.
+        # The top corners: the road runs up the middle and the pillars sweep
+        # the sides at road height, so only the rim lights a corner.
         corners = ((2, 2), (self.W - 3, 2))
         swing = max(
             abs(self._light(b, x, y) - self._light(a, x, y))
@@ -14605,8 +13585,7 @@ class TestTheBeatHitsHardEnoughToFeel:
             f"{swing:.2f} from one frame to the next")
 
     def test_the_edge_is_what_lights_rather_than_the_road(self, qapp):
-        """Where the beat is allowed to hit. The middle of the frame is
-        where a block is read, so it is the one place that must not."""
+        """Where the beat may hit: not the middle, where blocks are read."""
         import statistics
 
         import visualizers
@@ -14624,8 +13603,7 @@ class TestTheBeatHitsHardEnoughToFeel:
             f"and quietest moment of a beat")
 
     def test_a_block_reads_the_same_on_the_beat_as_off_it(self, qapp):
-        """The whole constraint. Measured against the road beside it at
-        the instant of a kick and again between kicks."""
+        """Measured against the road beside it, at a kick and between kicks."""
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -14694,21 +13672,11 @@ class TestTheBeatHitsHardEnoughToFeel:
 
 
 class TestTheRoadIsNeverBare:
-    """A road with nothing on it is not a game.
-
-    The chart is the drums, and a breakdown has none. Measured on eight
-    real records, two of them left the road bare for a quarter of the
-    run and one stretch ran 8.6 seconds - nine seconds of a game with
-    nothing in it. A sound effect with almost no drums in it at all was
-    bare 90 per cent of the time.
-
-    So where the chart has put nothing down for a bar, something goes
-    there anyway: prizes, on the beat like everything else. A quiet
-    passage is a place to collect, not a place to be caught out by
-    something the music never played, and putting a hazard there would
-    break the rule that obstacles land on the beats you can hear
-    coming. Audiosurf thins out where a track thins out; it does not
-    stop.
+    """A road with nothing on it is not a game. The chart is the drums, and a
+    breakdown has none: on eight real records two left the road bare a
+    quarter of the time, with one stretch of 8.6 s. Where the chart lays
+    nothing for a bar, prizes go down on the beat; never hazards, which must
+    land on beats you can hear coming.
     """
 
     BEAT = 60.0 / 120.0
@@ -14764,10 +13732,9 @@ class TestTheRoadIsNeverBare:
             f"over forty seconds")
 
     def test_a_track_with_no_drums_found_at_all_still_has_a_road(self, qapp):
-        """Ambient, orchestral, a voice on its own. The fill used to
-        wait for the chart to place something first, and a chart with
-        nothing in it never did - so the road stayed empty for the whole
-        track."""
+        """Ambient, orchestral, a lone voice: the fill used to wait for the
+        chart to place something first, which an empty chart never did.
+        """
         scene = self._laid({})
         laid = [b for b in scene._blocks
                 if b[2] in ("wall", "block", "run")]
@@ -14776,8 +13743,9 @@ class TestTheRoadIsNeverBare:
             f"figures over forty seconds")
 
     def test_what_fills_a_quiet_passage_is_never_a_hazard(self, qapp):
-        """The rule this must not break: an obstacle lands on a beat you
-        can hear coming, and there is nothing to hear here."""
+        """The rule it must not break: an obstacle lands on a beat you can hear
+        coming, and there is nothing to hear here.
+        """
         scene = self._laid({"Kick": (1.0, 2.0, 3.0)})
         greys = [b for b in scene._blocks
                  if b[4] and b[0] > 6.0]
@@ -14789,9 +13757,8 @@ class TestTheRoadIsNeverBare:
         import visualizers
 
         scene = self._laid({"Kick": (1.0, 2.0, 3.0)})
-        # The figures, not every block in them: a run is a slalom and
-        # its second and third steps are a sixth of a beat apart on
-        # purpose. Grouped the way the rest of these tests group them.
+        # The figures, not every block: a run's steps are a sixth of a beat
+        # apart on purpose.
         times = sorted({b[0] for b in scene._blocks
                         if b[2] in ("wall", "block", "run")})
         figures = [t for i, t in enumerate(times)
@@ -14804,15 +13771,15 @@ class TestTheRoadIsNeverBare:
             f"{max(off) * 1000:.0f} ms off the beat")
 
     def test_a_busy_track_is_not_padded(self, qapp):
-        """It fills gaps; it does not add to a road that is already
-        full. Four to the floor with hats on the eighths leaves no gap a
-        bar wide, so nothing extra belongs in it."""
+        """It fills gaps and adds nothing to a full road: four to the floor
+        with hats on the eighths leaves no gap a bar wide.
+        """
         busy = {"Kick": tuple(i * self.BEAT for i in range(100)),
                 "Hats": tuple(i * self.BEAT / 2 for i in range(200))}
         scene = self._laid(busy)
         gaps = self._gaps(scene)
-        # Every gap comes from the chart's own spacing rather than from
-        # the filler, which only ever acts after a whole bar of nothing.
+        # Every gap comes from the chart's own spacing; the filler only acts
+        # after a whole bar of nothing.
         assert max(gaps) < self.BEAT * 3.0, (
             f"the widest gap on a busy track is {max(gaps):.2f}s")
         laid = len([b for b in scene._blocks
@@ -14822,8 +13789,9 @@ class TestTheRoadIsNeverBare:
         assert laid == plain
 
     def test_a_track_with_no_tempo_is_left_alone(self, qapp):
-        """Without a beat there is no grid to put anything on, and a
-        figure off the grid is worse than no figure."""
+        """Without a beat there is no grid, and a figure off the grid is worse
+        than none.
+        """
         import visualizers
         from attachment_widgets import SpectrumState
 
@@ -14837,8 +13805,7 @@ class TestTheRoadIsNeverBare:
         while scene._heard < 30.0:
             scene._heard += 0.5
             scene._lay(state)
-        # Whatever it lays comes from the chart, and the chart has two
-        # hits in it.
+        # Whatever it lays comes from the chart, which has two hits.
         laid = [b for b in scene._blocks
                 if b[2] in ("wall", "block", "run")]
         assert len(laid) <= 6, (
@@ -14847,22 +13814,12 @@ class TestTheRoadIsNeverBare:
 
 
 class TestATempoIsCountedTheWayAPersonWouldCountIt:
-    """Tempo detectors make octave errors.
-
-    They find the right pulse and report it doubled or halved. Measured
-    across eight real records, one came out at 230 bpm on a track that
-    anybody would tap at 115 - and a road built on that is a different
-    game from the song: it ran at 21.7 units a second where the others
-    ran at 12, laid its figures twice as thick, and gave 0.78 s of
-    warning where the rest gave 1.5.
-
-    Folded where the tempo and the beat phase are worked out together.
-    Folding it in the scene and leaving the phase alone is worse than
-    not folding at all: the phase then belongs to a grid at the other
-    tempo, and the correction that keeps the road's origin on the beat
-    spends every frame pulling against it. Measured, that made the road
-    run at exactly twice the speed its own beat asked for, which is how
-    it was found.
+    """Octave errors are folded back. Detectors find the right pulse and report
+    it doubled or halved: 230 bpm for a track tapped at 115, which ran the
+    road at 21.7 units a second and gave 0.78 s of warning instead of 1.5.
+    Folded where tempo and phase are worked out together: folding only the
+    tempo left the phase on the other grid, and the beat correction drove
+    the road at twice its own beat.
     """
 
     def test_an_octave_error_is_folded_back(self, qapp):
@@ -14874,8 +13831,9 @@ class TestATempoIsCountedTheWayAPersonWouldCountIt:
         assert visualizers.folded_tempo(45.0) == 90.0
 
     def test_every_real_reading_is_left_alone(self, qapp):
-        """The bounds are wide enough that nothing a detector got right
-        is moved. These are the eight records the batch was run on."""
+        """The bounds leave a correct reading alone; these are the eight
+        records measured.
+        """
         import visualizers
 
         for bpm in (78.0, 115.0, 128.0, 130.0, 137.0, 155.0, 164.0):
@@ -14900,8 +13858,8 @@ class TestATempoIsCountedTheWayAPersonWouldCountIt:
                     <= visualizers.TEMPO_MOST), f"{bpm} -> {got}"
 
     def test_the_phase_is_folded_with_the_tempo(self, qapp):
-        """The bug this was found by. The pane hands a scene a tempo and
-        a phase, and they have to describe the same grid.
+        """The pane hands a scene a tempo and a phase, which must describe the
+        same grid.
         """
         from array import array
 
@@ -14923,8 +13881,8 @@ class TestATempoIsCountedTheWayAPersonWouldCountIt:
         state = pane._state
         assert state.tempo == pytest.approx(115.0), (
             f"the pane handed over {state.tempo} bpm")
-        # And the phase belongs to the folded grid: at ten seconds, a
-        # 115 bpm grid starting at zero is a whole number of beats in.
+        # And the phase belongs to the folded grid: at ten seconds a 115 bpm
+        # grid from zero is a whole number of beats in.
         period = 60.0 / 115.0
         since = state.at
         wanted = (since / period) % 1.0
@@ -14934,16 +13892,9 @@ class TestATempoIsCountedTheWayAPersonWouldCountIt:
 
 
 class TestARunIsSomethingYouCanSee:
-    """A chain of forty is worth far more than four of ten, and it
-    looked exactly like a chain of one: a number in small text at the
-    top of the frame.
-
-    What a run is worth is the whole of Mono's scoring, so it has to be
-    something you can see without reading - and something you can feel
-    yourself lose. The craft's halo grows and warms as the run builds,
-    from nothing at all to a gold glow at forty, which is where the
-    chain is paying near its cap and a grey stops costing points and
-    starts costing the run.
+    """A long chain shows on the craft: its halo grows and warms from nothing
+    to gold at forty, where the chain pays near its cap and a grey starts
+    costing the run, so it is felt rather than read in small text.
     """
 
     @staticmethod
@@ -14967,8 +13918,7 @@ class TestARunIsSomethingYouCanSee:
         assert self._rider(400)._heat() == 1.0
 
     def test_the_grid_game_measures_the_grid(self, qapp):
-        """Puzzle keeps no chain: what it is building is the cluster
-        sitting in its columns."""
+        """Puzzle keeps no chain: it builds the cluster in its columns."""
         scene = self._rider(mode="Puzzle")
         scene._cells = [[], [], []]
         assert scene._heat() == 0.0
@@ -14976,8 +13926,7 @@ class TestARunIsSomethingYouCanSee:
         assert scene._heat() == pytest.approx(0.5)
 
     def test_losing_the_run_loses_the_heat(self, qapp):
-        """The half of it that matters: it has to be something you feel
-        go."""
+        """And it is felt going."""
         scene = self._rider(mode="Mono")
         scene._lane = 1
         scene._lane_here = scene._lane_at(1)
@@ -14996,8 +13945,9 @@ class TestARunIsSomethingYouCanSee:
             f"{scene._heat():.2f}")
 
     def test_a_long_run_draws_a_bigger_craft_than_a_short_one(self, qapp):
-        """Off the frame: read off the chain, this passes with the halo
-        drawn the same size however long the run is."""
+        """Off the frame: from the chain, this passes with a halo of fixed
+        size.
+        """
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -15048,24 +13998,18 @@ class TestARunIsSomethingYouCanSee:
 
 
 class TestTheCraftLeansIntoWhatItIsDoing:
-    """It used to slide between lanes perfectly flat.
-
-    Which reads as a shape being moved rather than as a thing being
-    ridden. The whole road banks into its own turns already - the
-    blueprint asks for it twice - and the one thing on it that never did
-    was the thing you are steering.
-
-    The roll has to be quicker than the slide or it is a wobble
-    arriving after the move: the slide is nine tenths done in 50 ms and
-    the roll settles inside three frames.
+    """The craft banks into a lane change rather than sliding flat. The roll is
+    quicker than the slide (nine tenths in 50 ms), settling inside three
+    frames, or it is a wobble after the move.
     """
 
     W, H = 520, 340
 
     @classmethod
     def _flown(cls, start=1, moves=0, frames=50, at_frame=30, stop_at=None):
-        """Fly the craft, steering part way through, and keep the last
-        frame and the swerve it ended on."""
+        """Fly the craft, steering part way, and keep the last frame and its
+        swerve.
+        """
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -15133,10 +14077,9 @@ class TestTheCraftLeansIntoWhatItIsDoing:
             "the craft leans harder one way than the other")
 
     def test_a_dash_across_the_road_banks_harder_than_a_nudge(self, qapp):
-        """Otherwise every move of any size looks the same, which is a
-        bank that reads as a switch. Measured as the angle drawn rather
-        than as the swerve behind it: read off the swerve, this passes
-        with the bank pinned at its ceiling for every move there is."""
+        """The bank follows the size of the move, measured as the angle drawn:
+        from the swerve, this passes with the bank pinned at its ceiling.
+        """
         import visualizers
 
         def bank(start, moves):
@@ -15165,12 +14108,10 @@ class TestTheCraftLeansIntoWhatItIsDoing:
             "the craft is allowed to roll further than a craft should")
 
     def test_a_stopped_track_holds_the_bank_where_it_was(self, qapp):
-        """Everything on this road runs on the track's own clock, so a
-        craft caught mid-swerve stays caught mid-swerve."""
-        # Stopped while the craft is still crossing: a track stopped
-        # after it has arrived holds a bank of nothing, which would
-        # pass this without testing anything. A dash across the whole
-        # road, for the same reason.
+        """On the track's clock, so a craft caught mid-swerve stays mid-swerve.
+        """
+        # Stopped while the craft is still crossing, on a dash across the road:
+        # a craft that has arrived holds no bank.
         early, _s, _p = self._flown(start=0, moves=2, frames=60,
                                     at_frame=20, stop_at=21)
         late, _s2, _p2 = self._flown(start=0, moves=2, frames=110,
@@ -15185,12 +14126,9 @@ class TestTheCraftLeansIntoWhatItIsDoing:
     # -- off the frame -----------------------------------------------------
     @classmethod
     def _held(cls, swerve):
-        """One frame of a craft standing still, banked by hand.
-
-        The craft is left in its lane and only the bank is changed, so
-        two frames differ by the roll and by nothing else. Comparing a
-        still craft with a *moving* one compares two positions, which is
-        a test that passes with the roll deleted - and did.
+        """One frame of a still craft banked by hand, so two frames differ by
+        the roll alone; against a moving craft, this passed with the roll
+        deleted.
         """
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
@@ -15232,15 +14170,9 @@ class TestTheCraftLeansIntoWhatItIsDoing:
 
     @classmethod
     def _tilt(cls, shot):
-        """Which way the craft leans, as how far its nose sits to one
-        side of its tail.
-
-        A roll about the craft's middle swings the nose one way and the
-        tail the other, so the difference between the two is the lean
-        and its sign is the direction. Reading how high the lit pixels
-        reach on each side was tried and is far too blunt on a shape
-        this small: it gave 1 and 3 for a craft banked 18 degrees each
-        way.
+        """Which way the craft leans, as how far its nose sits to one side of
+        its tail: a roll swings them opposite ways. Lit-pixel heights were
+        too blunt on a shape this small.
         """
         lit = [(x, y) for y in range(cls.H // 2, cls.H)
                for x in range(cls.W)
@@ -15258,8 +14190,7 @@ class TestTheCraftLeansIntoWhatItIsDoing:
         return sum(nose) / len(nose) - sum(tail) / len(tail)
 
     def test_the_craft_is_drawn_rolled(self, qapp):
-        """The bank itself, off the frame, with the craft held in one
-        lane so the roll is the only thing that differs."""
+        """The bank itself, off the frame, with the craft held in one lane."""
         level = self._held(0.0)
         banked = self._held(18.0)
         changed = sum(1 for y in range(self.H // 2, self.H)
@@ -15270,16 +14201,15 @@ class TestTheCraftLeansIntoWhatItIsDoing:
             f"in the same lane")
 
     def test_it_rolls_the_way_it_is_going(self, qapp):
-        """Nose up on the side it is heading for. Read off the drawn
-        shape: read off the swerve, this passes with the sign the wrong
-        way round."""
+        """Nose up on the side it heads for, read off the drawn shape: from the
+        swerve, this passes with the sign reversed.
+        """
         one = self._tilt(self._held(18.0))
         other = self._tilt(self._held(-18.0))
         level = self._tilt(self._held(0.0))
         assert None not in (one, other, level), (one, other, level)
-        # Against the level craft rather than against zero: the craft
-        # is drawn nose-forward, so in perspective its nose already sits
-        # to one side of its tail before anything banks at all.
+        # Against the level craft, not zero: in perspective its nose already
+        # sits to one side.
         assert (one - level) * (other - level) < 0, (
             f"banking one way puts the nose at {one:.1f} and the other "
             f"way at {other:.1f}, against {level:.1f} level - the same "
@@ -15287,10 +14217,8 @@ class TestTheCraftLeansIntoWhatItIsDoing:
         assert abs(one - level) > 4.0 and abs(other - level) > 4.0, (
             f"the craft barely leans at all: {one:.1f} and {other:.1f} "
             f"against {level:.1f}")
-        # And into the move rather than away from it: crossing to the
-        # right puts the nose to the right of the tail, the way anything
-        # that corners leans. Symmetry alone passes with the whole thing
-        # mirrored, which is a craft heeling out of every turn it takes.
+        # And into the move: crossing right puts the nose right of the tail.
+        # Symmetry alone passes with everything mirrored.
         assert one > level > other, (
             f"a craft crossing right leans to {one:.1f} and one crossing "
             f"left to {other:.1f}, against {level:.1f} level - it is "
@@ -15298,21 +14226,11 @@ class TestTheCraftLeansIntoWhatItIsDoing:
 
 
 class TestTheScreenAnswersWhatYouDo:
-    """"Xxxx xxxxxx xxxxxx xxxxxxxxx xx xxxxxxx xx obstacle and
-    collecting coins, hitting combos."
-
-    Measured against the beat on the same road, the things a player did
-    registered fifteen times weaker than the music. A beat moved 43 per
-    cent of the frame; taking a coin moved 2.7, a prize 2.3, and a chain
-    reaching forty 2.6 - indistinguishable from any other prize. A hit
-    moved 13.5. The flag every collection set so that something could
-    answer it had never been drawn at all.
-
-    Now each thing answers: a ring thrown off the craft, a flash of
-    colour from the frame's edge, and for the moments that deserve it a
-    word - CHAIN 25, CHAIN LOST, DOUBLE. Screen space, outside the bank
-    and the shake, because it is the game talking to the player rather
-    than something in the world.
+    """Hits, coins and chains answer on screen. Against a beat that moved 43
+    per cent of the frame, a coin moved 2.7, a prize 2.3, a chain reaching
+    forty 2.6 and a hit 13.5. Now each throws a ring from the craft, a flash
+    from the frame's edge and, for big moments, a word (CHAIN 25, CHAIN
+    LOST, DOUBLE), in screen space outside the bank and the shake.
     """
 
     W, H = 320, 180
@@ -15387,8 +14305,9 @@ class TestTheScreenAnswersWhatYouDo:
                 f"{words}")
 
     def test_losing_a_long_chain_says_what_it_cost(self, qapp):
-        """A chain of forty going is the worst thing that can happen on
-        this road, and it used to look exactly like a chain of two."""
+        """A chain of forty going is the worst thing on this road, and it
+        looked like a chain of two going.
+        """
         scene = self._rider(chain=30)
         self._into(scene, "block", grey=True)
         words = [pop[5] for pop in scene._pops if pop[5]]
@@ -15447,8 +14366,9 @@ class TestTheScreenAnswersWhatYouDo:
     # -- how big they are --------------------------------------------------
     @classmethod
     def _share(cls, event):
-        """How much of the frame one event moves at its peak, against
-        the same run with nothing happening."""
+        """How much of the frame one event moves at its peak, against the same
+        run with nothing happening.
+        """
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -15510,9 +14430,9 @@ class TestTheScreenAnswersWhatYouDo:
         return fire
 
     def test_a_hit_is_the_biggest_thing_on_the_road(self, qapp):
-        """It measured 13.6 per cent of the frame, less than a coin: the
-        damage wash multiplies, and black multiplied by red is still
-        black, so on this road it barely showed."""
+        """A hit measured 13.6 per cent, less than a coin: the damage wash
+        multiplies, and black times red is black.
+        """
         share = self._share(self._event("block", grey=True))
         assert share > 0.35, f"a hit moves {share:.1%} of the frame"
 
@@ -15525,9 +14445,9 @@ class TestTheScreenAnswersWhatYouDo:
         assert share > 0.12, f"a prize moves {share:.1%} of the frame"
 
     def test_a_milestone_is_a_moment(self, qapp):
-        """A chain reaching twenty-five moved 2.6 per cent of the frame,
-        the same as any prize, which is the moment a run becomes worth
-        protecting going by unremarked."""
+        """A chain reaching twenty-five moved 2.6 per cent, the same as any
+        prize.
+        """
         share = self._share(self._event("block", chain=24))
         plain = self._share(self._event("block", chain=4))
         assert share > 0.40, f"a milestone moves {share:.1%} of the frame"
@@ -15537,9 +14457,10 @@ class TestTheScreenAnswersWhatYouDo:
 
     # -- and they never break the frame ------------------------------------
     def test_a_callout_leaves_the_painter_as_it_found_it(self, qapp):
-        """The first version raised inside a saved painter - QFont was
-        never imported - and a painter ended with a saved state takes
-        the pane down with it at the end of the frame."""
+        """The first version raised inside a saved painter (QFont was never
+        imported), and a painter ended with a saved state takes the pane
+        down.
+        """
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QFont, QImage, QPainter
 
@@ -15550,10 +14471,9 @@ class TestTheScreenAnswersWhatYouDo:
                        QImage.Format.Format_ARGB32_Premultiplied)
         image.fill(QColor(0, 0, 0))
         painter = QPainter(image)
-        # What a leaked save actually leaks: the callout's own font and
-        # pen, into whatever the pane draws next. Ending the painter is
-        # no test of it - end() returns True with saved states left and
-        # only prints a warning about them.
+        # What a leaked save leaks: the callout's font and pen, into whatever
+        # is drawn next. end() returns True with saved states left, so ending
+        # is no test.
         font = QFont(painter.font())
         font.setPointSizeF(9.0)
         font.setBold(False)

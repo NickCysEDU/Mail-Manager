@@ -1,17 +1,9 @@
 """The pieces the attachment window is built from.
 
-Two of these exist because the obvious version was wrong:
-
-*SeekBar.* A QSlider does not move to where you click, and a media player
-reports its old position for a moment after a seek. Together those make a
-click flash to the new place and slide back, which is the bug that made
-scrubbing feel broken. Clicking is handled here, and reports from the player
-are ignored until one arrives near where the seek was aimed.
-
-*Spectrum.* Qt6 has no audio probe, so the analysis is precomputed and the
-paint loop only interpolates between two rows of numbers. No arithmetic per
-frame beyond that, no allocation in paintEvent, and it stops entirely when
-nothing is playing.
+SeekBar moves to where it is clicked and ignores the player's stale reports
+after a seek, so the handle does not jump back. Spectrum interpolates
+between rows of a precomputed analysis (Qt6 has no audio probe) and stops
+when nothing plays.
 """
 
 from __future__ import annotations
@@ -45,15 +37,9 @@ class SeekBar(QSlider):
     """A slider that goes where you click and stays where you put it."""
 
     seeked = Signal(int)
-    #: Where the player says it is, for anything following this bar.
-    #:
-    #: ``report`` sets the value with signals blocked, so that a position
-    #: coming back from the player cannot be mistaken for somebody dragging
-    #: the handle. That also means ``valueChanged`` never fires while a
-    #: track plays - and the full-screen bar was following ``valueChanged``,
-    #: so it sat at zero for the whole song. It moved again after a few
-    #: trips in and out of full screen because the transport keys and the
-    #: track change set the value the ordinary way, which does emit.
+    #: Where the player says it is, for anything following this bar. ``report``
+    #: sets the value with signals blocked, so ``valueChanged`` never fires
+    #: while a track plays; follow this instead.
     moved = Signal(int)
 
     def __init__(self) -> None:
@@ -122,13 +108,9 @@ class SeekBar(QSlider):
     def report(self, position: int) -> None:
         """Where the player says it is. Ignored while a seek is settling.
 
-        A player keeps emitting the position it had before the seek for a
-        little while after it, and those reports arrive out of order. The
-        first version of this cleared the guard as soon as one report landed
-        near the target, which let the *next* stale one through - so a quick
-        run of clicks still snapped the handle backwards. The guard now holds
-        for the whole settling window, and anything far from where the seek
-        was aimed is dropped for its duration.
+        A player keeps reporting its old position for a while after a seek,
+        out of order, so the guard holds for the whole settling window and
+        drops anything far from the target.
         """
         if self._dragging:
             return
@@ -137,7 +119,7 @@ class SeekBar(QSlider):
             if abs(position - self._pending) > tolerance:
                 return
             # Near enough to be real: follow it, but keep guarding until the
-            # window closes, because more stale reports may be behind it.
+            # window closes, since more stale reports may follow.
             self._pending = position
         self.blockSignals(True)
         self.setValue(position)
@@ -167,25 +149,11 @@ _LETTERS = ("0123456789 abcdefghijklmnopqrstuvwxyz"
 def warm_the_glyphs() -> None:
     """Pay the font machinery's one-off cost before anything animates.
 
-    The first piece of text drawn in a process is not the cost of
-    drawing text: it is Qt populating its font database, resolving the
-    family and loading the face, and it lands on whichever frame happens
-    to be first. Measured at 1440x810, the equaliser's first frame cost
-    168 ms against 6 ms for every frame after it - ten dropped frames at
-    the moment a scene appears, which is most of what "xxx xxxxxxxxxxx
-    xxx xxxxx xxxx xxxxx xxxxxx" was. One string is enough: the cost is
-    the machinery rather than the glyphs, and a single ``drawText`` takes
-    that frame to 13 ms.
-
-    On this thread, and that is not an implementation detail. Doing it
-    on a worker was tried, because 145 ms is a long time to hold the GUI
-    thread, and it segfaults: QCoreTextFontDatabase::populateFamilyAliases
-    is not safe to run off the GUI thread and races the GUI thread doing
-    the same thing. A stall is a nuisance and a crash is not a trade.
-
-    Called while the pane is being built, so the stall lands before
-    anything is moving; the scene's own fade then covers what is left.
-    See Spectrum.WARM_FRAMES.
+    The first text drawn in a process populates Qt's font database, which
+    cost 168 ms of a scene's first frame at 1440x810. One drawText is
+    enough. It must run on the GUI thread: populateFamilyAliases off it
+    races the GUI thread and crashes. Called while the pane is built, before
+    anything moves; see Spectrum.WARM_FRAMES.
     """
     global _WARMED
 
@@ -242,86 +210,63 @@ class SpectrumState:
         #: The reference these are copied from is red on near black.
         self.dial_colour = QColor(226, 62, 48)
         self.background = QColor(6, 4, 6)
-        #: How recently each part of the kit was hit, 1 at the moment of
-        #: the hit and falling away after it. A scene reads these rather
-        #: than the beat list, so it never has to know where the playhead
-        #: is or how long a frame took.
+        #: How recently each part of the kit was hit: 1 at the hit, falling
+        #: away after. Scenes read these, so they need not know the playhead or
+        #: the frame time.
         self.kit: dict = {}
         #: Where the playhead is, in seconds, on the pane's own clock.
         self.at = 0.0
-        #: Every hit in the track, by name, in seconds. A scene that has
-        #: to put something on screen *before* the beat it belongs to
-        #: cannot work from the kit levels, which only say what is
-        #: happening now.
+        #: Every hit in the track, by name, in seconds, for a scene that draws
+        #: something before its beat.
         self.chart: dict = {}
-        #: And how hard each part of the kit was hitting at every moment,
-        #: as (readings, readings a second), for reading a track's rhythm
-        #: without trusting any one detected hit. See trackstyle.
+        #: How hard each part of the kit hit at every moment, as (readings,
+        #: readings a second), for reading the rhythm without trusting single
+        #: hits. See trackstyle.
         self.flux: dict = {}
-        #: The track's shape from end to end: see attachment_audio's
-        #: ``contour``. None until the analysis has landed.
+        #: The track's shape from end to end (attachment_audio's ``contour``);
+        #: None until the analysis lands.
         self.contour = None
-        #: Its key, tuning, chords and lead: see harmony. None until that
-        #: pass has landed, which is last, and for good on a track with
-        #: no harmony to hear.
+        #: Key, tuning, chords and lead (see harmony). None until that pass
+        #: lands, which is last, and for good on a track with nothing to hear.
         self.harmony = None
-        #: The drums' own tempo, beat and pattern: see trackstyle. None
-        #: until the kit has been found.
+        #: The drums' tempo, beat and pattern (see trackstyle); None until the
+        #: kit is found.
         self.rhythm = None
-        #: Whether the track is actually going. A paused player reports
-        #: the same position every frame, and a scene that travels needs
-        #: to know the difference: without it the rave's corridor crept
-        #: and jittered under a stopped song, because the push behind it
-        #: went on easing towards the last bass it saw and the room's
-        #: position is worked out from that push.
+        #: Whether the track is moving. A paused player reports the same
+        #: position every frame, and a scene that travels must not creep while
+        #: stopped.
         self.moving = True
         #: Whether the player is playing, as the pane was told; None where
         #: nothing has said.
         self.playing = None
-        #: How many jumps the pane has made (see Spectrum.seek_to), and
-        #: whether the drums' beat is still to come; None where nothing
-        #: says.
+        #: How many jumps the pane has made (see Spectrum.seek_to), and whether
+        #: the drums' beat is still to come; None where nothing says.
         self.jumps = None
         self.rhythm_due = None
-        #: The track's tempo in beats a minute, or 0 where none was
-        #: found, and how far through the current beat the playhead is,
-        #: from 0 at the beat to just under 1 at the next.
-        #:
-        #: Scenes that want to *anticipate* need this rather than the kit:
-        #: the kit says a kick has just landed, which is too late to lean
-        #: into. A grid says where the next one will be.
+        #: The tempo in beats a minute (0 where none was found), and how far
+        #: through the current beat the playhead is, from 0 to just under 1.
+        #: For scenes that anticipate the next beat rather than react to the
+        #: last.
         self.tempo = 0.0
         self.beat_at = 0.0
 
 
     def settle(self) -> None:
-        """Force every number in here back into the range it claims.
+        """Force every number back into the range it claims.
 
-        The boundary between what was measured and what is drawn. A
-        level is nought to one and a tempo is a count of beats by
-        construction, which is not the same as in fact: a decode that
-        goes wrong, a calibration that comes out zero or a tempo looked
-        for in silence can put a nan or an infinity in one of these.
-
-        It matters more than one bad frame. The scenes accumulate what
-        they are handed - the field's drifts, the rider's followers are
-        running sums - so one bad value is not a bad frame, it is every
-        frame after it; and a nan or an infinity that reaches an
-        ``int()`` raises out of paint, which closes the window.
-
-        Once a frame, in one place, because there is one of these and
-        every scene is handed it. ``phase`` is a running angle rather
-        than a level and is only checked for being a number at all.
-        ``trace`` and ``vector`` are samples rather than levels, and are
-        the same lists the history holds, so they are left alone.
+        A bad decode or a tempo looked for in silence can put a nan or an
+        infinity here. Scenes keep running sums, so one bad value spoils
+        every later frame, and a nan reaching ``int()`` raises out of paint
+        and closes the window. ``phase`` is a running angle and is only
+        checked for being a number; ``trace`` and ``vector`` are samples
+        shared with the history and are left alone.
         """
         from visualizers import bounded
 
         self.levels = [bounded(value) for value in self.levels]
         self.peaks = [bounded(value) for value in self.peaks]
-        # A scene draws a peak over the bar it belongs to and reads the
-        # two by the same index, so the two are the same length here
-        # rather than in every scene that pairs them.
+        # A scene reads peaks and levels by the same index, so they are made
+        # the same length here.
         if len(self.peaks) != len(self.levels):
             self.peaks = (self.peaks + [0.0] * len(self.levels)
                           )[:len(self.levels)]
@@ -334,13 +279,11 @@ class SpectrumState:
         self.scroll = bounded(self.scroll)
         self.phase = bounded(self.phase, most=1e9)
         self.beat_at = bounded(self.beat_at)
-        #: A tempo of a millionth of a beat a minute is a beat of sixty
-        #: million seconds, and one of a million is a road laid sixteen
-        #: thousand figures a second.
+        #: Bounded both ways: a tempo near zero is a beat of millions of
+        #: seconds, and a huge one lays thousands of figures a second.
         self.tempo = bounded(self.tempo, most=1000.0)
-        #: A day of music. An *infinite* playhead is worse than a large
-        #: one: the rider's origin is set from it, so its position comes
-        #: out as infinity minus infinity, which is a nan.
+        #: A day of music. An infinite playhead sets the rider's origin to
+        #: infinity, and its position then comes out as a nan.
         self.at = bounded(self.at, most=86400.0)
         if self.kit:
             self.kit = {name: bounded(value)
@@ -348,14 +291,11 @@ class SpectrumState:
 
 
 def _gpu_wanted() -> bool:
-    """Whether the pane may draw on the graphics card at all.
+    """Whether the pane may draw on the graphics card.
 
-    Not under the offscreen and minimal platforms, which is where the
-    test suite runs: every test of what the scenes draw goes through the
-    CPU path, which is the path that has always been there and the one
-    any machine without a working GPU falls back to. ``MAIL_MANAGER_GPU=0``
-    forces that path everywhere, for anybody chasing a drawing problem
-    who wants to know whether the card is part of it.
+    Not on the offscreen and minimal platforms, where the tests run: those
+    use the CPU path, which any machine without a working GPU also falls
+    back to. ``MAIL_MANAGER_GPU=0`` forces the CPU path everywhere.
     """
     import os
 
@@ -371,34 +311,19 @@ def _platform_name() -> str:
 
 
 class _GpuCanvas(QOpenGLWidget):
-    """Where the pane draws when there is a graphics card to draw on.
+    """Where the pane draws when there is a graphics card.
 
-    "Xxxxxxxx xxxxxxxxxx xx xxxx xxxxxx xx xxx xxxxx xx xxxxx." It was
-    not sharp because it could not afford to be: at a Retina full screen
-    - 2880x1800 real pixels - the rider cost 24 ms a frame on the CPU
-    with nothing else going on, and 42 once the bloom and the vignette
-    were added, against a sixtieth of a second for everything. So the
-    pane drew it at half the resolution and stretched it, which is one
-    buffer pixel per point, which on a Retina screen is soft.
-
-    Qt's own OpenGL paint engine draws the same QPainter calls on the
-    card. Measured at the same size: 4.8 ms for the scene and 10.2 for
-    the scene with every effect, against 23.6 and 41.9 on the CPU, with
-    a mean difference between the two frames of 0.004 in brightness. No
-    new dependency - it ships in PySide6 - and every scene keeps drawing
-    exactly what it drew.
-
-    Transparent to the mouse, so the pane underneath still gets every
-    click it always got. It covers the pane completely, so the pane
-    itself paints nothing while it is there.
+    At a Retina full screen the rider with its effects cost 42 ms a frame on
+    the CPU, so the pane drew at half resolution and stretched it. Qt's
+    OpenGL paint engine draws the same QPainter calls on the card in 10 ms,
+    with the same picture. It is transparent to the mouse and covers the
+    pane, which then paints nothing itself.
     """
 
     def __init__(self, pane) -> None:
         super().__init__(pane)
-        # Weakly. The pane holds the canvas; a canvas that held the pane
-        # back made the two a cycle, and a cycle is freed by Python's
-        # collector whenever it next runs - which can be in the middle of
-        # another pane's frame. See paintGL.
+        # Weakly: a canvas holding the pane made a cycle, and the collector can
+        # free a cycle in the middle of another pane's frame. See paintGL.
         import weakref
 
         self._pane = weakref.ref(pane)
@@ -406,8 +331,8 @@ class _GpuCanvas(QOpenGLWidget):
         self._buffers = None
         self._halves = {}
         self._blitter = None
-        #: The last frame of the scene before, while the next one fades
-        #: up over it. See hold.
+        #: The last frame of the scene before, while the next fades up over it.
+        #: See hold.
         self._held = None
         #: The small copy of the last frame the bloom was made from.
         self.last_halo = None
@@ -421,28 +346,23 @@ class _GpuCanvas(QOpenGLWidget):
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
     def initializeGL(self) -> None:      # noqa: N802 - Qt's name
-        # A new context, which reparenting into full screen can bring:
-        # whatever was built on the old one is gone with it.
+        # A new context, which reparenting into full screen can bring: whatever
+        # was built on the old one is gone.
         self._buffers = None
         self._halves = {}
         self._held = None
         self.world = None
         self._blitter = QOpenGLTextureBlitter()
         self._blitter.create()
-        # Everything the rider's world makes on a context is a Qt object
-        # that frees its GL names with that context, so letting go of the
-        # old world here is enough: what Python collects later is only
-        # the shells. (Releasing it explicitly as the context goes is Qt's
-        # advice in C++, and cannot be done from Python: by the time a
-        # context says it is going, PySide has already let go of it.)
+        # The rider's world frees its GL names with its context, so dropping it
+        # here is enough. (Releasing explicitly as the context goes cannot be
+        # done from Python: PySide has let go of the context by then.)
 
     def buffers(self, width: int, height: int, halo: QSize,
                 samples: int = 4):
-        """The three framebuffers and the device for this size.
-
-        Multisampled for the scene itself, because that is where the
-        antialiasing comes from on a card; a plain one it is resolved
-        into; and a small one the bloom is read back from.
+        """The three framebuffers and the device for this size: multisampled
+        for the scene, a plain one it resolves into, and a small one for the
+        bloom.
         """
         key = (width, height, halo.width(), halo.height(), samples,
                id(self.context()))
@@ -475,11 +395,10 @@ class _GpuCanvas(QOpenGLWidget):
     def hold(self, fold=None) -> bool:
         """Keep the frame last drawn, for the next scene to fade up over.
 
-        ``fold`` is how far a scene already fading up had come: the frame
-        held before and the last one are then mixed in that proportion,
-        which is the picture that was on screen, so a change made during
-        a change carries on from what is showing. False if nothing has
-        been drawn to keep.
+        ``fold`` is how far a scene already fading up had come; the held
+        frame and the last one are mixed in that proportion, so a change
+        during a change carries on from what is showing. False if nothing
+        has been drawn.
         """
         if self._buffers is None:
             return False
@@ -521,8 +440,8 @@ class _GpuCanvas(QOpenGLWidget):
         if alpha < 0.999:
             functions.glEnable(0x0BE2)      # blending
             functions.glBlendColor(0.0, 0.0, 0.0, float(alpha))
-            # By a constant rather than the texture's own alpha, which the
-            # rider's world does not always leave at one.
+            # By a constant, not the texture's alpha, which the rider's world
+            # does not always leave at one.
             functions.glBlendFunc(0x8003, 0x8004)
         else:
             functions.glDisable(0x0BE2)
@@ -537,15 +456,11 @@ class _GpuCanvas(QOpenGLWidget):
     def paintGL(self) -> None:      # noqa: N802 - Qt's name
         """One frame, with Python's collector held off until it is done.
 
-        The collector runs when enough has been allocated, which is at no
-        particular moment - and if what it frees is a Qt widget with a GL
-        context of its own, taking that apart makes its context current
-        and then none at all, in the middle of this frame. The next thing
-        the painter did dereferenced the current context and crashed the
-        process. Measured on the rider's world, which allocates enough in
-        a frame to set the collector off: a second pane drawing while the
-        first was dropped crashed three runs in three. Collection waits
-        for the end of the frame instead, which is a few milliseconds.
+        If the collector frees a widget with its own GL context mid-frame,
+        that context becomes current and then none, and the painter's next
+        call crashed the process (three runs in three with a second pane
+        dropped while the first drew). Collection waits for the end of the
+        frame instead.
         """
         import gc
 
@@ -562,21 +477,17 @@ class _GpuCanvas(QOpenGLWidget):
 
 
 class Spectrum(QWidget):
-    """The equaliser, and whichever scene is drawing it.
-
-    The numbers are worked out once, before playback. This keeps the smoothed
-    state and hands it to a scene; changing theme swaps one object and costs
-    nothing. Nothing runs while nothing is playing.
+    """The equaliser, and whichever scene draws it. The numbers are worked out
+    before playback; this keeps the smoothed state and hands it to a scene.
+    Nothing runs while nothing plays.
     """
 
-    #: How tall the plain strip wants to be. The scenes have detail worth
-    #: room - a dial's numbers, a landscape's depth - and at 240 they were
-    #: squashed into a letterbox.
+    #: How tall the plain strip wants to be: at 240 the scenes' detail was
+    #: squashed.
     HEIGHT = 320
 
-    #: Shapes the picture can take, as width-to-height. None fills the
-    #: height the window can spare. Portrait is genuinely taller than it is
-    #: wide, which several of the scenes suit better than a letterbox.
+    #: Shapes the picture can take, as width to height; None fills the height
+    #: the window can spare.
     SHAPES = (("Fill", None),
                ("Cinema 21:9", 21 / 9), ("Wide 16:9", 16 / 9),
                ("Photo 3:2", 3 / 2), ("Classic 4:3", 4 / 3),
@@ -589,62 +500,38 @@ class Spectrum(QWidget):
     #: Frames of history kept for the scenes that plot time.
     HISTORY = 96
 
-    #: The least it will ever take. Below about this the scenes have
-    #: nowhere to put their detail - ten dials in sixty pixels is not a
-    #: rack of meters, it is a smear - so the strip keeps this much and
-    #: the controls wrap instead.
+    #: The least it will ever take: below this the scenes have nowhere to put
+    #: their detail, so the controls wrap instead.
     FLOOR = 150
 
-    #: What the strobe has been set to, when a scene changed it. The
-    #: controls follow so that what they show is what is happening.
+    #: What the strobe has been set to when a scene changed it, so the controls
+    #: can follow.
     strobe_settings_changed = Signal(str, float, float)
 
     #: Sixty a second, which is what the scenes are budgeted against.
     FRAME_MS = 16
 
-    #: How long one scene takes to give way to the next, as offered in
-    #: the window. The first is the default.
+    #: How long one scene takes to give way to the next; the first is the
+    #: default.
     CHANGES = (("Quick", 0.2), ("Smooth", 0.6), ("Slow", 1.5), ("Cut", 0.0))
 
-    #: How much of the way a newly chosen scene fades up each frame, at
-    #: sixty a second and the default length.
+    #: How much of the way a new scene fades up each frame, at sixty a second
+    #: and the default length.
     FRESH_STEP = FRAME_MS / 1000.0 / CHANGES[0][1]
 
-    #: How many frames a scene draws before the fade even starts.
+    #: How many frames a scene draws, unseen, before its fade starts.
     #:
-    #: "Xxx xxxxxxxxxxx xxx xxxxx xxxx xxxxx xxxxxx." A scene's first
-    #: frames cost several times what its later ones do: one-off
-    #: allocations, a pixmap built and then blitted for ever after, and
-    #: the font machinery. The fade used to run through exactly those
-    #: frames, which put the roughest part of every scene on screen.
-    #:
-    #: The frames are still drawn, at an opacity of nothing, so the cost
-    #: is paid where nobody can see it and the fade begins on a scene
-    #: that is already up to speed.
-    #:
-    #: Six rather than the twenty-four Sharpness takes to decide how big
-    #: to draw. Measured once the font machinery is warmed elsewhere,
-    #: only the *first* frame of a scene is expensive - 12 to 16 ms
-    #: against 5 to 11 settled - so six covers the roughness, and the
-    #: rest of Sharpness's window lands under the fade, where a change
-    #: of resolution is not something anybody can see. Twenty-four was
-    #: four tenths of a second of blank pane every time somebody changed
-    #: scene, which is its own kind of rough.
+    #: A scene's first frames cost several times its later ones (one-off
+    #: allocations, cached pixmaps, fonts), and the fade used to show exactly
+    #: those. Six because only the first frame is expensive once fonts are
+    #: warmed (12 to 16 ms against 5 to 11); twenty-four left the pane blank
+    #: for four tenths of a second.
     WARM_FRAMES = 6
 
     #: Frames up to this many pixels are drawn at their real size without
-    #: anything being measured first, because at that size every scene
-    #: holds a frame. Above it ``Sharpness`` times the scene and decides,
-    #: which is the part that used to be a guess: this number alone was
-    #: the whole rule, and at full screen it put the buffer *below* the
-    #: window's own logical resolution - 1032x580 behind 1920x1080 - while
-    #: the same rule in a windowed strip drew at nearly twice logical.
-    #: That is what "fuzzy at full screen" was.
-    #:
-    #: A scene that says it can afford more gets more
-    #: (``Scene.sharp_pixels``). The dials are the case that made that
-    #: necessary - their faces are drawn once into a pixmap and blitted
-    #: after that, so they cost almost nothing per frame.
+    #: measuring, since every scene holds a frame there. Above it Sharpness
+    #: times the scene and decides. A scene that can afford more says so
+    #: (``Scene.sharp_pixels``), as the dials do: their faces are cached.
     SHARP_PIXELS = 600_000
 
     #: Which bands feed which aggregate, as fractions of the band count.
@@ -669,12 +556,12 @@ class Spectrum(QWidget):
         self._last_bass = 0.0
         self._dial_frames: List = []
         self._dial_level: List[float] = []
-        #: How fast each needle is moving, and when it last moved. A
-        #: movement with no momentum is a bar graph.
+        #: How fast each needle moves, and when it last moved: without momentum
+        #: a meter is a bar graph.
         self._dial_speed: List[float] = []
         self._dial_clock = None
-        #: Which frequency each meter reads. Chosen by the user; starts at
-        #: the ten from the photograph the scene was copied from.
+        #: Which frequency each meter reads, chosen by the user; starts at the
+        #: ten on the reference meter.
         self._dial_centres = None
         #: One slice of the real waveform per frame, for the scope.
         self._traces: List = []
@@ -699,91 +586,85 @@ class Spectrum(QWidget):
         self._buffer = None
         #: None for the fixed strip, else width-to-height.
         self._aspect = None
-        #: The most the strip may take, set by whoever owns the layout.
-        #: Without it a tall shape simply demanded its height, the layout
-        #: could not fit the transport underneath, and the controls ended
-        #: up drawn on top of the scene.
+        #: The most the strip may take, set by whoever owns the layout. Without
+        #: it a tall shape took its height and the controls were drawn over the
+        #: scene.
         self._budget = None
         #: Middle of the slider until somebody moves it.
         self._strobe_rate = 0.5
         self._strobe_sense = 0.5
         #: Which part of the sound the strobe listens to.
         self._strobe_source = "Bass"
-        #: Whether the user has touched any of the strobe controls. Until
-        #: they have, switching scene sets them to whatever suits it.
+        #: Whether the user has touched the strobe controls; until then a scene
+        #: sets them to suit itself.
         self._strobe_chosen = False
-        #: 0 while a track is playing, 1 while the scene is drifting on
-        #: its own. Everything in between is the crossfade.
+        #: 0 while a track plays, 1 while the scene drifts on its own; in
+        #: between is the crossfade.
         self._settle = 0.0
         #: 0 to 1 while a newly chosen scene fades up. See FRESH_STEP.
         self._fresh = 1.0
         #: How long that takes, in seconds. See set_change.
         self._change = self.CHANGES[0][1]
-        #: On the card, the scene before is kept and the new one fades up
-        #: over it: asked for, under way, and how far it had got when last
-        #: shown. See _keep_the_last_frame.
+        #: On the card, the scene before is kept and the new one fades up over
+        #: it: asked for, under way, and how far it had got when last shown.
         self._swap_pending = False
         self._crossing = False
         self._shown_fresh = 0.0
-        #: How many frames the current scene has drawn. The fade waits
-        #: for these: see WARM_FRAMES.
+        #: How many frames the current scene has drawn; the fade waits for
+        #: these (see WARM_FRAMES).
         self._drawn = 0
         self._last_watched = 0.0
         self._since_hit = 99
         #: A clock of our own that leans on the playhead. See ``_heard``.
         self._heard_now = None
         self._heard_at = None
-        #: Where the player was last sent, while waiting for it to move on
-        #: from there, and when. See seek_to.
+        #: Where the player was last sent, and when, while waiting for it to
+        #: move on. See seek_to.
         self._seek_hold = None
         self._seek_at = 0.0
         self._seek_from = None
         self._was_playing = False
-        #: Started again and not yet heard from since, and closing on the
-        #: player's first word since. See _heard.
+        #: Started again and not heard from since, then closing on the player's
+        #: first report. See _heard.
         self._settling = False
         self._catching = False
-        #: How many times the picture has jumped rather than moved. A scene
-        #: compares it with the last count it saw.
+        #: How many times the picture has jumped rather than moved; a scene
+        #: compares it with the count it last saw.
         self._jumps = 0
-        #: Whether the drums' own beat is still being worked out for this
-        #: track. See expect_rhythm.
+        #: Whether the drums' beat is still being worked out for this track.
+        #: See expect_rhythm.
         self._rhythm_due = False
-        #: The moment of the music this frame shows, worked out once a
-        #: frame from the clock (see _heard and _tick) and read by
-        #: everything drawn from the track.
+        #: The moment of the music this frame shows, worked out once a frame
+        #: (see _heard and _tick) and read by everything drawn.
         self._now = 0.0
-        #: The allowance for the ear and the eye - see av_sync - set by
-        #: whoever is playing the music through the machine's audio. None
-        #: shows the player's position as it is.
+        #: The allowance for the ear and the eye (see av_sync), set by whoever
+        #: plays the audio. None shows the player's position as it is.
         self.allowance = None
-        #: The last position the source reported, and when it landed.
-        #: See ``_heard``: a report is a timestamp, not a level.
+        #: The last position the source reported, and when; a report is a
+        #: timestamp, not a level. See _heard.
         self._said_was = None
         self._said_at = None
         #: Whether the manual key is being held down.
         self._holding = False
         self._spamming = False
-        #: What the two sliders mean in Manual. See HAND_SLOWEST and
-        #: HAND_ON. Kept apart from the automatic pair rather than shared
-        #: with them, so switching modes does not carry one mode's
-        #: settings into the other's.
+        #: What the two sliders mean in Manual (see HAND_SLOWEST and HAND_ON),
+        #: kept apart from the automatic pair so switching mode carries nothing
+        #: over.
         self._hand_rate = 0.5
         self._hand_shape = 0.0
-        #: Where a flash from the hand is heading, which is what the
-        #: shape rises towards and falls away from.
+        #: Where a flash from the hand is heading: what the shape rises towards
+        #: and falls from.
         self._hand_want = 0.0
-        #: When the rapid-fire key last fired, on the wall clock rather
-        #: than in frames: the frame rate moves with the scene and the
-        #: machine, and a strobe rate that moves with it is not a rate.
+        #: When the rapid-fire key last fired, by the wall clock rather than
+        #: frames, so its rate does not move with the frame rate.
         self._spam_at = None
         #: The beats found before playback started, one map per source.
         self._beats: dict = {}
         #: The kit on its own, for scenes that want to know which is which.
         self._elements: dict = {}
         self._chart_from = None
-        #: The track's shape, built once the frames and the traces are
-        #: both in. See ``set_traces``.
+        #: The track's shape, built once the frames and the traces are both in.
+        #: See set_traces.
         self._contour = None
         self._contour_from = None
         self._contour_whole = False
@@ -797,18 +678,17 @@ class Spectrum(QWidget):
         #: How far through each element's list the playhead has got.
         self._kit_at: dict = {}
         self._kit_seen = -1.0
-        #: How far through the map the playhead has got, so each frame
-        #: only looks at what has happened since the last one.
+        #: How far through the map the playhead has got, so each frame only
+        #: looks at what happened since the last.
         self._beat_at = 0
         self._beat_seen = -1.0
-        #: How long the watched band has been holding, and when the rapid
-        #: strobe last fired.
+        #: How long the watched band has held, and when the rapid strobe last
+        #: fired.
         self._held = 0.0
         self._held_seen = 0.0
         self._rapid_at = -99.0
         self._timer = QTimer(self)
-        # Sixty a second. Every scene paints in well under a frame at
-        # 1080p, so the limit is the display rather than the drawing.
+        # Sixty a second; every scene paints in well under a frame at 1080p.
         self._timer.setInterval(self.FRAME_MS)
         self._timer.timeout.connect(self._tick)
 
@@ -819,22 +699,20 @@ class Spectrum(QWidget):
         self._source = None
 
         self._flow = QVariantAnimation(self)
-        # Long enough to read as growing rather than appearing, short
-        # enough that turning the visualiser on feels like turning
-        # something on. It was nearly a second, which is a long time to
-        # watch a panel arrive when you have already decided you want it.
+        # Long enough to read as growing, short enough that turning the
+        # visualiser on feels immediate.
         self._flow.setDuration(380)
         self._flow.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._flow.valueChanged.connect(self._reveal_changed)
 
-        # Kept, and never started: conceal() is still reachable by hand
-        # for the pane that is putting a file away.
+        # Kept, never started: conceal() is still called directly by a pane
+        # putting a file away.
         self._away = QTimer(self)
         self._away.setSingleShot(True)
         # Before anything animates. See warm_the_glyphs.
         warm_the_glyphs()
-        #: Where the scene was drawn on the card this frame, and through
-        #: what, for the polish to be put over it. See _paint_on_gpu.
+        #: Whether this frame's scene was drawn on the card, and through what,
+        #: for the polish to go over it. See _paint_on_gpu.
         self._on_gpu = False
         self._gpu_scene = None
         #: The GPU canvas, where there is a GPU. See _GpuCanvas.
@@ -854,11 +732,9 @@ class Spectrum(QWidget):
             return None
 
     def _drop_canvas(self) -> None:
-        """Give up on the card for the rest of the session.
-
-        Once, and quietly: the pane goes on drawing exactly as it did
-        before there was a canvas, and a card that failed one frame is
-        not asked again.
+        """Give up on the card for the rest of the session, quietly: the pane
+        draws as it did without a canvas, and a card that failed is not
+        asked again.
         """
         canvas, self._canvas = self._canvas, None
         self._crossing = self._swap_pending = False
@@ -868,12 +744,10 @@ class Spectrum(QWidget):
         super().update()
 
     def _world(self):
-        """The rider's world for the canvas's context, made on first use.
-
-        None where there is no canvas, where ``MAIL_MANAGER_WORLD=0`` says
-        to draw the rider flat, or where this card would not build it -
-        which is logged once and then the flat drawing is used for the
-        rest of the session.
+        """The rider's world for the canvas's context, made on first use. None
+        without a canvas, with ``MAIL_MANAGER_WORLD=0``, or where this card
+        would not build it (logged once; the flat drawing is used from then
+        on).
         """
         import os
 
@@ -907,16 +781,10 @@ class Spectrum(QWidget):
         if self._canvas is None:
             super().update(*args)
             return
-        # Only the canvas. It covers the pane and draws all of it, and
-        # asking the pane as well painted every frame twice: the pane's
-        # own paint asks the canvas again, one frame later. Measured, 120
-        # frames a second off a 60 a second timer.
-        #
-        # Kept the pane's size here as well as in resizeEvent: Qt holds a
-        # hidden widget's resize events back until it is shown, and a
-        # canvas that missed one draws at whatever size it last heard
-        # about - which, for a pane built hidden, is a strip with no
-        # height at all.
+        # Only the canvas: it covers the pane, and asking the pane too painted
+        # every frame twice. Its size is set here as well as in resizeEvent,
+        # because Qt holds back a hidden widget's resizes, and a pane built
+        # hidden left the canvas with no height.
         if self._canvas.geometry() != self.rect():
             self._canvas.setGeometry(self.rect())
         self._canvas.update()
@@ -924,16 +792,11 @@ class Spectrum(QWidget):
     def _paint_on_gpu(self, canvas) -> None:
         """One frame, drawn on the card at the screen's own resolution.
 
-        The same ``_paint`` as ever, into a multisampled framebuffer the
-        size of the pane in real pixels, so nothing is drawn small and
-        stretched. The polish the scene asks for is then put on over the
-        top, from a small copy of the frame made on the card - the bloom
-        is a blur, and a blur is a small picture made big, so only that
-        small picture ever comes back off the card.
-
-        Unless the card cannot draw that many pixels sixty times a
-        second, which a big external display can ask of a small card:
-        then fewer samples, and after that fewer pixels. See
+        The same _paint, into a multisampled framebuffer the size of the
+        pane in real pixels. The scene's polish goes over it from a small
+        copy made on the card (the bloom is a blur, so only that small
+        picture comes back). A card that cannot draw that many pixels sixty
+        times a second gets fewer samples, then fewer pixels: see
         CardSharpness.
         """
         import time as _time
@@ -944,9 +807,8 @@ class Spectrum(QWidget):
             screen_w = int(round(canvas.width() * ratio))
             screen_h = int(round(canvas.height() * ratio))
             if screen_w < 2 or screen_h < 2:
-                # A pane with no room - collapsed, or not laid out yet -
-                # has nothing to draw, and a framebuffer with no height
-                # is one the card will not paint into.
+                # A pane with no room has nothing to draw, and the card will
+                # not paint into a framebuffer with no height.
                 return
             samples, share = self._card.choice(
                 screen_w * screen_h, ratio, self._scene)
@@ -955,16 +817,15 @@ class Spectrum(QWidget):
             halo = QSize(
                 max(PostProcess.BLOOM_MIN, width // PostProcess.BLOOM_DIVISOR),
                 max(PostProcess.BLOOM_MIN, height // PostProcess.BLOOM_DIVISOR))
-            # A scene that draws a world of its own antialiases it there,
-            # at the samples asked for here; the canvas's own would be the
-            # same work twice - five milliseconds of it at a MacBook Pro's
-            # full screen - for a picture that arrives already smooth.
+            # A scene with a world of its own antialiases it there, so the
+            # canvas's own samples would be the same work twice (five
+            # milliseconds at full screen).
             world = (self._world()
                      if hasattr(self._scene, "paint_on_card") else None)
             canvas.world_samples = samples
             if self._swap_pending:
-                # What is on screen, kept before anything is drawn over
-                # it, for the scene just chosen to fade up over.
+                # What is on screen, kept before anything is drawn over it, for
+                # the new scene to fade up over.
                 self._swap_pending = False
                 self._crossing = canvas.hold(
                     self._shown_fresh if self._crossing else None)
@@ -975,8 +836,8 @@ class Spectrum(QWidget):
             multi.bind()
             painter = QPainter(device)
             if not painter.isActive():
-                # The card would not start a painter on a buffer it was
-                # given, which is a card that is not going to work.
+                # The card would not start a painter on its own buffer: it is
+                # not going to work.
                 multi.release()
                 raise RuntimeError("the graphics card refused a painter")
             self._on_gpu = True
@@ -990,17 +851,16 @@ class Spectrum(QWidget):
             QOpenGLFramebufferObject.blitFramebuffer(flat, full, multi, full)
             if self._gpu_scene is not None:
                 self._polish_on_gpu(canvas, flat, small, device, ratio * share)
-            # Back onto the canvas's own framebuffer, which the blits
-            # above unbound.
+            # Back onto the canvas's own framebuffer, which the blits above
+            # unbound.
             functions = canvas.context().functions()
             functions.glBindFramebuffer(0x8D40, canvas.defaultFramebufferObject())
             screen = QRect(0, 0, screen_w, screen_h)
             functions.glViewport(0, 0, screen_w, screen_h)
             functions.glClearColor(0.0, 0.0, 0.0, 1.0)
             functions.glClear(0x00004000)
-            # Stretched without smoothing when the stretch is a whole
-            # number, for the reason blit_scene gives: every pixel
-            # doubled evenly holds the edge a smoothed stretch blurs.
+            # Stretched without smoothing when the stretch is a whole number,
+            # which keeps the edges a smoothed stretch blurs (see blit_scene).
             grew = screen_w / width
             whole = abs(grew - round(grew)) < 0.02
             smooth = (getattr(self._scene, "stretch_smooth", False)
@@ -1020,8 +880,8 @@ class Spectrum(QWidget):
                     self._crossing = False
                     canvas.let_go()
                 canvas.cover(flat.texture(), screen)
-            # Waited for, so that what is measured is what the card
-            # took rather than how long it took to be asked.
+            # Waited for, so the measurement is what the card took, not how
+            # long it took to be asked.
             functions.glFinish()
             self._card.record((_time.perf_counter() - started) * 1000.0,
                               ratio)
@@ -1034,49 +894,31 @@ class Spectrum(QWidget):
             QTimer.singleShot(0, self._drop_canvas)
 
     def _polish_on_gpu(self, canvas, flat, small, device, ratio) -> None:
-        """The scene's own post-processing, over the frame on the card.
+        """The scene's post-processing, over the frame on the card.
 
-        Through the same PostProcess as ever, with the same transform
-        and opacity the scene was drawn through - the reveal slides the
-        scene and a new scene fades up, and the polish has to slide and
-        fade with it or a hidden scene would still bloom.
-
-        Into the scene's own framebuffer, before the frame goes to the
-        screen, rather than over the screen afterwards. At 6K each pass
-        over the whole screen is twenty million pixels read and written,
-        which on a small card is two milliseconds a pass whatever is in
-        it - and it was most of what a frame drawn at half the
-        resolution still cost: 13.7 ms, against 8 for the same buffer
-        on a screen a third the size. Drawn into the buffer, a smaller
-        buffer makes all of the frame cheaper rather than some of it.
+        Through the same PostProcess, with the transform and opacity the
+        scene was drawn through, so the polish slides and fades with the
+        scene. Into the scene's framebuffer before it reaches the screen: at
+        6K each full-screen pass costs two milliseconds on a small card, and
+        a smaller buffer then makes all of the frame cheaper.
         """
         rect, transform, opacity, recipe = self._gpu_scene
-        # Where the scene landed in real pixels, which is what the small
-        # copy is taken from: the polish belongs to the scene, not to
-        # the pane's background around it.
+        # Where the scene landed in real pixels, which the small copy is taken
+        # from: the polish belongs to the scene, not the background around it.
         box = transform.mapRect(rect)
         source = QRect(int(box.x() * ratio), int(box.y() * ratio),
                        max(1, int(box.width() * ratio)),
                        max(1, int(box.height() * ratio)))
-        # Upside down, because a framebuffer counts its rows from the
-        # bottom and a painter counts them from the top. With the scene
-        # filling the pane the two agree and nobody would notice; with
-        # the control strip reserved or the scene letterboxed, the bloom
-        # would be made from the wrong band of the picture.
+        # Upside down: a framebuffer counts rows from the bottom and a painter
+        # from the top. With the scene letterboxed, the bloom would otherwise
+        # come from the wrong band.
         flipped = QRect(source.x(),
                         flat.height() - source.y() - source.height(),
                         source.width(), source.height())
-        # Down to the bloom's size in halves rather than in one step.
-        #
-        # A linear blit reads a two-by-two patch of the source for each
-        # pixel it writes, so a halving is an exact average of every
-        # pixel it covers - and an eightfold shrink done in one blit
-        # reads one pixel in sixteen and skips the rest. A thin line
-        # then only reaches the small copy where it happens to cross
-        # the pixels that were read, and the bloom made from it put a
-        # row of soft blobs along every chevron on the road: measured,
-        # twelve bright peaks along a single one. The CPU's own shrink
-        # averages the whole block, which is what this now matches.
+        # Down to the bloom's size in halves. A linear blit averages two by
+        # two, so each halving is exact, while one eightfold shrink reads one
+        # pixel in sixteen and turned thin lines into rows of soft blobs. This
+        # matches the CPU's shrink.
         here, area = flat, flipped
         while (area.width() // 2 >= small.width() * 2
                and area.height() // 2 >= small.height() * 2):
@@ -1090,9 +932,8 @@ class Spectrum(QWidget):
             small, QRect(0, 0, small.width(), small.height()), here, area,
             0x00004000, 0x2601)
         halo = QPixmap.fromImage(small.toImage())
-        # Kept, so what the bloom was made from can be looked at: it is
-        # the one thing that comes back off the card, and the one place
-        # a mistake in which part of the frame it came from would show.
+        # Kept, so the source of the bloom can be inspected: it is the one
+        # thing that comes back off the card.
         canvas.last_halo = halo
         flat.bind()
         painter = QPainter(device)
@@ -1109,10 +950,9 @@ class Spectrum(QWidget):
     # -- what it shows ----------------------------------------------------
     def set_scene(self, scene) -> None:
         was, self._scene = self._scene, scene
-        # There is one of each scene for the whole session, so picking one
-        # gets it back exactly as the last track left it. Asked for rather
-        # than required: the pane duck-types scenes everywhere else, and a
-        # stand-in that only knows how to paint has nothing to forget.
+        # There is one of each scene for the session, so picking one returns it
+        # as the last track left it. Optional: a stand-in that only paints has
+        # nothing to reset.
         start = getattr(scene, "reset", None)
         if scene is not was and callable(start):
             start()
@@ -1121,11 +961,10 @@ class Spectrum(QWidget):
                 self._fresh = 1.0
                 self._crossing = self._swap_pending = False
             else:
-                # Faded in rather than cut to. A scene starts with nothing
-                # in it - see Scene.reset - so its first frames are half
-                # built, and a hard cut shows that. On the card it fades
-                # up over the last frame of the scene before, so changing
-                # scene quickly never passes through black.
+                # Faded in rather than cut to: a scene's first frames are half
+                # built. On the card it fades up over the last frame of the
+                # scene before, so changing scene quickly never passes through
+                # black.
                 self._fresh = 0.0
                 self._swap_pending = (
                     self._canvas is not None and self._reveal >= 0.999
@@ -1134,12 +973,9 @@ class Spectrum(QWidget):
         self.update()
 
     def _suit_the_scene(self, scene) -> None:
-        """Put the strobe where this scene wants it, until somebody says.
-
-        Only while the controls are untouched. The moment either slider
-        is moved, or a source is chosen, the choice is the user's and
-        switching scene stops overriding it - a setting that springs back
-        every time you change something else is not a setting.
+        """Put the strobe where this scene wants it, until the user moves a
+        slider or chooses a source; after that switching scene leaves the
+        controls alone.
         """
         if self._strobe_chosen:
             return
@@ -1151,13 +987,14 @@ class Spectrum(QWidget):
             self._strobe_source = source
         self._strobe_rate = max(0.0, min(1.0, float(rate)))
         self._strobe_sense = max(0.0, min(1.0, float(sense)))
-        # What the sliders should show, which is not this pair when the
-        # scene asked for Manual.
+        # What the sliders should show, which is not this pair when the scene
+        # asked for Manual.
         self.strobe_settings_changed.emit(*self.strobe_shown())
 
     def set_change(self, seconds: float) -> None:
-        """How long a newly chosen scene takes to replace the one before,
-        in seconds. 0 cuts straight to it."""
+        """How long a newly chosen scene takes to replace the one before, in
+        seconds; 0 cuts.
+        """
         self._change = max(0.0, float(seconds))
         if self._change <= 0.0:
             self._fresh = 1.0
@@ -1189,10 +1026,9 @@ class Spectrum(QWidget):
         self.updateGeometry()
 
     def _scene_box(self, rect):
-        """The part of the widget the scene is drawn in.
-
-        Whole widget for the plain strip; otherwise the largest rectangle
-        of the chosen ratio that fits, centred.
+        """The part of the widget the scene is drawn in: all of it for the
+        plain strip, otherwise the largest centred rectangle of the chosen
+        ratio.
         """
         if self._aspect is None or rect.width() <= 0 or rect.height() <= 0:
             return rect
@@ -1208,10 +1044,8 @@ class Spectrum(QWidget):
                       rect.width(), height)
 
     def _full_height(self) -> int:
-        """How tall the strip wants to be when fully revealed.
-
-        Never more than the budget: a shape is a preference, not a claim
-        on space the window does not have.
+        """How tall the strip wants to be when fully revealed, never more than
+        the budget.
         """
         if self._aspect is None:
             # All the height there is to spare, where that is known.
@@ -1224,12 +1058,9 @@ class Spectrum(QWidget):
         return max(60, wanted)
 
     def set_strobe_rate(self, rate: float) -> None:
-        """How soon after a flash the next one may fire, 0 rare to 1 often.
-
-        In Manual it is how fast the rapid-fire key repeats instead.
-        Nothing fires by itself in Manual, so "how soon another may
-        follow" has nothing to follow: the slider was inert in the one
-        mode where the strobe is being played rather than watched.
+        """How soon after a flash the next may fire, 0 rare to 1 often. In
+        Manual, nothing fires by itself, so it sets how fast the rapid-fire
+        key repeats.
         """
         self._strobe_chosen = True
         value = max(0.0, min(1.0, float(rate)))
@@ -1238,94 +1069,70 @@ class Spectrum(QWidget):
         else:
             self._strobe_rate = value
 
-    #: What the strobe can be told to listen to. The four ranges, then
-    #: the parts of the kit - which are not the same thing said twice: a
-    #: range is a place in the spectrum and an instrument is a place and
-    #: a shape, so "Kick" fires on kicks and not on the bass note under
-    #: them.
+    #: What the strobe can listen to: four ranges, then the parts of the kit. A
+    #: range is a place in the spectrum and an instrument is a place and a
+    #: shape, so Kick fires on kicks and not on the bass under them.
 
-    #: "Manual" is last and is not a part of the sound at all: it means
-    #: nothing fires by itself and the only light is the one the hotkey
-    #: gives. The hotkey works in every other mode too - it adds a flash
-    #: on top of whatever the track is doing, which is how anybody
-    #: actually plays a strobe - but there has to be a setting where the
-    #: automatic side is out of the way entirely.
+    #: Manual is last and is not part of the sound: nothing fires by itself and
+    #: the only light is the hotkey's. The hotkey works in every mode, adding a
+    #: flash on top of the track.
     STROBE_SOURCES = ("Bass", "Mids", "Treble", "Synths",
                       "Kick", "Snare", "Hats", "Synth", "Manual")
 
     #: The one source that listens to nobody.
     BY_HAND = "Manual"
 
-    #: How hard a flash the hotkey gives, and how long a held key keeps
-    #: the light up before it starts to sag. Full brightness: a strobe you
-    #: press yourself is the one thing on screen that should not be shy.
+    #: How hard a hotkey flash is, and how long a held key keeps the light up
+    #: before it sags. Full brightness.
     HAND_HIT = 1.0
 
-    #: Frames between flashes while the rapid-fire key is held, outside
-    #: Manual. Five is twelve a second at sixty frames, which is about as
-    #: fast as anybody can hit a key and is the rate the strobe's own
-    #: warning is about.
+    #: Frames between flashes while the rapid-fire key is held, outside Manual:
+    #: twelve a second at sixty frames, the rate the strobe's warning is about.
     SPAM_EVERY = 5
 
     #: How far the hit from an automatic flash falls each frame.
     HIT_FALL = 0.16
 
-    #: In Manual the two sliders take the two things a hand strobe has:
-    #: how fast it repeats, and how it comes up and goes down.
+    #: In Manual the two sliders set how fast a hand strobe repeats and how it
+    #: rises and falls.
 
-    #: Flashes a second at the two ends of the rate slider. The middle of
-    #: the slider is their geometric mean, so the setting it arrives at -
-    #: and the one it had before there was a slider - is the twelve a
-    #: second the rapid-fire key has always run at.
+    #: Flashes a second at the two ends of the rate slider. Its middle is their
+    #: geometric mean, the twelve a second the rapid-fire key has always used.
     HAND_SLOWEST = 4.8
     HAND_FASTEST = 30.0
 
-    #: How much brightness a flash from the hand gains and loses each
-    #: frame, at the two ends of the shape slider: left, there and gone
-    #: again in a single frame; right, a quarter of a second coming up
-    #: and about half a second going down.
+    #: Brightness a hand flash gains and loses each frame at the two ends of
+    #: the shape slider: left, there and gone in one frame; right, a quarter of
+    #: a second up and half a second down.
     HAND_ON = (1.0, 0.075)
     HAND_OFF = (1.0, 0.030)
 
-    #: How early a repeat may fire and still count as on time.
-    #:
-    #: Half a frame at sixty. Frames do not land on the exact multiples
-    #: of a period, so a rate of thirty a second asked for every 33.3 ms
-    #: and got a frame at 33.2 - missed, waited another frame, and ran at
-    #: twenty. Snapping to the nearer frame is the only honest answer
-    #: when the frame is the smallest thing that can be lit.
+    #: How early a repeat may fire and still count as on time: half a frame.
+    #: Frames do not land on exact multiples of a period, so thirty a second,
+    #: asked for every 33.3 ms, missed a frame at 33.2 and ran at twenty.
     SPAM_SLACK = 0.008
 
     def flash(self, strength: float = 1.0) -> None:
-        """Fire the strobe now, whatever it is listening to.
-
-        Taps land on the frame after they are pressed rather than on the
-        next beat, because the point of the key is that the timing is the
-        player's.
+        """Fire the strobe now, whatever it listens to. A tap lands on the next
+        frame, not the next beat: the timing is the player's.
         """
         want = max(0.0, min(1.0, float(strength)))
         if self._strobe_source == self.BY_HAND:
-            # Aimed at, and moved towards straight away rather than on
-            # the next frame: with the shape slider hard left the rise is
-            # a whole flash, so this still lands the moment it is pressed.
+            # Moved towards at once rather than on the next frame: with the
+            # shape slider hard left the rise is a whole flash.
             self._hand_want = max(self._hand_want, want)
             self._state.hit = min(self._hand_want,
                                   self._state.hit + self.hand_curve()[0])
         else:
             self._state.hit = max(self._state.hit, want)
         self._since_hit = 0
-        # Back to full rate at once if the controls had slowed it down,
-        # rather than at the next tick.
+        # Back to full rate at once if the controls had slowed it.
         self._pace()
         self.update()
 
     def hold_flash(self, on: bool) -> None:
-        """Keep the light up for as long as the key is down.
-
-        The steady one. Its opposite is ``spam_flash``, which fires over
-        and over instead of holding: one key for a held light and one for
-        a strobe, because those are two different things to want and one
-        key cannot be both.
+        """Keep the light up while the key is down. ``spam_flash`` is the other
+        key: one holds a light, the other strobes.
         """
         self._holding = bool(on)
         if on:
@@ -1349,11 +1156,8 @@ class Spectrum(QWidget):
         return name
 
     def set_beats(self, maps) -> None:
-        """The beat maps the analysis found, one per thing to listen to.
-
-        With the kit kept, if it is already here: the drums are worked out
-        alongside the rest now rather than after it, so they can arrive
-        first - and replacing the table outright threw them away.
+        """The beat maps the analysis found, one per thing to listen to,
+        keeping the kit if it is already here: the drums can arrive first.
         """
         self._beats = dict(maps or {})
         self._beats.update(self._elements)
@@ -1361,13 +1165,10 @@ class Spectrum(QWidget):
         self._beat_seen = -1.0
 
     def set_elements(self, maps) -> None:
-        """The kit: where the kicks, snares and hats are.
-
-        Added to the same table the beat maps live in, so the strobe can
-        be pointed at "Kick" exactly as it is pointed at "Bass" - and so
-        a scene can ask for them by name without knowing where they came
-        from. They arrive a few seconds after the rest, so anything
-        reading them has to cope with their not being there yet.
+        """The kit: where the kicks, snares and hats are. In the same table as
+        the beat maps, so the strobe and the scenes ask for "Kick" as they
+        ask for "Bass". They arrive after the rest, so readers must cope
+        with their absence.
         """
         self._elements = dict(maps or {})
         self._chart_from = None
@@ -1386,11 +1187,8 @@ class Spectrum(QWidget):
         return self._beats.get(self._strobe_source)
 
     def set_strobe_source(self, name: str) -> None:
-        """Which part of the sound sets the strobe off.
-
-        The two sliders mean different things in Manual, so changing mode
-        has to move them: they are told what to show here rather than
-        keeping a number that now means something else.
+        """Which part of the sound sets the strobe off. The sliders mean other
+        things in Manual, so they are told what to show here.
         """
         self._strobe_chosen = True
         if name in self.STROBE_SOURCES:
@@ -1398,10 +1196,8 @@ class Spectrum(QWidget):
             self.strobe_settings_changed.emit(*self.strobe_shown())
 
     def set_strobe_sense(self, sense: float) -> None:
-        """How big a jump counts as a hit, 0 fussy to 1 eager.
-
-        In Manual it is the shape of a flash instead: left is on and off
-        with nothing in between, right fades up and back down.
+        """How big a jump counts as a hit, 0 fussy to 1 eager. In Manual, the
+        shape of a flash: left is on and off, right fades up and down.
         """
         self._strobe_chosen = True
         value = max(0.0, min(1.0, float(sense)))
@@ -1411,10 +1207,8 @@ class Spectrum(QWidget):
             self._strobe_sense = value
 
     def strobe_shown(self) -> tuple:
-        """(source, rate, sense) as the two sliders should show them.
-
-        The pair that applies to the mode the strobe is in, which is not
-        the same pair in Manual.
+        """(source, rate, sense) as the sliders should show them: the pair for
+        the strobe's mode.
         """
         if self._strobe_source == self.BY_HAND:
             return self._strobe_source, self._hand_rate, self._hand_shape
@@ -1426,12 +1220,8 @@ class Spectrum(QWidget):
         return 1.0 / (self.HAND_SLOWEST * span ** self._hand_rate)
 
     def hand_curve(self) -> tuple:
-        """(rise, fall) a frame for a flash from the hand.
-
-        Geometric between the ends rather than linear, because halfway
-        along a linear run from 1.0 to 0.075 is 0.54, which is still
-        instant - the whole interesting half of the slider would have
-        been squeezed into its last inch.
+        """(rise, fall) a frame for a hand flash. Geometric between the ends:
+        halfway along a linear run from 1.0 to 0.075 is still instant.
         """
         shape = self._hand_shape
         return (self.HAND_ON[0] * (self.HAND_ON[1] / self.HAND_ON[0]) ** shape,
@@ -1439,27 +1229,18 @@ class Spectrum(QWidget):
                 ** shape)
 
     def _shape_hand(self, state) -> None:
-        """Move the hand strobe towards where it is heading.
-
-        One place for the tap, the held key and the rapid fire, because
-        they are the same light with a different target: the tap aims at
-        full and lets go, the held key keeps aiming at full, and the
-        rapid fire re-aims every time it comes round.
+        """Move the hand strobe towards its target. The tap aims at full and
+        lets go, the held key keeps aiming at full, and the rapid fire
+        re-aims each time it comes round.
         """
         rise, fall = self.hand_curve()
         if self._holding:
             self._hand_want = self.HAND_HIT
         elif self._since_hit > 0 and state.hit >= self._hand_want - 1e-6:
-            # Arrived, and nobody is holding it there: start falling.
-            # Before the move rather than after it, or the light spends a
-            # frame sitting at the top - which at the instant end of the
-            # shape slider is the whole flash happening twice.
-            #
-            # Never on the frame it was fired, though: at that end of the
-            # slider a flash is there and gone in one frame, and letting
-            # go of it in the same frame it was struck means the light is
-            # never up at all. That is what the rapid-fire key did - it
-            # fired at the right rate and drew nothing.
+            # Arrived and not held: start falling, before the move, or the
+            # light sits at the top for a frame. Never on the frame it was
+            # fired, though: at the instant end of the slider the flash would
+            # never be drawn.
             self._hand_want = 0.0
         if state.hit < self._hand_want:
             state.hit = min(self._hand_want, state.hit + rise)
@@ -1490,11 +1271,8 @@ class Spectrum(QWidget):
         return tuple(self._dial_centres or attachment_audio.DIAL_CENTRES)
 
     def set_dial_centres(self, centres) -> None:
-        """Point the meters at different frequencies.
-
-        The analysis is not redone: regroup re-reads the frames that are
-        already in memory against whatever centres are asked for, so this
-        is immediate however long the track is.
+        """Point the meters at different frequencies. The frames in memory are
+        re-read against the new centres, so this is immediate.
         """
         import attachment_audio
 
@@ -1504,8 +1282,8 @@ class Spectrum(QWidget):
                 hertz = int(value)
             except (TypeError, ValueError):
                 continue
-            # Below 20 Hz nobody hears it, and above the Nyquist limit of
-            # the decode there is nothing in the signal to read.
+            # Below 20 Hz nothing is heard, and above the decode's Nyquist
+            # limit there is nothing to read.
             top = attachment_audio.DECODE_RATE // 2
             cleaned.append(max(20, min(top, hertz)))
         if not cleaned:
@@ -1542,11 +1320,9 @@ class Spectrum(QWidget):
         """The waveform slices that go with the frames."""
         self._traces = list(shapes or [])
         self._vectors = list(vectors or [])
-        # The shape of the track, for a scene that builds a world out of
-        # it - worked out again with the traces in it, unless the analysis
-        # already sent the whole of it with the bands. Then it is final,
-        # and a road does not change shape under the rider because the
-        # scope's traces turned up. See set_contour.
+        # The track's shape, worked out again with the traces in it unless the
+        # analysis already sent it whole; then it is final, so a road does not
+        # change under the rider when the traces arrive. See set_contour.
         if not self._contour_whole:
             self._contour = None
             self._contour_from = None
@@ -1556,14 +1332,16 @@ class Spectrum(QWidget):
         self._harmony = harmony
 
     def set_rhythm(self, rhythm) -> None:
-        """The drums' own tempo, beat and pattern, once they are known -
-        None when they could not be."""
+        """The drums' tempo, beat and pattern once known; None when they could
+        not be.
+        """
         self._rhythm = rhythm
         self._rhythm_due = False
 
     def expect_rhythm(self) -> None:
-        """The drums' own beat is being worked out and will follow: a scene
-        that counts on it can wait for it rather than start on another."""
+        """The drums' beat is still being worked out: a scene that needs it can
+        wait.
+        """
         self._rhythm_due = True
 
     def rhythm(self):
@@ -1589,8 +1367,8 @@ class Spectrum(QWidget):
         import attachment_audio
 
         if frames and frames is self._frames and max(1, rate) == self._rate:
-            # The same analysis again. Starting over would zero every
-            # level mid-song, which is a dip in the picture for nothing.
+            # The same analysis again: starting over would zero every level
+            # mid-song.
             return
         self._frames = frames or []
         self._contour_whole = False
@@ -1598,8 +1376,8 @@ class Spectrum(QWidget):
         width = len(self._frames[0]) if self._frames else 0
         self._level = [0.0] * width
         self._peak = [0.0] * width
-        # The dial scene wants ten named bands rather than the twenty-seven
-        # the equaliser uses, so they are read out of the same frames once.
+        # The dial scene reads ten named bands rather than the equaliser's
+        # twenty-seven, taken once from the same frames.
         self._rebuild_dials()
         if self._frames and self._wanted:
             self.set_playing(True)
@@ -1609,12 +1387,9 @@ class Spectrum(QWidget):
         self._position = max(0, milliseconds)
 
     def follow(self, source) -> None:
-        """Where to read the position, rather than waiting to be told.
-
-        positionChanged fires only when the position changes, and not at all
-        until the player has produced samples - so the display sat on frame
-        zero, which is the silence at the top of a track. It looked dead
-        until the track was paused and skipped, which forced a report out.
+        """Where to read the position rather than waiting to be told:
+        positionChanged fires only on a change, and not at all until the
+        player has produced samples.
         """
         self._source = source
 
@@ -1627,9 +1402,7 @@ class Spectrum(QWidget):
             self._timer.start()
             return
         if self._reveal > 0.0 and self._frames:
-            # Idling, not leaving. It used to slide itself shut after a
-            # few seconds of not playing, so pausing made the whole thing
-            # vanish and the pane jump; it stays until the tick box says
+            # Idling, not leaving: the strip stays until the tick box says
             # otherwise.
             self._idling = True
             self._timer.start()
@@ -1638,10 +1411,10 @@ class Spectrum(QWidget):
         self.update()
 
     def clear(self, keep_open: bool = False) -> None:
-        """Put the track down, and the strip away with it - unless
-        ``keep_open``: a new track in a pane that is showing keeps its
-        room, rather than the controls jumping up and back down while it
-        is read."""
+        """Put the track down, and the strip away with it, unless
+        ``keep_open``: a new track in a showing pane keeps its room while it
+        is read.
+        """
         if not keep_open:
             self._flow.stop()
             self._away.stop()
@@ -1668,9 +1441,8 @@ class Spectrum(QWidget):
         self._state.vector_history = []
         for spark in self._sparks:
             spark[4] = 0.0
-        # A new track gets the scene as it was built rather than as the
-        # last one left it. See Scene.reset. Faded up once the track is
-        # read, as a newly chosen scene is.
+        # A new track gets the scene as it was built (see Scene.reset), faded
+        # up once the track is read.
         start = getattr(self._scene, "reset", None)
         if callable(start):
             start()
@@ -1687,9 +1459,8 @@ class Spectrum(QWidget):
     def reveal(self) -> None:
         if self._reveal >= 1.0 and self.maximumHeight() >= self._full_height():
             return
-        # Already on its way. Started again on every word of progress, the
-        # strip never finished opening while a track was read, and the
-        # window was laid out again a dozen times a second for it.
+        # Already on its way. Restarted on every progress report, the strip
+        # never finished opening while a track was read.
         if (self._target >= 1.0 and self._flow.state()
                 == QAbstractAnimation.State.Running):
             return
@@ -1706,42 +1477,22 @@ class Spectrum(QWidget):
         self._flow.setEndValue(float(target))
         self._flow.start()
 
-    #: How often the clock ticks while a track is being analysed. The
-    #: analysis is pure Python on a thread of its own, and so is every
-    #: scene, so the two take turns holding the interpreter lock: a pane
-    #: repainting sixty times a second is not politely waiting, it is
-    #: taking the processor away from the thing being waited for.
-    #: Measured, painting a scene alongside made the analysis 1.6 times
-    #: slower. Twelve a second is plenty for a progress bar.
+    #: How often the clock ticks while a track is analysed. The analysis and
+    #: the scenes share the interpreter lock, and painting alongside made the
+    #: analysis 1.6 times slower; twelve a second is plenty for a progress bar.
     WORKING_MS = 80
 
     def set_working(self, fraction) -> None:
-        """Show that analysis is running, and roughly how far along.
-
-        Analysis takes a few seconds on a long track. Without this the
-        strip is blank for all of it, which reads as nothing happening -
-        or, when it ran on the UI thread, as the app having died.
-
-        This had a block of the constructor pasted into the middle of it,
-        and it has been that way since the analysis moved off the UI
-        thread. It ran on every progress callback, which meant that while
-        a track was being read the pane threw away its render buffer and
-        built a new post-processor several times a second, and reset the
-        aspect ratio, the strobe settings and the source the strobe was
-        listening to back to their defaults. It also never set
-        ``_working``, so the "listening to the track" bar this method
-        exists to show had not appeared once.
-
-        The line that assigned the progress fraction had been left
-        attached to ``_since_hit``, the strobe's frame counter, which is
-        where the tail of that block ended up.
+        """Show that analysis is running, and roughly how far along: a long
+        track takes a few seconds, and a blank strip reads as nothing
+        happening.
         """
         self._working = (None if fraction is None
                          else max(0.0, min(1.0, float(fraction))))
         if self._working is not None:
             self.reveal()
-            # Slowed right down while the analysis has the processor, and
-            # put back when it finishes.
+            # Slowed while the analysis has the processor, and restored when it
+            # finishes.
             if self._timer.interval() != self.WORKING_MS:
                 self._timer.setInterval(self.WORKING_MS)
             if not self._timer.isActive():
@@ -1756,12 +1507,9 @@ class Spectrum(QWidget):
         self.update()
 
     def set_unbounded(self, free: bool) -> None:
-        """Stop holding the widget to its strip height.
-
-        In the pane the scene is a 240px band and the reveal animation
-        drives that height. Full screen wants the whole window, so the
-        clamps come off - without this the animation kept reapplying them
-        and the scene sat as a band across the middle of the screen.
+        """Stop holding the widget to its strip height. Full screen wants the
+        whole window; otherwise the reveal animation keeps reapplying the
+        clamps.
         """
         self._unbounded = bool(free)
         if free:
@@ -1780,26 +1528,18 @@ class Spectrum(QWidget):
                 self._idling = False
             self.update()
             return
-        # The maximum is the height it wants; the minimum is small enough
-        # that it can always give way.
-        #
-        # Both were set to the same value, which forced the height. In a
-        # pane too short to hold everything the layout then had nowhere to
-        # put the transport and drew it over the scene - the scrub bar
-        # inside the picture, unclickable, at any window under about a
-        # thousand pixels tall. A widget that can shrink cannot do that.
+        # The maximum is the height it wants; the minimum is small enough that
+        # it can always give way. With both the same, a short pane drew the
+        # transport over the scene.
         self.setMaximumHeight(height)
-        # The floor is what the strip would like to keep, not what it may
-        # insist on. Bounded by the budget, because a minimum larger than
-        # the room available is how the transport ended up drawn over the
-        # picture - the layout has to put it somewhere.
+        # The floor is what the strip would like, bounded by the budget: a
+        # minimum larger than the room puts the transport over the picture.
         floor = self.FLOOR if self._budget is None else min(self.FLOOR,
                                                             self._budget)
         self.setMinimumHeight(min(height, floor))
-        # Only a slide that is heading for zero means "gone". The first
-        # frame of a slide *away* from zero also reports about zero, and
-        # stopping on that killed the scene every time it opened - which
-        # looked like a visualiser that would not come back after a hide.
+        # Only a slide heading for zero means gone. The first frame of a slide
+        # away from zero also reports about zero, and stopping on it killed the
+        # scene as it opened.
         if self._reveal <= 0.001 and self._target <= 0.0:
             self._timer.stop()
             self._idling = False
@@ -1833,8 +1573,8 @@ class Spectrum(QWidget):
     def _row(self) -> Optional[List[float]]:
         if not self._frames:
             return None
-        # A frame is the sound of a window starting at its slot, so what is
-        # in it is half a window later: read at the middle of the window.
+        # A frame is the sound of a window starting at its slot, so it is read
+        # at the middle of the window.
         exact = (self._now - self.FRAME_MIDDLE) * self._rate
         if exact < 0.0:
             exact = 0.0
@@ -1845,9 +1585,8 @@ class Spectrum(QWidget):
         if index + 1 < len(self._frames):
             second = self._frames[index + 1]
             blend = exact - index
-            # Falling, eased from one frame to the next. Rising, not until
-            # the next frame's own moment: eased, a kick began to rise a
-            # whole frame before it and was half way up 33 ms early.
+            # Falling, eased between frames; rising, not until the next frame's
+            # moment, or a kick starts to rise a frame early.
             return [a + (b - a) * blend if b < a else a
                     for a, b in zip(first, second)]
         return list(first)
@@ -1878,21 +1617,10 @@ class Spectrum(QWidget):
         high = max(low + 1, int(span[1] * count))
         return sum(row[low:high]) / max(1, high - low)
 
-    #: What a frame is allowed to be while somebody is working the
-    #: controls, as a multiple of the ordinary one.
-    #:
-    #: The pane paces itself to spend almost all of a sixtieth of a second
-    #: painting - 8.5 ms for the scene and 6.5 for the polish, out of 16 -
-    #: which leaves about a millisecond an frame for everything else: the
-    #: cursor, the bar fading in, a button lighting up under the pointer.
-    #: That is fine while nothing else is happening and it is not fine
-    #: while somebody is reaching for the controls, which is "xxxxxxxx xx
-    #: xxxxxx xxx xxxx xxx xx xxxxx xx xxxxxxxxxx".
-    #:
-    #: So the scene halves its rate while the controls are up. Nobody
-    #: watching a scene at thirty a second for the second and a half it
-    #: takes to move a slider is going to mind, and it hands the rest of
-    #: the frame to the thing being looked at.
+    #: A frame's allowed length while the controls are being used, as a
+    #: multiple of the ordinary one. The pane spends most of each sixtieth of a
+    #: second painting, leaving about a millisecond for the cursor and the
+    #: controls, so the scene halves its rate while they are up.
     GIVE_WAY = 2.0
 
     def set_giving_way(self, giving: bool) -> None:
@@ -1903,33 +1631,26 @@ class Spectrum(QWidget):
             self._pace()
 
     def _pace(self) -> None:
-        """Ask the timer for frames at a rate the scene can actually meet.
-
-        A timer set to sixteen milliseconds that is handed a thirty
-        millisecond frame does not draw faster; it fills the event queue,
-        and the pane stops answering the mouse. This is the same lesson as
-        the analysis throttle - the scene was never the thing being
-        starved.
+        """Ask the timer for frames at a rate the scene can meet: a
+        sixteen-millisecond timer handed thirty-millisecond frames fills the
+        event queue, and the pane stops answering the mouse.
         """
         if self._working is not None:
             return      # the analysis has its own, slower, interval
-        # The scene's own time plus the polish pass's, because what
-        # decides whether a frame fits is the whole frame. Both are
-        # measured; neither is a guess about this machine.
+        # The scene's time plus the polish's, both measured: what matters is
+        # whether the whole frame fits.
         if self._canvas is not None:
-            # On the card the whole frame is measured at once, polish
-            # and all. See CardSharpness.
+            # On the card the whole frame is measured at once. See
+            # CardSharpness.
             wanted = self._card.interval_ms(self.FRAME_MS)
         else:
             wanted = self._sharpness.interval_ms(
                 self.devicePixelRatioF(), self.FRAME_MS,
                 extra=self._effects.cost_ms())
         if self._giving_way and not (self._holding or self._spamming):
-            # Not while somebody is playing the strobe by hand. The bar
-            # coming up halves the frame rate, and the bar comes up on any
-            # mouse movement, so reaching for the controls and then hitting
-            # the strobe key meant the light arrived a frame and a half
-            # later: "xxxxxx xxxxxx xx xxxx xxxxxxx xx xxxx xxxxxx xxxx".
+            # Not while the strobe is being played by hand: the bar comes up on
+            # any mouse movement, and the halved rate delayed the light by a
+            # frame and a half.
             wanted = int(wanted * self.GIVE_WAY)
         if self._timer.interval() != wanted:
             self._timer.setInterval(wanted)
@@ -1941,31 +1662,25 @@ class Spectrum(QWidget):
                 self._position = max(0, int(self._source()))
             except Exception:      # noqa: BLE001 - a dead player is not fatal
                 pass
-        # One moment for the whole frame, from the clock rather than from
-        # the player's last word. The player moves its position every 50
-        # ms; read straight off it, the kick lit up to 33 ms after it was
-        # due and the bars rose up to 25 ms before, depending on where in
-        # the player's step the frame fell - on beat on one record and not
-        # on the next, which is how "on beat" never quite felt it.
+        # One moment for the whole frame, from the clock rather than the
+        # player's last report. The player updates every 50 ms; read straight
+        # off it, hits landed up to 33 ms late or 25 ms early depending on
+        # where the frame fell.
         self._now = max(0.0, self._heard() + self._ahead())
         if (self._fresh < 1.0 and self._level and self._working is None
                 and self._drawn >= self.WARM_FRAMES):
-            # Only once there is a scene to fade in. While a track is
-            # being analysed the pane shows a progress ring instead, and
-            # the fade used to run out behind it - so the scene arrived at
-            # full strength and the fade was spent on a screen it was not
-            # for. By the frame's own length, so a scene paced slower than
-            # sixty still takes the time that was chosen.
+            # Only once there is a scene to fade in: during analysis the pane
+            # shows a progress ring, and the fade used to run out behind it. By
+            # the frame's own length, so a slower-paced scene still takes the
+            # time chosen.
             if self._change <= 0.0:
                 self._fresh = 1.0
             else:
                 step = max(self.FRAME_MS, self._timer.interval()) / 1000.0
                 self._fresh = min(1.0, self._fresh + step / self._change)
         self._drift += 0.035
-        # Ease between the track and the idle drift rather than swapping
-        # one for the other. Switching outright made the scene lurch the
-        # moment a track ended or was paused, which is the jump you see
-        # when the last bar of a song stops.
+        # Ease between the track and the idle drift rather than swapping, or
+        # the scene lurches when a track ends or pauses.
         target = 1.0 if self._idling else 0.0
         if self._settle < target:
             self._settle = min(target, self._settle + 0.045)
@@ -1999,10 +1714,9 @@ class Spectrum(QWidget):
 
         state = self._state
         bass = self._band(row, self.BASS)
-        # Eased both ways, and up twice as fast as down. Eased up as
-        # slowly as down, it was half way up to a kick 17 to 50 ms after
-        # it; straight up, every flicker in the bands jumped it, and the
-        # whole road rides on it - the craft shook with the air.
+        # Eased both ways, up twice as fast as down. Eased up slowly, it lagged
+        # a kick by 17 to 50 ms; straight up, every flicker jumped it and the
+        # road shook.
         rise = self.BASS_RISE if bass > state.bass else self.BASS_FALL
         state.bass += (bass - state.bass) * rise
         state.mid = state.mid * 0.80 + self._band(row, self.MID) * 0.20
@@ -2018,10 +1732,8 @@ class Spectrum(QWidget):
         if not hand:
             state.hit = max(0.0, state.hit - self.HIT_FALL)
         # Sensitivity decides what counts as a hit; rate decides how soon
-        # another may follow. Both ranges are wide: at one end the strobe
-        # waits for something unmistakable and fires at most twice a bar,
-        # at the other it takes almost anything and fires every frame it
-        # is allowed to.
+        # another may follow. At one end the strobe waits for the unmistakable
+        # and fires at most twice a bar; at the other it takes almost anything.
         watched = {"Bass": bass, "Mids": state.mid, "Treble": high,
                    "Synths": state.synth}.get(self._strobe_source, bass)
         self._since_hit += 1
@@ -2046,8 +1758,8 @@ class Spectrum(QWidget):
         elif not self._fire_from_the_map(state):
             self._fire_from_the_frame(state, watched)
         if hand:
-            # The hand strobe has a shape of its own, which is the one
-            # thing the sliders are for in this mode.
+            # The hand strobe has a shape of its own, which is what the sliders
+            # set in this mode.
             self._shape_hand(state)
         self._last_watched = watched
         self._last_bass = bass
@@ -2060,9 +1772,8 @@ class Spectrum(QWidget):
         state.peaks = self._peak
         state.trace = self._trace_now()
         state.vector = self._vector_now()
-        # History belongs to the clock, not to the paint. Scenes used to
-        # collect it themselves inside paint(), which tied how much they
-        # remembered to how often they happened to be redrawn.
+        # History belongs to the clock, not the paint, so how much a scene
+        # remembers does not depend on how often it is redrawn.
         state.history.append(list(self._level))
         if len(state.history) > self.HISTORY:
             del state.history[:len(state.history) - self.HISTORY]
@@ -2094,34 +1805,24 @@ class Spectrum(QWidget):
             spark[4] -= 0.028
         self.update()
 
-    #: What a VU movement does, as the standard describes it: 300ms to
-    #: reach 99% of a step, and a percent or so of overshoot on the way.
-    #: Modelled rather than eyeballed because those two numbers are the
-    #: whole character of the instrument - it is a mass on a spring in a
-    #: magnetic field, and anything that snaps to its reading is a bar
-    #: graph wearing a needle.
+    #: What a VU movement does, per the standard: 300 ms to reach 99% of a
+    #: step, with about a percent of overshoot. It is a mass on a spring, so it
+    #: is modelled as one.
     VU_SECONDS = 0.30
-    #: Damping, chosen for that overshoot rather than picked by eye:
-    #: exp(-pi*z/sqrt(1-z*z)) is how far a second-order system goes past
-    #: its target, and 0.83 puts that at one per cent. Softer damping
-    #: looks livelier and is wrong - at 0.62 the needle sails eight per
-    #: cent past every reading and slaps the zero pin on the way down.
+    #: Damping chosen for that overshoot: exp(-pi*z/sqrt(1-z*z)) is how far a
+    #: second-order system overshoots, and 0.83 makes it one percent. At 0.62
+    #: the needle overshoots eight percent and slaps the zero pin.
     VU_DAMPING = 0.83
 
     def _swing(self, wanted) -> None:
-        """Move every needle towards its reading, the way a coil moves.
-
-        The old rule was "instant up, slow down". Up being instant is what
-        made this jumpy: a band that jumps ten decibels between one frame
-        and the next threw the needle across the face in a single frame,
-        which no meter has ever done. Here it accelerates towards the
-        reading and is slowed in proportion to how fast it is already
-        going, so it arrives, overshoots very slightly, and settles.
+        """Move every needle towards its reading as a coil does: accelerated
+        towards it, slowed in proportion to its speed, arriving with a
+        slight overshoot. An instant rise threw the needle across the face
+        in one frame.
         """
         now = _time.monotonic()
-        # One frame on the first call. Taking the whole settling time
-        # there put every needle at its reading before anybody saw it
-        # move, which is the thing this exists to stop.
+        # One frame on the first call; the whole settling time would put every
+        # needle at its reading before anyone saw it move.
         step = (1.0 / 60.0 if self._dial_clock is None
                 else min(0.1, max(0.0, now - self._dial_clock)))
         self._dial_clock = now
@@ -2131,10 +1832,8 @@ class Spectrum(QWidget):
         omega = 4.6 / (self.VU_DAMPING * self.VU_SECONDS)
         if len(self._dial_speed) != len(self._dial_level):
             self._dial_speed = [0.0] * len(self._dial_level)
-        # Several small steps rather than one big one when a frame runs
-        # late: the simple integrator below is only stable while the step
-        # is short against the swing, and a stalled window would otherwise
-        # throw the needles off the face.
+        # Several small steps when a frame runs late: the integrator below is
+        # only stable while the step is short against the swing.
         slices = max(1, int(step / 0.02) + 1)
         piece = step / slices
         for index in range(len(self._dial_level)):
@@ -2145,8 +1844,8 @@ class Spectrum(QWidget):
                 speed += (omega * omega * (target - here)
                           - 2.0 * self.VU_DAMPING * omega * speed) * piece
                 here += speed * piece
-            # Off the end of the scale is a reading, not a position: a real
-            # needle stops against the pin rather than leaving the face.
+            # Off the scale is a reading, not a position: the needle stops at
+            # the pin.
             if here < 0.0:
                 here, speed = 0.0, max(0.0, speed)
             elif here > 1.15:
@@ -2154,35 +1853,30 @@ class Spectrum(QWidget):
             self._dial_level[index] = here
             self._dial_speed[index] = speed
 
-    #: How long a hit stays lit, in seconds, per part of the kit. A hat
-    #: is over almost at once and a bass note holds; lighting that treats
-    #: them the same reads as one thing flashing rather than as a kit.
+    #: How long a hit stays lit, in seconds, per part of the kit: a hat is over
+    #: at once and a bass note holds.
     KIT_HOLD = {"Kick": 0.16, "Snare": 0.20, "Hats": 0.07,
                 "Bass": 0.30, "Synth": 0.34}
 
     def _clock(self, state) -> None:
-        """Where the playhead is on the beat, for scenes that want it.
-
-        Taken from whichever map has a tempo, preferring the kick: what a
-        scene wants to sit on is the pulse, and on most records the kick
-        is the pulse. Falls back to the source the strobe is watching, and
-        then to nothing, which scenes read as "free running".
+        """Where the playhead is on the beat, for scenes that want it: from
+        whichever map has a tempo, preferring the kick, then the strobe's
+        source, then nothing, which scenes read as free running.
         """
         state.at = self._now
-        # Position, not our own clock: the smoothed one keeps creeping for
-        # a moment after a pause by design, and this has to be the truth.
+        # From the position, not the smoothed clock, which keeps creeping
+        # briefly after a pause.
         state.moving = (self._moved_at is None
                         or abs(self._position - self._moved_at) > 0)
-        # And whether the player is playing at all, which is known rather
-        # than worked out: our clock eases onto a pause for half a second,
-        # and a scene that read that easing as playing ran on past it.
+        # And whether the player is playing, which is known: the clock eases
+        # onto a pause for half a second, and scenes ran on past it.
         state.playing = bool(self._wanted and not self._idling)
         state.jumps = self._jumps
         state.rhythm_due = self._rhythm_due
         self._moved_at = self._position
-        # The track's own shape: how loud it is and which way it leans,
-        # a few times a second from end to end. Built once, from the
-        # frames and the traces, the first frame after both have landed.
+        # The track's shape: how loud it is and which way it leans, a few times
+        # a second from end to end. Built once, the first frame after the
+        # frames and the traces have both landed.
         if self._contour_from is not self._frames:
             import attachment_audio
 
@@ -2195,9 +1889,8 @@ class Spectrum(QWidget):
         state.harmony = self._harmony
         state.rhythm = self._rhythm
         if self._chart_from is not self._elements:
-            # Built once per analysis. The maps arrive a few seconds after
-            # the rest, and rebuilding this every frame would walk every
-            # hit in the track sixty times a second.
+            # Built once per analysis: rebuilding it every frame would walk
+            # every hit in the track sixty times a second.
             self._chart_from = self._elements
             state.chart = {name: tuple(beat.at for beat in found.beats)
                            for name, found in self._elements.items()
@@ -2205,12 +1898,10 @@ class Spectrum(QWidget):
             state.flux = {name: (found.flux, found.rate)
                           for name, found in self._elements.items()
                           if getattr(found, "flux", None)}
-        # The drums' own tempo and beat, once they are known: folded over
-        # the whole track at sixty readings a second, where the maps below
-        # are phased from the first thing they heard - a third of a beat
-        # out on some records, and every scene's pulse with them. Measured
-        # against a DJ program's grids, the drums' beat is 7 ms out at the
-        # median.
+        # The drums' tempo and beat once known, folded over the whole track;
+        # the maps below are phased from the first thing they heard and can be
+        # a third of a beat out. Against a DJ program's grids the drums' beat
+        # is 7 ms out at the median.
         rhythm = self._rhythm
         if rhythm and rhythm.get("beats"):
             # A tempo that moves: counted on the drums' own beats.
@@ -2239,57 +1930,51 @@ class Spectrum(QWidget):
         if found is None or not found.beats:
             state.tempo = 0.0
             return
-        # Folded first: a detector that reports the pulse doubled would
-        # otherwise drive every scene at twice the song's speed. The
-        # phase below is worked out from the same folded period, which
-        # is the whole point of doing it here. See folded_tempo.
+        # Folded first, or a detector reporting the pulse doubled drives every
+        # scene at twice the song's speed; the phase below uses the same folded
+        # period. See folded_tempo.
         state.tempo = visualizers.folded_tempo(found.bpm)
         period = 60.0 / max(1e-6, state.tempo)
-        # Against the first beat rather than against zero: a grid that
-        # starts where the track starts is a grid that is wrong by
-        # whatever the intro was.
+        # Against the first beat, not zero: a grid starting at the top of the
+        # track is wrong by the length of the intro.
         since = self._now - found.beats[0].at
         state.beat_at = (since / period) % 1.0 if since >= 0 else 0.0
 
-    #: How far the playhead has to disagree with our own clock before it
-    #: is treated as a seek rather than as drift, and how hard the drift
-    #: is corrected each frame.
+    #: How far the playhead may disagree with the clock before it counts as a
+    #: seek rather than drift, and how hard drift is corrected each frame.
     SEEK_GAP = 0.30
     PULL = 0.06
-    #: After starting again, the most faster or slower than time the clock
-    #: runs while it closes on the player's first word.
+    #: After starting again, the most faster or slower than time the clock runs
+    #: while it closes on the player's first report.
     CATCH_RATE = 0.25
-    #: The most a hit may be taken early for being nearer this frame than
-    #: the next: half of a frame at sixty. Half of whatever time had gone
-    #: by since the last frame, it was half a second on the first frame of
-    #: a track and an eighth of one after a pause - a strobe that went off
-    #: on a beat that had not come.
+    #: The most a hit may be taken early for being nearer this frame than the
+    #: next: half a frame at sixty. Half of the time since the last frame, it
+    #: fired strobes on beats that had not come.
     NEAREST_MOST = 1.0 / 60.0 / 2.0
-    #: How much of the way to the bass's new level the bass the scenes
-    #: read goes in a frame, rising and falling.
+    #: How much of the way to the new bass level the scenes' bass goes in a
+    #: frame, rising and falling.
     BASS_RISE = 0.6
     BASS_FALL = 0.3
-    #: Where in its slot a frame of the bands is heard, in seconds: its
-    #: window starts at the slot, so what it holds is half a window in -
-    #: attachment_audio's WINDOW over twice its DECODE_RATE.
+    #: Where in its slot a frame of the bands is heard, in seconds: half a
+    #: window in (attachment_audio's WINDOW over twice its DECODE_RATE).
     FRAME_MIDDLE = 2048 / 2 / 48000
-    #: How far a report may be run forward before it is not trusted.
-    #: Comfortably past any sane player's update interval, and well
-    #: inside SEEK_GAP so a stalled source cannot fake a seek.
+    #: How far a report may be run forward before it is distrusted: past any
+    #: player's update interval, and inside SEEK_GAP so a stalled source cannot
+    #: fake a seek.
     STALE_MOST = 0.25
 
-    #: How long after a seek the picture waits for the player to be heard
-    #: moving on from where it was sent, before believing whatever it says;
-    #: and how far past the time since the seek its first report may be.
+    #: How long after a seek the picture waits to hear the player move on
+    #: before believing it, and how far past the time since the seek its first
+    #: report may be.
     SEEK_SETTLE = 1.0
     REPORT_SLACK = 0.1
 
     def seek_to(self, milliseconds: int) -> None:
-        """The player was sent to ``milliseconds``: go there at once, and
-        wait there until the player is heard moving on. Qt's player reports
-        the new position straight away and holds it for most of a tenth of
-        a second while it starts again; run on from the seek, the picture
-        was that far ahead and spent the next second easing back."""
+        """The player was sent to ``milliseconds``: go there at once and wait
+        until the player is heard moving on. Qt's player holds the new
+        position for most of a tenth of a second while it restarts; run on
+        from the seek, the picture was ahead and spent a second easing back.
+        """
         import time as _time
 
         self._seek_from = self._heard_now
@@ -2300,10 +1985,11 @@ class Spectrum(QWidget):
         self._jumps += 1
 
     def _heard(self) -> float:
-        """The moment the music is at: the player's last report, run on
-        from when it landed and eased towards each new one, since it only
-        moves every 50 ms. Exact while paused, held after a seek until the
-        player moves on, and a jump nobody announced is taken at once."""
+        """The moment the music is at: the player's last report run on from
+        when it landed and eased towards each new one, since it only moves
+        every 50 ms. Exact while paused, held after a seek until the player
+        moves on; an unannounced jump is taken at once.
+        """
         import time as _time
 
         now = _time.monotonic()
@@ -2312,8 +1998,8 @@ class Spectrum(QWidget):
             0.0, min(0.25, now - self._heard_at))
         self._heard_at = now
         playing = self._wanted and not self._idling
-        # Starting to play: the last word is where it stopped, true as of
-        # now rather than as of the pause.
+        # Starting to play: the last report is where it stopped, true as of
+        # now.
         resumed = playing and not self._was_playing
         word = said != self._said_was
         if word or resumed:
@@ -2326,10 +2012,9 @@ class Spectrum(QWidget):
         if self._seek_hold is not None:
             held = self._seek_hold / 1000.0
             since = now - self._seek_at
-            # Moved on: just past where it was sent, by no more than the
-            # time since. Still saying where it was sent, or where it was
-            # before (a late word), is waited through; anything else is a
-            # jump of its own.
+            # Moved on: just past where it was sent, by no more than the time
+            # since. A report still at the target, or before it, is waited
+            # through; anything else is a jump of its own.
             moved_on = (playing
                         and held < said <= held + since + self.REPORT_SLACK)
             late = (said == held or (self._seek_from is not None and abs(
@@ -2347,10 +2032,9 @@ class Spectrum(QWidget):
             return said
         run = said + min(self.STALE_MOST, stale)
         if self._settling and word:
-            # The player's first word since starting again, which restarts
-            # its pipeline as a seek does and can be some way from a clock
-            # run on from the pause: closed at a little faster or slower
-            # than time, never in a jump.
+            # The player's first report since starting again, which can be some
+            # way from a clock run on from the pause: closed at a little faster
+            # or slower than time, never in a jump.
             self._settling = False
             self._catching = True
         if self._heard_now is None or abs(run - self._heard_now) > self.SEEK_GAP:
@@ -2370,8 +2054,9 @@ class Spectrum(QWidget):
         return self._heard_now
 
     def _ahead(self) -> float:
-        """How far ahead of the player's position the picture is shown:
-        see av_sync. Nothing without an allowance."""
+        """How far ahead of the player's position the picture is shown (see
+        av_sync); nothing without an allowance.
+        """
         if self.allowance is None:
             return 0.0
         screen = self.screen()
@@ -2379,12 +2064,9 @@ class Spectrum(QWidget):
         return self.allowance.ahead(refresh)
 
     def _decay_kit(self, state) -> None:
-        """Light whichever parts of the kit are due, and fade the rest.
-
-        A scene asks "how recently was the kick hit" rather than "where is
-        the playhead against a list of times", because the second question
-        has an answer that depends on the frame rate and the first does
-        not. A hit lights its own entry to one and it falls from there.
+        """Light whichever parts of the kit are due, and fade the rest. A scene
+        asks how recently the kick was hit, which, unlike the playhead
+        against a list of times, does not depend on the frame rate.
         """
         import beatmap
 
@@ -2404,8 +2086,8 @@ class Spectrum(QWidget):
                 nxt = beatmap.next_after(beats, now)
                 self._kit_at[name] = beats.index(nxt) if nxt is not None else len(beats)
                 continue
-            # In the frame nearest the hit, rather than the first frame
-            # after it, which put every hit up to a frame late.
+            # In the frame nearest the hit, not the first after it, which made
+            # hits up to a frame late.
             while (cursor < len(beats)
                    and beats[cursor].at <= now + min(self.NEAREST_MOST,
                                                      step / 2)):
@@ -2415,27 +2097,20 @@ class Spectrum(QWidget):
         self._kit_seen = now
 
     def _fire_from_the_map(self, state) -> bool:
-        """Flash because a beat is due. Returns whether the map was used.
+        """Flash because a beat is due; returns whether the map was used.
 
-        The map is the whole track's beats, found before anything played,
-        so this is not detection - it is a lookup against the playhead.
-        That is what makes it steady: the flash lands on the beat rather
-        than a frame or two after whatever transient set it off, and a bar
-        where the drummer left a gap is still lit, because the grid
-        carries on through it.
-
-        Sensitivity picks how hard a beat has to have been hit before it
-        counts, and rate sets how close together flashes may come. Both
-        act on a list of known beats rather than on a threshold, so
-        turning one down thins the lighting instead of switching it off.
+        The map is the whole track's beats, found before playback, so this
+        is a lookup, not detection: the flash lands on the beat and the grid
+        carries on through gaps. Sensitivity picks how hard a beat must be
+        hit to count and rate how close flashes may come, so turning one
+        down thins the lighting rather than switching it off.
         """
         found = self._beats.get(self._strobe_source)
         beats = getattr(found, "beats", ())
         if not beats:
             return False
         now = self._now
-        # A seek, either way, means starting again from where the playhead
-        # landed rather than walking there one beat at a time.
+        # A seek either way starts again from where the playhead landed.
         if now < self._beat_seen or now - self._beat_seen > 1.0:
             import beatmap
             nxt = beatmap.next_after(beats, now)
@@ -2444,14 +2119,10 @@ class Spectrum(QWidget):
             return True
         floor = 0.06 + (1.0 - self._strobe_sense) * 0.72
         gap = 0.08 + (1.0 - self._strobe_rate) * 1.60
-        # A held note is not a beat, and on a grid it gets one flash and
-        # then nothing until the next bar - which is the opposite of what
-        # a room does under a sustained bass line. When the thing being
-        # watched is holding, and both knobs are up, the grid is divided
-        # and the strobe runs at a multiple of the beat for as long as it
-        # holds. The knobs have to be up together on purpose: this is the
-        # loudest thing the visualiser does and nobody should arrive at
-        # it by nudging one slider.
+        # A held note gets one flash on a grid, and then nothing until the next
+        # bar. When the watched band holds and both knobs are up, the grid is
+        # divided and the strobe runs at a multiple of the beat. Both knobs
+        # must be up on purpose: this is the loudest thing the visualiser does.
         self._machine_gun(state, beats, now, floor)
         # In the frame nearest the beat, as the kit is.
         due = now + min(self.NEAREST_MOST,
@@ -2474,25 +2145,16 @@ class Spectrum(QWidget):
     #: And the watched band has to have been this loud for this long.
     RAPID_LEVEL = 0.45
     RAPID_HOLD = 0.35
-    #: The fastest it will ever run, in flashes a second.
-    #:
-    #: Ten, and the number matters. Photosensitive epilepsy is provoked
-    #: most reliably somewhere between fifteen and twenty flashes a
-    #: second, and general accessibility guidance draws its line at
-    #: three. A music visualiser's strobe is not general-purpose content
-    #: - it is off until somebody switches it on, and this speed needs
-    #: two separate sliders pushed most of the way up - but ten is close
-    #: enough to that range to be worth capping deliberately rather than
-    #: letting the subdivision run wherever the tempo takes it. The
-    #: control says so too.
+    #: The fastest it runs, in flashes a second. Photosensitive epilepsy is
+    #: most often provoked between fifteen and twenty a second, and
+    #: accessibility guidance draws its line at three. The strobe is off by
+    #: default and this speed needs both sliders most of the way up, but ten is
+    #: capped on purpose, and the control says so.
     RAPID_CEILING = 10.0
 
     def _sustained(self, state) -> float:
-        """How long the watched band has been holding up, in seconds.
-
-        Measured on the smoothed aggregate rather than on the beat list,
-        because the question is about a note that is still sounding and a
-        beat list only knows where things started.
+        """How long the watched band has held, in seconds, from the smoothed
+        level: a beat list only knows where notes started.
         """
         watched = {"Bass": state.bass, "Kick": state.bass,
                    "Mids": state.mid, "Synths": state.synth,
@@ -2517,9 +2179,8 @@ class Spectrum(QWidget):
             return
         if self._sustained(state) < self.RAPID_HOLD:
             return
-        # How far past the point where it switches on both knobs are,
-        # which is what decides the subdivision: just past it doubles the
-        # beat, all the way over is as fast as it will go.
+        # How far past the switch-on point both knobs are, which sets the
+        # subdivision: just past doubles the beat, all the way is the fastest.
         over = min(1.0, ((self._strobe_rate - self.RAPID_KNOB)
                          + (self._strobe_sense - self.RAPID_KNOB))
                    / (2.0 * (1.0 - self.RAPID_KNOB)))
@@ -2547,13 +2208,9 @@ class Spectrum(QWidget):
         return 0.0
 
     def _fire_from_the_frame(self, state, watched: float) -> None:
-        """Flash on a jump in one band, for when there is no map yet.
-
-        This is what the strobe used to be, and it is kept for the seconds
-        before the analysis finishes and for anything it could not read.
-        It cannot be consistent - the threshold is an absolute number, so
-        a quiet track never reaches it and a loud one is always past it -
-        which is why it is now the fallback rather than the mechanism.
+        """Flash on a jump in one band, while there is no map yet. The
+        threshold is absolute, so a quiet track never reaches it and a loud
+        one is always past it; hence only a fallback.
         """
         jump = 0.40 - self._strobe_sense * 0.39    # 0.40 fussy, 0.01 eager
         wait = int(75 - self._strobe_rate * 73)    # frames before the next
@@ -2575,17 +2232,13 @@ class Spectrum(QWidget):
 
     # -- painting ---------------------------------------------------------
     def paintEvent(self, event) -> None:      # noqa: N802 - Qt's name
-        """Paint, and never leave the painter open.
-
-        An exception raised out of a paintEvent does not propagate: Qt
-        catches it, prints it, and carries on with a painter still active
-        on the backing store, which then crashes the process. Whatever
-        goes wrong in a scene, the painter has to be closed.
+        """Paint, and never leave the painter open. An exception out of
+        paintEvent is caught and printed by Qt, which carries on with a
+        painter still active on the backing store and then crashes.
         """
         if self._canvas is not None:
-            # The canvas covers the pane and draws it. A repaint of the
-            # pane from anywhere - a resize, an expose, Qt's own reasons
-            # - is a repaint of the canvas.
+            # The canvas covers the pane and draws it, so any repaint of the
+            # pane is a repaint of the canvas.
             self._canvas.update()
             return
         painter = QPainter(self)
@@ -2597,40 +2250,30 @@ class Spectrum(QWidget):
     def _paint(self, painter) -> None:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         rect = QRectF(self.rect())
-        # Every pixel, every frame, before anything else.
-        #
-        # This widget sets neither WA_OpaquePaintEvent nor
-        # autoFillBackground, so Qt does not clear it: whatever the
-        # backing store held is still there when a paint begins. That was
-        # fine while every path covered the whole widget and is not fine
-        # on the three that do not - the early return while the strip is
-        # closed, the reveal, and the fade a newly chosen scene comes up
-        # through. All three then blend over, or leave, the frame before
-        # them, which is a ghost of the picture: "xx xxxxx xxxx x xxxxxx
-        # xxxxxx xx xxx xxxxxxxxxx".
+        # Every pixel, every frame, first. Neither WA_OpaquePaintEvent nor
+        # autoFillBackground is set, so the backing store keeps the last frame,
+        # and the paths that do not cover the widget (closed strip, reveal,
+        # fade-in) left a ghost of it.
         painter.fillRect(rect, self._state.background)
         if self._reserve:
-            # Kept clear for the floating control bar. Reserving the strip
-            # permanently rather than while the bar shows means the scene
-            # never has a button sitting on top of it, and never resizes
-            # underneath the viewer when the bar fades.
+            # Kept clear for the floating control bar, always rather than while
+            # it shows, so no button sits on the scene and nothing resizes when
+            # the bar fades.
             rect = rect.adjusted(0.0, 0.0, 0.0,
                                  -min(float(self._reserve), rect.height() / 3.0))
         if self._reveal <= 0.001:
             return
-        # The chosen shape, fitted inside whatever room there is. Height
-        # alone could not express it: every ratio wanted more height than
-        # the pane had, so they were all clamped to the same number and
-        # choosing between them did nothing at all. Fitting the ratio in
-        # the box and filling the sides is what a video player does.
+        # The chosen shape fitted inside the room there is, with the sides
+        # filled, as a video player does. By height alone every ratio clamped
+        # to the same number.
         scene_box = self._scene_box(rect)
         if scene_box != rect:
             rect = scene_box
         if self._reveal < 0.999:
             painter.setOpacity(self._reveal)
             painter.translate(0.0, (1.0 - self._reveal) * rect.height() * 0.45)
-        # Before the new scene's fade, which waits for the analysis and so
-        # hid the progress bar for the whole of it.
+        # Before the new scene's fade, which waits for the analysis and hid the
+        # progress bar.
         if not self._level:
             painter.fillRect(rect, QColor(8, 6, 18))
             if self._working is not None:
@@ -2641,17 +2284,17 @@ class Spectrum(QWidget):
                              "the spectrum appears when something is playing")
             return
         if self._fresh < 0.999 and not (self._on_gpu and self._crossing):
-            # The new scene coming up over the background, which stays.
-            # On the card it is drawn whole and faded up over the last
-            # frame instead: see _keep_the_last_frame.
+            # The new scene coming up over the background. On the card it is
+            # drawn whole and faded up over the last frame instead: see
+            # _keep_the_last_frame.
             painter.setOpacity(painter.opacity() * self._fresh)
         self._paint_scene(painter, rect)
         self._tell_listener()
 
     def set_listener(self, listener) -> None:
-        """Something to be handed the scene after every frame is drawn -
-        the rider's sounds, which answer what the game just did. None to
-        stop."""
+        """Something handed the scene after every frame (the rider's sounds,
+        which answer what the game did); None to stop.
+        """
         self._listener = listener
 
     def _tell_listener(self) -> None:
@@ -2668,33 +2311,28 @@ class Spectrum(QWidget):
             self._listener = None
 
     def _paint_scene(self, painter, rect) -> None:
-        """The scene, then whatever polish it asks for.
-
-        A scene that wants no post-processing is drawn straight onto the
-        widget, exactly as before - the buffer and the extra passes only
-        exist for the ones that do.
+        """The scene, then whatever polish it asks for. A scene with no
+        post-processing is drawn straight onto the widget.
         """
         import visualizers
 
         import time as _time
 
-        # Nothing a scene is handed has ever been outside its own range
-        # by the time it gets there. See SpectrumState.settle.
+        # Nothing a scene is handed is outside its range. See
+        # SpectrumState.settle.
         self._state.settle()
         self._drawn += 1
         recipe = visualizers.post_for(self._scene) if self._post else {}
         ratio = self.devicePixelRatioF()
         pixels = rect.width() * ratio * rect.height() * ratio
-        # Antialiasing is what these scenes cost, and it is charged per
-        # pixel of every stroke: Ambience measured 10.3 ms a frame at 1080p
-        # with it on and 1.6 ms with it off. Rather than give it up and
-        # draw jagged curves, a frame that will not fit is drawn smaller
-        # and stretched, which costs the same as turning it off and still
-        # looks smooth. How much smaller is measured rather than fixed -
-        # see Sharpness, and the note on SHARP_PIXELS.
+        # Antialiasing is what these scenes cost, per pixel of every stroke
+        # (Ambience: 10.3 ms at 1080p with it, 1.6 without). A frame that will
+        # not fit is drawn smaller and stretched instead, which costs the same
+        # and stays smooth. How much smaller is measured: see Sharpness and
+        # SHARP_PIXELS.
         if self._on_gpu:
-            # A scene with a world of its own to draw on the card draws
-            # that, polish and all. See rider_gl.
+            # A scene with a world of its own to draw on the card draws that,
+            # polish and all. See rider_gl.
             on_card = getattr(self._scene, "paint_on_card", None)
             world = self._world() if on_card is not None else None
             if world is not None:
@@ -2710,11 +2348,9 @@ class Spectrum(QWidget):
                         "flat from here on")
                     self._canvas.world = None
                     self._canvas.world_failed = True
-            # Straight in, at every pixel the screen has. There is no
-            # buffer to shrink into and no stretching back out: the
-            # card draws the full resolution inside the frame, which is
-            # the whole reason for drawing on it. The polish is put on
-            # afterwards, over the finished frame. See _paint_on_gpu.
+            # Straight in, at every pixel the screen has: no buffer to shrink
+            # into and nothing stretched. The polish goes on afterwards; see
+            # _paint_on_gpu.
             self._scene.paint(painter, rect, self._state)
             if recipe:
                 self._gpu_scene = (QRectF(rect), painter.worldTransform(),
@@ -2769,16 +2405,9 @@ class Spectrum(QWidget):
 
 
 class _KeysCard(QWidget):
-    """The list of playing keys, hidden until somebody asks for it.
-
-    Hidden because the keys are for playing with, and a panel explaining
-    them is the opposite of that - but unfindable keys are not keys, so
-    there has to be somewhere to look. ``?`` opens it and closes it, and
-    it is the only thing in full screen that does not fade on its own.
-
-    Painted rather than built out of labels: it is one panel of text over
-    a picture, and a layout of a dozen QLabels to say twelve short lines
-    is a lot of widgets for something that is usually not on screen.
+    """The list of playing keys, hidden until asked for: ``?`` opens and closes
+    it, and it is the only thing in full screen that does not fade on its
+    own. Painted rather than built from a dozen labels.
     """
 
     #: The keys, in the order they are worth learning.
@@ -2876,17 +2505,11 @@ class _KeysCard(QWidget):
 
 
 class _ControlBar(QWidget):
-    """The floating strip of controls, drawn rather than stylesheeted.
-
-    A stylesheet can give a widget a colour and a corner radius and
-    nothing else, so the bar used to be a flat black rectangle with round
-    corners sitting on the picture - which reads as a hole in it. What
-    makes a floating panel look like it is floating is the edge: a
-    gradient so the top catches more light than the bottom, a hairline
-    highlight along that top edge, and a shadow under it that separates
-    it from whatever is behind. Qt has no box-shadow, and the bar already
-    spends its one allowed graphics effect on the fade, so all three are
-    painted here.
+    """The floating strip of controls, painted rather than stylesheeted: a
+    stylesheet gives only a colour and a radius, which looked like a hole in
+    the picture. A gradient, a hairline highlight along the top and a shadow
+    make it float. Qt has no box-shadow, and the bar's one graphics effect
+    is its fade.
     """
 
     #: How far the shadow reaches past the panel, in pixels.
@@ -2902,18 +2525,16 @@ class _ControlBar(QWidget):
 
     def _paint(self, painter) -> None:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        # The panel sits inside the widget by exactly the shadow's reach on
-        # every side, and the layout's margins are set from the same
-        # number - so the controls land inside the panel rather than over
-        # its edge, whatever the shadow is changed to.
+        # The panel is inset by the shadow's reach on every side, and the
+        # layout's margins come from the same number, so the controls stay
+        # inside the panel.
         panel = QRectF(self.rect()).adjusted(
             self.SHADOW, self.SHADOW, -self.SHADOW, -self.SHADOW)
         if panel.width() < 8 or panel.height() < 8:
             return
 
-        # The shadow, as a few rounded rectangles of falling opacity. A
-        # blur would be truer and costs a full-size image every frame the
-        # bar fades; four strokes look the same behind a panel this dark.
+        # The shadow, as a few rounded rectangles of falling opacity; a blur
+        # would cost a full-size image every frame the bar fades.
         painter.setBrush(Qt.BrushStyle.NoBrush)
         for step in range(5, 0, -1):
             spread = step * (self.SHADOW / 5.0)
@@ -2942,16 +2563,13 @@ class _ControlBar(QWidget):
 
 
 class FullScreenSpectrum(QWidget):
-    """The scene alone, filling the screen, with controls that get out of it.
+    """The scene alone, filling the screen, with controls that get out of the
+    way.
 
-    It borrows the running Spectrum rather than building a second one, so
-    there is one analysis, one timer and one set of smoothed values however
-    many windows are looking. On the way out the widget goes back where it
-    came from.
-
-    The controls float on top and fade after a few seconds of stillness.
-    Moving the mouse brings them back, and they stay while the pointer is on
-    them - otherwise reaching for the volume makes them vanish under it.
+    It borrows the running Spectrum, so there is one analysis and one timer
+    however many windows look, and gives it back on the way out. The
+    controls fade after a few seconds of stillness and return on movement,
+    and stay while the pointer is on them.
     """
 
     #: Stillness before the controls go, and before the pointer does.
@@ -2962,10 +2580,8 @@ class FullScreenSpectrum(QWidget):
         self.setWindowTitle("Visualiser")
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.setMouseTracking(True)
-        # Near black, not the theme's window colour. A scene that does not
-        # fill the screen - anything but 16:9 on a 16:9 display - shows
-        # this at the sides, and a light grey band either side of a dark
-        # picture is the one thing full screen is meant to avoid.
+        # Near black, not the theme's colour: a scene that does not fill the
+        # screen shows this at the sides.
         self.setAutoFillBackground(True)
         palette = self.palette()
         palette.setColor(self.backgroundRole(), QColor(6, 5, 9))
@@ -2974,9 +2590,8 @@ class FullScreenSpectrum(QWidget):
         self._owner = owner
         self._home = spectrum.parentWidget()
         self._layout_index = None
-        #: Whether the pointer is currently hidden, so that showing it
-        #: again is something that happens once rather than on every mouse
-        #: move event.
+        #: Whether the pointer is hidden, so showing it again happens once
+        #: rather than on every mouse move.
         self._hidden_cursor = False
 
         parent_layout = self._home.layout() if self._home else None
@@ -2996,11 +2611,9 @@ class FullScreenSpectrum(QWidget):
         self.bar = _ControlBar(self)
         self.bar.setMouseTracking(True)
         self.bar.setObjectName("visualiserBar")
-        # The same wrapping row the window uses. A fixed line squeezed its
-        # controls into nothing on a small screen rather than taking a
-        # second line. Its margins leave room for the shadow the bar
-        # paints outside the panel, so the controls still sit where the
-        # panel is rather than over its edge.
+        # The same wrapping row the window uses, so a small screen gets a
+        # second line. Its margins leave room for the shadow painted outside
+        # the panel.
         pad = _ControlBar.SHADOW
         self._bar_layout = FlowRow(spacing=14)
         self._bar_layout.setContentsMargins(pad + 16, pad + 11,
@@ -3020,14 +2633,13 @@ class FullScreenSpectrum(QWidget):
         self._idle.timeout.connect(self._hide_controls)
         self._idle.start()
 
-        #: The list of playing keys. Hidden, and it stays hidden until
-        #: somebody presses the one key that is about the keys.
+        #: The list of playing keys, hidden until the key that shows it is
+        #: pressed.
         self.keys = _KeysCard(self)
 
     # -- what goes in the bar ---------------------------------------------
-    #: The bar's rows are sized from each control's hint, and a slider's
-    #: hint describes its groove rather than its handle - so the tops of
-    #: the knobs were cut off by the bar's own background.
+    #: A slider's size hint describes its groove, not its handle, so rows sized
+    #: from hints cut off the tops of the knobs.
     CONTROL_HEIGHT = 30
 
     def add_control(self, widget, stretch: int = 0) -> None:
@@ -3053,10 +2665,8 @@ class FullScreenSpectrum(QWidget):
             self._fade.setEndValue(1.0)
             self._fade.start()
         if self._hidden_cursor:
-            # Only when it is actually hidden. This ran on every mouse
-            # move event, and asking Qt to change a cursor walks the widget
-            # tree and tells the window system - a hundred times a second,
-            # for a cursor that was already showing.
+            # Only when it is hidden: changing a cursor walks the widget tree
+            # and tells the window system, and this ran on every mouse move.
             self._hidden_cursor = False
             self.unsetCursor()
         self._spectrum.set_giving_way(True)
@@ -3076,11 +2686,9 @@ class FullScreenSpectrum(QWidget):
         self._spectrum.set_giving_way(False)
 
     def keyPressEvent(self, event) -> None:      # noqa: N802 - Qt's name
-        """Escape leaves; J, K and L work the transport; the rest play it.
-
-        One method, deliberately. There were two, and the later one won,
-        so the transport keys were dead the whole time - pressing them
-        did nothing but wake the control bar.
+        """Escape leaves; J, K and L work the transport; the rest play it. One
+        method: with two, the later one won and the transport keys were
+        dead.
         """
         if event.key() in (Qt.Key.Key_Question, Qt.Key.Key_Slash):
             self.show_keys(not self.keys.isVisibleTo(self))
@@ -3090,8 +2698,8 @@ class FullScreenSpectrum(QWidget):
                 Qt.Key.Key_L: "forward", Qt.Key.Key_Space: "toggle"}
         action = keys.get(event.key())
         if action is not None:
-            # The transport moves the playhead, and the bar is where the
-            # playhead is shown, so these bring it back.
+            # The transport moves the playhead, which the bar shows, so these
+            # bring it back.
             self._show_controls()
             handler = getattr(self._owner, "transport", None)
             if handler is not None:
@@ -3105,13 +2713,8 @@ class FullScreenSpectrum(QWidget):
                 self.close()
             event.accept()
             return
-        # And the playing keys deliberately do not.
-        #
-        # They used to, because waking the bar was the first thing this
-        # method did. Changing scene with a number then slid a strip of
-        # controls up over the picture every time, which is the opposite
-        # of what the keys are for: they exist so that the scene can be
-        # played without the furniture.
+        # The playing keys do not wake the bar: changing scene with a number
+        # would slide the controls over the picture each time.
         if self._play_it(event, held=True):
             return
         self._show_controls()
@@ -3131,12 +2734,9 @@ class FullScreenSpectrum(QWidget):
                               size.width(), size.height())
 
     def keyReleaseEvent(self, event) -> None:      # noqa: N802 - Qt's name
-        """Letting the strobe key go puts the light out.
-
-        Auto-repeat is ignored on both sides: holding a key down sends
-        press, release, press, release at the keyboard's repeat rate, and
-        a held strobe that switches itself off thirty times a second is a
-        strobe rather than a held light.
+        """Letting the strobe key go puts the light out. Auto-repeat is ignored
+        on both sides, or a held light switches itself off at the keyboard's
+        repeat rate.
         """
         if self._play_it(event, held=False):
             return
@@ -3170,10 +2770,8 @@ class FullScreenSpectrum(QWidget):
         super().mouseMoveEvent(event)
 
     def mousePressEvent(self, event) -> None:      # noqa: N802 - Qt's name
-        """A click brings the controls back, like a move does.
-
-        On a trackpad the pointer can be somewhere the bar has already
-        faded from, and the first thing anybody does then is click.
+        """A click brings the controls back, as a move does: on a trackpad the
+        first thing anybody does is click.
         """
         self._show_controls()
         super().mousePressEvent(event)
@@ -3189,26 +2787,22 @@ class FullScreenSpectrum(QWidget):
         self._place_bar()
 
     def _place_bar(self) -> None:
-        # Wide enough that the seek bar is obviously the long one and the
-        # volume slider obviously the short one, but never wider than the
-        # screen it has to sit on.
+        # Wide enough that the seek bar is clearly the long one and the volume
+        # clearly the short one, but never wider than the screen.
         width = max(320, min(int(self.width() * 0.86), self.width() - 48))
-        # Margins included: the layout counts its own, and adding them
-        # here as well made the bar half as tall again as its contents.
+        # Margins included: the layout counts its own, and adding them here as
+        # well made the bar half as tall again.
         height = max(48 + _ControlBar.SHADOW * 2,
                      self._bar_layout.heightForWidth(width))
-        # The widget is the panel plus the shadow painted around it, so
-        # the gap at the bottom is measured to the panel rather than to
-        # the widget - otherwise the shadow reads as extra margin and the
-        # bar floats higher than it looks like it should.
+        # The widget is the panel plus its shadow, so the gap at the bottom is
+        # measured to the panel.
         self.bar.setGeometry(
             int((self.width() - width) / 2),
             int(self.height() - height - 30 + _ControlBar.SHADOW),
             width, height)
         self.bar.raise_()
-        # No strip kept clear. Full screen means the whole screen, and the
-        # bar fades out when it is not being used, so the scene running
-        # behind it is the point rather than a problem.
+        # No strip kept clear: full screen is the whole screen, and the bar
+        # fades when unused.
         self._spectrum.set_reserve(0)
 
     def closeEvent(self, event) -> None:      # noqa: N802 - Qt's name
@@ -3218,16 +2812,13 @@ class FullScreenSpectrum(QWidget):
         spectrum = self._spectrum
         spectrum.setParent(None)
         spectrum.set_reserve(0)
-        # set_unbounded recomputes the height from the shape and the
-        # budget. Putting back the minimum and maximum that were saved on
-        # the way in restored a forced height instead, which is what made
-        # the transport appear inside the picture after a trip through
-        # full screen and back.
+        # set_unbounded recomputes the height from the shape and the budget;
+        # restoring the saved minimum and maximum forced a height and put the
+        # transport inside the picture.
         spectrum.set_unbounded(False)
         parent_layout = self._home.layout() if self._home else None
         if parent_layout is not None and self._layout_index is not None:
-            # With the stretch it had. insertWidget defaults to zero, so
-            # the scene came back unable to claim any spare room.
+            # With the stretch it had: insertWidget defaults to none.
             parent_layout.insertWidget(self._layout_index, spectrum,
                                        self._stretch)
         elif self._home is not None:
@@ -3235,9 +2826,8 @@ class FullScreenSpectrum(QWidget):
         if spectrum.parentWidget() is not None:
             spectrum.show()
         else:
-            # Nowhere to go back to. Showing it here would put a bare
-            # spectrum on screen as a window of its own, which then
-            # outlives everything that knew about it.
+            # Nowhere to go back to: shown here, the spectrum would become a
+            # window of its own that outlives everything that knew about it.
             spectrum.hide()
         if self._owner is not None:
             release = getattr(self._owner, "release_full_screen", None)
@@ -3245,9 +2835,8 @@ class FullScreenSpectrum(QWidget):
                 release()
             else:
                 self._owner._full = None
-        # The window the scene came from, back in front. Closing this one
-        # handed the front to whatever was behind it, which is the main
-        # window, leaving the viewer the scene belongs to underneath it.
+        # The window the scene came from, back in front; otherwise the main
+        # window came forward and covered the viewer.
         home = spectrum.window()
         if home is not None and home is not self:
             home.raise_()
@@ -3256,19 +2845,12 @@ class FullScreenSpectrum(QWidget):
 
 
 class FlowRow(QLayout):
-    """A row of controls that wraps instead of running off the edge.
-
-    The visualiser controls grow and shrink with what is selected - the
-    colour button only exists for the meters - and a plain QHBoxLayout
-    keeps laying them out in one line however narrow the pane gets, so
-    they overlap each other and then leave the window. This puts what
-    fits on a line and moves the rest down.
+    """A row of controls that wraps instead of running off the edge: what fits
+    goes on a line and the rest moves down.
     """
 
-    #: Widgets on this platform can draw outside the rectangle a layout
-    #: gives them - a combo box reserves about eleven pixels for its focus
-    #: ring - so a gap narrower than that lets one draw over the label
-    #: before it. Wide enough that it cannot.
+    #: Widgets here can draw outside their rectangle (a combo box reserves
+    #: about eleven pixels for its focus ring), so the gap is wider than that.
     BLEED = 14
 
     def __init__(self, parent=None, spacing: int = 16) -> None:
@@ -3299,12 +2881,8 @@ class FlowRow(QLayout):
         return True
 
     def heightForWidth(self, width: int) -> int:      # noqa: N802 - Qt's name
-        """How tall the controls are in this width, margins included.
-
-        Margins included because that is what a caller asking a layout how
-        much room it needs means, and because ``setGeometry`` now takes
-        them off again - counting them in one place and not the other is
-        how a panel ends up shorter than the things inside it.
+        """How tall the controls are at this width, margins included:
+        setGeometry takes them off again, so both must count them.
         """
         margins = self.contentsMargins()
         inner = max(0, width - margins.left() - margins.right())
@@ -3312,13 +2890,8 @@ class FlowRow(QLayout):
         return rows + margins.top() + margins.bottom()
 
     def setGeometry(self, rect) -> None:      # noqa: N802 - Qt's name
-        """Lay the controls out inside the margins, not over them.
-
-        A QLayout subclass is handed the whole rectangle and has to inset
-        it by its own contents margins; nothing does that for it. This did
-        not, so every margin set on it was ignored - which was invisible
-        while the margins were ten pixels and obvious the moment the
-        control bar wanted room around its panel for a shadow.
+        """Lay the controls out inside the margins: a QLayout subclass must
+        inset its rectangle by its own contents margins.
         """
         super().setGeometry(rect)
         margins = self.contentsMargins()
@@ -3351,15 +2924,12 @@ class FlowRow(QLayout):
             widget = item.widget()
             if widget is not None and widget.isHidden():
                 continue
-            # Never below what the widget says it needs. A size hint is a
-            # preference and a minimum is not: sized to the hint alone,
-            # combo boxes and tick boxes came out two pixels short and the
-            # bottoms of their letters were cut off.
+            # Never below what the widget needs: sized to the hint alone, combo
+            # boxes and tick boxes came out two pixels short and lost the
+            # bottoms of their letters.
             hint = item.sizeHint()
-            # From the widget, not the item: a QWidgetItem's minimumSize
-            # reports whatever minimum was set on the widget, which is
-            # usually nothing, rather than what the widget says it needs
-            # to draw itself.
+            # From the widget, not the item: a QWidgetItem's minimumSize is the
+            # minimum set on the widget, usually none.
             least = (widget.minimumSizeHint() if widget is not None
                      else item.minimumSize())
             wanted = QSize(max(hint.width(), least.width()),
@@ -3405,9 +2975,8 @@ class FlowRow(QLayout):
                 y += self._gap
             for item, box in row:
                 if apply:
-                    # Centred on the line rather than hung from the top: a
-                    # combo box is taller than a tick box, and left flush
-                    # they read as two rows of controls rather than one.
+                    # Centred on the line, or a combo box and a tick box read
+                    # as two rows.
                     placed = QRect(box)
                     placed.moveTop(y + (tallest - box.height()) // 2)
                     item.setGeometry(placed)
@@ -3416,41 +2985,21 @@ class FlowRow(QLayout):
 
 
 def blit_scene(painter, rect, buffer, smooth: bool = False) -> None:
-    """Put a scene's buffer on the screen at the size it has to be.
+    """Put a scene's buffer on the screen at the size it has to be: smoothly,
+    unless it goes up by a whole number of pixels.
 
-    Smoothly, unless the buffer goes up by a whole number of pixels, in
-    which case not smoothly at all.
+    ``smooth`` overrides that for a scene that asks: doubling suits thin
+    bright lines and not arcs and lettering (see Scene.stretch_smooth).
+    Measured at 1512x982 on a 2x display, as the mean step in brightness
+    between neighbouring pixels:
 
-    ``smooth`` overrides that for a scene that asks. Not smoothing is
-    right for a picture made of thin bright lines, where the alternative
-    is losing them; it is wrong for one made of arcs and lettering, where
-    doubling every pixel is plainly doubling every pixel. The meters said
-    so: "XX xxxxxx xxxxx xxxxxxx xxx xxxxx xxxxxxxx pixelated in full
-    screen". See Scene.stretch_smooth.
+    full resolution 0.0040 half resolution, smoothed 0.0029 half resolution,
+    not smoothed 0.0040
 
-    A scene that does not fit the frame budget is drawn into a smaller
-    buffer and stretched, and the stretch was always smoothed. For a
-    picture made of thin bright lines on a dark ground that is most of
-    what it looks like. Measured at 1512x982 on a 2x display, as the mean
-    step in brightness between one pixel and the next:
-
-        full resolution                 0.0040
-        half resolution, smoothed       0.0029
-        half resolution, not smoothed   0.0040
-
-    Smoothing a half-resolution buffer threw away 42 per cent of the
-    picture's edge. The saturation hardly moved - 0.456 against 0.452 -
-    which is why "the background of rave is grey and unsaturated full
-    screen" did not show up in any measure of colour: what was missing
-    was not colour, it was contrast, and a soft picture reads as a grey
-    one. It was also the slower of the two, 2.35 ms against 1.92.
-
-    Only for a whole-number stretch. A buffer at 0.5 of a 2x display is
-    exactly two device pixels per buffer pixel, so every pixel gets the
-    same treatment and the result is steady. At 0.8 or 0.67 it does not
-    divide, some pixels would be doubled and their neighbours not, and
-    the unevenness crawls as the scene moves - which is the thing this is
-    trying not to do.
+    Smoothing lost 42 per cent of the edge, which reads as a greyer picture,
+    and was slower (2.35 ms against 1.92). Only for a whole-number stretch:
+    at 0.8 or 0.67 some pixels would double and their neighbours not, and
+    the unevenness crawls as the scene moves.
     """
     target = QRectF(rect)
     if buffer.width() <= 0 or target.width() <= 1.0:
@@ -3466,74 +3015,43 @@ def blit_scene(painter, rect, buffer, smooth: bool = False) -> None:
 class Sharpness:
     """How much of the screen's own resolution a scene is drawn at.
 
-    Antialiased strokes are charged by area, so a scene that paints in a
-    millisecond in a strip costs thirty at full screen. Something has to
-    give, and what used to give was resolution: everything above a fixed
-    600,000 pixels was drawn into a smaller buffer and stretched.
+    Antialiased strokes cost by area, so a scene that paints in a
+    millisecond in a strip costs thirty at full screen. A fixed pixel budget
+    put full screen below its logical resolution while a windowed strip drew
+    at 1.8 times it. So it is measured: draw at the largest scale that fits
+    the frame, which is a sixtieth of a second while the picture is sharper
+    than the window and a thirtieth once it is not, since below one buffer
+    pixel per point the picture goes soft.
 
-    A fixed number cannot be right, because it is a statement about a
-    machine and it was written on one machine. Measured here instead,
-    which is how the post-processing pass already decides what it can
-    afford.
-
-    The rule it follows comes from what the fixed number got wrong. At
-    full screen it put the buffer *below* the screen's logical
-    resolution - 961x624 behind a 1512x982 window on this display, 1032x580
-    behind 1920x1080 - while the same code in a windowed strip drew at
-    1.8 times logical and looked sharp. So:
-
-        Draw at the largest scale that fits the frame. The frame is a
-        sixtieth of a second while the picture is sharper than the window
-        it sits in, and a thirtieth once it is not - because below one
-        buffer pixel per point the picture goes soft, and for scenes like
-        these soft is worse than thirty a second.
-
-    ``LOGICAL`` is that line: on a 2x display it is 0.5 of the screen's
-    pixels, and a scale of 0.5 means one buffer pixel per point. The
-    rungs are coarse and the decisions have a settling period, so the
-    buffer is not reallocated every frame and a scene that sits between
-    two rungs does not flicker between them.
+    ``LOGICAL`` is that line: 0.5 of the pixels on a 2x display. The rungs
+    are coarse and decisions settle, so the buffer is not reallocated every
+    frame and a scene between two rungs does not flicker.
     """
 
-    #: Fractions of the screen's real pixels. 1.0 is every one of them.
-    #: 0.5 is one buffer pixel per point on a 2x display, which is why a
-    #: display's own ratio always has a rung of its own (see ``_rungs``).
+    #: Fractions of the screen's real pixels; a display's own ratio always has
+    #: a rung (see _rungs). Each divides into 1, so the buffer goes up by a
+    #: whole number and blit_scene need not smooth it, which matters more than
+    #: the resolution. Mean step in brightness at 1512x982 on a 2x display:
     #:
-    #: Every one of these divides into 1, so the buffer always goes up by
-    #: a whole number of pixels and ``blit_scene`` can put it on the
-    #: screen without smoothing it. That turns out to matter more than
-    #: the resolution does. Measured at 1512x982 on a 2x display, as the
-    #: mean step in brightness between one pixel and the next:
+    #: 1.00 a whole 1x 0.0020 0.80 1.25x 0.0015 0.50 a whole 2x 0.0020 0.67
+    #: 1.49x 0.0015 0.25 a whole 4x 0.0019 0.40 2.50x 0.0016
     #:
-    #:     1.00  a whole 1x   0.0020        0.80  1.25x   0.0015
-    #:     0.50  a whole 2x   0.0020        0.67  1.49x   0.0015
-    #:     0.25  a whole 4x   0.0019        0.40  2.50x   0.0016
-    #:
-    #: A quarter of the resolution, stretched evenly, holds more of the
-    #: picture's edge than four fifths of it stretched unevenly. The
-    #: rungs this used to have between them - 0.80, 0.67, 0.40 - cost a
-    #: quarter of the contrast for the resolution they bought, so they
-    #: are gone and the ladder is coarser.
+    #: A quarter of the resolution stretched evenly holds more edge than four
+    #: fifths stretched unevenly, so the uneven rungs are gone.
     SCALES = (1.0, 0.50, 1.0 / 3.0, 0.25)
 
-    #: The least it will ever draw at, however slow the machine. Past
-    #: this the picture stops being a picture.
+    #: The least it will ever draw at, however slow the machine.
     FLOOR = 0.22
 
-    #: What the scene itself may take at sixty a second, and at thirty.
-    #: The rest of the sixteen milliseconds belongs to the polish pass
-    #: (6.5 of it) and to Qt getting the result onto the screen.
+    #: What the scene may take at sixty a second, and at thirty; the rest of
+    #: the frame is the polish (6.5 ms) and Qt.
     SMOOTH_MS = 8.5
     SOFT_MS = 24.0
 
-    #: Frames thrown away before anything is believed, after a scene or a
-    #: size changes. The first frame of a scene is not a frame of that
-    #: scene: it is the fonts being opened, the gradients and tiles being
-    #: built, and the branches being taken for the first time. Measured
-    #: cold, the Equaliser's first frame came in at 64 ms against the 1.4
-    #: it settles at - and one reading like that, written down, was enough
-    #: to convince the governor for good that full resolution was
-    #: impossible.
+    #: Frames ignored after a scene or size changes: a scene's first frame is
+    #: fonts, gradients and first-time branches (the Equaliser's: 64 ms against
+    #: 1.4 settled), and one such reading convinced the governor full
+    #: resolution was impossible.
     WARMUP = 24
 
     def __init__(self) -> None:
@@ -3542,17 +3060,14 @@ class Sharpness:
         self._settle = 0
         self._warm = self.WARMUP
         self._key = None
-        #: What each rung actually measured, once it has been tried. A
-        #: guess is only used for a rung nothing is known about.
+        #: What each rung measured once tried; a guess is only used for a rung
+        #: nothing is known about.
         self._seen: dict = {}
 
     # -- what to draw at ---------------------------------------------------
     def _rungs(self, ratio: float) -> tuple:
-        """The scales, with the display's logical resolution among them.
-
-        On a 2x display 0.5 is already there. On a 1.5x or 1.25x display
-        it is not, and landing exactly on it matters more than the rung
-        it displaces, because that is the line the budget changes at.
+        """The scales, with the display's logical resolution among them: on
+        1.5x or 1.25x displays it is added, since the budget changes there.
         """
         logical = 1.0 / max(1.0, ratio)
         rungs = set(self.SCALES)
@@ -3561,11 +3076,9 @@ class Sharpness:
                             reverse=True))
 
     def scale_for(self, pixels: float, ratio: float, scene) -> float:
-        """The fraction of ``pixels`` to draw, for this scene and screen.
-
-        A new scene or a resized window starts again at the sharpest
-        rung it is likely to hold, rather than inheriting a decision made
-        about something else.
+        """The fraction of ``pixels`` to draw for this scene and screen. A new
+        scene or size starts again at the sharpest rung it is likely to
+        hold.
         """
         rungs = self._rungs(ratio)
         key = (id(scene), int(pixels / 100_000.0))
@@ -3579,13 +3092,9 @@ class Sharpness:
         return self._scale
 
     def _first(self, pixels: float, rungs: tuple, ratio: float, scene) -> float:
-        """Where to begin, before anything has been measured.
-
-        Small frames start sharp, because they will hold it. Big ones
-        start at the screen's logical resolution and climb from there if
-        the machine turns out to have the room - which is the same place
-        the old fixed budget would have landed a small window, and far
-        above where it landed a large one.
+        """Where to begin before anything is measured: small frames sharp, big
+        ones at the screen's logical resolution, climbing if the machine has
+        room.
         """
         floor = int(getattr(scene, "sharp_pixels", 0) or 0)
         if pixels <= max(600_000, floor):
@@ -3613,30 +3122,19 @@ class Sharpness:
         if self._cost > here and at < len(rungs) - 1:
             self._step(rungs[at + 1])
         elif self._cost < here * 0.45 and at > 0:
-            # Against the rung above's own budget, not this one's. The
-            # budget changes at logical resolution, so a scene sitting
-            # just under it is always comfortably inside the *soft*
-            # budget and always over the smooth one it would land in -
-            # which had it stepping up and back down for ever, 45 frames
-            # apart, for as long as the scene was on screen.
+            # Against the rung above's budget, not this one's: the budget
+            # changes at logical resolution, and a scene just under it stepped
+            # up and back down every 45 frames.
             up = rungs[at - 1]
             if self._predict(up) < self._budget_for(up, ratio):
                 self._step(up)
 
     def _predict(self, scale: float) -> float:
-        """What a frame would cost at ``scale``.
-
-        Measured if this rung has ever been drawn at, because a guess
-        that has been contradicted is not worth keeping. Waterfall is why:
-        it costs 14 ms at 960x540 and 24 ms at 1267x713, where any tidy
-        model says 18 - so the governor stepped up, found out, stepped
-        down, forgot, and did it again every 45 frames.
-
-        The guess, for a rung never tried, is linear in the *side* rather
-        than in the area. Stroking is charged by the length of the stroke,
-        and a line across the screen is as long as the screen is wide.
-        Measured over a 28-fold range of area, Vaporwave's cost grew
-        five-fold and Ambience's 5.3-fold; the square would have said 28.
+        """What a frame would cost at ``scale``: measured if the rung was ever
+        drawn (Waterfall costs 14 ms at 960x540 and 24 at 1267x713, where
+        any tidy model says 18). For a rung never tried, the guess is linear
+        in the side, not the area: strokes cost by length. Over a 28-fold
+        range of area, Vaporwave's cost grew five-fold.
         """
         known = self._seen.get(scale)
         if known is not None:
@@ -3646,9 +3144,8 @@ class Sharpness:
         return self._cost * scale / self._scale
 
     def _step(self, to: float) -> None:
-        # Seeded with what the new rung is expected to cost rather than
-        # with zero: zeroing it makes the next frame look free, which
-        # sends it straight back where it came from.
+        # Seeded with the new rung's expected cost: zero makes the next frame
+        # look free and sends it straight back.
         self._cost = self._predict(to)
         self._scale = to
         self._settle = 45
@@ -3664,16 +3161,10 @@ class Sharpness:
 
     def interval_ms(self, ratio: float, frame_ms: int,
                     extra: float = 0.0) -> int:
-        """How often to repaint, given what a frame is costing.
-
-        Painting for longer than the timer's period does not slow the
-        scene down - it fills the event queue, and the pane stops
-        answering the mouse. So when a frame is known to cost more than
-        that, the timer is told the truth. This is the same lesson as the
-        analysis throttle: the scene was never the thing being starved.
-
-        ``extra`` is whatever else the frame pays for, which is the
-        polish pass.
+        """How often to repaint, given what a frame costs. Painting for longer
+        than the timer's period fills the event queue and the pane stops
+        answering the mouse, so the timer is told the truth. ``extra`` is
+        the polish pass.
         """
         whole = self._cost + max(0.0, extra)
         if whole <= frame_ms * 0.85:
@@ -3684,63 +3175,43 @@ class Sharpness:
 class CardSharpness:
     """What a frame on the graphics card may ask of it.
 
-    The card draws a MacBook's full screen with room to spare and a big
-    external display without it. Measured on an M1 - the least of the
-    Apple GPUs - for Music rider with all of its polish at every real
-    pixel and four samples a pixel:
+    Measured on an M1, the least of Apple's GPUs, for Music rider with all
+    its polish at every real pixel and four samples a pixel:
 
-        2560x1664   8.9 ms      3456x2234  13.8 ms      6016x3384  32.3 ms
-        3024x1964  11.2 ms      5120x2880  22.7 ms
+    2560x1664 8.9 ms 3456x2234 13.8 ms 6016x3384 32.3 ms 3024x1964 11.2 ms
+    5120x2880 22.7 ms
 
-    The last two are 44 and 31 frames a second. What gives is the
-    multisampling, because at a Retina display's density two samples a
-    pixel is most of the smoothness of four and at 5K it is half the
-    scene's cost - 9.1 ms against 5.5 - and after that none at all.
-
-    Never the resolution. It used to go next, to the screen's logical
-    resolution stretched back up, and the moment it went was often not the
-    card at all: the first seconds of a track are when three analysis
-    processes are busy on the same machine, and a median over half a
-    second of that put full screen at half its pixels until the next
-    retry. "Xxxxxx xxx xxxxxxxxxxx xxx xxxx xxx xxxx xxxx xxxxxxxx xxxx xx
-    xxxxxxxxxxx": a frame that will not fit at every pixel with no
-    samples is drawn at every pixel a little later instead.
-
-    Measured rather than guessed from the pixel count, for the same
-    reason Sharpness is: the same frame costs very different amounts on
-    different cards, and a rule written against this one would be wrong
-    on any other. What is measured is the whole frame on the card,
-    finished, because on a card the drawing calls return long before
-    the drawing is done.
+    What gives is the multisampling: at Retina density two samples are most
+    of the smoothness of four, and at 5K half the cost; after that, none.
+    Never the resolution: dropping it reacted to the first seconds of a
+    track, when the analysis is busy, and left full screen at half its
+    pixels. A frame that will not fit at every pixel with no samples is
+    drawn a little later instead. The whole finished frame is measured,
+    since drawing calls return before the card is done.
     """
 
-    #: Everything the card does for a frame, at sixty a second. The rest
-    #: of the sixteen milliseconds is Qt putting the window together and
-    #: the app doing whatever else it does between frames.
+    #: Everything the card does for a frame at sixty a second; the rest is Qt
+    #: and the app.
     BUDGET_MS = 12.5
 
-    #: Frames not believed after a scene or a size changes, and after a
-    #: rung changes - a new rung is new framebuffers, and their first
-    #: frames are the card setting them up. See Sharpness.
+    #: Frames not believed after a scene, size or rung changes: new
+    #: framebuffers' first frames are setup. See Sharpness.
     WARMUP = 24
     SETTLE = 12
 
-    #: How many frames a rung is judged on, by their median. A running
-    #: average was tried first and is the wrong statistic here: one frame
-    #: in thirty that the system took for something else lifted it over
-    #: the budget on a screen whose typical frame fitted with room to
-    #: spare, and a MacBook Pro's own display ended up at half its
-    #: resolution for a frame that was 10.5 ms nine times in ten.
+    #: How many frames a rung is judged on, by their median. A running average
+    #: let one stray slow frame in thirty halve a MacBook Pro's resolution for
+    #: frames that were 10.5 ms nine times in ten.
     WINDOW = 30
 
-    #: What the rung above is expected to cost against this one, until
-    #: it has been drawn at: half the samples measured 1.2 to 1.5 times
-    #: cheaper, half the pixels about twice.
+    #: What the rung above is expected to cost against this one until drawn at:
+    #: half the samples measured 1.2 to 1.5 times cheaper, half the pixels
+    #: about twice.
     DEARER_SAMPLES = 1.5
     DEARER_PIXELS = 2.0
 
-    #: Frames before a rung that did not fit is tried again - five
-    #: seconds at sixty - and it doubles each time it still does not.
+    #: Frames before a rung that did not fit is tried again (five seconds at
+    #: sixty), doubling each time it still does not.
     RETRY = 300
 
     def __init__(self) -> None:
@@ -3753,28 +3224,26 @@ class CardSharpness:
         self._count = 0
         #: What each rung measured, once it has been drawn at.
         self._seen: dict = {}
-        #: When each rung that did not fit may be tried again, and how
-        #: long the wait after the next failure will be.
+        #: When each rung that did not fit may be tried again, and how long the
+        #: next wait will be.
         self._retry_at: dict = {}
         self._backoff: dict = {}
-        #: The best rung that has fitted at each size this session,
-        #: whatever was being drawn. See choice.
+        #: The best rung that has fitted at each size this session, whatever
+        #: was drawn. See choice.
         self._fits: dict = {}
 
     @staticmethod
     def rungs(ratio: float) -> tuple:
-        """(samples a pixel, share of the screen's pixels), best first:
-        every pixel, whatever the screen. See the class."""
+        """(samples a pixel, share of the screen's pixels), best first: every
+        pixel, whatever the screen.
+        """
         return ((4, 1.0), (2, 1.0), (0, 1.0))
 
     def choice(self, pixels: float, ratio: float, scene) -> tuple:
-        """What to draw this frame at.
-
-        A new scene or size starts at the best rung anything has fitted
-        at on a screen this size, rather than at the top. Starting at the
-        top and stepping down cost a second of slow frames at every scene
-        change on a big display - "it runs slow until smoothing out" -
-        and a scene with room to spare climbs from there anyway.
+        """What to draw this frame at. A new scene or size starts at the best
+        rung anything has fitted at on a screen this size: starting at the
+        top cost a second of slow frames at every scene change on a big
+        display.
         """
         size = (int(pixels / 100_000.0), round(ratio, 3))
         key = (id(scene),) + size
@@ -3815,10 +3284,9 @@ class CardSharpness:
         size = self._key[1:]
         if self._cost > self.BUDGET_MS:
             if at < len(rungs) - 1:
-                # Not tried again for a while, and for twice as long
-                # each time it still does not fit, so a frame that sits
-                # between two rungs cannot turn the picture soft and
-                # sharp by turns.
+                # Not tried again for a while, twice as long each time it still
+                # does not fit, so a frame between two rungs cannot flick
+                # between soft and sharp.
                 wait = self._backoff.get(self._rung, self.RETRY)
                 self._retry_at[self._rung] = self._count + wait
                 self._backoff[self._rung] = wait * 2
@@ -3831,10 +3299,9 @@ class CardSharpness:
             self._fits[size] = self._rung
         if at == 0:
             return
-        # Up, when the frames say the rung above would fit. What drove
-        # it down may have been something else on the machine rather
-        # than the card - an analysis, a sync, another app - and without
-        # this one busy moment kept the picture soft for the session.
+        # Up, when the frames say the rung above would fit: what drove it down
+        # may have been something else on the machine, and one busy moment
+        # should not keep the picture soft.
         up = rungs[at - 1]
         if self._count < self._retry_at.get(up, 0):
             return
@@ -3849,11 +3316,8 @@ class CardSharpness:
         self._window = []
 
     def interval_ms(self, frame_ms: int) -> int:
-        """How often to ask for a frame, given what one is costing.
-
-        The same lesson as Sharpness.interval_ms: a timer that asks for
-        frames faster than they can be drawn does not get them faster,
-        it fills the event queue.
+        """How often to ask for a frame, given what one costs: asking faster
+        than frames can be drawn fills the event queue.
         """
         if self._cost <= frame_ms * 0.85:
             return frame_ms
@@ -3861,35 +3325,24 @@ class CardSharpness:
 
 
 class PostProcess:
-    """Cheap screen-space polish applied after a scene has drawn itself.
-
-    No shaders are available here, so each effect is something Qt can do
-    quickly and the expensive one - bloom - is done at a fraction of the
-    resolution and scaled back up, which is what a blur is anyway. The
-    overlays that never change are drawn once into tiles and repeated.
-
-    Everything is optional per scene, and the whole pass is skipped when a
-    scene asks for nothing, so the fast path stays exactly as fast.
+    """Cheap screen-space polish after a scene has drawn itself. No shaders
+    here, so bloom is done at a fraction of the resolution and scaled up
+    (which is a blur), and fixed overlays are tiles. The pass is skipped
+    when a scene asks for nothing.
     """
 
-    #: Bloom is computed at this fraction of the frame. Small enough that
-    #: the cost barely moves between a strip and a full screen.
+    #: Bloom is worked out at this fraction of the frame, so its cost barely
+    #: changes between a strip and full screen.
     BLOOM_DIVISOR = 8
     #: Never build a bloom buffer smaller than this.
     BLOOM_MIN = 32
 
-    #: Effects in the order they are given up when there is not time for
-    #: them. Bloom and the vignette carry most of the look, so they go last.
-    #:
-    #: Aberration used to be first out, which meant it was the one thing
-    #: a full screen never had. It is the only pass here that puts colour
-    #: into the picture rather than light or texture, and giving it up
-    #: cost 0.017 of the frame's colour where grain and scanlines cost
-    #: nothing measurable. Grain is a texture and scanlines are an
-    #: affectation, so they go first now.
+    #: Effects in the order they are given up when time runs short. Bloom and
+    #: the vignette carry most of the look, so they go last; aberration is the
+    #: only one that adds colour, so it outlasts grain and scanlines.
     ORDER = ("grain", "scanlines", "aberration", "bloom", "vignette")
-    #: The pass may have this long. The rest of the frame needs the other
-    #: ten milliseconds of a sixty-a-second budget.
+    #: The pass may take this long; the rest of a sixtieth of a second needs
+    #: the other ten milliseconds.
     BUDGET_MS = 6.5
 
     def __init__(self) -> None:
@@ -3898,8 +3351,8 @@ class PostProcess:
         self._cost = 0.0
         self._allow = len(self.ORDER)
         self._area = 0.0
-        #: Frames to leave alone after a change, so a decision is given a
-        #: chance to show its effect before the next one is made.
+        #: Frames left alone after a change, so a decision shows its effect
+        #: before the next.
         self._settle = 0
 
     def cost_ms(self) -> float:
@@ -3907,11 +3360,8 @@ class PostProcess:
         return max(0.0, self._cost)
 
     def _permitted(self, recipe: dict) -> dict:
-        """The recipe minus whatever there is no time for.
-
-        Measured rather than guessed from the pixel count: the same frame
-        costs very different amounts on different machines, and a rule
-        written against this one would be wrong on any other.
+        """The recipe minus whatever there is no time for, measured: the same
+        frame costs very different amounts on different machines.
         """
         if self._allow >= len(self.ORDER):
             return recipe
@@ -3925,10 +3375,8 @@ class PostProcess:
             return
         if self._cost > self.BUDGET_MS and self._allow > 1:
             self._allow -= 1
-            # Seeded at the budget rather than zero. Zeroing it made the
-            # next frame look instantly cheap, which put the effect
-            # straight back and left the whole thing oscillating between
-            # four and five effects for ever.
+            # Seeded at the budget, not zero: zero made the next frame look
+            # cheap and the effects oscillated between four and five.
             self._cost = self.BUDGET_MS
             self._settle = 30
         elif (self._cost < self.BUDGET_MS * 0.45
@@ -3939,31 +3387,19 @@ class PostProcess:
 
     def apply(self, painter, rect, frame, recipe: dict,
               smooth: bool = False) -> None:
-        """Draw ``frame`` into ``painter`` with ``recipe`` applied.
-
-        Every pass runs on the buffer, at the buffer's own size, and the
-        result is stretched to the frame once at the end. Doing it the
-        other way round - stretching first, then shading the full output -
-        charged every pass for the whole screen: six milliseconds a frame
-        at 1080p on a retina display, against a budget of sixteen for
-        everything.
+        """Draw ``frame`` into ``painter`` with ``recipe`` applied. Every pass
+        runs on the buffer at its own size and the result is stretched once
+        at the end; stretching first charged every pass for the whole screen
+        (six milliseconds a frame at 1080p on Retina).
         """
         import time as _time
 
         started = _time.perf_counter()
         area = rect.width() * rect.height()
         if area > self._area * 1.3 or area < self._area * 0.7:
-            # Start again with all of them, and measure.
-            #
-            # This used to guess from the frame's area, which is the one
-            # thing this class says not to do three paragraphs above: the
-            # passes do not run on the frame, they run on the buffer, and
-            # the buffer is whatever the governor shrank it to. A 1512x982
-            # full screen was read as 1.5 million pixels and given three
-            # of the five effects, while the same buffer in a 900x400
-            # window was read as 360,000 and given all five - so a window
-            # had colour fringing and a full screen never did, which is
-            # most of "the background is grey full screen". Measured, all
+            # Start again with all of them, and measure. The passes run on the
+            # buffer, not the frame, so the frame's area is no guide: guessing
+            # from it gave a window all five effects and full screen three. All
             # five cost 4.84 ms on that buffer against a 6.5 ms budget.
             self._area = area
             self._allow = len(self.ORDER)
@@ -3980,8 +3416,8 @@ class PostProcess:
             shift = float(recipe.get("aberration", 0.0))
             if bloom > 0.01 or shift > 0.05:
                 halo = self._halo(box, frame)
-                # In halo pixels, so the offset lands in the same place on
-                # screen whatever the buffer was scaled to.
+                # In halo pixels, so the offset lands in the same place
+                # whatever the buffer was scaled to.
                 apart = 0.0
                 if shift > 0.05:
                     apart = (shift * halo.width()
@@ -4005,28 +3441,17 @@ class PostProcess:
 
     # -- the expensive one, kept cheap -------------------------------------
     def _halo(self, rect, frame):
-        """A small, blurred copy of the frame.
-
-        Small is the whole trick: the blur is the downscale, and every
-        later pass reads this instead of the full frame, so the cost barely
-        moves between a strip and a full screen.
+        """A small, blurred copy of the frame: the blur is the downscale, and
+        later passes read this, so the cost barely changes with the frame's
+        size.
         """
         small = QSize(max(self.BLOOM_MIN, int(rect.width() / self.BLOOM_DIVISOR)),
                       max(self.BLOOM_MIN, int(rect.height() / self.BLOOM_DIVISOR)))
         shrunk = frame.scaled(small, Qt.AspectRatioMode.IgnoreAspectRatio,
                               Qt.TransformationMode.SmoothTransformation)
-        # Plain pixels from here on.
-        #
-        # scaled() keeps the frame's device pixel ratio, so on a 2x
-        # display the halo claimed to be half the size it is. Everything
-        # downstream then drew it at that claimed size: composing it into
-        # a pixmap of the same real size put the picture in the top-left
-        # quarter and left the other three empty, and stretching *that*
-        # over the frame put the whole polish pass in the top-left corner.
-        #
-        # It only showed in a window, because full screen shrinks the
-        # buffer to logical size and the ratio comes out at 1 - which is
-        # why it was "present in all visualizers in windowed mode".
+        # Plain pixels from here on. scaled() keeps the device pixel ratio, so
+        # on a 2x display the halo claimed half its size and the polish landed
+        # in the top-left quarter of a windowed scene.
         shrunk.setDevicePixelRatio(1.0)
         return shrunk
 
@@ -4034,19 +3459,10 @@ class PostProcess:
     FRINGE = 0.16
 
     def _glow(self, halo, amount: float, shift: float):
-        """The halo, plus its two offset copies, at the halo's own size.
-
-        Three full-size blits became one. Bloom drew the halo across the
-        whole frame and the fringing drew it twice more, offset either
-        way, and a full-size scaled blit is the expensive part of this
-        pass: measured at 1512x982, the blit alone is 1.92 ms, bloom adds
-        1.68 and the fringing 2.79. Composing the three in the halo's own
-        space - a sixty-fourth of the area - and putting the result up
-        once costs one blit instead of three.
-
-        The two are added together with Plus either way round, so doing it
-        small first changes only where the result is clipped at white,
-        which is at the top of a bloom nobody can see the edges of.
+        """The halo plus its two offset copies, composed at the halo's own size
+        and put up once: one full-size blit instead of three (at 1512x982
+        the blit alone is 1.92 ms). Added with Plus either way round, so
+        composing small only changes where the result clips at white.
         """
         wide = QPixmap(halo.size())
         wide.fill(QColor(0, 0, 0, 0))
@@ -4070,9 +3486,8 @@ class PostProcess:
     def _bloom(self, painter, rect, glow) -> None:
         painter.save()
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Plus)
-        # Scaled during the blit. Building a full-size blurred copy first
-        # cost thirty milliseconds a frame at full screen, which is most of
-        # the frame gone for something nobody can see the edges of anyway.
+        # Scaled during the blit: a full-size blurred copy cost thirty
+        # milliseconds a frame at full screen.
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         painter.drawPixmap(QRectF(rect), glow, QRectF(glow.rect()))
         painter.restore()
@@ -4113,13 +3528,10 @@ class PostProcess:
         painter.restore()
 
     def apply_on_gpu(self, painter, rect, halo, recipe: dict) -> None:
-        """The recipe over a frame that is already on the card.
-
-        Every effect the scene asks for, rather than the ones a budget
-        allows: the budget is there because these passes cost the CPU
-        several milliseconds at full screen, and on the card the whole
-        polish is a fraction of one. ``halo`` is the small copy of the
-        frame the bloom is made from - see Spectrum._paint_on_gpu.
+        """The recipe over a frame already on the card: every effect the scene
+        asks for, since on the card the whole polish costs a fraction of a
+        millisecond. ``halo`` is the small copy the bloom is made from (see
+        Spectrum._paint_on_gpu).
         """
         bloom = float(recipe.get("bloom", 0.0))
         shift = float(recipe.get("aberration", 0.0))
@@ -4139,11 +3551,8 @@ class PostProcess:
             self._vignette_over(painter, rect, fade)
 
     def _vignette_over(self, painter, rect, amount: float) -> None:
-        """One gradient over the frame.
-
-        Caching it small and stretching it back up was tried and is not
-        worth the code: 0.91 ms against 0.86: what this costs is covering
-        the frame, not working out the gradient.
+        """One gradient over the frame. Caching it small saved nothing (0.91 ms
+        against 0.86): the cost is covering the frame.
         """
         shade = QRadialGradient(rect.center(),
                                 max(rect.width(), rect.height()) * 0.72)
@@ -4153,36 +3562,25 @@ class PostProcess:
         painter.fillRect(rect, shade)
 
 class Waveform(QWidget):
-    """The shape of the whole track, above the seek bar.
-
-    What it is for: a seek bar says where you are and nothing about what
-    is there. A waveform says where the drop is, where the break is and
-    where the track stops, so seeking is aiming rather than guessing.
-
-    Bars rather than a filled curve, mirrored about the middle, and the
-    part already played drawn in the window's highlight over the part that
-    is not. Click or drag anywhere on it to seek.
-
-    It draws from the same analysis the scenes use, so it appears when the
-    picture does and is empty until then rather than being a second reason
-    to decode the file.
+    """The shape of the whole track, above the seek bar, so seeking is aiming:
+    it shows where the drop and the break are. Mirrored bars, with the
+    played part in the highlight colour; click or drag to seek. Drawn from
+    the scenes' analysis, so it is empty until that lands.
     """
 
     #: Emitted with a position in milliseconds when somebody clicks it.
     seeked = Signal(int)
-    #: Whether there is a shape to draw. The pane puts up the plain seek
-    #: bar instead when there is not.
+    #: Whether there is a shape to draw; the pane shows the plain seek bar when
+    #: there is not.
     shapeChanged = Signal(bool)
 
-    #: How tall the bar is, and how wide one column of it is with the gap
-    #: that follows. Three pixels a column: any narrower and the gaps
-    #: close up into a filled shape, any wider and a four minute track is
-    #: drawn from a few hundred readings.
+    #: How tall the bar is, and how wide a column is with its gap. Three
+    #: pixels: narrower and the gaps close up, wider and a long track is drawn
+    #: from too few readings.
     TALL = 44
     STEP = 3.0
     BAR = 2.0
-    #: The least a column may be drawn at, so silence is still a line
-    #: rather than a gap in the middle of the picture.
+    #: The least a column is drawn at, so silence is still a line.
     FLOOR = 1.5
 
     def __init__(self, parent=None) -> None:
@@ -4212,8 +3610,8 @@ class Waveform(QWidget):
     def set_position(self, milliseconds: int) -> None:
         was = self._at
         self._at = max(0, int(milliseconds))
-        # Only when it would move a column. A track redraws this sixty
-        # times a second otherwise, for a picture that changed by nothing.
+        # Only when it would move a column; otherwise it redraws sixty times a
+        # second for nothing.
         if self._span > 0 and self.width() > 0:
             step = max(1, self._span * int(self.STEP) // max(1, self.width()))
             if abs(self._at - was) < step:
@@ -4221,15 +3619,10 @@ class Waveform(QWidget):
         self.update()
 
     def clear(self) -> None:
-        """Forget the shape, and only the shape.
-
-        How long the track is and where it has got to belong to the
-        player, which says so once and then not again until they change.
-        This used to zero them as well, and a shape is cleared whenever
-        an analysis starts - so switching the visualiser on after a track
-        had loaded left a waveform with no length: nothing shaded as the
-        track played, and every click on it landed nowhere. A new track
-        resets them itself. See forget_track.
+        """Forget the shape, and only the shape. Length and position belong to
+        the player, which reports them once; clearing them too left a
+        waveform that could not be clicked after the visualiser was switched
+        on. A new track resets them itself; see forget_track.
         """
         self.set_shape(())
 
@@ -4281,22 +3674,20 @@ class Waveform(QWidget):
         columns = int(width / self.STEP) + 1
         for column in range(columns):
             x = column * self.STEP
-            # Nearest reading rather than an average of several: the
-            # outline is already a peak per column and averaging peaks
-            # is how a waveform turns into a sausage.
+            # The nearest reading, not an average: the outline is a peak per
+            # column, and averaging peaks flattens the waveform.
             index = min(len(self._shape) - 1,
                         int(column * len(self._shape) / max(1, columns)))
             high = max(self.FLOOR, self._shape[index] * (middle - 2.0))
             painter.setBrush(tint if x + self.BAR <= played else rest)
             painter.drawRect(QRectF(x, middle - high, self.BAR, high * 2.0))
-        # The column the playhead is in, half played and half not, so the
-        # line does not jump a whole column at a time.
+        # The column the playhead is in is half played, so the line moves
+        # smoothly.
         if 0.0 < played < width:
             painter.setBrush(tint)
             painter.drawRect(QRectF(played - 1.0, 0.0, 1.0, tall))
 
 
-#: Kept here under its old name: this module is where every other pane
-#: reaches for it, and the class itself is now shared with the triage
-#: window's wrapping rows.
+#: Kept under its old name, where every pane reaches for it; the class is
+#: shared with the triage window's wrapping rows.
 FlowHolder = _FlowHolder
