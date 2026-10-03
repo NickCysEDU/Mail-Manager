@@ -180,8 +180,97 @@ class TestTheCard:
         painter = Recording(image)
         scene._results(painter, QRectF(0, 0, 640, 400))
         painter.end()
-        assert "NEW BEST" in said and "TRACK COMPLETE" in said
-        assert scene._result["grade"] in said
+        assert "a new best" in said
+        assert any(f"grade {scene._result['grade']}" in words
+                   for words in said), said
+
+
+class TestTheRideAtTheEnd:
+    """Under the score, the whole ride along the track's shape."""
+
+    def test_every_block_is_logged_as_it_was_scored(self, qapp, clock):
+        import visualizers
+
+        scene = visualizers.Rider()
+        # No shield, so a grey in the lane is a hit.
+        scene.set_difficulty("Expert")
+        chart = [1.0 + i * 0.25 for i in range(34)]
+        _ride(scene, clock, 0.2, 10.6, chart=chart)
+        result = scene._result
+        assert result["hits"] and result["taken"], result
+        kinds = [kind for _when, kind, _hue in scene._log]
+        assert kinds.count("taken") == result["taken"]
+        assert kinds.count("hit") == result["hits"]
+        assert kinds.count("saved") == result["saves"]
+        assert kinds.count("coin") == result["coins"]
+        assert kinds.count("taken") + kinds.count("missed") == \
+            result["offered"]
+        times = [when for when, _kind, _hue in scene._log]
+        assert all(0.0 <= when <= 10.0 for when in times)
+        assert scene._ridden and scene._ridden[2] == pytest.approx(10.0)
+
+    def test_a_new_run_starts_a_new_log(self, qapp, clock):
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._log.append((3.0, "hit", 0.0))
+        scene.reset()
+        assert scene._log == [] and scene._ridden is None
+
+    @staticmethod
+    def _drawn(scene, age, size=(640, 400)):
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        scene._pops = [["finish", age, 1.0, 0.0, 0.0, ""]]
+        image = QImage(*size, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0))
+        painter = QPainter(image)
+        scene._results(painter, QRectF(0, 0, *size))
+        painter.end()
+        return image
+
+    @staticmethod
+    def _finished(length=10.0):
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._finished = True
+        scene._result = scene.result()
+        scene._ridden = ([0.5] * int(length * 8), 8.0, length)
+        return scene
+
+    @staticmethod
+    def _red_below(image, x):
+        """Red under the strip's line near ``x``: a hit."""
+        found = 0
+        for column in range(max(0, x - 3), min(image.width(), x + 4)):
+            for row in range(int(image.height() * 0.76),
+                             int(image.height() * 0.82)):
+                colour = image.pixelColor(column, row)
+                if colour.red() > 180 and colour.green() < 120:
+                    found += 1
+        return found
+
+    def test_a_hit_is_marked_where_it_happened(self, qapp):
+        scene = self._finished()
+        scene._log = [(7.5, "hit", 0.0)]
+        image = self._drawn(scene, 5.0)
+        left, right = 640 * 0.07, 640 * 0.93
+        at = int(left + (right - left) * 0.75)
+        assert self._red_below(image, at) > 0, "no mark where the hit was"
+        assert self._red_below(image, int(left + (right - left) * 0.25)) == 0
+
+    def test_it_draws_itself_across(self, qapp):
+        """The ride goes by again in a moment, from the start."""
+        scene = self._finished()
+        scene._log = [(1.0, "hit", 0.0), (9.0, "hit", 0.0)]
+        left, right = 640 * 0.07, 640 * 0.93
+        early = self._drawn(scene, scene.PLAYBACK * 0.3)
+        assert self._red_below(early, int(left + (right - left) * 0.1)) > 0
+        assert self._red_below(early, int(left + (right - left) * 0.9)) == 0
+        late = self._drawn(scene, scene.PLAYBACK)
+        assert self._red_below(late, int(left + (right - left) * 0.9)) > 0
 
 
 class TestTheBests:
@@ -719,7 +808,7 @@ class TestASeekIsNotARide:
         painter = Recording(image)
         scene._results(painter, QRectF(0, 0, 640, 400))
         painter.end()
-        assert any("NO BEST" in words for words in said), said
+        assert any("no best" in words for words in said), said
 
     def test_a_corkscrew_keeps_its_power_block_when_the_road_is_laid_again(
             self, qapp, clock):

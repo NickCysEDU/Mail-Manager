@@ -21,7 +21,8 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt
-from PySide6.QtGui import (QBrush, QColor, QFont, QImage, QLinearGradient,
+from PySide6.QtGui import (QBrush, QColor, QFont, QFontMetricsF, QImage,
+                           QLinearGradient,
                            QPainter, QPainterPath,
                            QPen, QRadialGradient, QTransform)
 
@@ -4257,6 +4258,11 @@ class Rider(Scene):
         self._saves = 0
         self._finished = False
         self._result = None
+        #: The run as it went, for the strip at the end: when each block
+        #: was taken, missed or hit, and the road's colour then. And the
+        #: track's loudness and length, kept at the finish.
+        self._log: list = []
+        self._ridden = None
         #: Whether this run is the whole track, ridden from the start with
         #: no seek in it - the only kind a best is kept for. See _finish.
         self._whole = True
@@ -6348,6 +6354,7 @@ class Rider(Scene):
                             and when - self._coin_last > self.COIN_ROW_GAP):
                         self._coin_run = 0
                     self._coin_last = when
+                    self._note(when, "coin")
                     self._coins += 1
                     self._coin_run += 1
                     self._coin_best = max(self._coin_best, self._coin_run)
@@ -6373,6 +6380,7 @@ class Rider(Scene):
                     self._shield = 0.0
                     self._saves += 1
                     self._record(block, "shatter")
+                    self._note(when, "saved")
                     self._clean = False
                     self._sore = self.SORE
                     self._shake = min(1.0, self._shake + 0.35)
@@ -6384,6 +6392,7 @@ class Rider(Scene):
                     continue
                 lost = self._chain
                 self._record(block, "hit")
+                self._note(when, "hit")
                 self._hits += 1
                 self._streak = 0
                 self._chain = 0
@@ -6414,6 +6423,7 @@ class Rider(Scene):
                     # three of a colour touching is what pays.
                     if self._stunned <= 0.0:
                         self._record(block, "taken")
+                        self._note(when, "taken")
                         self._taken += 1
                         self._drop(self._tier_of(when), lane)
                         self._got = 1.0
@@ -6423,6 +6433,7 @@ class Rider(Scene):
                     # A prize. See CHAIN_FIRST.
                     before = self._chain
                     self._record(block, "taken")
+                    self._note(when, "taken")
                     self._chain += 1
                     self._taken += 1
                     self._chain_most = max(self._chain_most, self._chain)
@@ -6439,6 +6450,8 @@ class Rider(Scene):
                     self._pop("prize", strength=0.7 + self._heat() * 0.6
                               + self.COMBO_LIFT * min(4, combo - 1))
                     self._milestone(before, self._chain)
+            else:
+                self._note(when, "missed")
 
     # -- the grid ---------------------------------------------------------
     #: Audiosurf's matrix, and the half of the game the road is the other
@@ -6884,6 +6897,12 @@ class Rider(Scene):
         self._finish(state)
         return step
 
+    def _note(self, when: float, how: str) -> None:
+        """A block's outcome, for the ride drawn at the end - which is the
+        run the result is of, so nothing after the finish."""
+        if not self._finished:
+            self._log.append((when, how, self._hue_now))
+
     def _record(self, block, how: str) -> None:
         # The block itself is kept with its outcome, not only its id: an
         # id is only unique while the thing is alive, and a block laid
@@ -6954,6 +6973,9 @@ class Rider(Scene):
         if at >= length - self.FINISH_BEFORE:
             self._finished = True
             self._result = self.result()
+            shape = getattr(state, "contour", None) or {}
+            self._ridden = (list(shape.get("loud") or ()),
+                            float(shape.get("rate") or 0.0), length)
             self._pop("finish", hue=0.13, sat=0.5, strength=1.4)
 
     def result(self) -> dict:
@@ -8241,99 +8263,190 @@ class Rider(Scene):
             + f"   best {self._best}")
         painter.restore()
 
+    #: How long the ride takes to draw itself across the strip at the end.
+    PLAYBACK = 1.2
+
     def _results(self, painter, rect) -> None:
         """The end of the track: how the run went, over the stopped road.
 
-        Comes up over the first half second after the finish, and stays
-        until the track is played again from the start.
+        The score and what it was made of, and under them the whole ride
+        along the track's own shape - each block taken, in the road's
+        colour at the time, each one missed and each hit - drawn across in
+        a moment. Stays until the track is played again from the start.
         """
         if not self._finished or self._result is None:
             return
         spec = self.POPS["finish"]
         age = next((pop[1] for pop in self._pops if pop[0] == "finish"),
                    spec[0])
-        shown = min(1.0, age / 0.5)
         result = self._result
+        tall, wide = rect.height(), rect.width()
+        left = rect.left() + wide * 0.07
+        right = rect.right() - wide * 0.07
+        plain = QColor(255, 255, 255, 235)
+        dim = QColor(255, 255, 255, 135)
         painter.save()
         try:
-            painter.setOpacity(painter.opacity() * shown)
-            painter.fillRect(rect, QColor(4, 3, 10, 170))
-            wide = min(rect.width() * 0.62, rect.height() * 1.05)
-            tall = rect.height() * 0.62
-            panel = QRectF(rect.center().x() - wide / 2.0,
-                           rect.center().y() - tall / 2.0, wide, tall)
-            painter.setPen(QPen(QColor.fromHsvF(self._hue_now % 1.0, 0.7,
-                                                1.0, 0.8), 2.0))
-            painter.setBrush(QColor(10, 8, 22, 225))
-            painter.drawRoundedRect(panel, 14.0, 14.0)
+            painter.setOpacity(painter.opacity() * min(1.0, age / 0.5))
+            painter.fillRect(rect, QColor(5, 4, 12, 165))
 
-            def line(text, y, size, colour, weight=QFont.Weight.Bold,
-                     align=Qt.AlignmentFlag.AlignHCenter):
+            def font_of(size, weight):
                 font = QFont(painter.font())
-                font.setPointSizeF(max(8.0, size))
+                font.setPointSizeF(max(7.0, size))
                 font.setWeight(weight)
+                return font
+
+            def say(text, x, y, font, colour):
                 painter.setFont(font)
                 painter.setPen(colour)
-                painter.drawText(QRectF(panel.left() + wide * 0.08, y,
-                                        wide * 0.84, size * 1.8),
-                                 int(align | Qt.AlignmentFlag.AlignVCenter),
-                                 text)
+                painter.drawText(QPointF(x, y), text)
+                return QFontMetricsF(font).horizontalAdvance(text)
 
-            unit = tall / 20.0
-            top = panel.top() + unit * 0.8
-            line("TRACK COMPLETE", top, unit * 0.75,
-                 QColor(220, 220, 240, 210))
-            grade = result["grade"]
-            colour = {"S": QColor(255, 215, 90), "A": QColor(120, 255, 170),
-                      "B": QColor(120, 200, 255), "C": QColor(210, 160, 255)
-                      }.get(grade, QColor(230, 120, 120))
-            line(grade, top + unit * 1.3, unit * 3.2, colour,
-                 QFont.Weight.Black)
-            line(f"{result['worth']:,}", top + unit * 6.3, unit * 1.6,
-                 QColor(255, 255, 255), QFont.Weight.Black)
+            y = rect.top() + tall * 0.27
+            small = font_of(tall * 0.026, QFont.Weight.Medium)
+            say(" · ".join([result["mode"], result.get("difficulty") or "",
+                            f"grade {result['grade']}"]).replace(" ·  · ",
+                                                                  " · "),
+                left, y, small, dim)
+            y += tall * 0.14
+            say(f"{result['worth']:,}", left - tall * 0.006, y,
+                font_of(tall * 0.12, QFont.Weight.Light), plain)
             if not result.get("whole", True):
-                best = "SKIPPED THROUGH · NO BEST KEPT"
+                best = "skipped through, so no best is kept"
             elif self.new_best:
-                best = "NEW BEST"
+                best = "a new best"
             elif self.best_before:
-                best = f"BEST {self.best_before:,}"
+                best = f"best {self.best_before:,}"
             else:
                 best = ""
+            y += tall * 0.065
             if best:
-                line(best, top + unit * 9.2, unit * 0.8,
-                     QColor(255, 225, 120) if self.new_best
-                     else QColor(200, 200, 220, 200))
-            rows = []
+                say(best, left, y, font_of(tall * 0.03, QFont.Weight.Medium),
+                    QColor.fromHsvF(self._hue_now % 1.0, 0.45, 1.0)
+                    if self.new_best and result.get("whole", True) else dim)
+            # What it was made of, as words: a figure in white, what it
+            # counts in grey.
+            parts = []
             if result["mode"] == "Puzzle":
-                rows.append(("Cleared", f"{result['cleared']}"))
+                parts.append(((f"{result['cleared']}", True),
+                              (" cleared", False)))
             if result["offered"]:
-                rows.append(("Taken", f"{result['taken']} of "
-                                      f"{result['offered']}  "
-                                      f"{result['share']:.0%}"))
+                parts.append(((f"{result['taken']}", True),
+                              (f" of {result['offered']} taken", False)))
             if result["mode"] != "Puzzle":
-                rows.append(("Longest chain", f"{result['chain']}"))
-            if result["coins"]:
-                rows.append(("Coins", f"{result['coins']}"))
-            if result["airs"]:
-                rows.append(("Jumps", f"{result['airs']}"))
-            rows.append(("Hits", f"{result['hits']}"))
+                parts.append((("longest chain ", False),
+                              (f"{result['chain']}", True)))
+            parts.append(((f"{result['hits']}", True),
+                          (" hit" if result["hits"] == 1 else " hits", False))
+                         if result["hits"] else (("no hits", False),))
             if result["saves"]:
-                rows.append(("Saved by the shield", f"{result['saves']}"))
+                parts.append(((f"{result['saves']}", True),
+                              (" saved by the shield", False)))
+            if result["coins"]:
+                parts.append(((f"{result['coins']}", True),
+                              (" coins", False)))
+            if result["airs"]:
+                parts.append(((f"{result['airs']}", True),
+                              (" jumps", False)))
             if result["clean"] and result["score"]:
-                # What was earned, then what keeping it clean adds: the
-                # big number above is the two together.
-                rows.append(("Score", f"{result['score']:,}"))
-                rows.append(("Clean finish",
-                             f"+{self.bonus(result['mode']):.0%}"))
-            y = top + unit * 10.9
-            for name, value in rows:
-                line(name, y, unit * 0.62, QColor(190, 190, 215),
-                     QFont.Weight.Medium, Qt.AlignmentFlag.AlignLeft)
-                line(value, y, unit * 0.62, QColor(255, 255, 255),
-                     QFont.Weight.Bold, Qt.AlignmentFlag.AlignRight)
-                y += unit * 1.05
+                parts.append((("clean finish ", False),
+                               (f"+{self.bonus(result['mode']):.0%}", True),
+                               (" on ", False),
+                               (f"{result['score']:,}", True)))
+            figures = font_of(tall * 0.028, QFont.Weight.Normal)
+            metrics = QFontMetricsF(figures)
+            gap = metrics.horizontalAdvance("    ")
+            y += tall * 0.075
+            x = left
+            for part in parts:
+                width = sum(metrics.horizontalAdvance(text) for text, _ in part)
+                if x > left and x + width > right:
+                    x = left
+                    y += metrics.height() * 1.3
+                for text, figure in part:
+                    x += say(text, x, y, figures, plain if figure else dim)
+                x += gap
+            self._ride_strip(painter, rect, left, right,
+                             min(1.0, age / self.PLAYBACK), dim)
         finally:
             painter.restore()
+
+    def _ride_strip(self, painter, rect, left, right, through, dim) -> None:
+        """The whole ride along the track's loudness: taken above the
+        line, hits and saves below it, the misses faint on it. Drawn as
+        far as ``through`` of the way across."""
+        loud, rate, length = self._ridden or ((), 0.0, 0.0)
+        if length <= 0.0 or right <= left:
+            return
+        tall = rect.height()
+        top = rect.top() + tall * 0.68
+        band = tall * 0.16
+        middle = top + band * 0.5
+        span = right - left
+        # Eased, so it slows into the end of the track.
+        through = through * through * (3.0 - 2.0 * through)
+        upto = length * through
+        reached = left + span * through
+        if loud and rate > 0.0:
+            columns = max(8, int(span / 3.0))
+            most = max(loud) or 1.0
+            shape = QPainterPath()
+            shape.moveTo(left, middle)
+            bottom = []
+            for index in range(columns + 1):
+                share = index / columns
+                if share > through:
+                    break
+                low = int(share * len(loud))
+                high = max(low + 1, int((index + 1) / columns * len(loud)))
+                level = max(loud[low:high] or (0.0,)) / most
+                x = left + span * share
+                shape.lineTo(x, middle - level * band * 0.3)
+                bottom.append((x, middle + level * band * 0.3))
+            for x, y in reversed(bottom):
+                shape.lineTo(x, y)
+            shape.closeSubpath()
+            painter.fillPath(shape, QColor(255, 255, 255, 24))
+        painter.setPen(QPen(QColor(255, 255, 255, 70), 1.0))
+        painter.drawLine(QPointF(left, middle), QPointF(reached, middle))
+        thin = max(1.0, tall / 500.0)
+        for when, kind, hue in self._log:
+            if when > upto:
+                continue
+            x = left + span * max(0.0, min(1.0, when / length))
+            if kind == "taken":
+                # Pale, so a block taken where the road ran red is not
+                # mistaken for a hit.
+                painter.setPen(QPen(QColor.fromHsvF(hue % 1.0, 0.4, 1.0, 0.95),
+                                    thin * 1.4))
+                painter.drawLine(QPointF(x, middle),
+                                 QPointF(x, middle - band * 0.42))
+            elif kind == "coin":
+                painter.setPen(QPen(QColor(255, 214, 110, 210), thin * 2.2,
+                                    Qt.PenStyle.SolidLine,
+                                    Qt.PenCapStyle.RoundCap))
+                painter.drawPoint(QPointF(x, middle - band * 0.5))
+            elif kind == "missed":
+                painter.setPen(QPen(QColor(255, 255, 255, 60), thin))
+                painter.drawLine(QPointF(x, middle),
+                                 QPointF(x, middle - band * 0.12))
+            elif kind == "hit":
+                painter.setPen(QPen(QColor(255, 72, 72, 235), thin * 1.8))
+                painter.drawLine(QPointF(x, middle),
+                                 QPointF(x, middle + band * 0.42))
+            elif kind == "saved":
+                painter.setPen(QPen(QColor(190, 235, 255, 220), thin * 1.8))
+                painter.drawLine(QPointF(x, middle),
+                                 QPointF(x, middle + band * 0.3))
+        times = QFont(painter.font())
+        times.setPointSizeF(max(7.0, tall * 0.022))
+        painter.setFont(times)
+        painter.setPen(dim)
+        below = top + band + tall * 0.045
+        painter.drawText(QPointF(left, below), "0:00")
+        end = f"{int(length) // 60}:{int(length) % 60:02d}"
+        painter.drawText(QPointF(right - QFontMetricsF(times)
+                                 .horizontalAdvance(end), below), end)
 
     @staticmethod
     def _beam(painter, path, colour) -> None:
