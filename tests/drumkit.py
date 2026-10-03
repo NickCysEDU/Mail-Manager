@@ -1,32 +1,22 @@
 """Drum tracks written to known times, so detection can be measured.
 
-The element detector says where the kick, the snare and the hats are.
-Whether it is any good at it is not a question you can ask of a recording
-without first sitting down and writing out where every hit is - and the
-answer would then be about that recording.
+Whether the element detector finds the kick, the snare and the hats cannot
+be asked of a recording without writing out where every hit is. So the
+recordings are written here: every hit is placed by this file, the truth is
+exact and the same on every machine, and nothing anybody owns is checked
+in.
 
-So the recordings are written here instead. Every hit is placed by this
-file, which means the truth is exactly known, the same on every machine,
-and nothing anybody owns has to be checked into a public repository.
-
-Four snares, because "snare" is not one sound and pretending it is, is
-what was wrong with the detector:
+Four snares, because "snare" is not one sound:
 
     bright   an acoustic snare: a two hundred hertz body and a lot of air
     tight    an electronic one: body, a little noise, and no air at all
     clap     all crack and no body
     rim      a sharp mid crack, nothing above or below it
 
-Held against those four, the detector used to find the first two
-perfectly and neither of the other two.
-
-One rule matters when writing these. **A sample that stops while it is
-still moving is a step, and a step is a broadband click.** The kick here
-stopped at about 1.5 per cent of full height, which put a click 150 ms
-after every one of them; the detector called those hits, quite correctly,
-and the false positives looked exactly like a rimshot. That very nearly
-became a change to the detector. Everything is faded to nothing now, and
-``test_the_written_track_is_clean`` checks that it stayed that way.
+**A sample that stops while it is still moving is a step, and a step is a
+broadband click**, which a detector is right to call a hit. Everything is
+faded to nothing, and ``test_the_written_track_is_clean`` checks it stays
+that way.
 """
 
 from __future__ import annotations
@@ -38,9 +28,8 @@ from typing import Dict, List, Sequence, Tuple
 
 RATE = 48000
 
-#: Beats in a bar, and the pattern: kick on one and three, snare on two
-#: and four, hats on every eighth. The oldest pattern there is, and the
-#: one any of this has to work on before it works on anything else.
+#: Beats in a bar, and the pattern: kick on one and three, snare on two and
+#: four, hats on every eighth.
 BEATS = 4
 
 
@@ -49,10 +38,8 @@ def _fall(t: float, rate: float) -> float:
 
 
 def taper(samples: List[float], share: float = 0.12) -> List[float]:
-    """Fade the last ``share`` of a sample to nothing.
-
-    See the note at the top: without this every sample ends in a click,
-    and the click is a real onset that a detector is right to find.
+    """Fade the last ``share`` of a sample to nothing. Otherwise every sample
+    ends in a click, a real onset that a detector is right to find.
     """
     count = len(samples)
     edge = max(1, int(count * share))
@@ -63,24 +50,19 @@ def taper(samples: List[float], share: float = 0.12) -> List[float]:
 
 #: How much beater there is in a kick, and how fast it goes.
 #:
-#: A kick is not only a falling pitch. A beater striking a head makes a
-#: click, and the click is broadband: real kicks carry real energy above
-#: 2 kHz for the first few milliseconds.
+#: A beater striking a head makes a broadband click: real kicks carry energy
+#: above 2 kHz for the first few milliseconds. Written kicks without it led a
+#: sweep to a cap of 0.06 on the top share, which on real recordings took one
+#: track from 27 kicks a minute to 9 and another from 25 to none.
 #:
-#: Leaving it out is a way of drawing wrong conclusions. Without it the
-#: written kicks had almost nothing up top, so a sweep of the detector's
-#: cap on the top share said 0.06 was best - and on real recordings 0.06
-#: took one track from 27 kicks a minute to 9 and another from 25 to none.
+#: **The cap on the kick's top share cannot be tuned from this file.** Even
+#: with a beater the written kicks reach only 0.09 up top, and real ones go
+#: well past 0.10 (capping there cost 45 per cent of them on a real recording):
+#: a mix has cymbals, synths and room landing on the kick, and this is one kick
+#: alone in silence.
 #:
-#: **The cap on the kick's top share cannot be tuned from this file.**
-#: Even with a beater the written kicks only reach 0.09 up top, and real
-#: ones plainly go well past 0.10: capping there cost 45 per cent of them
-#: on a real recording. A mix has cymbals, synths and room in it, and they
-#: all land on the kick sometimes. What is written here is one kick alone
-#: in silence, which is the wrong question to ask of that bound.
-#:
-#: 0.6 and 90 is an 11 ms beater at a bit over half the body's height,
-#: which is a kick. It is not chosen to make any number come out.
+#: 0.6 and 90 is an 11 ms beater at a bit over half the body's height: a kick,
+#: not a value chosen to make a number come out.
 CLICK = 0.6
 CLICK_FALL = 90.0
 
@@ -145,11 +127,9 @@ def snare(kind: str = "bright", length: float = 0.19,
 
 
 def note(hertz: float, length: float = 0.42) -> List[float]:
-    """A pitched tone with two harmonics.
-
-    The thing a snare gets confused with: it lives in the same part of
-    the spectrum and it is not a drum. Deliberately never placed on a
-    snare, so anything it triggers is a false positive and can be counted.
+    """A pitched tone with two harmonics: it lives where a snare does and is
+    not a drum. Never placed on a snare, so anything it triggers is a
+    countable false positive.
     """
     out = []
     for index in range(int(length * RATE)):
@@ -162,12 +142,8 @@ def note(hertz: float, length: float = 0.42) -> List[float]:
 
 
 def sub(hertz: float, length: float) -> List[float]:
-    """A held bass note, which is what a kick has to be found under.
-
-    House is the case that showed this up: a kick on every beat with a
-    bassline running underneath it, in the same part of the spectrum. The
-    band the kick is found in is never quiet, so the kick's *rise* in it
-    is a fraction of what it is over silence.
+    """A held bass note, which a kick has to be found under: with a bassline in
+    the same band, a kick's *rise* is a fraction of what it is over silence.
     """
     out = []
     count = int(length * RATE)
@@ -186,9 +162,8 @@ def track(kind: str = "bright", bpm: float = 120.0, seconds: float = 22.0,
           ) -> Tuple[array, Dict[str, List[float]]]:
     """The pattern, as stereo PCM, and where every hit really is.
 
-    ``house`` is four to the floor with a bassline under it: a kick on
-    every beat, offbeat hats, and a held sub that never gets out of the
-    way. It is the pattern the kick detector was reported as missing.
+    ``house`` is four to the floor with a bassline under it: a kick on every
+    beat, offbeat hats, and a held sub that never gets out of the way.
     """
     frames = int(seconds * RATE)
     buffer = [0.0] * frames
@@ -229,11 +204,10 @@ def track(kind: str = "bright", bpm: float = 120.0, seconds: float = 22.0,
     for value in buffer:
         level = value / peak
         if house:
-            # What a master limiter does, which is most of what makes a
-            # dance record hard to read: the loud parts are pulled down
-            # towards the quiet ones until the whole thing sits near the
-            # ceiling, and the rise at a transient - which is the only
-            # thing any of this detects - is a fraction of what it was.
+            # What a master limiter does, which is most of what makes a dance
+            # record hard to read: the loud parts are pulled down towards the
+            # quiet ones, and the rise at a transient, the only thing any of
+            # this detects, shrinks to a fraction of what it was.
             level = math.tanh(level * 3.4) / math.tanh(3.4)
         one = int(max(-1.0, min(1.0, level * 0.88)) * 32000)
         pcm.append(one)
@@ -245,11 +219,9 @@ def track(kind: str = "bright", bpm: float = 120.0, seconds: float = 22.0,
 
 def score(found: Sequence[float], truth: Sequence[float],
           slack: float = 0.07) -> Tuple[int, float, float]:
-    """(matched, recall, precision), one detected hit to one real one.
-
-    One to one on purpose: two flashes on one snare is not two right
-    answers, and a detector that fires ten times a beat should not score
-    perfectly for having covered everything.
+    """(matched, recall, precision), one detected hit to one real one: two
+    flashes on one snare are not two right answers, and firing ten times a
+    beat should not score perfectly for covering everything.
     """
     taken: set = set()
     matched = 0
@@ -271,19 +243,14 @@ def score(found: Sequence[float], truth: Sequence[float],
 # --------------------------------------------------------------------------
 # Styles
 # --------------------------------------------------------------------------
-#: Patterns, written as where each drum falls within a bar of four beats.
-#:
-#: ``track`` above writes one pattern, which is the oldest one there is and
-#: the one anything has to work on first. It is not the one this is used on.
-#: A detector tuned against a rock beat meets half-time, breakbeats, hat
-#: rolls at three times the tempo, and four-to-floor kicks buried under a
-#: sub that never stops - and "kick on one and three" tells you nothing
-#: about any of them.
-#:
-#: Each entry is (bpm, kick beats, snare beats, hat beats, snare kind,
-#: how loud the sub is, whether it is limited, swing). Beats are counted
-#: from zero and may be fractions. Swing delays every off-beat by that
-#: share of a half-beat, the way a shuffle does.
+# Patterns, as where each drum falls within a bar of four beats. A detector
+# tuned on a rock beat meets half time, breakbeats, hat rolls at three times
+# the tempo and four-to-floor kicks under a sub that never stops.
+#
+# Each entry is (bpm, kick beats, snare beats, hat beats, snare kind, how loud
+# the sub is, whether it is limited, swing). Beats count from zero and may be
+# fractions; swing delays every off-beat by that share of a half-beat, as a
+# shuffle does.
 STYLES: Dict[str, dict] = {
     # Four to the floor, offbeat hats, a clap on two and four, and a sub
     # that never gets out of the kick's way.
@@ -297,8 +264,7 @@ STYLES: Dict[str, dict] = {
     "trance": dict(bpm=138.0, kick=(0, 1, 2, 3), snare=(1, 3),
                    hat=(0.5, 1.5, 2.5, 3.5), kind="bright", sub=0.5,
                    limit=True),
-    # Half time: the snare waits until the third beat, and the space
-    # between is the whole point of the genre.
+    # Half time: the snare waits for the third beat.
     "dubstep": dict(bpm=140.0, kick=(0, 2.5), snare=(2,),
                     hat=(0.5, 1, 1.5, 2.5, 3, 3.5), kind="bright",
                     sub=0.8, limit=True),

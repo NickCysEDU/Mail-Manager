@@ -1,9 +1,7 @@
-"""Finding the beat, and the reasons the old strobe could not.
+"""Finding the beat.
 
-The complaint was that it was inconsistent. These tests are mostly about
-that one word: the same music, louder or quieter, has to give the same
-lighting, and music with no beat in it has to be admitted rather than
-guessed at.
+The same music, louder or quieter, has to give the same lighting, and music
+with no beat has to be admitted rather than guessed at.
 """
 
 from __future__ import annotations
@@ -66,17 +64,15 @@ class TestItFindsTheTempo:
     def test_a_click_track_comes_back_at_its_own_tempo(self, bpm):
         found = mapped(click(bpm))
         assert found.locked, f"no tempo found for {bpm} BPM"
-        # Half and double are correct answers to a slightly different
-        # question - "every other beat" is a real way to light a room -
-        # so they count.
+        # Half and double are right answers to a slightly different question
+        # (lighting every other beat is real), so they count.
         ratio = found.bpm / bpm
         assert min(abs(ratio - r) for r in (0.5, 1.0, 2.0)) < 0.04, (
             f"{bpm} BPM came back as {found.bpm:.1f}")
 
     def test_a_tempo_between_frames_is_still_found(self):
-        """120 BPM is 7.5 frames at the rate the analysis runs. An
-        autocorrelation can only use whole frames, so it cannot express
-        this tempo at all - it used to answer 82 BPM, every time."""
+        """120 BPM is 7.5 frames at the analysis rate; an autocorrelation of
+        whole frames cannot express it, and answered 82 BPM every time."""
         found = mapped(click(120))
         assert abs(found.bpm - 120.0) < 3.0, f"{found.bpm:.1f} BPM"
 
@@ -101,14 +97,12 @@ class TestItFindsTheTempo:
 
 
 class TestItIsTheSameWhateverTheVolume:
-    """The complaint, in one class.
+    """Loudness.
 
-    Note what is *not* being claimed here. The analysis already normalises
-    each track, so a recording mastered quietly does not by itself defeat
-    a fixed threshold. What defeats one is a track whose dynamics change
-    inside itself - a quiet verse into a loud chorus - and that is the
-    case the first test below covers, because it is the one a fixed
-    number cannot be chosen for.
+    The analysis normalises each track, so a quietly mastered recording does
+    not defeat a fixed threshold by itself. A track whose dynamics change
+    inside it (a quiet verse into a loud chorus) does, and that is the first
+    test below.
     """
 
 
@@ -198,11 +192,10 @@ class TestTheParts:
         assert not gaps or min(gaps) >= beatmap.FLOOR_GAP - 1e-9
 
     def test_it_prefers_an_ordinary_tempo_to_its_own_double(self):
-        """Onsets every half second fit 120 BPM, and fit 240 exactly as
-        well, and 60, and 30. Nothing in the arithmetic breaks that tie,
-        so a preference for the tempos music is actually written at does
-        - otherwise the strobe picks whichever end of the range it
-        happened to search last."""
+        """Onsets every half second fit 120 BPM, and 240, 60 and 30 exactly as
+        well. Nothing in the arithmetic breaks the tie, so a preference for
+        the tempos music is written at does; otherwise the strobe picks
+        whichever end of the range it searched last."""
         beats = tuple(Beat(at=n * 0.5, strength=1.0) for n in range(40))
         bpm, score, _phase = beatmap.tempo_of(beats)
         assert score > 0.9, "it did not fit a perfectly regular series"
@@ -264,8 +257,8 @@ class TestTheStrobeUsesIt:
             f"it flashed every {average * 1000:.0f} ms on a 500 ms beat")
 
     def test_a_quiet_track_is_lit_the_same_as_a_loud_one(self, qapp):
-        """The whole complaint. Thirty decibels down used to mean the
-        threshold was never crossed and the strobe simply never fired."""
+        """Thirty decibels down, the threshold was never crossed and the strobe
+        never fired."""
         loud = self._run(qapp, gain=1.0)
         quiet = self._run(qapp, gain=0.03)
         assert quiet, "a quiet track did not set the strobe off at all"
@@ -314,11 +307,10 @@ class TestTheStrobeUsesIt:
         spectrum._tick()
         spectrum.set_position(15000)      # fifteen seconds forward
         spectrum._tick()
-        # Thirty beats went by while nobody was looking, and every one of
-        # them is still sitting in the list ahead of the cursor. Walking
-        # to the new position one beat at a time fires the strobe on every
-        # one of them, so a seek ends in a flash - the cursor has to be
-        # found rather than walked to, and that frame lights nothing.
+        # Thirty beats went by unseen and are all still ahead of the cursor.
+        # Walking to the new position a beat at a time would fire the strobe on
+        # each, so the cursor is found, not walked, and that frame lights
+        # nothing.
         assert spectrum._state.hit < 0.5, (
             "seeking set the strobe off")
         assert spectrum._beat_at > 20, (
@@ -330,11 +322,10 @@ class TestTheStrobeUsesIt:
 
 
 class TestPickingTheKitApart:
-    """Kick, snare and hats, told from one another.
+    """Kick, snare and hats, told apart.
 
     The thresholds come from a kit played to a known pattern; these check
-    they hold on patterns they were not fitted to, because a classifier
-    tuned until one recording passes is a lookup table.
+    they hold on patterns they were not fitted to.
     """
 
     @staticmethod
@@ -422,9 +413,8 @@ class TestPickingTheKitApart:
         assert recall > 0.85
 
     def test_kicks_alone_are_never_called_hats(self):
-        """The one that decided where the hat threshold sits: with the
-        band detector trusted on its own, every kick came back as a hat
-        as well, and the two channels were the same channel."""
+        """The one that set the hat threshold: with the band detector trusted
+        alone, every kick came back as a hat too."""
         pcm, want = self._play(120, {"kick": [0, 4, 8, 12]})
         found = self._found(pcm)
         assert len(found["Hats"].beats) <= 3, (
@@ -450,10 +440,9 @@ class TestPickingTheKitApart:
         assert recall > 0.8, f"only found {recall:.0%} of the snares"
 
     def test_the_bands_are_read_linearly_not_in_decibels(self):
-        """Decibels compress a hundred-to-one difference into twenty units
-        of seventy, so every band rises together and a kick, a snare and a
-        hat come out looking the same - measured, they agreed to within
-        four per cent and nothing could be told apart."""
+        """Decibels compress a hundred-to-one difference into twenty units of
+        seventy, so every band rises together: measured, kick, snare and hat
+        agreed to within four per cent."""
         import attachment_audio
 
         pcm, _ = self._play(120, {"kick": [0, 4, 8, 12]})
@@ -467,16 +456,14 @@ class TestPickingTheKitApart:
         assert quietest < 0.02
 
     def test_the_finer_pass_can_see_the_bottom_of_the_range(self):
-        """A bin has to be narrow enough to put a kick in a band of its
-        own: at 512 points over 48 kHz the lowest one a transform can
-        report starts at 94 Hz, which is above where a kick lives.
+        """A bin has to be narrow enough to give a kick a band of its own: at
+        512 points over 48 kHz the lowest starts at 94 Hz, above where a
+        kick lives.
 
-        What matters is the bin *width*, which is the rate over the
-        window - not the window on its own. The pass halves both now, so
-        512 points over 24 kHz resolves exactly what 1024 over 48 did, at
-        half the arithmetic. Reading DECODE_RATE here rather than the rate
-        the pass actually runs at is what made this look like a
-        regression.
+        The bin width is the rate over the window. The pass halves both, so
+        512 points over 24 kHz resolves what 1024 over 48 did, for half the
+        arithmetic. Reading DECODE_RATE here instead of the pass's own rate
+        made this look like a regression.
         """
         import attachment_audio
 
@@ -489,9 +476,8 @@ class TestPickingTheKitApart:
 
 
 class TestTheStrobeRunsOnAHeldNote:
-    """A held note is not a beat. On a grid it gets one flash and then
-    nothing until the next bar, which is the opposite of what a room does
-    under a sustained bass line.
+    """A held note is not a beat: on a grid it gets one flash and then nothing
+    until the next bar, the opposite of a room under a sustained bass line.
     """
 
     @staticmethod
@@ -568,8 +554,8 @@ class TestTheStrobeRunsOnAHeldNote:
         assert hard > gentle * 1.5, f"{gentle:.1f} then {hard:.1f}"
 
     def test_one_knob_alone_does_not_reach_it(self, qapp):
-        """It is the loudest thing the visualiser does. Nobody should
-        arrive at it by nudging one slider."""
+        """The loudest thing the visualiser does; nobody should reach it by
+        nudging one slider."""
         only_rate, _ = self._flashes(qapp, 1.0, 0.3)
         only_sense, _ = self._flashes(qapp, 0.3, 1.0)
         both, _ = self._flashes(qapp, 1.0, 1.0)
@@ -693,8 +679,8 @@ class TestEveryKindOfSnare:
 
     @pytest.mark.parametrize("house", [False, True])
     def test_the_kick_is_found_under_a_bassline(self, house):
-        """Four to the floor with a sub running under it and a limiter on
-        the whole thing - the pattern this was reported as missing."""
+        """Four to the floor with a sub under it and a limiter on the whole: a
+        pattern it used to miss."""
         import attachment_audio
         import drumkit
 
@@ -711,16 +697,14 @@ class TestEveryKindOfSnare:
     def test_a_kick_is_what_the_bottom_leads_not_what_it_owns(self):
         """The bound that was wrong, and why it cannot be a bound.
 
-        It asked for 0.70 of a frame's whole rise to be in the bottom
-        third. In a mix something else is nearly always happening on the
-        beat, so a kick owns well under two thirds of the moment while
-        being unmistakably there: on a real track that threw away 227 of
-        309 candidates and left 44 kicks a minute where the pulse says
-        about 140.
+        It asked for 0.70 of a frame's rise in the bottom third. In a mix
+        something else nearly always happens on the beat, so a kick owns
+        well under two thirds of the moment while plainly there: on a real
+        track that threw away 227 of 309 candidates, leaving 44 kicks a
+        minute where the pulse says about 140.
 
-        A number cannot express this, because the number that lets a
-        kick through under a hat lets a bass note through on its own.
-        What is asked is that the bottom *leads*.
+        A number that lets a kick through under a hat lets a bass note
+        through on its own, so what is asked is that the bottom *leads*.
         """
         assert beatmap.PROFILE["Kick"].get("leads") == "bottom"
         # A kick with a hat over it: two thirds bottom, and still a kick.
@@ -733,20 +717,18 @@ class TestEveryKindOfSnare:
     def test_the_ceiling_on_the_sizzle_sits_between_a_clap_and_a_hat(self):
         """The one number that was wrong, and the gap it has to sit in.
 
-        A clap puts 0.21 of its rise in the top and the dimmest hat puts
-        0.29, so anything from about 0.22 to 0.28 tells them apart. It was
-        0.20 - one hundredth under the brightest snare - so every clap
-        went to the hats.
+        A clap puts 0.21 of its rise in the top and the dimmest hat 0.29, so
+        about 0.22 to 0.28 tells them apart; at 0.20 every clap went to the
+        hats.
 
-        Both halves are checks on a number rather than on behaviour, and
-        that is a deliberate choice in each case. The ceiling's behaviour
-        is already guarded, by test_hats_alone_are_never_called_kicks,
-        which fails outright at 0.45. The floor's is not guardable here:
-        the evidence for it is a real track that cannot be checked into a
-        public repository, where taking it away doubled the snares from 71
-        a minute to 151 and every extra one was a synth. On written tracks
-        it makes no difference either way, so the number is the only thing
-        left to hold on to.
+        Both halves check a number rather than behaviour, deliberately. The
+        ceiling's behaviour is guarded by
+        test_hats_alone_are_never_called_kicks, which fails outright at
+        0.45. The floor's cannot be guarded here: the evidence is a real
+        track that cannot be in a public repository, where taking it away
+        doubled the snares from 71 a minute to 151, all of them synths. On
+        written tracks it makes no difference, so the number is all there is
+        to hold.
         """
         low, high = beatmap.PROFILE["Snare"]["top"]
         assert 0.22 <= high <= 0.28, (
@@ -757,11 +739,10 @@ class TestEveryKindOfSnare:
             "what a pitched note in the same place does not")
 
     def test_nothing_fires_in_the_silence_between_the_hits(self):
-        """The threshold everything else uses is the local median plus a
-        multiple of the local spread, and in silence that is zero plus
-        zero. Measured before the floor was added: forty-three of the
-        sixty-six snares found were in the gaps, on rises a hundredth the
-        size of a real one."""
+        """The threshold is the local median plus a multiple of the local
+        spread, which in silence is zero. Before the floor, forty-three of
+        the sixty-six snares found were in the gaps, on rises a hundredth
+        the size of a real one."""
         _frames, truth, found = self._kit("bright")
         real = sorted(truth["Kick"] + truth["Snare"] + truth["Hats"])
         stray = []
@@ -774,23 +755,21 @@ class TestEveryKindOfSnare:
             + ", ".join(f"{n} at {t:.2f}s" for n, t in stray[:6]))
 
     def test_an_instruments_signature_is_its_attack_not_one_frame(self):
-        """A kick's fundamental arrives before its harmonics, so one frame
-        into it the bottom has stopped rising and only the middle is
-        moving - which reads as a perfect rimshot. Every kick produced
-        one, and the snare map came back with twice as many hits as there
-        were snares."""
+        """A kick's fundamental arrives before its harmonics, so a frame in,
+        the bottom has stopped rising and only the middle moves, which reads
+        as a rimshot: every kick made one, and the snare map had twice as
+        many hits as there were snares."""
         assert beatmap.ATTACK >= 1, (
             "reading a single frame calls the second half of every kick a "
             "snare")
 
     def test_the_written_tracks_do_not_click(self):
-        """The test of the test, and it earned its place.
+        """The test of the test.
 
-        A sample that stops while it is still moving is a step, and a step
-        is a broadband click that a detector is right to call a hit. Mine
-        stopped at about 1.5 per cent of full height, which put one 150 ms
-        after every kick; the false positives looked exactly like rimshots
-        and very nearly became a change to the detector.
+        A sample that stops while still moving is a step, a broadband click
+        a detector is right to call a hit. The kit's samples once stopped at
+        about 1.5 per cent of full height, which put a false rimshot 150 ms
+        after every kick and nearly prompted a change to the detector.
         """
         import drumkit
 
@@ -817,11 +796,9 @@ class TestTheKitIsReadInEveryStyle:
         house 0    trance 0    techno 8    trap 8    hiphop 12
         rock 100   jazz 100    breaks 92   dnb 80
 
-    A clap in house lands on beats two and four, where there is also a
-    kick, so the frame's rise is mostly kick and a rule reading shares of
-    that rise sees a kick. The fix is in beatmap.PROFILE, and what makes it
-    possible is that a kick alone has nothing at all up top while a kick
-    with a clap on it has a little.
+    A clap in house lands on two and four with a kick, so the frame's rise
+    is mostly kick. The fix is in beatmap.PROFILE: a kick alone has nothing
+    up top, and a kick with a clap on it has a little.
 
     Mean F1 over the eleven went from 66.0 to 75.8.
     """
@@ -830,10 +807,9 @@ class TestTheKitIsReadInEveryStyle:
     #: seconds of audio to synthesise and analyse.
     _read: dict = {}
 
-    #: The least each style may score, as a mean F1 over kick, snare and
-    #: hats, against what it measures at now. Several points of room each,
-    #: because the point of a floor is to catch a change of behaviour
-    #: rather than to pin a number.
+    #: The least each style may score, as a mean F1 over kick, snare and hats,
+    #: with several points of room: a floor catches a change of behaviour
+    #: rather than pinning a number.
     FLOORS = {
         "house": 60, "techno": 68, "trance": 75, "dubstep": 57,
         "trap": 48, "dnb": 61, "garage": 67, "breaks": 69,
@@ -872,8 +848,8 @@ class TestTheKitIsReadInEveryStyle:
                 for part, v in got.items()))
 
     def test_the_kit_is_read_as_well_across_the_styles_as_it_was(self):
-        """The whole point: one style improving at another's expense is
-        not tuning, it is moving the problem."""
+        """One style improving at another's expense is moving the problem, not
+        tuning."""
         means = []
         for style in self.FLOORS:
             got = self._scores(style)
@@ -893,20 +869,19 @@ class TestTheKitIsReadInEveryStyle:
             f"a four-to-floor kick is what hides them")
 
     def test_the_hats_floor_is_where_it_is_for_a_reason(self):
-        """Half the hats are missed, and this is not the file that can
-        say whether that is worth fixing.
+        """Half the hats are missed, and this file cannot say whether that is
+        worth fixing.
 
         Over these eleven the floor of 0.10 on the top share costs 46 per
-        cent of the hats, and every number here argues for lowering it:
-        0.04 finds 86 per cent of them for five points of precision, and on
-        two real recordings the floor changes nothing at all. It cannot
-        move. A kick on its own comes in at 0.085 up top, so any floor
-        under 0.09 calls every kick a hat - and every style written here
-        has hats going all the way through it, so nothing in this class can
-        see that. ``test_kicks_alone_are_never_called_hats`` can, and did.
+        cent of the hats, and every number here argues for lowering it: 0.04
+        finds 86 per cent of them for five points of precision, and on two
+        real recordings the floor changes nothing. It cannot move. A kick
+        alone comes in at 0.085 up top, so a floor under 0.09 calls every
+        kick a hat, which this class cannot see, since every style here has
+        hats throughout; ``test_kicks_alone_are_never_called_hats`` can.
 
-        Recorded as a test rather than a comment because the next person to
-        read these numbers will have the same idea.
+        A test rather than a comment, because the next reader of these
+        numbers will have the same idea.
         """
         import beatmap as under_test
 
@@ -921,12 +896,12 @@ class TestTheKitIsReadInEveryStyle:
             f"styles, against 55 when this was written")
 
     def test_the_written_kick_has_a_beater_on_it(self):
-        """Which is what stops this file giving bad advice.
+        """Which stops this file giving bad advice.
 
         A kick is a falling pitch *and* a click. Written without the click
-        it has almost nothing above 2 kHz, and a sweep of the detector's
-        cap on the top share then says 0.06 - which on a real recording
-        took 27 kicks a minute down to 9.
+        it has almost nothing above 2 kHz, and a sweep of the detector's cap
+        on the top share then says 0.06, which on a real recording took 27
+        kicks a minute down to 9.
         """
         import drumkit
 

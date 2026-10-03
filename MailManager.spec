@@ -1,12 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller build recipe for “iCloud Job Triage.app”.
+"""PyInstaller build recipe for "Mail Manager.app".
 
-Build with:
-
-    pyinstaller --clean --noconfirm iCloudJobTriage.spec
-
-The result is dist/"iCloud Job Triage.app", a self-contained bundle with its
-own Python and Qt. No terminal, no virtualenv, and no daily redeploy.
+Built by ./dev build, which runs build_app.sh. The result is
+dist/"Mail Manager.app", a self-contained bundle with its own Python and Qt.
 """
 
 import os

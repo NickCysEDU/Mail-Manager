@@ -1,14 +1,13 @@
-"""HTML -> plain text reduction tuned for marketing-heavy job email.
+"""HTML to plain text, tuned for marketing-heavy job email.
 
-Recruiting mail is almost always HTML, frequently table-based, and routinely
-carries hidden "preheader" text plus a wall of CSS. Feeding that raw to an LLM
-wastes tokens and actively degrades classification. This module produces the
-plain text a human would actually read, and - critically - keeps the *link
-targets*, because the single strongest interview signal in real mail is a
-Calendly/Greenhouse/Ashby booking URL hiding behind the words "pick a time".
+Recruiting mail is usually HTML, often table-based, with hidden preheaders
+and walls of CSS; fed raw to a model it wastes tokens and degrades
+classification. This produces the text a person would read and keeps the
+*link targets*: the strongest interview signal in real mail is a Calendly,
+Greenhouse or Ashby booking URL behind "pick a time".
 
-Implemented with the standard library only: PyInstaller bundles stay small and
-there is no third-party parser to break on malformed email HTML.
+Standard library only, so bundles stay small and no third-party parser
+breaks on malformed email HTML.
 """
 
 from __future__ import annotations
@@ -174,24 +173,23 @@ class _TextExtractor(HTMLParser):
             return True
         if "opacity:0" in style and "height:0" in style:
             return True
-        # font-size:0 on its own is a layout idiom, not a hiding one:
-        # responsive email builders put it on the container of the columns to
-        # kill the whitespace between inline-blocks, and the children set
-        # their own size back. Read as hidden, it threw away whole message
-        # bodies. It only means hidden alongside a second cue.
+        # font-size:0 alone is a layout idiom, not hiding: responsive builders
+        # put it on the columns' container to close the gaps between
+        # inline-blocks, and the children set their size back. Read as hidden,
+        # it threw away whole message bodies, so it means hidden only alongside
+        # a second cue.
         if _ZERO_FONT.search(style) and _ALSO_HIDDEN.search(style):
             return True
         return False
 
     @staticmethod
     def _font_size(attrs: Sequence[Tuple[str, Optional[str]]]) -> Optional[bool]:
-        """Whether this element sets a font size, and whether it is zero.
+        """Whether this element sets a font size, and whether it is zero. None
+        means it inherits.
 
-        None means it says nothing and inherits. A zero size hides the text
-        the element holds *itself*; a real size on a descendant brings that
-        descendant back, which is exactly what a responsive layout does - the
-        container zeroes the size to close up the gaps between its columns and
-        every column sets its own size again.
+        A zero size hides the text the element holds itself; a real size on
+        a descendant brings that descendant back, as a responsive layout's
+        columns do.
         """
         mapping = {name.lower(): (value or "") for name, value in attrs}
         style = mapping.get("style", "").lower().replace(" ", "")
@@ -381,24 +379,20 @@ def notable_links(links: Iterable[str], domains: Sequence[str] = NOTABLE_DOMAINS
     return tuple(result)
 
 
-#: A zero font size: on its own a layout idiom, not a hiding one. Responsive
-#: email builders put it on the container of the columns, and the children set
-#: their own size back; read as hidden, it threw away whole message bodies.
+#: A zero font size: hidden only alongside a second cue (see _ALSO_HIDDEN).
 _ZERO_FONT = re.compile(r"font-size:0(?:px|pt|em|rem)?(?:;|$)")
 
-#: What a preheader actually does as well as shrinking the text. Matched
-#: separately so that a background colour cannot be read as a text colour -
-#: "background-color:#ffffff" contains "color:#fff", which is how the first
-#: attempt at this fix still hid the body.
+#: What a preheader does as well as shrinking the text. Matched separately so a
+#: background colour is not read as a text colour: "background-color:#ffffff"
+#: contains "color:#fff".
 _ALSO_HIDDEN = re.compile(
     r"(?:^|;)(?:max-height:0|opacity:0|mso-hide:all|height:0(?:px)?)(?:;|$)"
 )
 
 
-#: How many unmatched "<" a document may carry before it is treated as
-#: malformed rather than merely untidy. Real mail, however badly generated,
-#: does not reach this; the value is well above anything in the six thousand
-#: messages of the SpamAssassin corpus.
+#: How many unmatched "<" a document may carry before it is malformed rather
+#: than untidy: far above anything in the six thousand messages of the
+#: SpamAssassin corpus.
 _STRAY_BRACKET_LIMIT = 200
 
 #: How far after a "<" a ">" may be and still plausibly close a tag. Longer
@@ -409,15 +403,11 @@ _TAG_WINDOW = 2048
 def defuse_stray_brackets(html: str) -> str:
     """Escape "<" characters that no ">" ever closes.
 
-    Python's HTMLParser rescans the rest of the buffer every time it meets a
-    "<" it cannot complete, which is quadratic: 40,000 unclosed tags in a
-    156 KB body took 22 seconds, and 00,000 took 35. A handful of such
-    messages in an inbox would stall a scan for minutes, and anyone can send
-    one.
-
-    A "<" with no ">" after it is not a tag by any reading, so turning it into
-    the entity it should have been costs nothing and removes the quadratic.
-    Documents that are merely untidy are left exactly as they are.
+    HTMLParser rescans the rest of the buffer at every "<" it cannot
+    complete, which is quadratic: 40,000 of them in a 156 KB body took 22
+    seconds, and anyone can send that. A "<" with no ">" after it is no tag
+    by any reading, so the entity costs nothing; merely untidy documents are
+    left exactly as they are.
     """
     opens = html.count("<")
     if opens - html.count(">") <= _STRAY_BRACKET_LIMIT:
@@ -433,10 +423,9 @@ def defuse_stray_brackets(html: str) -> str:
         out.append(html[index:nxt])
         closing = html.find(">", nxt + 1, nxt + 1 + _TAG_WINDOW)
         following = html.find("<", nxt + 1)
-        # A "<" only opens a tag if its ">" arrives before the next "<" does.
-        # Without that second test, the first of four hundred stray brackets
-        # claimed the ">" belonging to a real anchor tag a thousand
-        # characters later and swallowed the link whole.
+        # A "<" opens a tag only if its ">" comes before the next "<":
+        # otherwise the first of four hundred strays claimed a real anchor's
+        # ">" a thousand characters later and swallowed the link.
         stray = closing < 0 or (0 <= following < closing)
         if stray:
             out.append("&lt;")
@@ -486,11 +475,8 @@ _HTML_MARKERS = re.compile(
 
 
 def looks_like_html(text: str) -> bool:
-    """True when a part declared text/plain is really HTML.
-
-    Several applicant-tracking systems send a full HTML document under a
-    text/plain content type. Trusting the header put raw markup and CSS in
-    front of the classifier, which is both unreadable and expensive.
+    """True when a part declared text/plain is really HTML: several
+    applicant-tracking systems send whole documents as text/plain.
     """
     if not text:
         return False
@@ -509,12 +495,11 @@ def clean_body(body: str, is_html: bool) -> ExtractedText:
 
 
 def truncate_for_model(text: str, max_chars: int) -> Tuple[str, bool, int]:
-    """Trim to ``max_chars`` at a paragraph/word boundary.
+    """Trim to ``max_chars`` at a paragraph or word boundary.
 
-    Returns ``(text, was_truncated, original_length)``. When truncation happens
-    the caller is expected to tell both the model and the user - silent
-    truncation is how a rejection buried at the bottom of a digest becomes a
-    misclassification.
+    Returns ``(text, was_truncated, original_length)``. The caller tells
+    both the model and the user: silent truncation is how a rejection at the
+    bottom of a digest gets misclassified.
     """
     original_length = len(text)
     if max_chars <= 0 or original_length <= max_chars:

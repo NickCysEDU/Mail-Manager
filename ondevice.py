@@ -1,12 +1,8 @@
-"""Finding, installing and starting Ollama.
+"""Finding, installing and starting Ollama: what is missing (the app, the
+server, the model), and the part that can be done from here.
 
-Picking "On this Mac" and getting a connection error is a dead end for anybody
-who has not already set Ollama up, and it is the one backend where the fix is
-entirely local. This works out what is missing - the app, the server, the model
-- and does the part it can do.
-
-Nothing here installs anything without being asked. The functions report, and
-the caller decides.
+Nothing is installed without being asked. The functions report, and the
+caller decides.
 """
 
 from __future__ import annotations
@@ -28,9 +24,8 @@ from typing import Callable, List, Optional, Tuple
 
 DEFAULT_ENDPOINT = "http://127.0.0.1:11434"
 DOWNLOAD_URL = "https://ollama.com/download"
-#: What Homebrew calls it, canonical name first. It was renamed from "ollama"
-#: to "ollama-app" and the old name survives only as an alias, which is the
-#: sort of thing that stops working without warning. Each is tried in turn.
+#: What Homebrew calls it, canonical name first: "ollama" was renamed
+#: "ollama-app" and survives only as an alias. Each is tried in turn.
 BREW_CASKS: Tuple[str, ...] = ("ollama-app", "ollama")
 
 #: Kept for anything still importing it.
@@ -250,11 +245,8 @@ def install_command() -> Optional[List[str]]:
 
 
 def install_commands() -> List[List[str]]:
-    """Every command that might install Ollama, best first.
-
-    More than one because the cask has been renamed once already. Trying the
-    next name when Homebrew says it has never heard of the first costs a
-    second and removes a whole class of "it just did not work".
+    """Every command that might install Ollama, best first: the cask has been
+    renamed once, and trying the next name costs a second.
     """
     brew = homebrew()
     if not brew:
@@ -265,10 +257,9 @@ def install_commands() -> List[List[str]]:
 def start_command() -> Optional[List[str]]:
     """The command that would start the server, if Ollama is installed.
 
-    The app is preferred over ``ollama serve`` when it is there. Opening it
-    twice is harmless, whereas a second ``serve`` exits with "address already
-    in use" - and it manages the server the way somebody who installed the app
-    expects, including starting it again after a reboot.
+    The app is preferred over ``ollama serve``: opening it twice is
+    harmless, where a second ``serve`` fails with "address already in use",
+    and the app starts the server again after a reboot.
     """
     app = find_app()
     if app:
@@ -280,12 +271,7 @@ def start_command() -> Optional[List[str]]:
 def wait_until_answering(endpoint: str = DEFAULT_ENDPOINT, timeout: float = 25.0,
                          cancel: Optional[threading.Event] = None,
                          on_wait: Optional[Callable[[float], None]] = None) -> bool:
-    """Poll until the server answers, or give up. Never raises.
-
-    Starting it and waiting a fixed few seconds is a guess, and it was wrong
-    in both directions: too short on a cold start, and it reported success
-    when nothing had come up at all.
-    """
+    """Poll until the server answers, or give up. Never raises."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if cancel is not None and cancel.is_set():
@@ -307,9 +293,9 @@ def pull_command(model: str) -> Optional[List[str]]:
 def run(command: List[str], timeout: float = 600.0) -> Tuple[bool, str]:
     """Run one of the commands above and wait. Returns (ok, output).
 
-    Blocks for as long as the command takes, which for ``brew install`` is
-    minutes. Never call this from a thread that is drawing a window - use
-    :func:`stream`, which is what the settings panel does.
+    Blocks for as long as the command takes, minutes for ``brew install``,
+    so never from a thread that draws a window: the settings panel uses
+    :func:`stream`.
     """
     lines: List[str] = []
     ok = stream(command, lines.append, timeout=timeout)
@@ -321,18 +307,14 @@ def stream(command: List[str], on_line: Callable[[str], None],
            timeout: float = 900.0, poll: float = 0.2) -> bool:
     """Run a command, handing back each line as it arrives. Never raises.
 
-    Downloading a model is a progress bar on stdout and installing one is a
-    Homebrew log; both take minutes, and a window that says nothing for four
-    minutes is indistinguishable from a window that has crashed. So output is
-    reported as it happens, and the whole thing can be stopped.
+    Downloads and Homebrew installs take minutes, so output is reported as
+    it happens and the whole thing can be stopped. The pipe is polled rather
+    than iterated: iterating blocks until a line arrives, so a stalled
+    download could not be cancelled, where polling checks the stop flag
+    every fifth of a second.
 
-    The pipe is polled rather than iterated. Iterating blocks until a line
-    arrives, which means a download that stalls cannot be cancelled - the one
-    case where somebody most wants to cancel it. Polling checks the stop flag
-    every fifth of a second whether or not anything was written.
-
-    Ollama writes its progress bar with carriage returns and no newline, so
-    ``\r`` ends a line here too; otherwise a two-gigabyte download is a single
+    Ollama draws its progress bar with carriage returns and no newline, so
+    ``\\r`` ends a line here too; otherwise a two-gigabyte download is one
     line that arrives when it has finished.
     """
     if not command:
@@ -416,10 +398,9 @@ def stream(command: List[str], on_line: Callable[[str], None],
 #: A percentage anywhere in a line. Ollama's pull writes "… 47% ▕███ ▏ 1.2 GB".
 _PERCENT = re.compile(r"(?<![-\d.])(\d{1,3}(?:\.\d+)?)\s*%")
 
-#: How far along a phase is, for the tools that report phases and not numbers.
-#: Homebrew says what it is doing and never how far through it is, so a bar
-#: driven only by percentages would sit at zero for the whole install. These
-#: are honest about being coarse: each is the *start* of that phase.
+#: How far along a phase is, for tools that report phases and not numbers:
+#: Homebrew never says how far through it is. Coarse on purpose: each is the
+#: *start* of its phase.
 _PHASES: Tuple[Tuple["re.Pattern", float, str], ...] = (
     (re.compile(r"==> *downloading", re.I), 5.0, "Downloading"),
     (re.compile(r"==> *fetching", re.I), 5.0, "Fetching"),
@@ -434,12 +415,10 @@ _PHASES: Tuple[Tuple["re.Pattern", float, str], ...] = (
 
 
 def parse_progress(line: str) -> Tuple[Optional[float], str]:
-    """How far along this line says we are, and what is happening.
+    """How far along this line says the work is, and what is happening.
 
-    Returns (percent or None, label). None means the tool did not say, which
-    the window shows as a busy bar rather than as nought per cent - a bar
-    stuck at zero for four minutes is how a working install comes to look
-    like a broken one.
+    Returns (percent or None, label). None shows as a busy bar rather than
+    nought per cent: a bar stuck at zero for minutes looks broken.
     """
     text = (line or "").strip()
     if not text:
@@ -480,11 +459,10 @@ def parse_progress(line: str) -> Tuple[Optional[float], str]:
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b[()][A-Z0-9]|\x1b[=>]")
 
 #: The cursor moves that start a new row: column 1, up, down, next line. A
-#: program redrawing a frame in place uses these where a script would use a
-#: newline, and without treating them as one, a whole frame - the progress bar
-#: and the heading above it - arrives as a single line, and whichever row is
-#: read first wins. That is why a two-gigabyte download reported "reading the
-#: manifest" from beginning to end.
+#: program redrawing a frame in place uses these where a script would print a
+#: newline; without treating them as one, a whole frame arrives as a single
+#: line and whichever row is read first wins, so a download said "reading the
+#: manifest" from start to finish.
 _CURSOR_BREAK = re.compile(r"\x1b\[[0-9]*[GAEF]")
 
 #: A spinner frame. Braille dots and the usual ASCII wheel, which otherwise
@@ -520,16 +498,12 @@ def _human(size: float) -> str:
 class ProgressReader:
     """Turns a download's chatter into one steady percentage and one label.
 
-    Ollama redraws a frame of several rows, so the heading it wrote first
-    arrives again between every update of the bar underneath it. Reporting
-    whatever the newest row says makes the display flicker between "reading
-    the manifest" at two per cent and the real figure - which is what the
-    progress bar looked like.
-
-    So this keeps state. A row carrying bytes always wins over a row carrying
-    only a phase; the percentage never goes backwards; and the size of the
-    largest layer drives the bar, because a model is one big file and a
-    handful of small ones and a bar that restarts for each reads as a
+    Ollama redraws a frame of several rows, so its first heading arrives
+    again between every update of the bar beneath it, and reporting the
+    newest row flickered between "reading the manifest" at two per cent and
+    the real figure. So this keeps state: a row with bytes beats a row with
+    only a phase, the percentage never goes backwards, and the largest layer
+    drives the bar, since a bar restarting for each small file reads as a
     failure.
     """
 
@@ -597,9 +571,9 @@ def _emit(pending: bytes, on_line: Callable[[str], None],
     return remainder.encode("utf-8", "replace")
 
 
-#: What the tools say, and what it means. Left as (pattern, explanation) so
-#: the original line is still shown underneath - a translation that is wrong
-#: is worse than none, and the reader can always see what was actually said.
+#: What the tools say, and what it means, as (pattern, explanation): the
+#: original line is still shown underneath, so a wrong translation can be
+#: checked against what was actually said.
 _EXPLANATIONS: Tuple[Tuple["re.Pattern", str], ...] = (
     (re.compile(r"pull model manifest.*(?:file does not exist|not found)", re.I),
      "Ollama has no model by that name. Check the spelling against "

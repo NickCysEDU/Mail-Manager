@@ -1,14 +1,12 @@
 """The visualiser, given everything it should never be given.
 
-A scene runs inside paintEvent, and an exception raised there does not
-propagate: Qt prints it and carries on with a painter still open on the
-backing store, which then takes the process down. So "it raised" and "it
-crashed" are the same outcome here, and every one of these is really the
-same question - does it survive.
+An exception in paintEvent does not propagate: Qt prints it and carries on
+with a painter open on the backing store, which then takes the process down,
+so raising and crashing are the same outcome here.
 
-Sizes nobody would choose, data that arrived half-finished, a playhead
-thrown around, scenes switched faster than frames are drawn, and the
-strobe at both ends of both sliders.
+Sizes nobody would choose, half-finished data, a playhead thrown around,
+scenes switched faster than frames are drawn, and the strobe at both ends of
+both sliders.
 """
 
 from __future__ import annotations
@@ -359,10 +357,9 @@ class TestTheMetersAtTheirLimits:
 class TestItNeverLeavesAPainterOpen:
     def test_a_scene_that_raises_does_not_take_the_painter_with_it(
             self, pane, monkeypatch):
-        """An exception out of paintEvent is caught by Qt, which then
-        carries on with a live painter on the backing store and brings
-        the process down some frames later. The wrapper has to close it
-        whatever happens."""
+        """An exception out of paintEvent leaves a live painter on the backing
+        store, which brings the process down some frames later; the wrapper
+        has to close it whatever happens."""
         class Exploding:
             name = "Exploding"
             blurb = ""
@@ -389,15 +386,12 @@ class TestItNeverLeavesAPainterOpen:
 
 
 class TestQuittingWhileItIsStillWorking:
-    """Qt calls qFatal when a running QThread is destroyed, and qFatal
-    aborts the process - there is no exception to catch and no stack to
-    read afterwards except a crash report.
+    """Qt calls qFatal when a running QThread is destroyed, aborting with
+    nothing to catch.
 
-    This is the shape of one that happened: the analysis hands the frames
-    over and then goes on picking the drums out, and the window closes in
-    between. The handle used to be released the moment the frames
-    arrived, which was safe only while that was the last thing the thread
-    did.
+    The analysis hands the frames over and then goes on picking out the
+    drums; with the handle released when the frames arrived, a window
+    closing in between did exactly that.
     """
 
     def test_the_handle_is_not_released_until_the_thread_ends(self, qapp):
@@ -409,9 +403,8 @@ class TestQuittingWhileItIsStillWorking:
 
     def test_a_thread_that_will_not_stop_is_kept_rather_than_destroyed(
             self, qapp, monkeypatch):
-        """Waiting can time out. Dropping the reference then is what
-        aborts the process, so it is kept instead and the process exits
-        while it finishes on its own."""
+        """Waiting can time out, and dropping the reference then aborts the
+        process, so it is kept and the thread finishes on its own."""
         import attachment_audio
 
         class Stubborn:
@@ -465,21 +458,15 @@ class TestQuittingWhileItIsStillWorking:
 
 
 class TestNothingTheAnalysisSaysCanCloseTheWindow:
-    """A level is nought to one and a tempo is a count of beats - by
-    construction, which is not the same as in fact.
+    """A level is nought to one and a tempo a count of beats by construction,
+    not in fact: a bad decode, a zero calibration or a tempo looked for in
+    silence can put a nan or an infinity in one of these numbers.
 
-    A decode that goes wrong, a calibration that comes out zero, a tempo
-    looked for in silence: any of them can put a nan or an infinity in
-    one of these numbers. It matters more than one bad frame, because
-    these scenes *accumulate* what they are handed. The field's drift
-    and the rider's envelope followers are running sums, so one bad
-    value is not a bad frame - it is every frame after it. And a nan
-    that reaches an ``int()`` is not a bad frame either: it is a
-    traceback out of paint, which takes the window with it.
-
-    Found by playing the rider hostile music rather than by reading the
-    code: a nan tempo closed the window on the first frame, and an
-    infinite level stopped the field moving for the rest of the session.
+    These scenes accumulate what they are handed (the field's drift and the
+    rider's envelope followers are running sums), so one bad value spoils
+    every frame after it, and a nan that reaches ``int()`` raises out of
+    paint. A nan tempo closed the window on the first frame, and an infinite
+    level stopped the field moving for the rest of the session.
     """
 
     NAN, INF = float("nan"), float("inf")
@@ -541,9 +528,8 @@ class TestNothingTheAnalysisSaysCanCloseTheWindow:
         assert visualizers.bounded(9.0) == 1.0
         assert visualizers.bounded(self.INF) == 1.0
         assert visualizers.bounded(-self.INF) == 0.0
-        # A nan is an answer that was never worked out, so it comes back
-        # as the floor rather than as whichever bound it is nearest -
-        # there is no such bound.
+        # A nan is an answer that was never worked out, so it comes back as the
+        # floor: there is no nearest bound.
         assert visualizers.bounded(self.NAN) == 0.0
         assert visualizers.bounded(self.NAN, least=0.25) == 0.25
         assert visualizers.bounded(None) == 0.0
@@ -553,13 +539,9 @@ class TestNothingTheAnalysisSaysCanCloseTheWindow:
 
     # -- the two it was written for ---------------------------------------
     def test_a_nan_tempo_does_not_close_the_window(self, qapp):
-        """It used to reach ``int(round(when / self._beat / ...))`` on
-        the first frame and raise out of paint.
-
-        A nan is *truthy*, which is what made this a crash rather than a
-        shrug: the tempo was tested for truth rather than for being a
-        tempo, so nothing without a beat was told apart from a beat of
-        nan.
+        """A nan tempo reached ``int(round(when / self._beat / ...))`` on the
+        first frame and raised out of paint. A nan is truthy, and the tempo
+        was tested for truth rather than for being a tempo.
         """
         import visualizers
 
@@ -574,10 +556,9 @@ class TestNothingTheAnalysisSaysCanCloseTheWindow:
             f"the road ended up at {scene._at}")
 
     def test_an_infinite_level_does_not_stop_the_field_moving(self, qapp):
-        """The field's three drifts are running sums. An infinity in one
-        of them is not a bad frame, it is every frame after it: the
-        drift never comes back, every sine in the picture is called on
-        an infinity, and the scene raises a domain error from then on.
+        """The field's three drifts are running sums: one infinity never comes
+        back, every sine in the picture is called on it, and the scene
+        raises a domain error from then on.
         """
         import visualizers
 
@@ -694,9 +675,9 @@ class TestNothingTheAnalysisSaysCanCloseTheWindow:
         assert said.peaks == [0.9] * 6
 
     def test_the_pane_settles_every_frame_before_a_scene_sees_it(self, qapp):
-        """The guarantee is only worth anything if it is wired in. Off
-        the pane's own painting rather than off a call count: read that
-        way, this passes with the call moved anywhere at all."""
+        """The guarantee is only worth anything if it is wired in. Read off the
+        pane's own painting rather than a call count, which would pass with
+        the call moved anywhere."""
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Entry point for iCloud Mail Job Triage.
+"""Entry point for Mail Manager.
 
 Run from source:      python main.py
-Run the bundled app:  open "dist/iCloud Job Triage.app"
+Run the bundled app:  open "dist/Mail Manager.app"
 """
 
 from __future__ import annotations
@@ -56,9 +56,9 @@ def configure_logging(level: str = "INFO", echo: bool = False) -> Path:
         )
         file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
         root.addHandler(file_handler)
-        # Readable by its owner and nobody else. The log names mailboxes and
-        # the subjects of messages as they are sorted, which is the same
-        # class of thing as the settings file and is stored the same way.
+        # Readable by its owner only: the log names mailboxes and the subjects
+        # of messages as they are sorted, the same class of thing as the
+        # settings file.
         _restrict(path)
         for index in range(1, file_handler.backupCount + 1):
             _restrict(path.with_name(f"{path.name}.{index}"))
@@ -184,8 +184,8 @@ def _clean_argv(argv: Optional[list]) -> list:
 def self_test(offline: bool = False) -> int:
     """Verify the runtime the app is actually running inside.
 
-    ``offline`` skips the one check that needs a network, so this can be run
-    on a build machine, in CI, or on a train.
+    ``offline`` skips the one check that needs a network, for a build
+    machine, CI or a train.
     """
     import config
 
@@ -222,21 +222,18 @@ def self_test(offline: bool = False) -> int:
     check("world lexicon", _lexicon.describe)
 
     def _encryption() -> str:
-        """Seal and open a scrap, so the answer is demonstrated not asserted.
-
-        A security property nobody can check is one nobody should believe.
-        This does the whole round trip - make a key, encrypt, decrypt, and
-        confirm the plaintext really is absent from the file - in a temporary
-        directory it then removes.
+        """Seal and open a scrap, so the answer is demonstrated, not asserted:
+        make a key, encrypt, decrypt, and confirm the plaintext is absent
+        from the file, in a temporary directory that is then removed.
         """
         import tempfile
         import vault
 
         if not vault.cipher_available():
             return "no cipher library; summaries are not written to disk"
-        # Its own box with the same short timeout the other checks use: a
-        # self-test that waits on a Keychain prompt is a self-test that never
-        # finishes, and this one runs inside the build.
+        # Its own box with the same short timeout as the other checks: this
+        # runs inside the build, where a Keychain prompt would never be
+        # answered.
         box = vault.Vault(config.CredentialStore(read_timeout=5.0))
         if not box.sealing:
             return "Keychain unavailable; summaries are not written to disk"
@@ -290,10 +287,9 @@ def self_test(offline: bool = False) -> int:
     def _attachment_viewer() -> str:
         """The viewer is reached by a function-level import, so prove it.
 
-        PyInstaller finds modules by reading the source, and a module only
-        ever imported inside a method is the kind it can miss. Missing it
-        would not break the build or the tests - it would break the button,
-        in the shipped app, for the person who pressed it.
+        PyInstaller finds modules by reading the source and can miss one
+        imported only inside a method, which would break the button in the
+        shipped app rather than the build.
         """
         import attachments
         import attachment_view
@@ -308,10 +304,9 @@ def self_test(offline: bool = False) -> int:
         if not hasattr(attachment_view, "AttachmentViewer"):
             raise RuntimeError("the viewer is not in this build")
 
-        # The Qt pieces, actually constructed. Checking that the Python
-        # modules import proved nothing: QtMultimedia and QtPdf were on the
-        # spec's exclude list for two releases, so audio and PDF said
-        # "unavailable in this build" while this check said "present".
+        # The Qt pieces, actually constructed: QtMultimedia and QtPdf were once
+        # on the spec's exclude list while an import check said they were
+        # present.
         working = ["images", "text"]
         from PySide6.QtMultimedia import QAudioDecoder, QMediaPlayer
         player = QMediaPlayer()
@@ -324,17 +319,14 @@ def self_test(offline: bool = False) -> int:
             raise RuntimeError("PDF is not in this build")
         working.append("PDF")
 
-        # Checked, not named. This line ends up in a public build log, and
-        # what the player does with a sound file is meant to be found
-        # rather than read about.
+        # Checked, not named: this line ends up in a public build log.
         import visualizers
         if len(visualizers.SCENES) < 2:
             raise RuntimeError("part of the audio pane is not in this build")
 
-        # The pane draws on the graphics card when there is one, and a full
-        # screen is only sharp there. Built, for the same reason as the
-        # player: the module importing proves the Python half is present,
-        # and the Qt library behind it is the half a bundle can lose.
+        # The pane draws on the graphics card when there is one. Built, not
+        # just imported: the module importing proves the Python half, and the
+        # Qt library behind it is the half a bundle can lose.
         from PySide6.QtOpenGL import QOpenGLFramebufferObjectFormat
         import attachment_widgets
         wanted = QOpenGLFramebufferObjectFormat()
@@ -358,9 +350,9 @@ def self_test(offline: bool = False) -> int:
             raise RuntimeError("the rider's sounds are not in this build")
         working.append("the rider's sounds")
         # Kept, read back and beaten, in a folder of its own that is then
-        # removed. Imported only when a ride ends, so a bundle without it
-        # fails there - inside the listener that plays the sounds, which
-        # is let go when it fails, so they would stop too.
+        # removed. Imported only when a ride ends, so a bundle without it would
+        # fail there, inside the listener that plays the sounds, silencing them
+        # too.
         import tempfile
 
         import rider_bests
@@ -404,18 +396,18 @@ def self_test(offline: bool = False) -> int:
         if plan.figure(drop, 0, True)[0] not in rider_layout.DANGER:
             raise RuntimeError("the rider cannot lay a road")
         working.append("the rider's road")
-        # The scope's screen on the card, imported the first time the
-        # scope is drawn there. A bundle without it draws the scope on the
-        # CPU instead, which is too slow at a full screen to notice as
-        # anything but a stutter - so it is looked for here.
+        # The scope's screen on the card, imported the first time the scope is
+        # drawn there. Without it the scope is drawn on the CPU, too slow at
+        # full screen to notice as anything but a stutter, so it is looked for
+        # here.
         import scope_gl
         if scope_gl.reach(2880, 1800) != (2160, 1800) or not hasattr(
                 scope_gl, "Tube"):
             raise RuntimeError("the scope cannot draw on the card")
         working.append("the scope on the card")
-        # The picture's allowance for the ear and the eye, made the first
-        # time a track is played. Asked here, so a bundle without it - or
-        # without the Core Audio it asks - fails now.
+        # The picture's allowance for the ear and the eye, made the first time
+        # a track plays: asked here, so a bundle without it, or without the
+        # Core Audio it asks, fails now.
         import av_sync
         allowance = av_sync.Allowance()
         if not -1.0 < allowance.ahead(60.0) < 1.0:
@@ -519,8 +511,8 @@ def show_config() -> int:
 
     settings = Settings.load()
     # Nobody is watching a terminal command to click Allow, and the Keychain
-    # asks again for every re-signed build. Give up after a few seconds and
-    # report what happened rather than hanging with no output.
+    # asks again for every re-signed build, so give up after a few seconds and
+    # say so.
     store = CredentialStore(read_timeout=5.0)
     print(f"{APP_DISPLAY_NAME} {APP_VERSION} - configuration\n")
     for field, value in sorted(settings.to_dict().items()):
@@ -639,8 +631,8 @@ def main(argv: Optional[list] = None) -> int:
 
     settings = Settings.load()
 
-    # Paint before the first window exists, so nothing is ever shown in the
-    # default palette and then repainted in front of the user.
+    # Paint before the first window exists, so nothing is shown in the default
+    # palette and then repainted.
     import theme
     theme.apply(app, settings.appearance_mode, settings.contrast, settings.readable)
 
@@ -658,9 +650,8 @@ def main(argv: Optional[list] = None) -> int:
         log.info("Demo mode: using bundled sample data, no network access.")
         window._load_demo_data()
 
-    # Belt and braces: whether the user closes the window, picks Quit, or the
-    # session ends, every background thread is stopped before the event loop
-    # returns. Nothing is left running after the app disappears.
+    # However the app ends (the window closed, Quit, the session ending), every
+    # background thread is stopped before the event loop returns.
     app.aboutToQuit.connect(window.shutdown)
 
     # With a menu bar item present, closing the window puts the app away
@@ -682,22 +673,16 @@ def main(argv: Optional[list] = None) -> int:
 
 
 def _dial_face() -> str:
-    """Which face the meter dials will be lettered in.
+    """Which face the meter dials will be lettered in, worth a line of its own.
 
-    Worth a line of its own in the self test. The dials are drawn from a
-    photograph of a real meter, and the face used to be asked for by name
-    with a fallback list that exists on no machine anybody runs this on -
-    so Qt quietly substituted whatever it had and the dials came out in a
-    different typeface on every platform, with nothing to say so.
+    Asked for by name with a fallback list no machine has, Qt substituted
+    whatever it had, differently on every platform, with nothing to say so.
     """
     import visualizers
 
-    # The file in the bundle first, whatever else is true: what goes wrong
-    # in a build is the file not being in it at all.
-    #
-    # A failure, not a remark. It was a remark, and every build since the
-    # face was chosen shipped without it - the spec only copied the icons -
-    # under a self test that said "All checks passed".
+    # The file in the bundle first: what goes wrong in a build is the file not
+    # being in it. A failure, not a remark: as a remark, builds shipped without
+    # the face under a self test that passed.
     where = _bundled_path(f"assets/fonts/{visualizers.FONT_FILE}")
     if not where:
         raise FileNotFoundError(
@@ -730,10 +715,9 @@ def _bundled_path(relative: str) -> Optional[Path]:
 
 
 if __name__ == "__main__":
-    # First, before anything else runs. The audio analysis works in
-    # processes of its own, and in the built app a new process is this
-    # same program started again - this is what tells it to be a worker
-    # rather than open a second window.
+    # First, before anything else runs. The audio analysis works in processes
+    # of its own, and in the built app a new process is this program started
+    # again: this tells it to be a worker rather than open a second window.
     import multiprocessing
 
     multiprocessing.freeze_support()

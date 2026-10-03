@@ -1,21 +1,19 @@
-"""Claude-backed classification engine.
+"""The model-backed classification engine.
 
-One structured-output request per email. The response is constrained by a JSON
-schema (``output_config.format``), so the transport can only ever hand back an
-object with the right shape; :meth:`models.Classification.from_payload` then
-re-validates it so that a schema regression cannot turn into a misfiled email.
+Emails go to the model a few at a time (see ``batch_size``). The response is
+constrained by a JSON schema (``output_config.format``), so the transport can
+only hand back an object of the right shape, and
+:meth:`models.Classification.from_payload` validates it again so that a schema
+regression cannot misfile an email.
 
-Design notes
-------------
-* **Adaptive thinking** is on for the reasoning-capable models. Classification
-  looks easy and is not: the difference between "we received your application"
-  and "we received your application, please complete this assessment" is one
-  clause, and it changes the folder.
-* **Prompt caching** keeps the (long, frozen) system prompt cheap across the
-  dozens of calls a single scan makes.
-* **Server-side refusal fallbacks** are requested on Opus 5. They degrade
-  gracefully - if the beta or any newer request field is rejected, the engine
-  records the degradation once and reissues on the stable endpoint.
+* **Adaptive thinking** is on for the reasoning-capable models: "we received
+  your application" and "we received your application, please complete this
+  assessment" differ by one clause, and it changes the folder.
+* **Prompt caching** keeps the long, frozen system prompt cheap across the
+  calls a scan makes.
+* **Server-side refusal fallbacks** are requested on Opus 5. If the beta or a
+  newer request field is rejected, the engine notes it once and reissues on
+  the stable endpoint.
 """
 
 from __future__ import annotations
@@ -453,11 +451,9 @@ class LLMEngine:
         return getter() if callable(getter) else self.provider
 
     def close(self) -> None:
-        """Release the backend's connections.
-
-        Called when a scan finishes and when the user stops everything. Closing
-        mid-flight makes in-flight requests fail fast instead of holding worker
-        threads open for the full request timeout.
+        """Release the backend's connections, when a scan finishes or
+        everything is stopped: requests in flight then fail fast instead of
+        holding worker threads for the full timeout.
         """
         with self._lock:
             if self._closed:
@@ -484,10 +480,9 @@ class LLMEngine:
     ) -> None:
         """Change backend without interrupting the scan.
 
-        ``_send`` reads ``self.provider`` on every call, so a swap takes effect
-        from the next request onwards; work already in flight finishes on the
-        old backend. The old provider is closed afterwards so its sockets are
-        not left open.
+        ``_send`` reads ``self.provider`` on every call, so a swap takes
+        effect from the next request; work in flight finishes on the old
+        backend, which is closed afterwards.
         """
         if self._closed:
             raise ClassificationCancelled("The classifier was closed.")
@@ -588,11 +583,9 @@ class LLMEngine:
         return "\n".join(parts)
 
     def build_batch_prompt(self, messages: Sequence[EmailMessage]) -> str:
-        """Render several emails into one request.
-
-        The system prompt is ~2,800 tokens and a typical email body is a few
-        hundred, so one call per email spends most of its budget re-sending
-        the instructions. Batching amortises that over the whole group.
+        """Render several emails into one request: the system prompt is about
+        2,800 tokens and a typical body a few hundred, so batching spreads
+        the instructions over the group.
         """
         parts = ["<emails>"]
         for message in messages:
@@ -936,10 +929,10 @@ class LLMEngine:
                     stopped = True
                     raise ClassificationCancelled("Cancelled.")
         finally:
-            # On a normal finish every future is already done, so this returns
-            # at once. When stopping, queued work is dropped and the call
-            # returns immediately - an in-flight HTTP request must never hold
-            # the UI's Stop button hostage for the request timeout.
+            # On a normal finish every future is done and this returns at once.
+            # When stopping, queued work is dropped and it returns immediately,
+            # so a request in flight never holds Stop hostage for the request
+            # timeout.
             pool.shutdown(wait=not stopped, cancel_futures=True)
 
         if auth_error:

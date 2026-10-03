@@ -28,9 +28,9 @@ die()  { printf '%serror:%s %s\n' "$R" "$N" "$*" >&2; exit 1; }
 # Environment (idempotent, and quiet when there is nothing to do)
 # --------------------------------------------------------------------------
 # An interpreter that runs on this machine's own architecture. An Intel
-# Python on Apple silicon works, through Rosetta, until macOS starts warning
-# that "Xxxxxx xxxxxxxx x xxxxxxxxx xxxx xxxx xxx xxxx xxxx xxxxxx versions
-# of macOS" - which it now does, because Rosetta is being retired.
+# Python on Apple silicon works, through Rosetta, until macOS warns that a
+# component of it will stop working in a future version, which it now does
+# because Rosetta is being retired.
 runs_natively() {
   local arch_here; arch_here="$(uname -m)"
   local slices; slices="$(lipo -archs "$1" 2>/dev/null)" || return 0

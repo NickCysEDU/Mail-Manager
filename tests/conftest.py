@@ -53,18 +53,13 @@ def isolated_home(tmp_path, monkeypatch):
 def no_real_keychain(monkeypatch):
     """Make the real Keychain unreachable, and give the vault its own.
 
-    This file has always said the suite does not touch the Keychain, and
-    until the cipher went in nothing did: vault.key() gave up at
-    cipher_available() before it ever asked. Once cryptography was installed
-    every save went looking for a data key, found none on a fresh machine,
-    and tried to create one - which on a locked or headless keychain blocks
-    in securityd with nobody to approve it. On a CI runner that is a suite
-    that never finishes.
+    With cryptography installed every save looks for a data key, and
+    creating one on a locked or headless keychain blocks in securityd with
+    nobody to approve it: on CI, a suite that never finishes.
 
-    A store built with an explicit backend still uses it; those are the fakes
-    tests hand in on purpose. It is only the fallback to the real thing that
-    is closed off, and it fails loudly rather than hanging, so a test that
-    starts reaching for it says so.
+    A store built with an explicit backend still uses it; only the fallback
+    to the real thing is closed off, and it fails loudly rather than
+    hanging.
     """
     import config
     import vault
@@ -91,10 +86,9 @@ def no_real_keychain(monkeypatch):
 def dialog_calls(monkeypatch):
     """Neutralise every modal dialog so a test can never block on one.
 
-    Yields the list of calls that were intercepted as
-    ``(kind, title, text)`` tuples, so tests can assert on what the app tried
-    to show. A test that needs a specific answer can monkeypatch the same
-    method again - test-level patches are applied after this fixture.
+    Yields the intercepted calls as ``(kind, title, text)`` tuples. A test
+    that needs a specific answer can monkeypatch the same method again:
+    test-level patches are applied after this fixture.
     """
     try:
         from PySide6.QtWidgets import QDialog, QFileDialog, QMessageBox
@@ -180,11 +174,9 @@ def mime_factory():
 # Fake IMAP server
 # --------------------------------------------------------------------------
 class FakeIMAP:
-    """A small, strict stand-in for ``imaplib.IMAP4_SSL``.
-
-    Strict on purpose: it rejects unquoted mailbox names and unknown commands so
-    that protocol mistakes surface as test failures rather than as silent
-    behaviour differences against the real server.
+    """A small, strict stand-in for ``imaplib.IMAP4_SSL``: it rejects unquoted
+    mailbox names and unknown commands, so protocol mistakes fail tests
+    rather than behave differently against the real server.
     """
 
     def __init__(
@@ -575,13 +567,10 @@ def qapp():
 def reap_deleted_widgets():
     """Actually destroy what each test asked to be destroyed.
 
-    ``deleteLater`` only queues the deletion; without an event loop running
-    nothing collects it, so every dialog a test builds stays alive for the
-    rest of the session. That is not merely untidy: ``setStyleSheet`` restyles
-    every live widget, so the cost of a theme change grows with the number of
-    leftovers - measured at 0.17s after one dialog pair and 0.89s after five,
-    which is what eventually pushed a test that changes the theme over its
-    timeout.
+    ``deleteLater`` only queues the deletion, so without an event loop every
+    dialog a test builds lives for the session, and ``setStyleSheet``
+    restyles every live widget: a theme change took 0.17s after one dialog
+    pair and 0.89s after five, enough to push a test past its timeout.
     """
     yield
     try:
@@ -606,12 +595,10 @@ GIT_ROOT = Path(__file__).resolve().parents[1]
 def git_binary() -> str:
     """The first git on this machine that will actually run.
 
-    On a Mac where Xcode is installed but its licence has never been
-    accepted, ``/usr/bin/git`` is a shim that refuses every command. Tests
-    that read ``git ls-files`` then saw an empty list and reported that
-    every file was untracked, which is a lie about the repository dressed
-    up as a test failure. Look for one that works, and say plainly when
-    none does.
+    With Xcode installed but its licence never accepted, ``/usr/bin/git`` is
+    a shim that refuses every command, and tests read the empty ``git
+    ls-files`` as every file being untracked. Look for one that works, and
+    say plainly when none does.
     """
     import shutil
     import subprocess
@@ -654,11 +641,9 @@ def git_lines(*arguments: str) -> list:
 def git_check_ignore(path: str) -> bool:
     """True when git ignores this path.
 
-    check-ignore answers 0 for ignored and 1 for not, and anything else
-    means git did not answer at all. Telling those apart matters: a caller
-    that reads "did not run" as "not ignored" fails confusingly, and one
-    that reads it as "ignored" - or skips itself - quietly stops checking
-    that private files stay out of the repository.
+    check-ignore answers 0 for ignored and 1 for not; anything else means
+    git did not answer. Read as either, a caller would fail confusingly or
+    quietly stop checking that private files stay out of the repository.
     """
     import subprocess
 

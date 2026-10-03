@@ -1,47 +1,39 @@
 #!/usr/bin/env python3
 """Play real records through Music rider, headless, and measure it.
 
-The scene is a game, and a game is not finished when its tests pass. A
-test says a block arrives on the beat when the chart is three evenly
-spaced kicks; a record says whether it arrives on the beat when the
-detector heard the kick 40 ms late, the tempo came out at 87.3 and the
-chorus is twice as loud as the intro. Nearly everything worth fixing in
-this scene was found here rather than in the suite, and then written
-back into the suite as a test.
+A test says a block arrives on the beat when the chart is three evenly
+spaced kicks; a record says whether it does when the detector heard the
+kick 40 ms late, the tempo came out at 87.3 and the chorus is twice as loud
+as the intro. Most of what was worth fixing in the scene was found here,
+then written into the suite as a test.
 
-It drives the real pane - the same Spectrum widget the window uses, fed
-by the app's own decoder, analysis and beat map - rather than a state
-built by hand, so what it measures is what somebody playing the track
-would see. The only things faked are the two clocks, which are stepped
-by exactly one frame each frame so that a slow machine measures the same
-run as a fast one.
+It drives the real pane, fed by the app's own decoder, analysis and beat
+map, so it measures what somebody playing the track would see. Only the two
+clocks are faked, stepped exactly one frame each frame, so a slow machine
+measures the same run as a fast one.
 
     ./dev playtest ~/Music/*.mp3
     ./dev playtest track.mp3 --seconds 90 --mode Puzzle
     ./dev playtest track.mp3 --save frame.png
 
-No path, no song and nothing measured here is ever written into the
-repository: songs are somebody's music, and a frame of one is a picture
-of somebody's music. Pass the files on the command line.
+Nothing measured here is written into the repository: songs are somebody's
+music, and a frame of one is a picture of it. Pass the files on the command
+line.
 
-What it reports, per track, and what each one is for:
+Per track:
 
-  off        How far each block was from the beat it belongs to, as a
-             median and a worst case, in milliseconds. This is the whole
-             point of the scene: a dodge you begin on the beat has to
-             land on it.
-  speed      The road's own speed in world units a second - its floor,
-             its mean and its peak. A road that stops between beats
-             reads as a stutter however good the timing is.
+  off        How far each block was from its beat, median and worst, in
+             milliseconds: a dodge begun on the beat has to land on it.
+  speed      The road's speed in world units a second: floor, mean, peak.
+             A road that stops between beats reads as a stutter.
   stall      The share of frames under a tenth of the mean speed.
-  back       Frames where the road moved backwards. Should be zero: a
-             road may only go forwards, and a seek is the one exception.
-  empty      The share of frames with nothing on the road at all.
+  back       Frames where the road moved backwards. Should be zero; a
+             seek is the one exception.
+  empty      The share of frames with nothing on the road.
   hits       What a player who dodges perfectly still gets hit by. Any
-             hit here is the chart asking for something nobody can do.
-  coins      Coins taken by that player, and the best row of them. A
-             player who never goes near an obstacle takes none, so this
-             is really "did the coins make anybody ride differently".
+             hit is the chart asking for something nobody can do.
+  coins      Coins taken by that player, and the best row of them: did
+             the coins make anybody ride differently.
   twists     Corkscrews the track earned, at its loudest moments.
   ms         What a frame costs, mean and worst, at 1280x720.
 """
@@ -61,9 +53,8 @@ sys.path.insert(0, str(ROOT))
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-#: How long to wait for one file to decode and analyse before giving up.
-#: A four minute track takes a few seconds; this is the point at which
-#: something has gone wrong rather than slow.
+#: How long to wait for one file to decode and analyse: a four minute track
+#: takes a few seconds, so this means something has gone wrong.
 PATIENCE = 180.0
 
 #: How often a real media player reports where it is. The pane runs its
@@ -73,11 +64,9 @@ REPORTS_A_SECOND = 4.0
 
 
 def decoded(path, patience=PATIENCE):
-    """The app's own analysis of a file, or None with a reason.
-
-    Runs the real decoder on its real threads and spins a Qt event loop
-    until the callbacks land, because that is the only way this data is
-    ever produced.
+    """The app's own analysis of a file, or None with a reason: the real
+    decoder on its real threads, with a Qt event loop spun until the
+    callbacks land.
     """
     from PySide6.QtCore import QCoreApplication, QEventLoop
     from PySide6.QtWidgets import QApplication
@@ -163,21 +152,15 @@ def paned(got, mode="Mono", size=(1280, 720)):
 
 
 class Clock:
-    """The clock the pane and the scene read, stepped by hand.
+    """The clock the pane and the scene read, stepped by hand: on the wall
+    clock every frame would be a different length, and the run would measure
+    the machine rather than the scene.
 
-    A headless run that let them read the wall clock would measure the
-    machine rather than the scene: every frame would be a different
-    length, and the scene's whole job is to be the same on every
-    machine.
-
-    ``time.monotonic`` itself, rather than each module's name for it.
-    The pane imports it inside the methods that use it - a local
-    ``import time as _time`` binds from sys.modules and walks straight
-    past a module attribute somebody swapped, so patching the two module
-    namespaces left the pane on the wall clock while the scene ran on
-    this one. What that measured was the pane's clock standing still
-    while the playhead ran, which reads exactly like the picture lagging
-    a third of a beat behind the music, and is not.
+    ``time.monotonic`` itself is replaced, not each module's name for it.
+    The pane imports it inside its methods (``import time as _time`` binds
+    from sys.modules), so patching module namespaces left the pane on the
+    wall clock, which looked exactly like the picture lagging a third of a
+    beat behind the music.
     """
 
     def __init__(self, start=1000.0):
@@ -206,14 +189,14 @@ class Clock:
 def dodgeable(scene, blocks):
     """Can a perfect player get through this chart untouched?
 
-    Audiosurf's greys are avoidable, always. Three lanes and a figure
-    that closes two of them leaves one, and a slalom closes them one
-    after another - so the question is not "is a lane free" but "is a
-    free lane *reachable* from the last one, in the time between".
+    Greys have to be avoidable, always. With three lanes a figure closing
+    two leaves one, and a slalom closes them in turn, so the question is
+    whether a free lane is *reachable* from the last one in the time
+    between.
 
-    Solved rather than sampled: walk the figures in order keeping the
-    set of lanes a player could be in, and if that set ever empties the
-    chart has asked for something nobody can do.
+    Solved rather than sampled: walk the figures keeping the set of lanes a
+    player could be in; if it ever empties, the chart has asked for
+    something nobody can do.
     """
     greys = sorted((when, lane) for when, lane, _k, _d, grey in blocks
                    if grey)
@@ -250,19 +233,14 @@ def dodgeable(scene, blocks):
 def steer_well(scene):
     """Play it properly: take the free lane, and take what pays.
 
-    Not an optimal player - an attentive one. It looks at the next
-    figure due, moves out of a lane that figure closes, and otherwise
-    goes for whatever is worth having in the lanes that are still open:
-    a coin, a power block, a prize.
-
-    Coins are the point of the exercise. They sit in the lane *beside*
-    an obstacle, so a player that only avoided things would never take
-    one - which is exactly the behaviour the coins exist to change, and
-    exactly what this has to be able to measure.
+    Attentive rather than optimal: it moves out of a lane the next figure
+    closes, and otherwise goes for a coin, a power block or a prize in the
+    open lanes. Coins sit beside obstacles, so a player that only avoided
+    things would never take one, which is what the coins exist to change and
+    what this has to measure.
     """
-    # Wakeboard: leave the road where the road is leaving you. A jump
-    # off the flat is worth nothing, so a player that jumped on a timer
-    # would measure nothing either.
+    # Wakeboard: leave the road where the road leaves you; a jump off the flat
+    # is worth nothing.
     crest = getattr(scene, "_crest", None)
     if callable(crest) and crest() > 0.6:
         scene.jump()
@@ -315,9 +293,9 @@ def ride(got, seconds=45.0, mode="Mono", fps=60, save=None, steer=True,
                     pane.set_position(int(at * 1000.0))
                 if steer and not stopped:
                     steer_well(scene)
-                # The pane's own frame: what the window's timer calls.
-                # Everything the scene is handed is built in here, so a
-                # run that only painted would paint an empty state.
+                # The pane's own frame, as the window's timer calls it:
+                # everything the scene is handed is built here, so a run that
+                # only painted would paint an empty state.
                 pane._tick()
                 image.fill(QColor(0, 0, 0))
                 started = time.perf_counter()
@@ -332,8 +310,8 @@ def ride(got, seconds=45.0, mode="Mono", fps=60, save=None, steer=True,
                     now = scene._where(block[0]) - scene.RIDER_AT
                     key = id(block)
                     if key in side and side[key] > 0.0 >= now:
-                        # It crossed the rider this frame. How far from
-                        # its own beat did that happen?
+                        # It crossed the rider this frame: how far from its own
+                        # beat?
                         offs.append((scene._heard - block[0]) * 1000.0)
                     side[key] = now
                 if scene._speed > 0.0:

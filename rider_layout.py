@@ -1,12 +1,9 @@
 """What Music rider lays on its road, and where, for a given record.
 
-The road used to be laid from one rule for everything: a figure every two
-beats or so, the same eight shapes in turn - wall, block, wall, run, wall,
-block, wall, wall - and a quarter of them obstacles. Every record rode the
-same, only faster or slower. This decides instead, from how the record
-moves and how it is put together (see trackstyle):
+Decided from how the record moves and how it is put together (see
+trackstyle).
 
-**Which figures.** A vocabulary of them, each a way of moving to music:
+**Which figures**, each a way of moving to music:
 
     wall      two lanes shut, one open                 the kick you dodge
     gate      a wall whose open lane walks across      a four-to-the-floor
@@ -28,14 +25,12 @@ and dangerous, a build rolls towards it, a break is a melody to collect and
 nothing to dodge.
 
 **In what order.** Each section draws a short palette of figures, weighted
-as above, and walks it in a pattern - A A B A, A B A C - so a part of a
-track has a rhythm of its own rather than a figure picked afresh every
-time. A section that comes back - the second chorus - takes the palette
-the first one drew, mirrored, so it feels like the part it is and not
-like the same road twice.
+as above, and walks it in a pattern (A A B A, A B A C), so a part of a track
+has a rhythm of its own. A section that comes back, such as the second
+chorus, takes the palette the first one drew, mirrored.
 
 Everything is drawn from the track's own seed, so a record lays out the
-same way every time it is played and every record lays out its own way.
+same way every time and every record its own way.
 """
 
 from __future__ import annotations
@@ -167,9 +162,9 @@ class Plan:
         self._seen[signature] = occurrence + 1
         base = self._palettes.get(signature)
         if base is None:
-            # A checksum rather than hash(): Python salts the hash of a
-            # string per process, which would give a record a new road
-            # every time the app started.
+            # A checksum rather than hash(): Python salts string hashes per
+            # process, which would give a record a new road every time the app
+            # started.
             seed = (getattr(self.style, "seed", 0)
                     ^ zlib.crc32(repr(signature).encode()))
             rng = random.Random(seed)
@@ -211,9 +206,8 @@ DIFFICULTY: Dict[str, Dict[str, Optional[float]]] = {
 #: How calm a record has to be to have nothing to dodge at all.
 CALM_RIDDEN = 0.75
 
-#: The most of any section that is obstacles, at any level: what is left
-#: is what there is to take, and a road of nothing but greys is a road
-#: with no game on it but staying alive.
+#: The most of any section that is obstacles, at any level: what is left is
+#: what there is to take.
 DANGER_MOST = 0.85
 
 
@@ -229,8 +223,7 @@ def danger_share(kind: str, mode: str, style=None,
     share = ninja if mode == "Ninja" else mono
     chosen = level(difficulty)
     share *= float(chosen["danger"])
-    # The harder levels have something to dodge everywhere, even where
-    # twice nothing would still be nothing.
+    # The harder levels have something to dodge everywhere.
     share = max(share, float(chosen.get("least") or 0.0))
     if style is not None and kind == "drop":
         share += 0.05 * max(float(getattr(style, "heavy", 0.0)),
@@ -247,11 +240,9 @@ def danger_share(kind: str, mode: str, style=None,
 #: How much the loudness where a figure lands stretches or tightens its
 #: section's spacing: at silence, and at the loudest the track gets.
 #:
-#: Audiosurf's traffic follows the music's intensity, and the kind of
-#: section says what the figures are, not only how many. A record's drums
-#: arrive a few seconds after its picture, and until they do every loud
-#: part reads as a break - which spaced a chorus exactly like the quiet
-#: intro before it, three beats apart both.
+#: A record's drums arrive a few seconds after its picture, and until then
+#: every loud part reads as a break, which spaced a chorus exactly like the
+#: quiet intro before it.
 LOUDNESS = (1.2, 0.8)
 
 

@@ -1,8 +1,7 @@
-"""Deliberate misuse. Every case here is something a user or a server can do.
+"""Deliberate misuse: everything here is something a user or a server can do.
 
-Written to break things rather than to demonstrate them. Where one of these
-found a real defect the fix is in the code and the case stays as a guard; where
-the behaviour was already right, it stays as a statement that it has to remain
+Where a case found a real defect the fix is in the code and the case stays
+as a guard; where the behaviour was already right, it stays to keep it
 right. Nothing here is adjusted to match what the code happens to do.
 """
 
@@ -465,9 +464,8 @@ class TestSigningCannotShipAnAppThatWillNotStart:
         """It turns on library validation, which needs a Team ID.
 
         A local certificate has none, so the app is refused its own bundled
-        framework and dies before main() with a message about Team IDs. The
-        hardened runtime is only useful alongside notarisation, which needs a
-        paid Developer ID anyway.
+        framework and dies before main(). The hardened runtime is only
+        useful with notarisation, which needs a paid Developer ID anyway.
         """
         commands = [line for line in self._build_script().splitlines()
                     if "codesign" in line and not line.lstrip().startswith("#")]
@@ -479,13 +477,11 @@ class TestSigningCannotShipAnAppThatWillNotStart:
         assert "Re-signing ad-hoc" in self._build_script()
 
     def test_no_variable_runs_into_a_curly_quote(self):
-        """``"as “$IDENTITY”"`` is not the name in quotes. macOS's bash
-        reads the closing quote's bytes as more of the variable's name,
-        so under ``set -u`` it stopped the build after the bundle was
-        made and before it was signed or started - on exactly the
-        machines that have a signing identity, because ad-hoc signing
-        takes the other branch. Without ``set -u`` it prints nothing
-        where the name should be. ``${IDENTITY}`` says where it ends."""
+        """``"as “$IDENTITY”"`` is not the name in quotes: macOS's bash reads
+        the closing quote's bytes as more of the variable's name, so under
+        ``set -u`` the build stopped after the bundle was made and before it
+        was signed, on exactly the machines with a signing identity.
+        ``${IDENTITY}`` says where the name ends."""
         import re
         from pathlib import Path
 
@@ -535,8 +531,8 @@ class TestPastedCredentials:
 
     def test_a_newline_is_the_one_that_broke_login(self):
         """imaplib puts the password in a quoted string. A line ending inside
-        that string ends the command early, and the server answers
-        "unmatch quote" - which reads to the user as a wrong password."""
+        it ends the command early, and the server's "unmatch quote" reads as
+        a wrong password."""
         from imap_engine import clean_secret
         assert "\n" not in clean_secret("password\n")
         assert "\r" not in clean_secret("pass\rword")
@@ -575,11 +571,10 @@ class TestPastedCredentials:
 class TestNoMessageCanHangTheSorter:
     """Found by running six thousand real messages through it.
 
-    One began with seventy underscores and took forty-three seconds. The gapped
-    matcher lets separator characters fall between the words of a phrase, and a
-    long run of them can be divided between those gaps in exponentially many
-    ways. The guard is in normalize(), which collapses the run before any
-    pattern sees it.
+    One began with seventy underscores and took forty-three seconds: the
+    gapped matcher lets separators fall between a phrase's words, and a long
+    run of them divides between the gaps in exponentially many ways.
+    normalize() collapses the run before any pattern sees it.
     """
 
     @pytest.fixture(scope="class")
@@ -614,11 +609,11 @@ class TestNoMessageCanHangTheSorter:
 
 
 class TestUnsolicitedMailIsNotJobMail:
-    """Work-from-home spam was being read as an interview next step.
+    """Work-from-home spam read as an interview next step.
 
-    "Fill out the form below" is what a hiring process says and what a scam
-    says. Counting families of solicitation language separates them without
-    needing to know which scam is current.
+    A hiring process and a scam both say "fill out the form below". Counting
+    families of solicitation language separates them without knowing which
+    scam is current.
     """
 
     @pytest.fixture(scope="class")
@@ -665,11 +660,8 @@ class TestPlainHttpOnlyEverGoesNowhere:
     """Every request to a model backend carries the text of somebody's email.
 
     Plain HTTP is allowed to this machine and to a box on the same network,
-    because that is where a local model runs and the traffic never leaves the
-    building. It is refused everywhere else.
-
-    The check used to be a string prefix, so `127.0.0.1.evil.com` began with
-    "127." and passed. Setting that as the endpoint would have sent every
+    where a local model runs; it is refused everywhere else. A string-prefix
+    check once let `127.0.0.1.evil.com` through, which would have sent every
     message body to somebody else's server in the clear.
     """
 
@@ -723,11 +715,10 @@ class TestPlainHttpOnlyEverGoesNowhere:
 
 
 class TestUnclosedTagsCannotStallAScan:
-    """Python's HTMLParser is quadratic on "<" it cannot close.
+    """Python's HTMLParser is quadratic on a "<" it cannot close.
 
-    It rescans the rest of the buffer every time, so 40,000 unclosed tags in
-    a 156 KB body took 22 seconds and 00,000 took 35. Anyone can send that,
-    and a handful of them in one inbox would stall a scan for minutes.
+    It rescans the rest of the buffer each time, so 40,000 unclosed tags in
+    a 156 KB body took 22 seconds, and anyone can send that.
     """
 
     def test_it_is_fast_now(self):
@@ -882,12 +873,11 @@ class TestInstructionsInsideAMessageAreNotFollowed:
 class TestALinkGoesWhereItSays:
     """The links panel builds anchors from URLs the sender chose.
 
-    A URL may legally contain an apostrophe, and Qt's rich text parser does
-    not expand entities inside an attribute value. Escaping one the way body
-    text is escaped therefore did two wrong things at once: it corrupted
-    ordinary links, and it let a crafted one close the href and append a
-    second. Qt keeps the last href, so the click went somewhere the displayed
-    text never mentioned - phishing served by the app's own window.
+    A URL may contain an apostrophe, and Qt's rich text does not expand
+    entities inside an attribute. Escaped like body text, an ordinary link
+    was corrupted and a crafted one could close the href and append a
+    second; Qt keeps the last, so the click went somewhere the displayed
+    text never mentioned.
     """
 
     SPOOF = ("https://careers.example/apply?x=' title='https://careers.example'"
@@ -948,12 +938,10 @@ class TestALinkGoesWhereItSays:
 class TestSealingNeverWaitsForever:
     """The Keychain prompt that stopped a build.
 
-    Signing changes an app's code signature, which is how macOS decides
-    whether it already has permission. The freshly signed bundle is therefore
-    a stranger, and macOS asks - a dialog with nobody watching for it during
-    a build. The vault built its credential store with no read timeout, so
-    the self-test that seals a canary blocked in SecItemCopyMatching and the
-    build sat there indefinitely with nothing on screen to explain it.
+    Signing changes the app's signature, so macOS treats the freshly signed
+    bundle as a stranger and asks, with nobody watching during a build. With
+    no read timeout, the self-test that seals a canary blocked in
+    SecItemCopyMatching indefinitely.
     """
 
     def test_the_vault_gives_up_on_a_keychain_that_never_answers(self):
@@ -1063,16 +1051,14 @@ class TestOfflineMeansOffline:
 class TestTheCipherSurfaceStaysNarrow:
     """Why the cryptography pin is safe, checked rather than asserted.
 
-    48.x is the last release with a universal2 macOS wheel; 49 and 50 publish
-    arm64 only, so moving up would quietly make the app Apple-silicon only.
-    48.0.1 carries three advisories - a Bleichenbacher oracle in PKCS#7
-    EnvelopedData decryption, and two in the X.509 path verifier. None is
-    reachable from here: the only thing this app asks cryptography for is
-    AES-GCM, and TLS is done by Python's own ssl module.
+    48.x is the last release with a universal2 macOS wheel; 49 and 50 are
+    arm64 only. 48.0.1 carries three advisories (a Bleichenbacher oracle in
+    PKCS#7 EnvelopedData decryption, and two in the X.509 path verifier),
+    none reachable here: the app asks cryptography only for AES-GCM, and TLS
+    is Python's own ssl module.
 
-    That is only true while it stays true. If someone starts verifying
-    certificates or decrypting PKCS#7 with this library, the pin stops being
-    safe, and this test is what says so.
+    If anything starts verifying certificates or decrypting PKCS#7 with this
+    library, the pin stops being safe, and this test says so.
     """
 
     ALLOWED = "cryptography.hazmat.primitives.ciphers.aead"

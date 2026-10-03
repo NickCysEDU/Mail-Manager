@@ -1,25 +1,18 @@
-"""What is attached to a message, and what is safe to do with it.
-
-Attachments are the one part of an email that is a file rather than text,
-which makes them the one part that can still hurt you in 2026. Everything
+"""What is attached to a message, and what is safe to do with it. Everything
 here assumes the sender is hostile.
 
-Three separate problems, kept separate:
+*Naming.* A filename in a message is a stranger's suggestion: it can
+traverse directories, contain a null byte, run to four thousand characters,
+or use a right-to-left override so that ``photo_gnp.exe`` displays as
+``photo_exe.png``. :func:`safe_name` makes something safe to write to disk;
+:func:`display_name` makes something safe to show, which is a different job.
 
-*Naming.* A filename in a message is not a filename, it is a suggestion from
-a stranger. It can traverse directories, contain a null byte, be four
-thousand characters long, or use a right-to-left override so that
-``photo_gnp.exe`` displays as ``photo_exe.png``. :func:`safe_name` produces
-something safe to write to disk; :func:`display_name` produces something safe
-to show, which is not the same job.
-
-*Typing.* The declared content type is also a suggestion. A part claiming to
-be a PNG may be anything, so :func:`sniff` reads the leading bytes and the
-viewer trusts that rather than the header.
+*Typing.* The declared content type is also a suggestion, so :func:`sniff`
+reads the leading bytes and the viewer trusts those.
 
 *Opening.* Nothing here opens anything. The viewer renders a known-safe set
-in-process and offers to save the rest; running an attachment is the user's
-business, done in Finder, with the quarantine flag the save put there.
+in-process and offers to save the rest; running an attachment happens in
+Finder, against the quarantine flag the save sets.
 """
 
 from __future__ import annotations
@@ -30,9 +23,9 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
-#: Beyond this, a part is listed but not fetched without the user insisting.
-#: Large enough for an ordinary offer letter or photograph, small enough that
-#: a careless double-click does not pull fifty megabytes over a hotel network.
+#: Beyond this a part is listed but not fetched unless asked: large enough for
+#: an ordinary letter or photograph, small enough that a careless double-click
+#: does not pull fifty megabytes over a slow network.
 FETCH_WITHOUT_ASKING = 8 * 1024 * 1024
 
 #: A hard ceiling on any single fetch, whatever the user asks for.
@@ -60,14 +53,13 @@ sh bash zsh csh ksh fish py rb pl php lua ps1 psm1 vbs vbe js jse wsf wsh hta
 dmg pkg mpkg iso
 """.split())
 
-#: Archives. Never expanded here - an archive is saved, not browsed, because
-#: expanding one is how zip slip and zip bombs arrive.
+#: Archives are saved, never expanded here: expanding one is how zip slip and
+#: zip bombs arrive.
 _ARCHIVE = frozenset("zip tar gz tgz bz2 xz 7z rar lzh cab".split())
 
-#: Executables, by their own first bytes. These are listed first and map to
-#: "program" rather than to whatever the part claimed to be: a message may
-#: declare image/png and begin with MZ, and the one thing that must not
-#: happen is handing those bytes to an image decoder to find out.
+#: Executables, by their own first bytes, checked first and mapped to "program"
+#: whatever the part claimed: a message may declare image/png and begin with
+#: MZ, and those bytes must never reach an image decoder.
 _PROGRAM: Tuple[Tuple[bytes, str], ...] = (
     (b"MZ", "application/x-dosexec"),
     (b"\x7fELF", "application/x-executable"),
@@ -179,11 +171,9 @@ def sniff(head: bytes, declared: str = "", name: str = "") -> Tuple[str, str]:
         if head[8:12] == b"WAVE":
             return "audio", "audio/wav"
         return "image", "image/webp"
-    # AIFF, and its compressed cousin. The same shape as RIFF with the
-    # bytes the other way round, which is why it needs its own line: the
-    # name ".aif" was already in every list of audio extensions, and the
-    # rule here is that the bytes decide, so an AIFF was being called
-    # "some other file" and never reached the player.
+    # AIFF and its compressed cousin: RIFF's shape with the bytes the other way
+    # round. The bytes decide here, so without this an AIFF was "some other
+    # file" and never reached the player.
     if head[:4] == b"FORM" and head[8:12] in (b"AIFF", b"AIFC"):
         return "audio", "audio/aiff"
     if head[4:8] == b"ftyp":

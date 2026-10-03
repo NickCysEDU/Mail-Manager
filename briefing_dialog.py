@@ -1,15 +1,12 @@
 """The briefing, on screen.
 
-A window rather than a panel in the main one, for the same reason a morning
-paper is not printed in the margin of a spreadsheet: it is read once, in one
-pass, and then closed. It is deliberately not interactive except in the one
-way that matters - clicking anything under "Needs you" selects that message in
-the table behind, so reading the briefing and acting on it are the same
-motion.
+A window rather than a panel: it is read once, in one pass, and closed.
+Clicking anything under "Needs you" selects that message in the table
+behind, so reading the briefing and acting on it are one motion.
 
-Nothing here computes anything. :mod:`briefing` decides what the sections say
-and this arranges them, so what the window shows and what "Copy" puts on the
-clipboard cannot drift apart - they are the same object rendered twice.
+:mod:`briefing` decides what the sections say and this arranges them, so the
+window and what "Copy" puts on the clipboard are the same object rendered
+twice.
 """
 
 from __future__ import annotations
@@ -26,13 +23,12 @@ import briefing as _briefing
 import widgets
 from briefing import Briefing, Urgency
 
-#: The marker down the left of a line, and the colour of its text. A
-#: marker and coloured words rather than a filled button: eight of these
-#: in a row, each a solid block of red or blue, is a warning label rather
-#: than a list, and a list that shouts at every line is not ranked.
+#: The marker down the left of a line, and the colour of its text: a marker and
+#: coloured words rather than filled buttons, which in a row read as a warning
+#: label.
 #:
-#: Only the two that mean "somebody is waiting on you" are marked at all.
-#: A line the sorter was unsure about is not urgent, it is unfinished.
+#: Only the two that mean somebody is waiting on you are marked; a line the
+#: sorter was unsure about is unfinished, not urgent.
 MARK = {
     Urgency.ACT_NOW: ("●", widgets.ACCENT_RED),
     Urgency.ANSWER: ("●", widgets.ACCENT_BLUE),
@@ -43,19 +39,12 @@ MARK = {
 class _Card(QFrame):
     """One section: a heading and the lines under it.
 
-    Three columns, the same in every card: a count on the left, the line
-    itself, and where it is bound for on the right. They were laid out well
-    enough one card at a time and read as a mess down the page, for four
-    reasons, all of them about lines not sharing an edge.
-
-    A clickable line is a flat button and a plain one is a label, and the
-    button carried padding the label did not, so the two were different
-    heights and their text sat at different places. A wrapped line is two
-    lines tall and its count was centred against the whole of it, so the
-    number drifted away from the line it counts. The right-hand column took
-    its width from whatever folder name happened to be in it, so no two
-    cards agreed where the middle column ended. And a long folder name took
-    that room from the line itself.
+    Three columns, the same in every card: a count, the line, and where it
+    is bound for. The lines have to share edges: a clickable line (a flat
+    button) and a plain one (a label) have the same padding and height, a
+    count sits at the top of a wrapped line rather than centred on it, and
+    the right-hand column has a fixed width, so no folder name moves the end
+    of the middle column or takes the line's room.
     """
 
     #: The two outer columns, which are the same width in every card so that
@@ -95,9 +84,8 @@ class _Card(QFrame):
             urgency: int = Urgency.NOTE, tooltip: str = "",
             on_click=None, dim: bool = False) -> None:
         number = QLabel(count)
-        # Top, not centre: a line that wraps onto two is twice as tall, and
-        # a count centred against the whole of it floats away from the line
-        # it belongs to.
+        # Top, not centre: a count centred against a wrapped line floats away
+        # from it.
         number.setAlignment(Qt.AlignmentFlag.AlignRight
                             | Qt.AlignmentFlag.AlignTop)
         number.setProperty("dim", "true")
@@ -107,9 +95,8 @@ class _Card(QFrame):
         if marker and not count:
             number.setText(marker)
             if colour:
-                # Colour only. A stylesheet that also carried padding or a
-                # radius would make this line a different height from the
-                # ones around it, which is how a list stops being a list.
+                # Colour only: padding or a radius would make this line a
+                # different height from the ones around it.
                 number.setStyleSheet(f"color: {colour};")
 
         body: QWidget
@@ -117,19 +104,11 @@ class _Card(QFrame):
             button = QPushButton(text)
             button.setFlat(True)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
-            # A link, not a button. setFlat only drops the raised look;
-            # the theme still draws a border, and eight bordered boxes
-            # stacked up read as a form to fill in rather than a list to
-            # read.
-            # No padding of its own. A plain line is a label with none, and
-            # a list whose clickable lines are two pixels taller than its
-            # plain ones is the mess this was.
-            # No padding and no minimum height of its own. The theme
-            # gives every button one height so that a row of mixed
-            # controls lines up, which is right for a row of buttons and
-            # wrong for something pretending to be a line of text: it made
-            # the clickable lines taller than the plain ones, by however
-            # much the current density asks for.
+            # A link, not a button: setFlat only drops the raised look, and the
+            # theme still draws a border. No padding and no minimum height of
+            # its own: the theme gives every button one height so that mixed
+            # controls line up, which made the clickable lines taller than the
+            # plain ones.
             rule = ("text-align: left; padding: 0px; margin: 0px; "
                     "min-height: 0px; background: none; border: none;")
             if colour:
@@ -142,14 +121,10 @@ class _Card(QFrame):
             label.setWordWrap(True)
             # Inside the label as well as in the grid.
             #
-            # A wrapped label works out how tall it wants to be from a
-            # width it is told before the grid has settled on one, and it
-            # comes out a line taller than the text it ends up holding:
-            # 45 pixels for two 15-pixel lines. The spare line's worth is
-            # then shared above and below the text, so a two-line entry
-            # started seven pixels below the count beside it. Where the
-            # box ends up does not matter if the text starts at the top
-            # of it.
+            # A wrapped label sizes itself from a width it is told before the
+            # grid settles, and comes out a line taller than its text (45
+            # pixels for two 15-pixel lines), with the spare shared above and
+            # below. Anchored at the top, the text starts level with its count.
             label.setAlignment(Qt.AlignmentFlag.AlignLeft
                                | Qt.AlignmentFlag.AlignTop)
             if dim:
@@ -163,10 +138,8 @@ class _Card(QFrame):
         self._grid.addWidget(number, self._rows, 0,
                              Qt.AlignmentFlag.AlignRight
                              | Qt.AlignmentFlag.AlignTop)
-        # Top, like its count. Left to fill the cell, a single-line label
-        # given spare room centres its text in it while the fixed-height
-        # count beside it stays at the top, so the two drift apart by
-        # however much room the card happens to have.
+        # Top, like its count: a single-line label given spare room centres its
+        # text, while the fixed-height count beside it stays at the top.
         self._grid.addWidget(body, self._rows, 1,
                              Qt.AlignmentFlag.AlignTop)
         if folder:
@@ -178,9 +151,9 @@ class _Card(QFrame):
             where.setFixedWidth(self.FOLDER_WIDTH)
             where.setText(where.fontMetrics().elidedText(
                 folder, Qt.TextElideMode.ElideLeft, self.FOLDER_WIDTH))
-            # Once a card has a folder in it, the column is that wide in
-            # that card whatever the names turn out to be - so the middle
-            # column ends in the same place on every line.
+            # Once a card has a folder in it, the column is that wide whatever
+            # the names, so the middle column ends in the same place on every
+            # line.
             self._grid.setColumnMinimumWidth(2, self.FOLDER_WIDTH)
             self._grid.addWidget(where, self._rows, 2,
                                  Qt.AlignmentFlag.AlignRight
@@ -191,13 +164,9 @@ class _Card(QFrame):
 class BriefingDialog(QDialog):
     """What the last scan found, in the order somebody wants to be told it."""
 
-    #: Room between the cards and the scroll bar.
-    #:
-    #: Measured at 700x520 with the bar showing, the cards ended one pixel
-    #: from it while the same cards had eleven to the dialog's edge on the
-    #: left: a column of bordered panels running straight into the bar,
-    #: which is "xxx xxxxxx xxx xxxxxxxxxx xxxxx xxxxx xx xxxxxxxx". This
-    #: matches the margin on the other side.
+    #: Room between the cards and the scroll bar, matching the margin on the
+    #: other side: at 700x520 the cards ended a pixel from the bar and had
+    #: eleven to the left edge.
     BAR_GAP = 11
 
     #: A row in the table the reader wants to look at.
@@ -323,10 +292,8 @@ class BriefingDialog(QDialog):
 
 def show(items, parent=None, *, window_start=None, window_end=None,
          mailboxes=(), on_row=None) -> Optional[BriefingDialog]:
-    """Build a briefing from rows and put it on screen.
-
-    One call, because the window has no business knowing how a briefing is
-    assembled - only that it wants one for these rows.
+    """Build a briefing from rows and put it on screen: the window has no
+    business knowing how a briefing is assembled.
     """
     report = _briefing.build(items, window_start=window_start,
                              window_end=window_end, mailboxes=mailboxes)

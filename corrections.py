@@ -1,37 +1,22 @@
 """What the app has learned from being corrected.
 
-Every sorter gets some mail wrong, and the useful question is not whether it
-does but whether it does the same one twice. When you drag a message into a
-folder the app did not suggest, that is a fact about your mail that no amount
-of general-purpose language modelling was going to produce: that
-``no-reply@greenhouse.io`` means interviews *to you*, that mail from your
-recruiter's personal Gmail is job mail, that the newsletter the sorter keeps
-filing under Applications is not one.
+Filing a message somewhere the app did not suggest is a fact about your mail
+that no model would produce: that ``no-reply@greenhouse.io`` means
+interviews *to you*, or that a recruiter's personal Gmail is job mail. This
+module writes those facts down and reads them back on the next scan.
 
-This module writes those facts down and reads them back on the next scan.
+**An exact address needs one correction**: it cannot mean anyone else.
 
-Two rules govern when a memory is allowed to speak:
+**A domain needs two, from two different people**: one says something about
+a person, two about the company. Shared mail hosts (Gmail, iCloud, Outlook
+and the rest) never learn at the domain level.
 
-**An exact address needs one correction.** If you filed a message from
-``jane@acme.example`` into Interviews, the next message from Jane goes to
-Interviews. One correction is enough because the address is specific: you
-cannot mean anyone else.
+The learned folder is always the most recent one, and its strength is how
+many corrections in a row agree with it, so the memory changes its mind as
+soon as it is corrected, with nothing to un-teach.
 
-**A domain needs two, from two different people.** One correction at
-``acme.example`` says something about that person; two, from two colleagues, say
-something about the company. Shared mail hosts - Gmail, iCloud, Outlook and
-the rest - never learn at the domain level at all, because "the domain" there
-is four hundred million strangers.
-
-Corrections are also allowed to change their mind. The learned folder is
-always the most recent one, and the strength behind it is how many corrections
-in a row agree with it. Correct a sender three times to Applications and once
-to Interviews, and the answer is Interviews - immediately, with a strength of
-one. Nothing has to be un-taught by hand.
-
-Everything lives in the user's Application Support directory, mode 0600,
-alongside their settings. Nothing here ships with the app: the file starts
-empty and only ever contains what the person using it put there.
+Everything lives in Application Support, mode 0600, beside the settings. The
+file starts empty and holds only what the person using it put there.
 """
 
 from __future__ import annotations
@@ -51,13 +36,12 @@ log = logging.getLogger(__name__)
 #: directory without importing this module first.
 FILENAME = "corrections.json"
 
-#: How many corrections to keep. Beyond this the oldest go, which is also the
-#: right policy for a memory: a folder you stopped using two years ago should
-#: not still be pulling mail towards it.
+#: How many corrections to keep. Beyond this the oldest go: a folder unused for
+#: two years should not still pull mail towards it.
 MAX_ENTRIES = 4000
 
-#: Corrections for one key beyond this are not consulted. A run of five
-#: agreeing corrections is already as certain as this gets.
+#: Corrections for one key beyond this are not consulted: five agreeing ones
+#: are as certain as this gets.
 RECENT_PER_KEY = 8
 
 #: An exact address is specific enough that one correction settles it.
@@ -67,10 +51,9 @@ SENDER_STRENGTH = 1
 #: people at that domain.
 DOMAIN_STRENGTH = 2
 
-#: Mail hosts where the domain says nothing about the sender. Learning
-#: "everything from gmail.com goes to Applications" would be a disaster, and
-#: it is exactly what a naive domain rule would conclude from three
-#: corrections in a row.
+#: Mail hosts where the domain says nothing about the sender: a naive domain
+#: rule would conclude "everything from gmail.com goes to Applications" from
+#: three corrections.
 SHARED_HOSTS = frozenset({
     "aol.com", "btinternet.com", "comcast.net", "cox.net", "email.com",
     "fastmail.com", "fastmail.fm", "free.fr", "gmail.com", "gmx.com",
@@ -91,11 +74,9 @@ def _now() -> str:
 
 
 def _address(raw: str) -> str:
-    """Normalise an address for use as a key.
-
-    Case is folded because mail servers do not care, and anything outside a
-    plausible address is dropped rather than stored - a malformed From header
-    should not become a key that never matches anything again.
+    """Normalise an address for use as a key: case folded, as servers ignore
+    it, and anything outside a plausible address dropped rather than stored
+    as a key that never matches.
     """
     text = (raw or "").strip().lower()
     if text.startswith("<") and text.endswith(">"):
@@ -109,12 +90,9 @@ def _address(raw: str) -> str:
 
 
 def domain_of(address: str) -> str:
-    """The host part, with a leading subdomain of a mail robot left in place.
-
-    ``no-reply@mail.greenhouse.io`` keeps ``mail.greenhouse.io`` rather than
-    being folded to ``greenhouse.io``. That is deliberate: the two are often
-    different systems sending different mail, and the narrower key is the one
-    that will not surprise anybody.
+    """The host part, with a mail robot's subdomain left in place:
+    ``mail.greenhouse.io`` is often a different system from
+    ``greenhouse.io``, sending different mail.
     """
     _, _, host = _address(address).partition("@")
     return host
@@ -136,7 +114,7 @@ class Correction:
     sender: str
     folder: str
     #: Where the app wanted to put it. Empty when it wanted to leave it alone,
-    #: which is the correction worth the most - a missed message.
+    #: which makes the most valuable correction: a missed message.
     suggested: str = ""
     #: Whether the app called it job-related. Kept so the memory can say
     #: "you have filed four of these, and the sorter called none of them job
@@ -188,8 +166,8 @@ class Learned:
     scope: str
     #: The key itself, for the settings list and for forgetting.
     key: str
-    #: A sentence for the reasoning column. Written here rather than in the
-    #: UI so that every place that shows it says the same thing.
+    #: A sentence for the reasoning column, written here so every place that
+    #: shows it says the same thing.
     because: str
 
 
@@ -214,9 +192,8 @@ class Memory:
     def load(cls, path: Optional[Path] = None) -> "Memory":
         """Read the file. A damaged or missing file is an empty memory.
 
-        Never raises. A corrections file that cannot be parsed must not stop
-        someone scanning their mail - the worst case is that the app forgets
-        what it was taught, which is recoverable by teaching it again.
+        Never raises: at worst the app forgets what it was taught, and can
+        be taught again.
         """
         path = path or cls.default_path()
         raw = vault.shared().read(path)
@@ -302,9 +279,8 @@ class Memory:
     def _agreeing_run(entries: Sequence[Correction]) -> Tuple[str, List[Correction]]:
         """The newest folder, and the run of newest corrections choosing it.
 
-        Reading backwards is what lets the memory change its mind: the moment
-        a correction disagrees with the ones before it, the run stops there
-        and the older ones stop counting.
+        Reading backwards lets the memory change its mind: a correction that
+        disagrees ends the run, and the older ones stop counting.
         """
         recent = list(entries)[-RECENT_PER_KEY:]
         if not recent:
@@ -352,10 +328,8 @@ class Memory:
     def summary(self) -> List[Learned]:
         """Everything the memory would act on, for the settings list.
 
-        An address is left out when the rule for its domain already sends mail
-        to the same place. Listing both is technically accurate and useless:
-        the reader wants to know what the app will do, and the answer for
-        everyone at that domain is one line, not four.
+        An address is left out when its domain's rule already sends mail to
+        the same place: one line covers everyone at that domain.
         """
         self._index()
         domains = {domain: rule
@@ -395,9 +369,8 @@ class Memory:
 def apply_to(items: Iterable, memory: Memory) -> int:
     """Point each item at its learned folder. Returns how many were changed.
 
-    Only items the user has not already touched by hand are considered, and
-    only when the memory disagrees with the app - so this can be run over a
-    scan's results without ever overriding a person's own choice.
+    Only items not touched by hand, and only where the memory disagrees with
+    the app, so a person's own choice is never overridden.
     """
     changed = 0
     for item in items:
