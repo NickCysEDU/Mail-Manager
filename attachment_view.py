@@ -1,26 +1,17 @@
 """A window for looking at what somebody attached, without running it.
 
-The rule this is built around: **nothing here executes anything.** Images,
-audio, PDFs and text render in-process; everything else is described and
-offered as a save. Opening a saved file happens in Finder afterwards, against
-the quarantine flag the save sets.
+Nothing here executes anything. Images, audio, PDFs and text render
+in-process; everything else is described and offered as a save, which sets
+the quarantine flag.
 
-Three refusals that look like missing features and are not:
+Deliberately not features: SVG is shown as text (it can hold scripts and
+fetch URLs); HTML is shown as text (rendering it loads remote images, which
+tell the sender it was opened); archives are never expanded (browsing one
+walks paths a stranger chose).
 
-*SVG is shown as text.* It is a document format with script elements and
-external references, and rendering one runs somebody's XML through a parser
-that can fetch URLs. The markup is readable; that is enough.
-
-*HTML is shown as text.* Rendering it loads remote images, which is how an
-attachment tells the sender it was opened.
-
-*Archives are never expanded.* Saving a zip is fine. Browsing one means
-walking paths a stranger chose.
-
-Bytes arrive one part at a time. The list is built from the server's
-description of the message, which costs a fraction of a second, and a part is
-only fetched when somebody looks at it - so a six megabyte message opens at
-once rather than after all six megabytes.
+The list comes from the server's description of the message, and a part is
+fetched only when somebody looks at it, so a six megabyte message opens at
+once.
 """
 
 from __future__ import annotations
@@ -49,8 +40,8 @@ from attachment_widgets import (FlowHolder, FlowRow, SeekBar, Spectrum,
                                 Waveform)
 from widgets import _html, system_font
 
-#: Text longer than this is truncated on screen. A log file attached to a bug
-#: report can be tens of megabytes and nobody reads it in a dialog.
+#: Text longer than this is truncated on screen; a log attached to a bug report
+#: can be tens of megabytes.
 TEXT_LIMIT = 400_000
 
 #: Cover art is attacker-controlled bytes from inside another file, so it
@@ -100,11 +91,8 @@ def _match_text(root) -> None:
 
 
 def _labelled(text: str, control) -> QWidget:
-    """A caption and its control as one thing.
-
-    The row wraps, and a bare label followed by a bare slider could be
-    split across the break - leaving a caption on one line and the slider
-    it names on the next, which reads as two unrelated controls.
+    """A caption and its control as one widget, so a wrapping row cannot split
+    them.
     """
     holder = QWidget()
     row = QHBoxLayout(holder)
@@ -158,11 +146,8 @@ def _keep_viewer_pref(name: str, value) -> None:
 
 
 def _relabel(holder: QWidget, text: str, tip: str) -> None:
-    """Change what a ``_labelled`` control is called, and its tooltip.
-
-    Two of these controls mean different things in Manual, and a slider
-    captioned "sens" that sets the shape of a flash is worse than no
-    caption at all.
+    """Rename a ``_labelled`` control and change its tooltip: two of these
+    controls mean different things in Manual.
     """
     row = holder.layout()
     caption = row.itemAt(0).widget()
@@ -173,10 +158,8 @@ def _relabel(holder: QWidget, text: str, tip: str) -> None:
 
 
 def _combo(options, tip: str) -> QComboBox:
-    """A dropdown wide enough for its longest option, popup included.
-
-    Qt sizes a combo to whatever is selected and lets the popup inherit that
-    width, so a short current item clips every longer one in the list.
+    """A dropdown wide enough for its longest option, popup included: Qt sizes
+    a combo to the current item, and the popup inherits that width.
     """
     box = QComboBox()
     box.addItems(options)
@@ -193,8 +176,6 @@ def _combo(options, tip: str) -> QComboBox:
     return box
 
 
-#: Transport symbols. Both are plain text, so they take the button's own
-#: colour and scale with its font instead of needing a themed icon set.
 #: How far J and L jump.
 SKIP_MS = 10_000
 
@@ -211,12 +192,8 @@ def _name_transport(button, playing: bool) -> None:
 
 
 class _FetchThread(QThread):
-    """One part, off the interface thread.
-
-    Fetching on the thread that handles clicks is why selecting an attachment
-    stuttered: a megabyte and a half over IMAP is a second or two, and for
-    that time nothing repaints. The window stays live now and says what it is
-    waiting for.
+    """One part, off the interface thread: a megabyte and a half over IMAP
+    takes a second or two, and the window keeps repainting meanwhile.
     """
 
     done = Signal(int, object)      # row, bytes
@@ -252,8 +229,8 @@ class ImagePane(QWidget):
             "How big the image is drawn. Fit shows all of it; Fill crops it "
             "to the window; the percentages are its own size.")
         self.mode_box.currentTextChanged.connect(self._set_mode)
-        # Words, not symbols. A bare + next to a bare - tells a first-time
-        # reader nothing about what it will do.
+        # Words, not symbols: a bare + and - say nothing to a first-time
+        # reader.
         self.zoom_out = QPushButton("Smaller")
         self.zoom_in = QPushButton("Larger")
         self.zoom_out.setToolTip("Step down through the sizes in the list.")
@@ -424,8 +401,8 @@ class AudioPane(QWidget):
     EFFECTS = 50
     #: The narrowest the seek bar may be made, however small the window.
     SEEK_LEAST = 160
-    #: Where it is kept. A new name when the default changes, so a level
-    #: set while trying an older one is not carried over.
+    #: Where it is kept. A new name when the default changes, so a level set
+    #: under the old default is not carried over.
     EFFECTS_PREF = "effects_level"
     #: What each of the rider's games is, in a line, under the controls.
     GAME_ABOUT = {
@@ -483,9 +460,8 @@ class AudioPane(QWidget):
         self.full_button = QPushButton("Full screen")
         self.full_button.setToolTip(
             "Full screen (F). Escape or F comes back.")
-        # Words, not symbols. A glyph saves eighty pixels and costs
-        # anybody who has not met it before knowing what the button does,
-        # which is the wrong trade for a control somebody uses once.
+        # Words, not symbols: a glyph saves eighty pixels and costs knowing
+        # what the button does.
         for button in (self.colour_button, self.full_button):
             button.setAccessibleName(button.text())
         self.full_button.clicked.connect(self._go_full_screen)
@@ -499,8 +475,7 @@ class AudioPane(QWidget):
             "tunnel; the strip keeps it out of the way.")
         self.shape_box.currentTextChanged.connect(self._shape_chosen)
 
-        # Two controls, not one. They do different things and lumping them
-        # behind a single "Flash" slider made both of them hard to find.
+        # Two controls, not one: they do different things.
 
         self.sense = QSlider(Qt.Orientation.Horizontal)
         self.sense.setRange(0, 100)
@@ -532,8 +507,7 @@ class AudioPane(QWidget):
         self.decay.valueChanged.connect(
             lambda value: self.spectrum.set_decay(value / 100.0))
 
-        # Words, not prepositions. "on" and "every" were shorter and told
-        # nobody what the slider under them did.
+        # Captioned with what the slider sets.
         self.sense_box = _labelled("Sensitivity", self.sense)
         self.rate_box = _labelled("Rate", self.flash)
         self.decay_box = _labelled("Glow", self.decay)
@@ -548,10 +522,9 @@ class AudioPane(QWidget):
         self.mode_box.currentTextChanged.connect(self.spectrum.set_scope_mode)
         self.mode_box_holder = _labelled("Beam", self.mode_box)
 
-        # And the rider's two games, which share a road and score
-        # nothing alike. Its own box rather than the scope's, because the
-        # two lists have nothing to do with each other and a combo that
-        # is refilled when the scene changes loses what was chosen.
+        # The rider's two games, which share a road and score differently. Its
+        # own box rather than the scope's: the lists are unrelated, and a combo
+        # refilled on a change of scene loses the choice.
         self.game_box = _combo(
             list(_vis.by_name("Music rider").MODES),
             "Which game to play on the road.\n\n"
@@ -564,13 +537,11 @@ class AudioPane(QWidget):
             "Puzzle: a colour is worth nothing until three of them touch "
             "in the grid, and the grid is three columns deep by six.")
         self.game_box.currentTextChanged.connect(self.spectrum.set_scope_mode)
-        # Not hidden itself: its holder is what comes and goes, and a
-        # combo hidden inside a holder that is shown stays hidden - which
-        # is how the game could not be chosen in the window at all, only
-        # the word "game" with nothing after it.
+        # Not hidden itself: its holder comes and goes, and a combo hidden
+        # inside a shown holder stays hidden.
         self.game_box_holder = _labelled("Game", self.game_box)
-        # How hard it is. The rider is one scene for the session, so it is
-        # told directly; a new level is a new run, as a new game is.
+        # How hard it is. The rider is one scene for the session, so it is told
+        # directly; a new level starts a new run, as a new game does.
         rider = _vis.by_name("Music rider")
         self.level_box = _combo(
             list(rider.DIFFICULTIES),
@@ -589,19 +560,16 @@ class AudioPane(QWidget):
         rider.set_difficulty(self.level_box.currentText())
         self.level_box.currentTextChanged.connect(self._level_chosen)
         self.level_box_holder = _labelled("Level", self.level_box)
-        # The rider's own sounds: a note for every block taken, climbing
-        # as a run goes on, and a thump with the music ducking under it
-        # when one is hit. On unless somebody says otherwise. See
-        # rider_sound.
+        # The rider's own sounds (see rider_sound), on unless switched off.
         self.sound_box = QCheckBox("Sounds")
         self.sound_box.setChecked(True)
         self.sound_box.setToolTip(
             "The game's own sounds: a note for each block you take, rising "
             "as the chain grows, and a thump for a hit. Key X.")
         self.sound_box.toggled.connect(self._sounds_changed)
-        # How loud those are against the music: a share of the player's
-        # own volume, so the balance stays where it was put when the music
-        # is turned up or down. Remembered, and heard as it is let go.
+        # How loud those are against the music, as a share of the player's
+        # volume, so the balance holds when the music is turned up or down.
+        # Remembered, and heard as it is let go.
         self.effects = _Slider(self.EFFECTS, Qt.Orientation.Horizontal)
         self.effects.setRange(0, 100)
         kept = _viewer_prefs().get(self.EFFECTS_PREF, self.EFFECTS)
@@ -619,8 +587,8 @@ class AudioPane(QWidget):
             lambda: _keep_viewer_pref(self.EFFECTS_PREF, self.effects.value()))
         self.effects.valueChanged.connect(self._keep_effects.start)
         self.effects.sliderReleased.connect(self._preview_effects)
-        # The tick box names the slider: the game's sounds, on or off, and
-        # how loud. Apart, a wrapping row could put them on different lines.
+        # The tick box names the slider; apart, a wrapping row could split
+        # them.
         self.effects_box = QWidget()
         pair = QHBoxLayout(self.effects_box)
         pair.setContentsMargins(0, 0, 0, 0)
@@ -634,9 +602,8 @@ class AudioPane(QWidget):
         self._track_key = None
         self._kept_result = None
         self._best_keeper = None
-        # The tick box and the two sliders that shape it, as one block: on
-        # their own the sliders said "Sensitivity" and "Rate" with nothing
-        # to say what of.
+        # The tick box and the two sliders that shape it, as one block, so the
+        # sliders' captions say what they shape.
         from attachment_widgets import Spectrum as _Spec
 
         self.strobe_source = _combo(
@@ -648,13 +615,9 @@ class AudioPane(QWidget):
             f"Both work on the other settings too.")
         self.strobe_source.currentTextChanged.connect(
             self.spectrum.set_strobe_source)
-        # What to press, said where the choice is made.
-        #
-        # Picking "Manual" turns the automatic strobe off and leaves
-        # nothing on screen to say what turns it on. It was in the full
-        # screen key card, behind ?, which is no use to somebody who has
-        # just chosen it from a menu and is waiting for something to
-        # happen.
+        # What to press, shown where Manual is chosen: Manual turns the
+        # automatic strobe off, and nothing else on screen says what turns it
+        # on.
         self.by_hand = QLabel(
             f"{AudioPane.BY_HAND_KEY} hold · {AudioPane.SPAM_KEY} strobe")
         self.by_hand.setFont(system_font())
@@ -664,14 +627,13 @@ class AudioPane(QWidget):
         self.by_hand.setVisible(False)
         self.strobe_source.currentTextChanged.connect(self._show_by_hand)
         self.source_box = _labelled("Listens to", self.strobe_source)
-        # When a scene sets the strobe up for itself, the controls have to
-        # move with it, or they show one thing while another happens.
+        # A scene that sets the strobe up for itself moves these controls with
+        # it.
         self.spectrum.strobe_settings_changed.connect(self._show_strobe)
 
-        # The picture's own settings, in one panel under one button: its
-        # shape, how one scene gives way to the next, the strobe, and its
-        # timing against the sound. Each was a control of its own in the
-        # row under the picture, and few people touch any of them.
+        # The picture's own settings, in one panel under one button: its shape,
+        # how scenes give way to each other, the strobe, and its timing against
+        # the sound. Few people touch any of them.
         from PySide6.QtWidgets import QGridLayout, QMenu, QWidgetAction
 
         changes = [name for name, _ in _Spectrum.CHANGES]
@@ -752,9 +714,9 @@ class AudioPane(QWidget):
             "strobe (S) and the picture's timing against the music.")
         self.picture_button.clicked.connect(self._show_picture_panel)
 
-        # What belongs to one scene, and is there only while it is the
-        # scene: the rider's game, the scope's beam, the meters' colours.
-        # Each its own item in the row, so the row can wrap between them.
+        # What belongs to one scene, there only while it is showing: the
+        # rider's game, the scope's beam, the meters' colours. Each its own
+        # item, so the row can wrap between them.
         self.scene_controls = {
             "Music rider": (self.game_box_holder, self.level_box_holder,
                             self.effects_box),
@@ -765,9 +727,9 @@ class AudioPane(QWidget):
             for widget in controls:
                 widget.hide()
 
-        # The visualiser's own line - on or off, which scene, and the
-        # picture's settings and full screen at the far end - with the
-        # scene's own controls under it, on a line that wraps.
+        # The visualiser's own line (on or off, the scene, the picture's
+        # settings and full screen), with the scene's controls under it on a
+        # line that wraps.
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
         top.setSpacing(12)
@@ -795,9 +757,8 @@ class AudioPane(QWidget):
         self.game_box.currentTextChanged.connect(
             lambda name: self.game_about.setText(self.GAME_ABOUT.get(name, "")))
         rows.addWidget(self.game_about)
-        # One size for the whole section. Checkboxes, combo boxes, buttons
-        # and plain labels each come with their own idea of how big their
-        # text should be, and side by side in one row that reads as a mess.
+        # One text size for the whole section: checkboxes, combos, buttons and
+        # labels each bring their own.
         _match_text(self.visual_holder)
         _match_text(self.picture_panel)
         self._visual_controls = (self.scene_box, self.picture_button,
@@ -805,8 +766,8 @@ class AudioPane(QWidget):
                                  *(widget for controls in
                                    self.scene_controls.values()
                                    for widget in controls))
-        # Everything except the tick box starts unavailable, because the
-        # visualiser starts off.
+        # Everything but the tick box starts unavailable: the visualiser starts
+        # off.
         self._grey_visual_controls(False)
 
         self._playing = False
@@ -815,9 +776,8 @@ class AudioPane(QWidget):
         self.play.setFixedWidth(52)
         _name_transport(self.play, False)
         self.position = SeekBar()
-        # Above the bar: what the track looks like, so seeking is aiming
-        # rather than guessing. Windowed only - the full-screen view has
-        # its own bar and no room for furniture.
+        # Above the bar: what the track looks like, so seeking is aiming.
+        # Windowed only; full screen has its own bar.
         self.wave = Waveform()
         self.position.setMinimumWidth(self.SEEK_LEAST)
         self.wave.setMinimumWidth(self.SEEK_LEAST)
@@ -830,9 +790,8 @@ class AudioPane(QWidget):
         self.volume.setFixedWidth(84)
         self.volume.setToolTip("Volume")
 
-        # What the track is, beside a thumbnail of its cover. In place of
-        # the window's own heading rather than under it: two headings over
-        # one picture was a line of type the picture could have had.
+        # What the track is, beside its cover, in place of the window's heading
+        # rather than under it, which leaves the picture that line.
         self.header_row = QWidget()
         header = QHBoxLayout(self.header_row)
         header.setContentsMargins(0, 0, 0, 0)
@@ -848,16 +807,13 @@ class AudioPane(QWidget):
         self.header_row.hide()
 
         controls = QHBoxLayout()
-        # As tall with the slider as with the waveform that replaces it,
-        # so the line does not change height, and move everything under
-        # it, once a track has been read.
+        # As tall with the slider as with the waveform that replaces it, so the
+        # line keeps its height once a track has been read.
         controls.addStrut(self.wave.minimumHeight())
         controls.addWidget(self.play)
-        # The waveform *is* the seek bar once there is one: it says where
-        # you are and what is there, which a slider cannot. The slider
-        # stays for the rest of the time - a track nobody has analysed
-        # has no shape to draw, and a transport with nothing to drag is
-        # worse than a plain one.
+        # The waveform is the seek bar once there is one: it shows where you
+        # are and what is there. The slider stays for a track with no shape
+        # yet.
         controls.addWidget(self.position, 1)
         controls.addWidget(self.wave, 1)
         controls.addWidget(self.clock)
@@ -871,20 +827,16 @@ class AudioPane(QWidget):
         # ends up (-1 asks for them then).
         layout.setContentsMargins(-1, 0, -1, -1)
         layout.addWidget(self.header_row)
-        # No stretch. With one it competed with the spacer at the foot of
-        # this layout and took half the spare room rather than the height
-        # its shape asks for. Its maximum caps it and its floor lets it
-        # give way, which is all the control that is needed.
+        # No stretch: with one it shared the spare room with the spacer below
+        # rather than taking the height its shape asks for. Its maximum caps it
+        # and its floor lets it give way.
         layout.addWidget(self.spectrum)
-        # A gap under the picture. Packed tight the transport's first row
-        # of pixels landed on the scene's last one - not enough to see,
-        # but they should not be touching either.
+        # A gap under the picture, so the transport's first row of pixels does
+        # not touch the scene's last.
         layout.addSpacing(8)
         layout.addLayout(controls)
-        # Below the transport, outside the picture. Putting them inside the
-        # visualiser frame meant they were hidden whenever it was, and they
-        # were hidden by a one-shot timer that fired before the analysis
-        # finished - so they never came back.
+        # Below the transport, outside the picture's frame, so hiding the
+        # picture never hides them.
         layout.addWidget(self.visual_holder)
         layout.addStretch(1)
 
@@ -975,11 +927,10 @@ class AudioPane(QWidget):
     def _start_analysis(self, path: Path) -> None:
         """Decode and analyse in the background, and survive being closed.
 
-        The decoder finishes on its own schedule, which may be after the
-        window has gone. Calling into a deleted widget from that callback
-        raises out of Qt's event loop, so both ends are checked: a token
-        that changes when another file is loaded, and shiboken's own
-        liveness check on the widget itself.
+        The decoder may finish after the window has gone, and calling into a
+        deleted widget raises out of Qt's event loop, so both ends are
+        checked: a token that changes when another file is loaded, and
+        shiboken's liveness check.
         """
         import attachment_audio
 
@@ -1006,16 +957,14 @@ class AudioPane(QWidget):
             frames, shapes, vectors, calibration, beats = result
             self.spectrum.set_calibration(calibration)
             self.spectrum.set_working(None)
-            # Unless they came early and these are the same maps again:
-            # setting them twice starts the strobe's count over mid-song.
+            # Unless they came early and these are the same maps: setting them
+            # twice restarts the strobe's count mid-song.
             if beats != early.get("maps"):
                 self.spectrum.set_beats(beats)
             self.spectrum.set_traces(shapes, vectors)
-            # Set again, because the position the pane is at has to be
-            # read against the finished list rather than the one that
-            # arrived early. It is the same list on an uninterrupted run,
-            # and then there is nothing to do: the pane knows, and the
-            # waveform is not worked out a second time.
+            # Set again: the pane's position must be read against the finished
+            # list, not the early one. On an uninterrupted run it is the same
+            # list and nothing is done.
             if frames is not self.spectrum.frames_list():
                 self.spectrum.set_frames(frames, attachment_audio.RATE)
                 self.wave.set_shape(
@@ -1023,13 +972,11 @@ class AudioPane(QWidget):
             self._decoder = None
 
         def bands(result) -> None:
-            """The picture, as soon as there is one to show.
+            """The picture, as soon as there is one.
 
-            Eight of the nine scenes draw from the bands alone, and the
-            two passes that follow take another two thirds as long again -
-            so waiting for all of it before showing anything is most of
-            the wait anybody sees. The scene starts here and the traces
-            arrive underneath it a moment later.
+            Eight of the nine scenes draw from the bands alone, and the two
+            passes after take two thirds as long again, so the scene starts
+            here and the traces arrive a moment later.
             """
             if not alive():
                 return
@@ -1136,11 +1083,8 @@ class AudioPane(QWidget):
 
     @Slot(bool)
     def _grey_visual_controls(self, on: bool) -> None:
-        """Off should look off.
-
-        Disabling alone still reads as available on this platform, so the
-        whole group is dimmed as well - there is no point offering a full
-        screen button for something that is not being drawn.
+        """Off should look off: disabled alone still reads as available here,
+        so the group is dimmed too.
         """
         for widget in self._visual_controls:
             widget.setEnabled(on)
@@ -1148,8 +1092,7 @@ class AudioPane(QWidget):
         # The panel's controls too: the strobe, which has a key of its own,
         # is not something to be set for a picture that is not there.
         self.picture_panel.setEnabled(on)
-        # Hidden rather than dimmed. Half a dozen greyed-out controls is
-        # more to read than none, and none of them can be used.
+        # Hidden rather than dimmed: none of them can be used.
         self._show_visual_controls(on)
         self.visual_row.invalidate()
 
@@ -1168,10 +1111,8 @@ class AudioPane(QWidget):
 
     def _enable_visualiser(self, on: bool) -> None:
         """Off means off: no decode, no timer, no widget with a height.
-
-        Analysing a track costs a few seconds of one core and a few hundred
-        kilobytes. Nobody should pay that for something they have switched
-        off, so the decode only starts when this is ticked.
+        Analysing a track costs a few seconds of a core, so the decode
+        starts only when this is ticked.
         """
         self._grey_visual_controls(on)
         self._apply_budget()
@@ -1192,31 +1133,23 @@ class AudioPane(QWidget):
                 self.spectrum.set_playing(True)
 
     def _spectrum_budget(self, fresh: bool = True) -> int:
-        """How much height the scene may have without evicting anything.
+        """How much height the scene may have without pushing anything out.
 
-        Asked of the layout rather than totted up by hand: whatever the
-        layout says it needs at minimum, less what the scene is currently
-        claiming, is what everything else needs. The rest is the scene's.
-
-        A shape that wanted more than this used to take it anyway - the
-        layout could not fit the transport underneath and drew it on top
-        of the picture instead.
+        What the layout needs at minimum, less the scene's current claim, is
+        what everything else needs; the rest is the scene's. A shape that
+        took more had the transport drawn on top of the picture.
         """
         layout = self.layout()
         if layout is None:
             return self.HEIGHT if hasattr(self, "HEIGHT") else 240
-        # Ask for a fresh answer. invalidate() only marks the layout dirty;
-        # minimumSize() keeps handing back the old number until it is made
-        # to recompute, so a control row that had just grown was measured
-        # at its previous height and the scene was given room that was no
-        # longer there.
+        # Ask for a fresh answer: invalidate() only marks the layout dirty, and
+        # minimumSize() keeps returning the old number, so a control row that
+        # had just grown was measured at its old height.
         if fresh:
             self.visual_row.invalidate()
             layout.activate()
-        # At this width. The plain minimum measures a row that wraps at
-        # whatever width it last had, which after a resize is the old one:
-        # the scene was short by a line of controls on a window made
-        # wider, and the room it should have had sat empty underneath.
+        # At this width: the plain minimum measures a wrapping row at its last
+        # width, which after a resize is the old one.
         needed_by_everything = layout.minimumHeightForWidth(self.width())
         if needed_by_everything < 0:
             needed_by_everything = layout.minimumSize().height()
@@ -1247,9 +1180,8 @@ class AudioPane(QWidget):
     def _show_strobe(self, source: str, rate: float, sense: float) -> None:
         """Move the controls to where a scene has just put the strobe.
 
-        Without blocking their signals this would come straight back as
-        "the user moved a slider", which is the one thing that stops a
-        scene setting itself up at all.
+        Signals blocked: otherwise this comes back as a slider moved by
+        hand, which stops the scene setting itself up.
         """
         for widget, value in ((self.flash, int(round(rate * 100))),
                               (self.sense, int(round(sense * 100)))):
@@ -1272,10 +1204,9 @@ class AudioPane(QWidget):
         # when there is something for it to do.
         self._show_visual_controls(self.enable_box.isChecked())
         self.visual_row.invalidate()
-        # Scenes bring their own controls - the scope has two more than
-        # anything else - so the row can get taller and the scene's share
-        # of the pane has to be worked out again. Without this the extra
-        # line pushed the transport up into the picture.
+        # Scenes bring their own controls (the scope has two more), so the row
+        # can grow and the scene's share is worked out again; otherwise the
+        # extra line pushed the transport into the picture.
         self._apply_budget()
 
     # -- the rider's sounds -------------------------------------------------
@@ -1295,10 +1226,9 @@ class AudioPane(QWidget):
             self._board.set_harmony(self.spectrum.harmony())
         return self._board
 
-    #: How far either way the picture may be moved against the music, in
-    #: milliseconds, and where that is kept. A new name when what the
-    #: picture is timed against changes, so an old setting made up for
-    #: something since put right is not carried over.
+    #: How far either way the picture may be moved against the music, in ms,
+    #: and where that is kept. A new name when what the picture is timed
+    #: against changes, so an old correction is not carried over.
     SYNC_MOST = 250
     SYNC_PREF = "sync_ms"
 
@@ -1378,14 +1308,13 @@ class AudioPane(QWidget):
             self._sound_board().preview(self.spectrum._scene)
 
     def _later(self, seconds: float, action) -> None:
-        """Do ``action`` in ``seconds``, to the millisecond: the notes of
-        an arpeggio, and the echoes of a note taken.
+        """Do ``action`` in ``seconds``, to the millisecond: the notes of an
+        arpeggio, and the echoes of a note taken.
 
-        A timer of the pane's own, precise and let go once it has fired.
+        A timer of the pane's own, precise, let go once it fires.
         ``QTimer.singleShot`` with a timer type and a function is not a
-        signature PySide has: the first echo raised, the pane let go of
-        the game's listener for it, and the game went silent for the rest
-        of the session - with nothing but a line in the log to say so."""
+        PySide signature: it raised, and the game went silent for the rest
+        of the session."""
         timer = QTimer(self)
         timer.setSingleShot(True)
         timer.setTimerType(Qt.TimerType.PreciseTimer)
@@ -1485,11 +1414,9 @@ class AudioPane(QWidget):
         window.exec()
 
     def release_full_screen(self) -> None:
-        """Undo everything the full-screen view wired into this pane.
-
-        Signals outlive the widgets they were connected to, and a lambda
-        holding a label that Qt has destroyed raises out of the next
-        emission - which is every time the position moves.
+        """Undo everything the full-screen view wired into this pane: a lambda
+        holding a destroyed label raises on the next emission, every time
+        the position moves.
         """
         for signal, handle in getattr(self, "_full_links", []):
             try:
@@ -1519,34 +1446,23 @@ class AudioPane(QWidget):
         self.position.setValue(target)
         self._seek(target)
 
-    #: The key that flashes the strobe by hand, written where somebody
-    #: choosing "Manual" will see it.
+    #: The key that flashes the strobe by hand, shown where Manual is chosen.
     #:
-    #: G rather than F. F was already the key that goes full screen, in
-    #: this pane and in the viewer above it, so the one key somebody in
-    #: Manual has to know was the one key that also left the room. G is
-    #: next to it and next to A, S and D, so the left hand still covers
-    #: everything.
+    #: G rather than F, which goes full screen; G sits by A, S and D, so the
+    #: left hand covers everything.
     BY_HAND_KEY = "G"
 
-    #: The other one: held, it fires over and over instead of holding the
-    #: light up. Named beside the first wherever the first is named, so
-    #: that somebody who finds one finds both.
+    #: The other one: held, it fires over and over instead of holding the light
+    #: up. Named beside G wherever G is.
     SPAM_KEY = "H"
 
-    #: The keys that play the visualiser, and what each one does.
+    #: The keys that play the visualiser.
     #:
-    #: Numbers for scenes because there are eight of them and they are in
-    #: a fixed order, so the number is the same key every time whatever
-    #: the combo box happens to be showing. The rest sit under the left
-    #: hand while the right hand is on the numbers: S switches the strobe
-    #: on and off, A and D walk through what it is listening to, M goes
-    #: straight to listening to nobody, and G and H are the strobe itself.
-    #: G held is a light that stays on; H held is a strobe at twelve a
-    #: second. One key cannot be both, and both are worth having.
-    #:
-    #: J, K, L, space and escape are the transport and are handled where
-    #: they always were; these are the ones that are new.
+    #: Numbers pick scenes, in their fixed order. The rest sit under the left
+    #: hand: S switches the strobe on and off, A and D step through what it
+    #: listens to, M sets it to Manual, G held is a light that stays on and H
+    #: held strobes twelve times a second. J, K, L, space and escape are the
+    #: transport, handled elsewhere.
     VJ_KEYS = {
         Qt.Key.Key_S: ("strobe", 0),
         Qt.Key.Key_A: ("reaction", -1),
@@ -1554,9 +1470,8 @@ class AudioPane(QWidget):
         Qt.Key.Key_M: ("by-hand", 0),
         Qt.Key.Key_G: ("flash", 1),
         Qt.Key.Key_H: ("spam", 1),
-        # The lanes, for the scene that is a game. They do nothing at all
-        # in the other eight, and ``vj`` says so by returning False, which
-        # leaves the key to whatever else wanted it.
+        # The lanes, for the game; ``vj`` returns False in the other scenes,
+        # leaving the key to whatever else wants it.
         Qt.Key.Key_Left: ("lane", -1),
         Qt.Key.Key_Right: ("lane", 1),
         # And up, for the one game that is not locked to the road.
@@ -1578,10 +1493,8 @@ class AudioPane(QWidget):
     def vj(self, action: str, value: int = 0) -> bool:
         """One of the playing keys, wherever it was pressed.
 
-        Everything goes through this pane's own controls rather than
-        straight at the spectrum, so that what the boxes show is what is
-        happening - the same reason the full screen controls are wired to
-        the ones in the window rather than to the widget.
+        Everything goes through this pane's controls, so what they show is
+        what is happening.
         """
         if action == "scene":
             import visualizers
@@ -1615,10 +1528,9 @@ class AudioPane(QWidget):
             return True
         if action in ("flash", "unflash", "spam", "unspam"):
             wants = action in ("flash", "spam")
-            # Pressing the strobe key with the strobe switched off did
-            # nothing at all, because the master switch is what scenes
-            # ask before they light up. Reaching for the light is asking
-            # for the light, so the box is ticked rather than ignored.
+            # The strobe key with the strobe switched off did nothing, since
+            # scenes ask the master switch before they light up; reaching for
+            # the light ticks the box.
             if wants and not self.strobe_box.isChecked():
                 self.strobe_box.setChecked(True)
             if action in ("spam", "unspam"):
@@ -1643,11 +1555,8 @@ class AudioPane(QWidget):
         return True
 
     def _jump(self) -> bool:
-        """Leave the road, if the game on screen is the one that can.
-
-        Returns False everywhere else, which leaves the key to whatever
-        else wanted it - the list scrolls on the arrows the rest of the
-        time.
+        """Leave the road, if the game on screen can. Returns False elsewhere,
+        leaving the key to the list, which scrolls on the arrows.
         """
         scene = getattr(self.spectrum, "_scene", None)
         leap = getattr(scene, "jump", None)
@@ -1656,11 +1565,9 @@ class AudioPane(QWidget):
         self.spectrum.update()
         return True
 
-    #: What the two sliders are called, and what they do, in each mode.
-    #: Manual has nothing firing by itself, so "what counts as a hit" and
-    #: "how soon another may follow" have nothing to say; the two things
-    #: a hand strobe does have are how fast it repeats and how it comes
-    #: up and goes down.
+    #: What the two sliders are called and do in each mode. In Manual nothing
+    #: fires by itself, so they set how fast a hand strobe repeats and how it
+    #: comes up and goes down.
     SENSE_WORDS = (
         "Sensitivity", "How big a jump counts as a hit, from fussy to "
                        "eager.")
@@ -1697,12 +1604,9 @@ class AudioPane(QWidget):
 
     @Slot()
     def _go_full_screen(self) -> None:
-        """The scene on the whole screen, with the controls it needs.
-
-        Play, seek, volume, theme, strobe and colours all come along -
-        leaving the window to change any of them would defeat the point.
-        The bar fades after a few seconds of stillness and comes back on
-        the first movement.
+        """The scene on the whole screen, with the controls it needs: play,
+        seek, volume, theme, strobe and colours. The bar fades after a few
+        still seconds and returns on the first movement.
         """
         from attachment_widgets import FullScreenSpectrum
 
@@ -1711,9 +1615,8 @@ class AudioPane(QWidget):
         where = layout.indexOf(self.spectrum) if layout is not None else -1
         full = FullScreenSpectrum(self.spectrum, self)
         self._full = full
-        # Something in the hole the scene left. Without it the pane simply
-        # has a gap in it and nothing anywhere says where the picture went,
-        # so a full-screen window on another display is lost.
+        # Something in the hole the scene left, so a full-screen window on
+        # another display is not lost.
         if layout is not None and where >= 0:
             layout.insertWidget(where, self._full_notice(full))
 
@@ -1728,13 +1631,11 @@ class AudioPane(QWidget):
         seek.setValue(self.position.value())
         seek.seeked.connect(self._seek)
         seek.seeked.connect(self.position.setValue)
-        # Connections from the pane's own widgets to widgets that only
-        # exist while full screen does. They have to be undone when it
-        # closes, or the next seek calls into a deleted label.
-        # Both signals. valueChanged carries a seek or a track change;
-        # ``moved`` carries the player's own reports, which are the ones
-        # that arrive while a track is playing. Following only the first
-        # left this bar at zero for the whole song.
+        # Connections from the pane's widgets to widgets that exist only while
+        # full screen does, undone when it closes, or the next seek calls into
+        # a deleted label. Both signals: valueChanged carries a seek or a track
+        # change, and ``moved`` carries the player's own reports while a track
+        # plays.
         self._full_links = [
             (self.position.valueChanged, self.position.valueChanged.connect(
                 seek.report)),
@@ -1810,9 +1711,9 @@ class AudioPane(QWidget):
         by_hand.setVisible(reaction.currentText() == _Spec.BY_HAND)
         self._by_hand_echo = [by_hand]
 
-        # Back the other way as well. The keys drive this pane's own
-        # controls, so without these the picture changed and the box in
-        # front of it went on saying what it used to be.
+        # Back the other way too: the keys drive this pane's controls, so
+        # without these the box in front of the picture kept showing the old
+        # choice.
         self._full_links += [
             (self.scene_box.currentTextChanged,
              self.scene_box.currentTextChanged.connect(scene.setCurrentText)),
@@ -2047,12 +1948,10 @@ class AudioPane(QWidget):
             self._cancel_analysis()
         handled = super().event(incoming)
         if incoming.type() == QEvent.Type.LayoutRequest:
-            # Something around the picture changed size - the cover and
-            # title arriving, a line of controls wrapping - and its share
-            # is worked out again. Only on a resize, it kept the share it
-            # had, and the rows under it were squeezed or left a gap until
-            # the window was next resized. Not while the pane is being
-            # taken apart, when the picture may already be gone.
+            # Something around the picture changed size (the cover and title
+            # arriving, a row of controls wrapping), so its share is worked out
+            # again, not only on a resize. Not while the pane is being taken
+            # apart, when the picture may be gone.
             import shiboken6
 
             spectrum = getattr(self, "spectrum", None)
@@ -2148,29 +2047,24 @@ class MetadataPane(QPlainTextEdit):
 
 
 class AttachmentViewer(QDialog):
-    """The window. A list on the left, whatever it is on the right.
+    """The window: a list on the left, the selected part on the right.
 
-    ``fetch`` is called with one attachment and must return its bytes, or
-    raise. It is only called for parts nobody has looked at yet, which is
-    what keeps a six megabyte message from being downloaded to see the first
-    thing in it.
+    ``fetch`` is called with one attachment and returns its bytes or raises;
+    it is called only for parts not yet looked at.
     """
 
     def __init__(self, found: List[attachments.Attachment], subject: str = "",
                  parent=None, fetch: Optional[Callable] = None,
                  library: bool = False) -> None:
         super().__init__(parent)
-        # The same window serves two jobs. As a library it is somebody's
-        # own music rather than a message's parts, so it gains a way to
-        # add tracks and loses the ones about saving copies of something
-        # that arrived in the post.
+        # The same window serves as a music library: it gains a way to add
+        # tracks and loses the ones for saving a message's parts.
         self.library = bool(library)
         self.setWindowTitle("Visualiser" if library else "Attachments")
-        # Narrower than the attachment window is allowed to be: the
-        # visualiser has to be usable on a small screen. Tall enough that
-        # the picture still has room once the transport and the controls
-        # have theirs. Widened to what the controls need once they are
-        # built: see showEvent.
+        # Narrower than the attachment window may be, so the visualiser works
+        # on a small screen; tall enough for the picture once the transport and
+        # controls have their room. Widened to the controls' needs in
+        # showEvent.
         self._least = QSize(720 if library else 900, 600)
         self.setMinimumSize(self._least)
         self._sized = False
@@ -2188,10 +2082,8 @@ class AttachmentViewer(QDialog):
         self._awaiting: Optional[int] = None
 
         self.list = QListWidget()
-        # No fixed width. At 280 inside a narrower panel its right edge
-        # was outside the frame, so three sides of its border were drawn
-        # and the fourth was cut - which reads as a border that cannot
-        # make up its mind.
+        # No fixed width: at 280 in a narrower panel its right edge fell
+        # outside the frame and its border was cut.
         self.list.setMinimumWidth(180)
         self.list.setToolTip(
             "Everything attached to this message. Pick one to look at it.")
@@ -2200,9 +2092,7 @@ class AttachmentViewer(QDialog):
             entry.setToolTip(_row_tooltip(item))
             self.list.addItem(entry)
 
-        # Not the dim style. This is the only place the keys are written
-        # down, and a run-on line of grey text separated by middots is
-        # something people's eyes slide off rather than read.
+        # Not the dim style: this is the only place the keys are written down.
         opening = ("Add a track, then click it to watch. Nothing is sent "
                    "anywhere and nothing is kept."
                    if library else
@@ -2296,9 +2186,8 @@ class AttachmentViewer(QDialog):
         actions.addWidget(buttons)
 
 
-        # The status shares the footnote's line. On its own it was a line
-        # of window given over to the word "ready", which the picture
-        # playing in front of it had already said.
+        # The status shares the footnote's line rather than taking a line of
+        # its own.
         self.status.setAlignment(Qt.AlignmentFlag.AlignLeft
                                  | Qt.AlignmentFlag.AlignVCenter)
 
@@ -2418,9 +2307,8 @@ class AttachmentViewer(QDialog):
             self.addAction(action)
 
         add("Space", self._space)
-        # The transport keys a media player is expected to have. J and L
-        # jump ten seconds, K plays and pauses - the same three keys, in
-        # the same places, whether or not the visualiser is on.
+        # The transport keys a media player is expected to have: J and L jump
+        # ten seconds, K plays and pauses, with or without the visualiser.
         add("J", lambda: self._nudge(-SKIP_MS))
         add("K", self._space)
         add("L", lambda: self._nudge(SKIP_MS))
@@ -2446,15 +2334,11 @@ class AttachmentViewer(QDialog):
 
     # -- the playing keys, in a window as well as full screen -------------
     def _plays(self, event, held: bool) -> bool:
-        """Hand a playing key to the audio pane, if it wants it.
+        """Hand a playing key to the audio pane, if it wants it: the keys that
+        play the scene work in the window as in full screen.
 
-        These worked only in full screen. The keys that play the scene are
-        the same keys wherever the scene is, and a strobe you can only
-        reach by leaving the window is not much of a strobe.
-
-        Auto-repeat is dropped on both sides, as it is full screen: a
-        keyboard repeating a held key would switch a held light off and on
-        again at its own rate.
+        Auto-repeat is dropped, as in full screen: a repeating held key
+        would flicker a held light.
         """
         if event.isAutoRepeat():
             return False
@@ -2511,12 +2395,11 @@ class AttachmentViewer(QDialog):
         return self._found[row] if 0 <= row < len(self._found) else None
 
     def _start_fetch(self, row: int, item, then_show: bool) -> None:
-        """Queue one part. One request at a time, because one connection.
+        """Queue one part: one request at a time on one connection.
 
-        Two threads on the same IMAP socket do not race politely: they
-        interleave inside TLS and the server drops the connection with a bad
-        record MAC. So there is a single worker and a queue, and whatever the
-        person is actually looking at goes to the front of it.
+        Two threads on one IMAP socket interleave inside TLS and the server
+        drops the connection (bad record MAC). What the person is looking at
+        goes to the front.
         """
         if self._fetch is None:
             return
@@ -2763,11 +2646,8 @@ class AttachmentViewer(QDialog):
     OPENS_AT = QSize(1120, 800)
 
     def showEvent(self, event) -> None:      # noqa: N802 - Qt's name
-        """The first time: never narrower than the controls, and a size the
-        picture is worth looking at.
-
-        A fixed minimum narrower than the transport let the window be made
-        small enough that the clock was drawn over the seek bar.
+        """The first time: never narrower than the controls, and big enough for
+        the picture. A smaller minimum let the clock overlap the seek bar.
         """
         if not self._sized:
             self._sized = True
@@ -2792,13 +2672,9 @@ class AttachmentViewer(QDialog):
         super().done(result)
 
     def _sweep(self) -> None:
-        # Stop reading the files before deleting them. Sweeping only ever
-        # unlinked them, which left an analysis running against a path
-        # that no longer existed and, worse, a thread still going after
-        # the window it reports to had gone. The decode used to finish
-        # almost at once so the window was small; it is longer now that
-        # the drums are picked out afterwards, and a thread that outlives
-        # its widget takes the process with it.
+        # Stop reading the files before deleting them: unlinking alone left an
+        # analysis reading a deleted path, and a thread outliving its widget
+        # takes the process with it.
         self.audio.stop()
         self.audio._cancel_analysis()
         for path in self._written:
@@ -2836,11 +2712,8 @@ def _row_label(item) -> str:
 
 
 def _size_label(item) -> str:
-    """The size of the file, not the size of the base64 that carried it.
-
-    BODYSTRUCTURE reports the encoded length, which for base64 is a third
-    larger than the thing itself. Showing that means the list says 2.5 MB
-    and the saved file is 1.8 MB.
+    """The file's size, not the base64 that carried it: BODYSTRUCTURE reports
+    the encoded length, a third larger.
     """
     if item.data is not None:
         return item.human_size()

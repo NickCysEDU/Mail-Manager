@@ -97,10 +97,8 @@ class _BaseWorker(QThread):
         log.info(message)
         self.log_message.emit(message)
 
-    #: Failures that are worth explaining rather than just reporting, keyed by
-    #: something that appears in the message. The app knows what to do about
-    #: each of these, and saying so is the difference between an error the user
-    #: can act on and one they can only screenshot.
+    #: Failures worth explaining rather than just reporting, keyed by text in
+    #: the message: the app knows what to do about each.
     ADVICE = (
         ("AUTHENTICATIONFAILED", "The server rejected the password. Most providers "
          "need an app password rather than the one you sign in with; Settings → "
@@ -235,10 +233,8 @@ class ScanWorker(_BaseWorker):
         # one, so the bar means the same thing whether one is selected or six.
         fetched_before = 0
 
-        # The classifier is built before a single message has been downloaded,
-        # because the whole point is that it starts working on the first fifty
-        # while the mailbox is still handing over the next fifty. Two machines
-        # waiting for each other in turn is what this replaces.
+        # Built before the first message is downloaded, so it works on the
+        # first fifty while the mailbox hands over the next fifty.
         classifier = self._build_classifier()
         self._classifier = classifier
         cache = (verdict_cache.VerdictCache.load() if self.reuse_verdicts
@@ -312,12 +308,11 @@ class ScanWorker(_BaseWorker):
                     remaining = len(targets) - index
 
                     def fetch_report(done: int, total: int, text: str) -> None:
-                        # Mailboxes still to come are unknown until they are
-                        # opened, so they are assumed to hold about as much as
-                        # this one. The bar creeps rather than jumping back.
-                        # Fetching is the first half of the scan and sorting the
-                        # second, so this reports against twice the message
-                        # count and stops at the midpoint.
+                        # Mailboxes still to come are assumed to hold about as
+                        # much as this one, so the bar creeps rather than
+                        # jumping back. Fetching is the first half of the scan
+                        # and sorting the second, so this reports against twice
+                        # the message count and stops at the midpoint.
                         overall = offset + total + int(remaining * total * 0.9)
                         seen = offset + done
                         self._emit_progress(seen, max(overall * 2, seen * 2, 1), text)
@@ -330,12 +325,9 @@ class ScanWorker(_BaseWorker):
                         )
 
                     def hand_over(arrived, account=account) -> None:
-                        """Tag a batch and give it straight to the classifier.
-
-                        Tagging happens here rather than after the whole fetch
-                        because the verdict cache is keyed on the mailbox: a
-                        message handed over untagged would be looked up under
-                        the wrong key and always miss.
+                        """Tag a batch and hand it straight to the classifier:
+                        the verdict cache is keyed on the mailbox, so an
+                        untagged message would always miss.
                         """
                         for message in arrived:
                             message.account_id = account.id
@@ -358,9 +350,9 @@ class ScanWorker(_BaseWorker):
                     )
                     warnings_seen.extend(scan.warnings)
                     # Anything the window filter dropped after the fetch was
-                    # still handed over above; its verdict is simply never
-                    # asked for. Re-tagging is harmless and covers a fetch
-                    # path that emitted nothing.
+                    # handed over above, and its verdict is never asked for.
+                    # Re-tagging is harmless and covers a fetch path that
+                    # emitted nothing.
                     for message in scan.messages:
                         message.account_id = account.id
                         message.account_label = account.label
@@ -402,13 +394,10 @@ class ScanWorker(_BaseWorker):
             return
 
         # ---- 2. Classification ------------------------------------------
-        # Most of this already happened, on the classifier's own thread, while
-        # the mailbox was still being read. What is left is the tail.
-        #
-        # Anything the fetch did not stream is swept up here. Overlapping is a
-        # way of going faster, and it must never be the reason a message went
-        # unclassified - so correctness does not depend on the streaming hook
-        # having fired at all.
+        # Most of this already happened on the classifier's thread while the
+        # mailbox was read; what is left is the tail. Anything the fetch did
+        # not stream is swept up here, so no message depends on the streaming
+        # hook having fired.
         missed = [m for m in messages if id(m) not in offered]
         if missed:
             self._fetched_running = max(self._fetched_running, len(messages))
@@ -432,9 +421,8 @@ class ScanWorker(_BaseWorker):
                 error="No verdict was produced for this message.")
             for verdict in pipeline.in_original_order(messages, verdicts)
         ]
-        # The last word on the bar comes from this thread rather than the
-        # classifying one. Everything it said arrives by queued delivery and
-        # therefore in its own time; this is the update that has to be last.
+        # The bar's last word comes from this thread: everything the
+        # classifying thread said arrives queued, in its own time.
         total = len(messages)
         self._emit_progress(total * 2, total * 2,
                             f"Analyzed {total} message(s).")
@@ -486,11 +474,9 @@ class ScanWorker(_BaseWorker):
         self._classifier = None
 
     def _classify_chunk(self, chunk, classifier, cache, recipe, tally, started):
-        """One group of freshly fetched messages, start to finish.
-
-        The cache is consulted per group rather than once for the whole scan,
-        because there is no "whole scan" any more - messages arrive while
-        earlier ones are still being classified.
+        """One group of freshly fetched messages, start to finish. The cache is
+        consulted per group: messages arrive while earlier ones are still
+        being classified.
         """
         pending, known = (cache.split(chunk, recipe) if self.reuse_verdicts
                           else (list(chunk), {}))
@@ -519,11 +505,9 @@ class ScanWorker(_BaseWorker):
         return verdict_cache.VerdictCache.merge(chunk, pending, fresh, known)
 
     def _analysis_progress(self, analyzed: int) -> None:
-        """The bar, now that both halves are running at once.
-
-        Still two units per message - one for fetching it, one for sorting it
-        - so it means what it always meant. The difference is that the second
-        half starts filling before the first has finished.
+        """The bar, with both halves running at once: still two units per
+        message, one for fetching and one for sorting; the second half just
+        starts filling sooner.
         """
         fetched = self._fetched_running
         expected = max(fetched, analyzed, 1)
@@ -586,10 +570,8 @@ class ScanWorker(_BaseWorker):
 
     def _finish_routing(self, outcome, messages, classifications, plan) -> None:
         """Turn verdicts into rows, apply what was learned, and hand it over.
-
-        Its own method because there are two ways to get here: the ordinary
-        one, and the one where every message was already answered and the
-        model was never called at all.
+        Reached two ways: the ordinary one, and when every message was
+        already answered and the model never called.
         """
         routing = self.settings.routing
         outcome.items = [
@@ -604,9 +586,9 @@ class ScanWorker(_BaseWorker):
             for message, classification in zip(messages, classifications)
         ]
 
-        # ---- 4. What we were taught last time ----------------------------
-        # After routing, not before: the memory only speaks where it disagrees
-        # with the sorter, so it needs the sorter's answer to compare against.
+        # ---- 4. What was taught last time -------------------------------
+        # After routing: the memory speaks only where it disagrees with the
+        # sorter, so it needs the sorter's answer.
         if self.settings.learn_from_corrections:
             try:
                 memory = corrections.Memory.load()
@@ -631,9 +613,8 @@ class ScanWorker(_BaseWorker):
                           "with others in this scan.")
 
         # ---- 5. Rules the user wrote --------------------------------------
-        # Last, so a rule can override both the sorter and the memory - it is
-        # the most explicit statement of intent there is, somebody sat down
-        # and wrote it.
+        # Last, so a rule overrides both the sorter and the memory: it is the
+        # most explicit statement of intent.
         self._apply_sorting_rules(outcome.items)
         self._log(f"Analysis complete. {outcome.usage_text}")
         self.finished_ok.emit(outcome)
@@ -666,12 +647,10 @@ class ApplyWorker(_BaseWorker):
         return {targets[0].id: self.mailbox_password} if targets else {}
 
     def _grouped(self) -> List[tuple]:
-        """Moves bundled by mailbox and by the folder they start in.
-
-        Two levels because each mailbox is a separate server, and because a
-        move can only name one source folder at a time. Filing starts from the
-        inbox for everything; undoing starts from wherever each message was
-        filed to.
+        """Moves bundled by mailbox and by the folder they start in: each
+        mailbox is a separate server, and a move names one source folder.
+        Filing starts from the inbox; undoing starts from wherever each
+        message was filed.
         """
         default = self.settings.primary_account
         buckets: Dict[tuple, List[MovePlan]] = {}
@@ -758,21 +737,17 @@ class ApplyWorker(_BaseWorker):
 
 @dataclass
 class ReplyRun:
-    """What one pass of the reply rules did.
-
-    Kept as a record rather than a list of drafts because a rule can now file,
-    tick and flag as well as draft, and the window needs to know about all of
-    it to show what changed.
+    """What one pass of the reply rules did: a rule can file, tick and flag as
+    well as draft, and the window shows all of it.
     """
 
     outcomes: List[Tuple[TriageItem, object]] = field(default_factory=list)
     saved: int = 0
     marked_read: int = 0
     flagged: int = 0
-    #: Reasons a rule matched and still wrote nothing - already answered
-    #: this person, the wrong time of day, a machine on the other end.
-    #: Kept because "it matched and said nothing" looks identical to "it
-    #: did not match" from outside, and they mean opposite things.
+    #: Reasons a rule matched and still wrote nothing (already answered this
+    #: person, the wrong time of day, a machine at the other end). From
+    #: outside, that looks like not matching.
     held: List[str] = field(default_factory=list)
 
     def add(self, item: TriageItem, outcome) -> None:
@@ -813,13 +788,14 @@ class ReplyRun:
 
 
 class ReplyWorker(_BaseWorker):
-    """Run the reply rules over the scanned messages and carry out what they say.
+    """Run the reply rules over the scanned messages and carry out what they
+    say.
 
-    Kept apart from the scan on purpose. A rule can talk to the model again and
-    write to the mailbox, and neither of those should happen as a side effect of
-    looking at what arrived.
+    Apart from the scan: a rule can call the model and write to the mailbox,
+    neither of which should happen as a side effect of looking.
 
-    Nothing is ever sent. A reply lands in Drafts, and a person presses send.
+    Nothing is ever sent. A reply lands in Drafts, and a person presses
+    send.
     """
 
     finished_ok = Signal(object)
@@ -865,10 +841,9 @@ class ReplyWorker(_BaseWorker):
             )
 
         signature = self.settings.reply_signature
-        # Who has already been written to. Loaded once for the whole run
-        # rather than per message: a rule set to write once a week would
-        # otherwise not notice the three drafts it wrote in this same run,
-        # which is exactly the case it exists for.
+        # Who has already been written to, loaded once for the run: a
+        # once-a-week rule has to notice the drafts it wrote earlier in this
+        # run.
         import reply_log as _reply_log
 
         try:
@@ -890,18 +865,16 @@ class ReplyWorker(_BaseWorker):
                     rules, item.email, item.classification, signature,
                     self._classifier, context=context)
             except Exception as exc:  # noqa: BLE001 - one bad rule, not a crash
-                # Named by position rather than by subject: this line goes
-                # to the log file, and the promise made in SECURITY.md is
-                # that a message's subject never does.
+                # Named by position, not subject: this line goes to the log
+                # file, and SECURITY.md promises a subject never does.
                 self._log(f"A rule failed on message {index} of {total}: {exc}")
                 continue
             if outcome is not None:
                 result.add(item, outcome)
-                # Written down as the draft is composed, not after it is
-                # saved, so that the next message in this same run already
-                # knows about it. A draft that then fails to save costs one
-                # missed reply; the other way round costs a duplicate for
-                # every message from that sender in the batch.
+                # Written down as the draft is composed, not after it is saved,
+                # so the next message in this run knows about it. A draft that
+                # fails to save costs one missed reply; the other order costs a
+                # duplicate per message from that sender.
                 if outcome.draft is not None and outcome.drafted_to:
                     written.remember(outcome.drafted_to, outcome.drafted_by)
                 for reason in outcome.held:
@@ -1033,10 +1006,8 @@ class OnDeviceResult:
 class OnDeviceProbeWorker(_BaseWorker):
     """Asks the local model server what it has, off the UI thread.
 
-    Two seconds does not sound like a freeze until it happens every time
-    somebody opens a menu. An endpoint that drops packets rather than refusing
-    them costs the full timeout, and the endpoint is a field the user can type
-    anything into.
+    An endpoint that drops packets rather than refusing them costs the full
+    timeout every time a menu opens, and the endpoint is whatever was typed.
     """
 
     finished_ok = Signal(object)
@@ -1078,12 +1049,8 @@ class InstalledModelsWorker(_BaseWorker):
 
 
 class OnDeviceWorker(_BaseWorker):
-    """Installs Ollama, or downloads a model, without freezing the window.
-
-    This used to be a blocking subprocess call on the UI thread. A Homebrew
-    install takes minutes, so the app beachballed for the whole of it with no
-    output and no way to stop - indistinguishable, from the outside, from a
-    crash.
+    """Installs Ollama, or downloads a model, without freezing the window: a
+    Homebrew install takes minutes.
     """
 
     finished_ok = Signal(object)
@@ -1116,9 +1083,8 @@ class OnDeviceWorker(_BaseWorker):
             if update is None:
                 return
             percent, label = update
-            # Ten times a second is more than a progress bar can show and
-            # more than the queue should carry. A tenth of a per cent, or a
-            # second, is enough to look alive.
+            # Ten updates a second is more than a progress bar shows; a tenth
+            # of a per cent, or a second, is enough.
             now = time.monotonic()
             if percent < 100.0 and now - last_said[0] < 0.2:
                 return
@@ -1140,8 +1106,8 @@ class OnDeviceWorker(_BaseWorker):
             ok = ondevice.stream(command, line, cancel=self.cancel_event)
             if ok or self.cancel_event.is_set():
                 break
-            # Only a name Homebrew does not know is worth another go. A
-            # download that failed will fail the same way under another name.
+            # Only a name Homebrew does not know is worth another try; a failed
+            # download fails the same way under another name.
             if not ondevice.is_unknown_package("\n".join(result.lines[before:])):
                 break
 
@@ -1159,11 +1125,9 @@ class OnDeviceWorker(_BaseWorker):
 
 
 class OnDeviceStartWorker(_BaseWorker):
-    """Starts the local server and waits until it actually answers.
-
-    The old flow launched it, waited four seconds and said it had started.
-    That was a guess, and wrong in both directions: too short for a cold
-    start, and it claimed success when nothing had come up at all.
+    """Starts the local server and waits until it answers, rather than for a
+    fixed time, which was too short for a cold start and claimed success
+    when nothing came up.
     """
 
     finished_ok = Signal(object)
@@ -1218,12 +1182,10 @@ class OnDeviceStartWorker(_BaseWorker):
 class KeychainReadWorker(_BaseWorker):
     """Reads stored secrets without holding up the window.
 
-    macOS asks permission the first time a particular build of an app touches
-    an entry, and identifies the app by its code signature - so every rebuild
-    asks again. That prompt can take seconds to appear, and while the call is
-    outstanding the thread that made it is stopped dead. Making it from the
-    thread that draws the window means the window freezes behind the very
-    dialog the person is being asked to answer.
+    macOS asks permission the first time a build touches an entry, and it
+    knows the app by its signature, so every rebuild asks again. The calling
+    thread stops until the prompt is answered: on the drawing thread, the
+    window would freeze behind the dialog it is asking.
     """
 
     finished_ok = Signal(object)
@@ -1302,10 +1264,8 @@ def build_move_plans(items: Sequence[TriageItem]) -> List[MovePlan]:
 
 
 def required_folders(items: Sequence[TriageItem], plan: Optional[FolderPlan]) -> List[str]:
-    """Folders the approved set needs beyond the standard Job Search tree.
-
-    Only the mailboxes actually used are returned, so enabling topic filing does
-    not scatter a dozen empty folders through the account.
+    """Folders the approved set needs beyond the standard Job Search tree: only
+    those actually used, so topic filing does not scatter empty folders.
     """
     if plan is None:
         return []
@@ -1324,9 +1284,8 @@ def required_folders(items: Sequence[TriageItem], plan: Optional[FolderPlan]) ->
             others.append(item.classification.other_category)
     needed = list(plan.other_folders(dict.fromkeys(others)))
     for folder in manual:
-        # Parents first. A server is only asked to create one mailbox at a
-        # time, and "Sorted Mail/To Delete" under a root that does not exist
-        # yet is a CREATE that some servers refuse outright.
+        # Parents first: some servers refuse a CREATE under a root that does
+        # not exist yet.
         parent = plan.other_root
         if folder.startswith(parent + plan.delimiter) and parent not in needed:
             needed.append(parent)
@@ -1338,9 +1297,8 @@ def required_folders(items: Sequence[TriageItem], plan: Optional[FolderPlan]) ->
 class AttachmentWorker(_BaseWorker):
     """List what is attached to one message, without downloading any of it.
 
-    One FETCH of BODYSTRUCTURE. The window opens on that alone - a fraction
-    of a second rather than however long six megabytes takes - and parts are
-    fetched one at a time, by AttachmentSource, as somebody looks at them.
+    One FETCH of BODYSTRUCTURE opens the window; AttachmentSource fetches
+    parts one at a time as somebody looks at them.
     """
 
     ready = Signal(object)      # AttachmentSource
@@ -1374,14 +1332,12 @@ class AttachmentWorker(_BaseWorker):
 
 
 class AttachmentSource:
-    """Connections to fetch parts with, and the parts themselves.
+    """Connections to fetch parts with, and the parts.
 
-    One connection can only serve one request at a time - imaplib is not
-    thread safe, and two overlapping fetches corrupt the TLS stream outright.
-    So this keeps a small pool instead: a caller checks one out, uses it, and
-    puts it back. Extra connections are opened in the background after the
-    first, because opening one costs a second or so and the first fetch
-    should not wait for them.
+    imaplib is not thread safe, and two overlapping fetches corrupt the TLS
+    stream, so callers check a connection out of a small pool and put it
+    back. Connections after the first open in the background: each costs a
+    second or so.
     """
 
     #: Enough to overlap a few attachments without being rude to the server.
@@ -1450,12 +1406,10 @@ class AttachmentSource:
 
 
 class _FolderWorker(_BaseWorker):
-    """A connection of its own, for work that only touches one folder.
-
-    Its own engine rather than the scanner's, because these run while the
-    window is doing something else and an imaplib connection is not safe to
-    use from two threads. Connecting again costs one TLS handshake, which is
-    nothing against the thousands of messages this is here to shift.
+    """A connection of its own, for work on one folder: these run while the
+    window does other things, and an imaplib connection is not safe from two
+    threads. One more TLS handshake is nothing against thousands of
+    messages.
     """
 
     #: The title on the message box when this fails.
@@ -1486,11 +1440,8 @@ class _FolderWorker(_BaseWorker):
 
 
 class EmptyFolderWorker(_FolderWorker):
-    """Clears one folder on the server, without holding up the window.
-
-    The work is a handful of commands however many messages there are, but
-    each one is a round trip to a server that may be slow, so it does not
-    belong on the thread that draws.
+    """Clears one folder on the server, off the drawing thread: a handful of
+    commands, each a round trip to a server that may be slow.
     """
 
     finished_ok = Signal(int)
@@ -1509,11 +1460,8 @@ class EmptyFolderWorker(_FolderWorker):
 
 
 class FolderListWorker(_FolderWorker):
-    """Every folder on the server, with how full each one is.
-
-    The counts come from one SEARCH per folder, which is a round trip each -
-    fine for the twenty or so folders a mailbox has, and the reason the list
-    fills in rather than arriving at once. No message is fetched.
+    """Every folder on the server, with how full each is: one SEARCH per
+    folder, so the list fills in. No message is fetched.
     """
 
     finished_ok = Signal(list)
@@ -1540,10 +1488,8 @@ class FolderListWorker(_FolderWorker):
 class CountMatchingWorker(_FolderWorker):
     """How many messages a set of criteria would delete. Deletes nothing.
 
-    Separate from the worker that does the deleting, and always run first,
-    because the number in "delete 4,312 messages?" has to come from the
-    server answering the same question that is about to be asked
-    destructively.
+    Always run first, so the number in the question comes from the server
+    answering the same question that is about to be asked destructively.
     """
 
     finished_ok = Signal(int)
@@ -1562,11 +1508,9 @@ class CountMatchingWorker(_FolderWorker):
 
 
 class CleanOutWorker(_FolderWorker):
-    """Deletes everything matching a :class:`cleanup.Criteria`.
-
-    One SEARCH to find them, then a hundred UIDs per STORE and a batched
-    EXPUNGE. A mailbox of five thousand is about a hundred commands, which
-    is the difference between a few seconds and an afternoon.
+    """Deletes everything matching a :class:`cleanup.Criteria`: one SEARCH,
+    then a hundred UIDs per STORE and a batched EXPUNGE, about a hundred
+    commands for five thousand messages.
     """
 
     finished_ok = Signal(int)

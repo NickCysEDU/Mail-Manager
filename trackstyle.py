@@ -1,38 +1,26 @@
 """What kind of music a track is, and how it is put together.
 
-Music rider built every track from the same rules: a figure every two beats
-or so, the same eight shapes in turn, a quarter of them obstacles, a road
-whose hills are the loudness and whose bends are the stereo. A house record
-and a drum and bass record came out as the same ride at two speeds. What
-makes a ride *of that record* is what makes the record that record, and
-most of it is already measured by the time anything is drawn: where every
-kick, snare and hat is, the tempo, the loudness from end to end, and - from
-the harmony pass - the chords and the melody.
+A ride should be of its record, and most of what makes a record that record
+is measured before anything is drawn: every kick, snare and hat, the tempo,
+the loudness, and the chords and melody (see harmony). From them:
 
-So this reads two things off them.
+**The style**, as numbers from 0 to 1 rather than a genre's name, since a
+record can be house and garage at once: whether the kick lands on every beat
+(``steady``) or dodges it (``broken``), whether the snare waits for the
+third beat (``heavy``, half time), whether the hats swing (``swung``) or
+roll (``rolls``), how fast and hard it is (``hard``), whether there is a
+melody worth following (``melodic``), and how much it rises and falls
+(``drama``). They mix.
 
-**The style**, as a handful of numbers rather than a genre's name. A name
-is a guess and a brittle one - a record is house *and* garage, techno *and*
-trance - and what the ride needs is not what the record is called but how
-it moves: whether the kick lands on every beat (``steady``), whether it
-dodges the beat (``broken``), whether the snare waits for the third beat
-(``heavy``, half time), whether the hats swing (``swung``), whether they
-roll (``rolls``), how fast and hard it all is (``hard``), whether there is
-a melody worth following (``melodic``), and how much it rises and falls
-(``drama``). Each is 0 to 1, measured, and they mix: a record that is a
-little of everything gets a little of everything.
+**The sections**, bar by bar: intro, build, drop, groove, break or outro,
+each with its own intensity, from where the drums come and go and the
+loudness steps.
 
-**The sections**, bar by bar: where the drums come in and drop out and the
-loudness steps up or falls away. Each one is an intro, a build, a drop, a
-groove, a break or an outro, and each has its own intensity. Audiosurf 2
-times its loops and power-ups to "big moments in your music"; a drop is the
-biggest there is, and this is what finds it.
+A **seed** from the track itself, so the same record makes the same ride
+every time, which is what makes a best mean anything, while every record
+gets its own.
 
-And a **seed**, from the track itself, so the same record makes the same
-ride every time it is played - which is what makes a best mean anything -
-while every record gets its own.
-
-Pure Python and cheap: it walks the chart once and the loudness once.
+Pure Python and cheap: one walk over the chart and one over the loudness.
 """
 
 from __future__ import annotations
@@ -306,9 +294,9 @@ def sections(chart: dict, beat: float, grid: float, contour: dict,
         first = _downbeat(kicks, snares, grid, beat)
     starts = [start for start in _bars(first, beat, length) if start < length]
     if first > 0.0:
-        # What comes before the first downbeat belongs to the first bar,
-        # not to a bar of its own: a sliver of silence at the top of the
-        # file made a bar with nothing in it, and a part rising out of it.
+        # What comes before the first downbeat belongs to the first bar: a
+        # sliver of silence at the top of the file made an empty bar, and a
+        # part rising out of it.
         if starts and first < beat * BAR * 0.5:
             starts[0] = 0.0
         else:
@@ -388,9 +376,9 @@ def sections(chart: dict, beat: float, grid: float, contour: dict,
                 and section.kind in ("break", "groove")
                 and section.level < 0.5):
             section.kind = "outro"
-    # Two parts of the same kind side by side are one part: a cut inside a
-    # drop - a fill, a detector's noise - made two drops of one, and a
-    # corkscrew and a power block for the second half of it.
+    # Two parts of the same kind side by side are one: a fill or detector noise
+    # inside a drop made two drops, each with its own corkscrew and power
+    # block.
     merged: List[Section] = []
     for section in out:
         if merged and merged[-1].kind == section.kind:
@@ -569,22 +557,19 @@ def _measured(out: Dict[str, float], k, sn, h, kick, hats, rate: float,
     # A backbeat is two strong beats in four; half time is one.
     out["second_snare"] = sq[1] / first
     out["third_snare"] = sq[2] / first
-    # Half time: the snare two beats after the kick's strongest beat, where
-    # a backbeat puts it one beat either side. Measured from the kick
-    # rather than by how many strong beats the snare has: on a real mix a
-    # dubstep record's snare band is full of its bass, and its second
-    # strongest beat was 0.83 of the first against a house record's 0.94 -
-    # thirteen dubstep and trap records, sixteen house and techno. From the
-    # kick, the dubstep records came out at 1.9 and the house records at
-    # 0.94, and thirteen drum and bass records at no more than 0.74.
+    # Half time: the snare two beats after the kick's strongest beat, where a
+    # backbeat puts it one beat either side. Measured from the kick, not by how
+    # many strong beats the snare has: on a real mix a dubstep record's snare
+    # band is full of its bass (its second strongest beat 0.83 of the first,
+    # against house's 0.94, over thirteen dubstep and trap and sixteen house
+    # and techno records). From the kick, dubstep came out at 1.9, house at
+    # 0.94, and thirteen drum and bass records at 0.74 or less.
     #
     # Only where the kick has a strongest beat. Four to the floor has four
-    # alike, and which of them came out strongest was chance - half the
-    # time the one two beats before a clap, which is then half time. So it
-    # fades out as the kick comes to every beat, where ``steady`` fades in.
-    # (Weighing every beat by its kick instead, rather than taking the
-    # strongest, lost the dubstep records: their kick's bands carry the
-    # bass on the other beats.)
+    # alike, and which came out strongest was chance, half the time the one two
+    # beats before a clap. So it fades out as the kick comes to every beat,
+    # where ``steady`` fades in. Weighing every beat by its kick instead lost
+    # the dubstep records, whose kick bands carry the bass on the other beats.
     lead = kq.index(max(kq))
     near = max(snare_quarters[(lead + 1) % BAR],
                snare_quarters[(lead + 3) % BAR])
@@ -622,12 +607,11 @@ def _measured(out: Dict[str, float], k, sn, h, kick, hats, rate: float,
             late.append((where - PER_BEAT // 2) / PER_BEAT)
     late.sort()
     out["swing"] = late[len(late) // 2] if late else 0.0
-    # How far the drums stand out of their own floor at all: a record with
-    # no drums folds to a flat line, and every measure above is noise.
-    # The kick's strongest place in the bar against its floor - not the
-    # four beats' average, which on a record whose kick is on one beat of
-    # four is mostly empty beats, and under a detector's false hits fell
-    # below any line a record with drums could be told by.
+    # How far the drums stand out of their own floor: a record with no drums
+    # folds flat, and every measure above is noise. The kick's strongest place
+    # against its floor, not the four beats' average, which for a kick on one
+    # beat of four is mostly empty beats and, under false hits, fell below any
+    # line that could tell a record with drums.
     out["kick_contrast"] = min(20.0, (max(k) - _floor(k)) / (
         _floor(k) + 0.02 * (max(k) or 1.0)))
     return out
@@ -843,24 +827,21 @@ def within(bpm: float) -> float:
 
 def rhythm_of(kit: Optional[dict], tempo: float = 0.0,
               hint: float = 0.0) -> Optional[dict]:
-    """The drums' own tempo, beat and pattern, from the kit's onset
-    strength (see beatmap.BeatMap.flux). The heavy half of reading a
-    track's style, done where the drums are found - in a process of its
-    own - rather than on the thread drawing the picture.
+    """The drums' own tempo, beat and pattern, from the kit's onset strength
+    (see beatmap.BeatMap.flux): the heavy half of reading a style, done in
+    the drums' own process rather than on the thread drawing the picture.
 
-    ``{"tempo", "phase", "faster", "measured", "spans", "beats"}``: beats
-    a minute; the time of a beat, in seconds; 2 for a record heard at half
-    its speed (see ``read``) and otherwise 1; what the drums do (see
-    ``rhythm``); where the kick is playing; and the beat times where the
-    tempo moves, or None where one steady grid fits (see ``follow``). None
-    with no kit.
+    ``{"tempo", "phase", "faster", "measured", "spans", "beats"}``: beats a
+    minute; a beat's time, in seconds; 2 for a record heard at half its
+    speed (see ``read``), otherwise 1; what the drums do (see ``rhythm``);
+    where the kick is playing; and the beat times where the tempo moves, or
+    None where one steady grid fits (see ``follow``). None with no kit.
 
-    The beat maps the rest of the app counts in are found at fifteen
-    readings a second and phased from the first thing they heard, which on
-    a real record is as often between two beats as on one: measured on
-    sixteen records, a third of a beat out on one and nearly half on
-    another. This is phased from where the kick and the snare land over
-    the whole track, at sixty readings a second.
+    The app's beat maps are read at fifteen readings a second and phased
+    from the first thing heard, which on a real record is as often between
+    beats as on one: on sixteen records, a third of a beat out on one and
+    nearly half on another. This is phased from where the kick and snare
+    land over the whole track, at sixty readings a second.
     """
     if not kit:
         return None
@@ -889,13 +870,11 @@ def rhythm_of(kit: Optional[dict], tempo: float = 0.0,
     spans = _drum_spans(curves["Kick"][0], rate, beat)
     measured = rhythm(curves["Kick"][0], curves["Snare"][0],
                       curves["Hats"][0], rate, beat, spans)
-    # Kick on one and snare on three at 176 is the kick and the snare of a
-    # backbeat at 88, beat for beat: the fold cannot tell hip hop from half
-    # time, only the tempo can. That fast it is hip hop, or half-time drum
-    # and bass, and counted where a DJ program and a nodding head count it
-    # - at 88, with the snare on two and four. Ridden at 176 the road ran
-    # at twice the speed of the music. (Two hip hop records in eight were
-    # counted at double; dubstep at 140 or 150 is not touched.)
+    # Kick on one and snare on three at 176 is a backbeat at 88, beat for beat:
+    # only the tempo tells hip hop from half time. That fast it is hip hop or
+    # half-time drum and bass, counted where a DJ program and a nodding head
+    # count it, at 88 with the snare on two and four; ridden at 176 the road
+    # ran at twice the music's speed. Dubstep at 140 or 150 is not touched.
     if (tempo >= HALVED_FROM and measured["half"] >= HALF_SURE
             and measured["kick_contrast"] > 1.6):
         tempo /= 2.0
@@ -903,22 +882,20 @@ def rhythm_of(kit: Optional[dict], tempo: float = 0.0,
         measured = rhythm(curves["Kick"][0], curves["Snare"][0],
                           curves["Hats"][0], rate, beat, spans)
     faster = 1.0
-    # Counted at half its real tempo - drum and bass at 87 rather than
-    # 174 - a record has its snare on the off-beat of every beat it is
-    # counted in, which at its own tempo is two and four.
-    # Only where there are drums: a snare roll through a build is on every
-    # beat too, and a record with no kick at all doubled on it.
+    # Counted at half its tempo (drum and bass at 87, not 174), a record has
+    # its snare on the off-beat of every beat, which at its own tempo is two
+    # and four. Only where there are drums: a snare roll through a build is on
+    # every beat too, and a record with no kick at all doubled on it.
     if (tempo <= 100.0 and measured["snare_every"] > 0.6
             and measured["kick_contrast"] > 1.6):
         faster = 2.0
         beat /= 2.0
         measured = rhythm(curves["Kick"][0], curves["Snare"][0],
                           curves["Hats"][0], rate, beat, spans)
-    # Faster than anybody counts, with no kick on every beat to say it
-    # really is that fast: a backbeat counted twice over, which the two
-    # rules above can hand back and forth. Counted at half, as a DJ program
-    # counts it. Drum and bass at 170 to 180 is under the line; hardcore's
-    # kick is on every beat.
+    # Faster than anybody counts, with no kick on every beat to confirm it: a
+    # backbeat counted twice, which the two rules above can pass back and
+    # forth. Counted at half, as a DJ program counts it. Drum and bass at 170
+    # to 180 is under the line; hardcore's kick is on every beat.
     if 60.0 / beat > TOO_FAST and measured["four"] < FOUR_SURE:
         beat *= 2.0
         faster = 1.0
@@ -944,19 +921,16 @@ def on_the_hits(phase: float, beat: float,
                 kit: Optional[dict]) -> Tuple[float, float]:
     """The beat's phase and length, moved onto where the drums really hit.
 
-    The fold finds the beat to one twenty-fourth of it - 21 ms at 120 - and
-    a hit's onset strength peaks a reading before the hit itself, so the
-    beat it found sat a slot early: every scene's pulse came round 17 ms
-    before the kick it was for. And its tempo is found to a fiftieth of a
-    beat a minute, which over five minutes is 50 ms of drift by the end.
+    The fold finds the beat to a twenty-fourth of it (21 ms at 120), and
+    onset strength peaks a reading before the hit, so every scene's pulse
+    came 17 ms early. Its tempo is good to a fiftieth of a beat a minute: 50
+    ms of drift over five minutes.
 
-    The hits the kit found are timed to the sample. Each kick near the grid
-    is given its beat's number, and the straight line through them - when
-    each landed against which beat it was - is the grid, phase and length
-    both; the snares where there is no kick. Where the line will not do,
-    too few hits or a tempo further from the fold's than a refinement
-    should move it, the median of how far they are out puts the phase on
-    them and the tempo stays.
+    The kit's hits are timed to the sample. Each kick near the grid is
+    numbered by its beat, and the straight line through them is the grid,
+    phase and length; snares where there is no kick. With too few hits, or a
+    tempo further from the fold's than a refinement should move it, the
+    median offset sets the phase and the tempo stays.
     """
     if beat <= 0.0:
         return phase, beat
@@ -1130,14 +1104,14 @@ def read(chart: Optional[dict], beat: float, grid: Optional[float],
          contour: Optional[dict], harmony: Optional[dict] = None,
          length: float = 0.0, flux: Optional[dict] = None,
          rhythm_found: Optional[dict] = None, light: bool = False) -> Style:
-    """The style and the sections of a track - the cheap half, done where
-    the game is. ``rhythm_found`` is ``rhythm_of``'s answer, worked out
-    with the drums; without it, the drums' pattern is read here from
-    ``flux`` or, failing that, from the chart's hit times at ``beat``.
-    ``grid`` is the time of any one beat, for when nothing better is
-    known. ``light`` reads no pattern here at all - for the thread that
-    draws, while the drums' own reading has not arrived - and leaves the
-    style's numbers at nothing but the sections."""
+    """The style and the sections of a track: the cheap half, done where the
+    game is.
+
+    ``rhythm_found`` is ``rhythm_of``'s answer; without it the drums'
+    pattern is read here from ``flux``, or else from the chart's hit times
+    at ``beat``. ``grid`` is any one beat's time, for when nothing better is
+    known. ``light`` reads no pattern, for the thread that draws before the
+    drums' reading arrives, and fills in only the sections."""
     chart = {name: sorted(times) for name, times in (chart or {}).items()}
     loud = list((contour or {}).get("loud") or ())
     rate = float((contour or {}).get("rate") or 0.0)

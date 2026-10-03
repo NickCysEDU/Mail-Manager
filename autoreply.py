@@ -1,18 +1,12 @@
 """Drafting replies, and deciding which messages deserve one.
 
-Deliberately conservative in two ways.
+Nothing is ever sent: a draft is written to the account's Drafts mailbox
+with the headers to thread correctly, and a person presses send.
 
-Nothing is ever sent. A draft is written to the account's Drafts mailbox with
-the right headers to thread correctly, and a person presses send. An app that
-answers a stranger's mail on your behalf, using a model, without you reading it
-first, is not a feature anybody asked for twice.
-
-And a rule has to match on something specific. A rule is a list of conditions
-and a list of things to do, so anybody can build one that fits their own mail
-rather than picking from a fixed menu. The rules that ship cover the cases
-where the correct reply is nearly mechanical - acknowledging an interview
-invitation, answering a request for availability - and every one of them is off
-until it is switched on.
+A rule is a list of conditions and a list of things to do, so anybody can
+build one for their own mail. The rules that ship cover cases where the
+reply is nearly mechanical (acknowledging an interview invitation, answering
+a request for availability), and each is off until it is switched on.
 """
 
 from __future__ import annotations
@@ -36,9 +30,8 @@ MAX_MATCH_CHARS = 20000
 # ==========================================================================
 # Conditions and actions
 # ==========================================================================
-#: What a condition can look at. Each is (name, label, kind), where kind says
-#: what sort of value the field expects and so which editor the settings page
-#: shows for it.
+# What a condition can look at: (name, label, kind), where kind says what value
+# the field expects, and so which editor the settings page shows.
 FIELDS: Tuple[Tuple[str, str, str], ...] = (
     ("category", "Job category", "category"),
     ("topic", "Everyday topic", "topic"),
@@ -230,11 +223,11 @@ def _branches(group: str) -> List[str]:
 def _branches_overlap(group: str) -> bool:
     """Whether two alternatives can begin with the same character.
 
-    ``(a|a)*`` and ``(\\d|\\w)+`` are exponential for the same reason ``(a+)+``
-    is: at every position the matcher has more than one way to make progress,
-    and has to try all of them before it can give up. Asking each branch's
-    first atom about a handful of representative characters answers that
-    without writing a regular-expression engine.
+    ``(a|a)*`` and ``(\\d|\\w)+`` are exponential for the same reason as
+    ``(a+)+``: at every position the matcher has more than one way forward,
+    and must try them all before it can give up. Asking each branch's first
+    atom about a few representative characters answers that without a regex
+    engine.
     """
     parts = [p for p in _branches(group) if p]
     if len(parts) < 2:
@@ -266,14 +259,13 @@ _RISK: Dict[str, str] = {}
 
 
 def pattern_risk(pattern: str) -> str:
-    """Why this pattern could take an unreasonable amount of time, in words.
+    """Why this pattern could take an unreasonable time, in words.
 
     Python's regular expressions backtrack, and two shapes make that
-    catastrophic: a repeat inside a repeat, and two repeats of the same thing
-    side by side. Neither is rare in a pattern somebody wrote quickly -
-    ``.*.*x`` is what happens when you paste twice - and neither can be
-    interrupted, because the matcher holds the interpreter for its whole run.
-    So they are refused before they run rather than cancelled during it.
+    catastrophic: a repeat inside a repeat, and two repeats of the same
+    thing side by side (``.*.*x``, from pasting twice). The matcher holds
+    the interpreter for its whole run and cannot be interrupted, so these
+    are refused before they run.
     """
     if not pattern:
         return ""
@@ -321,11 +313,10 @@ _COMPILED: Dict[str, Any] = {}
 def _prepare(pattern: str) -> str:
     """Take off the leading and trailing “.*”, which a search does not need.
 
-    ``.*urgent.*`` is a reasonable thing to type and a quadratic thing to run:
-    the matcher takes every starting position in turn, runs to the end of the
-    message and walks back looking for the word. Under ``search`` those two
-    repeats say nothing the search was not already doing, and without them the
-    same pattern is linear. Two seconds a message becomes half a millisecond.
+    ``.*urgent.*`` is quadratic: the matcher tries every starting position,
+    runs to the end and walks back for the word. Under ``search`` the two
+    repeats add nothing, and without them the pattern is linear: two seconds
+    a message becomes half a millisecond.
     """
     trimmed = pattern
     while (trimmed.startswith(".*") and not trimmed.startswith(".*?")):
@@ -374,9 +365,9 @@ class Condition:
     operator: str = "contains"
     value: str = ""
 
-    #: Where an operator goes when the field it was written for does not
-    #: offer it - "is" on a subject means "is exactly", not "whichever
-    #: operator happened to come first".
+    #: Where an operator goes when the field it was written for does not offer
+    #: it: "is" on a subject means "is exactly", not whichever operator came
+    #: first.
     SYNONYMS = {"is": "equals", "is_not": "not_equals",
                 "equals": "is", "not_equals": "is_not",
                 "at_least": "contains", "at_most": "contains",
@@ -472,8 +463,8 @@ class Condition:
             hit = needle in parts or haystack == needle
             return hit if operator == "is" else not hit
         if not needle:
-            # An empty text test would match everything, which is never what
-            # somebody typing a rule meant to say.
+            # An empty text test would match everything, which nobody typing a
+            # rule means.
             return False
         if operator == "contains":
             return needle in haystack
@@ -555,9 +546,8 @@ class Action:
     value: str = ""
 
     def __post_init__(self) -> None:
-        # An action nobody has ever heard of is dropped by the rule rather
-        # than guessed at. Guessing "draft" would have a mangled config write
-        # mail; dropping it does nothing, which is the right way to be wrong.
+        # An unknown action is dropped by the rule rather than guessed at:
+        # guessing "draft" would have a mangled config write mail.
         if self.kind not in _ACTION_INPUT:
             self.kind = ""
         self.value = "" if self.value is None else str(self.value)
@@ -587,10 +577,9 @@ class Action:
         known = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in (raw or {}).items() if k in known})
 
-#: Local parts that are never a person. Mail from any of these is a
-#: machine talking, and drafting an answer to it is at best noise and at
-#: worst a loop: two autoresponders can keep each other busy for as long
-#: as the mail server lets them.
+#: Local parts that are never a person. Drafting an answer to a machine is at
+#: best noise and at worst a loop: two autoresponders keep each other busy for
+#: as long as the server lets them.
 ROBOT_NAMES = frozenset({
     "no-reply", "noreply", "no_reply", "donotreply", "do-not-reply",
     "do_not_reply", "mailer-daemon", "mailerdaemon", "postmaster",
@@ -598,9 +587,8 @@ ROBOT_NAMES = frozenset({
     "auto-reply", "autoreply", "root", "daemon", "nobody",
 })
 
-#: Headers a machine sets on its own mail. RFC 3834 exists precisely so
-#: that an autoresponder can recognise another autoresponder and shut up;
-#: honouring it is the difference between a reply feature and an outage.
+#: Headers a machine sets on its own mail. RFC 3834 exists so that an
+#: autoresponder can recognise another one and stay quiet.
 ROBOT_HEADERS = (
     ("auto_submitted", lambda v: v.strip().lower() not in ("", "no")),
     ("precedence", lambda v: v.strip().lower() in ("bulk", "list", "junk")),
@@ -612,17 +600,15 @@ def is_automated(message) -> bool:
     """Whether a machine sent this, by address or by header.
 
     Checked before anything is drafted, whatever the rule says, and not
-    offered as an option to turn off. An autoresponder that answers a
-    bounce produces another bounce, and the loop only stops when somebody
-    notices - which, for mail that is written to Drafts rather than sent,
-    means a Drafts folder with four hundred things in it.
+    optional: answering a bounce produces another bounce, and for mail
+    written to Drafts that means a Drafts folder four hundred deep.
     """
     address = (getattr(message, "sender_email", "") or "").strip().lower()
     local = address.rpartition("@")[0] or address
     if local in ROBOT_NAMES:
         return True
-    # Hyphenated variants: "no-reply-1234@" and "bounces+tag@" are the
-    # same senders wearing a tag, which is how most senders do it.
+    # Hyphenated variants: "no-reply-1234@" and "bounces+tag@" are the same
+    # senders with a tag.
     stem = local.split("+", 1)[0]
     if stem in ROBOT_NAMES:
         return True
@@ -631,10 +617,9 @@ def is_automated(message) -> bool:
         if not stem.startswith(prefix):
             continue
         rest = stem[len(prefix):]
-        # A boundary, not just a prefix. "no-reply-4821@" and "noreply.2@"
-        # are the same sender with a tag on it; "noreplygroup@" is a word
-        # that happens to start the same way, and a mailing list called
-        # that is full of people.
+        # A boundary, not just a prefix: "no-reply-4821@" and "noreply.2@" are
+        # one sender with a tag, while "noreplygroup@" is a word that starts
+        # the same way, and a list of that name is full of people.
         if not rest or rest[0] in "-_.0123456789":
             return True
     for attribute, says_yes in ROBOT_HEADERS:
@@ -648,10 +633,9 @@ def is_automated(message) -> bool:
 class Rule:
     """When these conditions hold, do these things.
 
-    Conditions and actions are lists, so a rule is whatever somebody needs it
-    to be rather than one of a fixed set. The older shape - a category, a
-    phrase, a confidence floor and one action - is still read, and converted
-    on the way in, so an existing configuration keeps working.
+    Conditions and actions are lists, so a rule is whatever somebody needs.
+    The older shape (a category, a phrase, a confidence floor and one
+    action) is still read, and converted on the way in.
     """
 
     name: str = "New rule"
@@ -664,16 +648,14 @@ class Rule:
     skip_bulk: bool = True
     #: Stop looking at later rules once this one has matched.
     stop_after: bool = False
-    #: Draft to the same sender at most once in this many days. Zero means
-    #: no limit. The single most important setting on an autoresponder:
-    #: without it, somebody who writes four times in a morning gets four
-    #: identical drafts, and a mailing list you are on gets one per post.
+    #: Draft to the same sender at most once in this many days; zero means no
+    #: limit. Without it, somebody who writes four times in a morning gets four
+    #: identical drafts, and a mailing list one per post.
     once_per_sender_days: int = 0
-    #: The hours of the day this rule may draft in, as (from, to) on a
-    #: 24-hour clock. (0, 24) means any time. Replies written at three in
-    #: the morning are read as three in the morning, and a rule that files
-    #: mail has no business being limited this way - so this only gates
-    #: the actions that write something.
+    #: The hours this rule may draft in, as (from, to) on a 24-hour clock; (0,
+    #: 24) is any time. A reply written at three in the morning reads as one.
+    #: Only actions that write are gated: filing has no business being limited
+    #: this way.
     active_from: int = 0
     active_to: int = 24
     #: Days of the week it may draft on, Monday is 0. Empty means any.
@@ -686,8 +668,8 @@ class Rule:
         self.active_from = max(0, min(24, int(self.active_from or 0)))
         self.active_to = max(0, min(24, int(self.active_to or 24)))
         if self.active_to <= self.active_from:
-            # A window that ends before it starts would never open. Nobody
-            # means that, so it reads as "any time" rather than "never".
+            # A window that ends before it starts would never open; nobody
+            # means that, so it reads as any time.
             self.active_from, self.active_to = 0, 24
         self.active_days = tuple(sorted(
             {int(d) for d in (self.active_days or ()) if 0 <= int(d) <= 6}))
@@ -702,9 +684,8 @@ class Rule:
             ) if action.kind
         ]
 
-    #: Actions that only rearrange the table. They need no network, write
-    #: nothing to the server, and can therefore run at the end of every scan
-    #: rather than waiting for somebody to ask for replies.
+    #: Actions that only rearrange the table: no network and nothing written to
+    #: the server, so they can run at the end of every scan.
     SORTING_ACTIONS = frozenset({"file_into", "tick", "untick", "bin_it",
                                  "leave", "stop"})
 
@@ -715,11 +696,9 @@ class Rule:
 
     @property
     def sorts_only(self) -> bool:
-        """Whether this rule just files and ticks.
-
-        A rule that flags a message or marks it read has to open the mailbox,
-        and a rule that drafts has to talk to a model; neither belongs in the
-        tail of a scan. One that only points a row at a folder does.
+        """Whether this rule just files and ticks. Flagging or marking read
+        opens the mailbox and drafting talks to a model; neither belongs in
+        the tail of a scan.
         """
         return bool(self.actions) and all(
             a.kind in self.SORTING_ACTIONS for a in self.actions)
@@ -774,18 +753,15 @@ class Rule:
 
     # -- may this one write anything just now ------------------------------
     def may_draft(self, message, context=None) -> Tuple[bool, str]:
-        """Whether this rule is allowed to draft for this message now.
+        """Whether this rule may draft for this message now.
 
-        Kept apart from :meth:`matches` on purpose. Matching is about the
-        message; this is about everything else - whether a machine sent
-        it, whether this person was already written to, whether it is the
-        middle of the night. A rule can match perfectly and still have
-        nothing to say, and the reason is worth having in words, because
-        "why did it not reply" is the question people actually ask.
+        Apart from :meth:`matches`, which is about the message. This is
+        everything else (a machine sent it, this person was already written
+        to, it is the middle of the night), with the reason in words, since
+        why it did not reply is what people ask.
 
-        Only drafting is gated. A rule that files a message into a folder
-        has not spoken to anybody, and holding that until nine in the
-        morning would be a bug rather than a courtesy.
+        Only drafting is gated: a rule that files a message has spoken to
+        nobody.
         """
         context = context or {}
         if is_automated(message):
@@ -812,9 +788,9 @@ class Rule:
     def problems(self) -> List[str]:
         """Everything wrong with this rule, in words, worst first.
 
-        The settings page shows these next to the rule rather than refusing to
-        save it, because a half-written rule is a normal state to leave a
-        rule in. A rule with problems is simply never switched on.
+        Shown beside the rule rather than refusing to save it: a
+        half-written rule is normal, and one with problems is never switched
+        on.
         """
         found: List[str] = []
         if not self.conditions:
@@ -894,8 +870,8 @@ class Rule:
         )
 
 
-#: Shipped switched off. Each is a case where the right response is nearly
-#: mechanical, which is the only kind worth automating.
+#: Shipped switched off, each a case where the right response is nearly
+#: mechanical.
 def default_rules() -> List[Rule]:
     return [
         Rule(
@@ -957,19 +933,16 @@ class Outcome:
     mark_read: bool = False
     flag: bool = False
     leave: bool = False
-    #: Why a draft was not written, when a rule matched but was held back.
-    #: Kept so the window can say "it matched, and here is why it said
-    #: nothing" rather than looking as though the rule simply failed.
+    #: Why a draft was not written when a rule matched but was held back, so
+    #: the window can say why it said nothing.
     held: List[str] = field(default_factory=list)
-    #: Which rule wrote the draft, and who it is addressed to, so the
-    #: reply log can be told after the draft is actually saved rather
-    #: than when it was composed.
+    #: Which rule wrote the draft and to whom, so the reply log is told once
+    #: the draft is saved rather than when it was composed.
     drafted_by: str = ""
     drafted_to: str = ""
-    #: Send it to the To Delete folder. Kept apart from ``file_into``
-    #: because the folder is not known here - it depends on the account's
-    #: folder plan - and because the caller needs to be able to tell "a rule
-    #: chose a folder" from "a rule gave up on this message".
+    #: Send it to the To Delete folder. Apart from ``file_into``: the folder
+    #: depends on the account's folder plan, unknown here, and the caller has
+    #: to tell a chosen folder from a rule giving up on the message.
     bin_it: bool = False
 
     @property
@@ -1011,10 +984,8 @@ def apply_rules(rules: Sequence[Rule], message, classification, me: str = "",
                 engine=None, context=None) -> Optional[Outcome]:
     """Run every rule in order and collect what they decided.
 
-    Rules are read top to bottom and a later one can add to what an earlier one
-    decided, until a rule says to stop. That ordering is the only thing anybody
-    has to hold in their head, and it is the same rule every mail client has
-    used for thirty years.
+    Rules are read top to bottom, a later one adding to what an earlier one
+    decided until a rule says to stop, as in every mail client.
 
     Returns None when no rule wanted anything, so a caller can tell "no rule
     applied" from "a rule applied and asked for nothing".
@@ -1060,18 +1031,15 @@ def apply_rules(rules: Sequence[Rule], message, classification, me: str = "",
                 outcome.leave = True
                 outcome.file_into = ""
                 outcome.bin_it = False
-                # Not just "do not file it": a tick an earlier rule put
-                # there would otherwise survive and Apply would move the
-                # message anyway, which is the opposite of what this says.
+                # Not just "do not file it": a tick an earlier rule put there
+                # would survive, and Apply would move the message anyway.
                 outcome.tick = False
             elif kind == "stop":
                 stop = True
         if stop:
             break
-    # Held reasons count as something to say. A rule that matched and then
-    # kept quiet looks identical to a rule that did not match, from
-    # outside, and they mean opposite things - "why did it not reply" is
-    # the question people actually ask about this feature.
+    # Held reasons count as something to say: from outside, a rule that matched
+    # and kept quiet looks like one that did not match.
     if outcome.does_anything or outcome.held:
         return outcome
     return None
@@ -1195,8 +1163,8 @@ def choose_rule(rules: Sequence[Rule], message: EmailMessage,
                 classification) -> Tuple[Optional[Rule], str]:
     """The first rule that drafts a reply, and why none did when none do.
 
-    Kept for the one caller that only wants a draft. Anything that needs the
-    whole picture - filing, ticking, flagging - wants apply_rules instead.
+    For the one caller that only wants a draft; anything that needs filing,
+    ticking or flagging wants apply_rules instead.
     """
     reasons = []
     for rule in rules:

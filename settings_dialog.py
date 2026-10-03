@@ -1,12 +1,6 @@
-"""Settings, and the dialogs that hang off it.
-
-Split out of gui.py, which had grown to six and a half thousand lines. This
-half of it is everything a person configures - mailboxes, the analysis
-backend, folders, reply rules, appearance - plus the window that manages
-locally installed models.
-
-A pure move: every class is exactly as it was in gui.py, and gui re-exports
-them so nothing that imports from there has to change.
+"""Settings, and the dialogs that hang off it: mailboxes, the analysis backend,
+folders, reply rules, appearance, and the window that manages locally
+installed models. gui re-exports these classes.
 """
 
 from __future__ import annotations
@@ -50,9 +44,8 @@ from workers import ConnectionTestWorker
 class _RuleRow(QWidget):
     """One line of a rule: some combo boxes, a value, and a way to delete it.
 
-    Conditions and actions are close enough to share the plumbing. What
-    differs is which combo boxes there are and what a value looks like, and
-    both subclasses answer that in `_value_kind`.
+    Conditions and actions share this; each subclass says in `_value_kind`
+    which combo boxes there are and what a value looks like.
     """
 
     changed = Signal()
@@ -65,9 +58,8 @@ class _RuleRow(QWidget):
         self._value_widget: Optional[QWidget] = None
         self._quiet = False
 
-        # A tall editor - a template, some guidance - goes underneath rather
-        # than in the line, or the combo boxes beside it float in the middle
-        # of a hundred points of nothing.
+        # A tall editor (a template, some guidance) goes underneath, or the
+        # combo boxes beside it float in a hundred points of nothing.
         self.stack = QVBoxLayout(self)
         self.stack.setContentsMargins(0, 0, 0, 0)
         self.stack.setSpacing(4)
@@ -284,11 +276,8 @@ class ActionRow(_RuleRow):
 
 
 class ModelsDialog(QDialog):
-    """What is installed on this Mac, and how to add to it or remove from it.
-
-    Downloading a model was already possible from the Analysis tab; there was
-    no way to see what you had or to get rid of it, so a machine slowly filled
-    with several gigabytes each and nothing said so.
+    """What is installed on this Mac, and how to add to it or remove from it:
+    models are several gigabytes each.
     """
 
     def __init__(self, endpoint: str = "", parent=None) -> None:
@@ -562,8 +551,8 @@ class SettingsDialog(QDialog):
         self.status = QLabel("")
         self.status.setWordWrap(True)
 
-        # The same help switch as the window's, because most of the writing
-        # that benefits from it is in here.
+        # The same help switch as the window's: most of the writing it helps
+        # with is in here.
         self.help_button = helpmode.HelpButton()
         self.help_button.setChecked(settings.help_mode)
         self.help_button.toggled.connect(self._toggle_help)
@@ -629,13 +618,10 @@ class SettingsDialog(QDialog):
 
     # -- tabs ------------------------------------------------------------
     def _build_account_tab(self) -> QWidget:
-        """Every mailbox, in a list you can see all of at once.
+        """Every mailbox in one visible list, marked when ready to scan.
 
-        The previous version hid the list behind a dropdown and captured edits
-        silently when you moved away from a field, which left no way to tell
-        whether anything had been kept. This shows every mailbox, marks which
-        ones are ready to scan, and writes each edit into the selected mailbox
-        as it is typed - so the list is the confirmation.
+        Each edit is written into the selected mailbox as it is typed, so
+        the list is the confirmation.
         """
         page = QWidget()
         outer = QVBoxLayout(page)
@@ -744,9 +730,8 @@ class SettingsDialog(QDialog):
         advanced.addRow("IMAP port", self.port_spin)
         advanced.addRow("Mailbox to scan", self.mailbox_edit)
         advanced.addRow("Parallel connections", self.connections_spin)
-        # Folders per mailbox, because people keep separate mailboxes for
-        # separate reasons - a work account where a folder called Job Search
-        # would be conspicuous, a personal one where it does not matter.
+        # Folders per mailbox: a work account where a Job Search folder would
+        # be conspicuous, a personal one where it does not matter.
         self.account_root_edit = QLineEdit()
         self.account_root_edit.setToolTip(
             "Where this mailbox's job-search folders go. Leave empty to use "
@@ -770,7 +755,7 @@ class SettingsDialog(QDialog):
         outer.addLayout(form)
 
         # Every field writes into the selected mailbox as it changes, so the
-        # list above is always showing the truth and there is nothing to press.
+        # list above shows the truth and there is nothing to press.
         for widget in (self.email_edit, self.account_label_edit, self.host_edit,
                        self.mailbox_edit, self.account_root_edit,
                        self.account_other_root_edit):
@@ -891,10 +876,8 @@ class SettingsDialog(QDialog):
         self._describe_preset(account.preset)
 
     def _capture_account(self) -> None:
-        """Fold the form back into the mailbox it belongs to.
-
-        Called on every keystroke rather than only when the selection moves, so
-        the list is always describing what has actually been entered.
+        """Fold the form back into its mailbox, on every keystroke, so the list
+        always describes what has been entered.
         """
         if not (0 <= self._account_index < len(self._accounts)):
             return
@@ -910,8 +893,8 @@ class SettingsDialog(QDialog):
         account.folder_root = self.account_root_edit.text().strip()
         account.other_folder_root = self.account_other_root_edit.text().strip()
         if address:
-            # Cleaned on the way in as well as on the way out, so what is shown,
-            # what is stored and what is sent are all the same thing.
+            # Cleaned on the way in as well as out, so what is shown, stored
+            # and sent are the same.
             self._account_passwords[address] = clean_secret(self.password_edit.text())
         self._refresh_list_row(self._account_index)
 
@@ -967,12 +950,11 @@ class SettingsDialog(QDialog):
         self._refresh_account_list()
 
     def _preset_changed(self) -> None:
-        """Follow the provider, the way the model page follows the backend.
+        """Follow the provider, as the model page follows the backend.
 
-        Changing the provider on a mailbox that already holds somebody else's
-        address is not a change of server, it is a different mailbox. Keeping
-        the old address is how an iCloud address ends up pointed at Gmail's
-        server, which then quietly scans nothing.
+        A mailbox holding another provider's address is a different mailbox,
+        not a change of server: keeping the old address pointed an iCloud
+        address at Gmail's server, which then scanned nothing.
         """
         name = self.preset_combo.currentData() or "custom"
         spec = accounts.host_for(name)
@@ -1052,16 +1034,16 @@ class SettingsDialog(QDialog):
         self.provider_blurb.setWordWrap(True)
         self.provider_blurb.setProperty("dim", "true")
 
-        # Shown only for the on-device backend, and only when it needs setting
-        # up. The equivalent of "get one" beside an API key field.
+        # Shown only for the on-device backend, when it needs setting up: the
+        # equivalent of "get one" beside an API key field.
         self.ollama_note = QLabel()
         self.ollama_note.setWordWrap(True)
         self.ollama_note.setOpenExternalLinks(True)
         self.ollama_note.setVisible(False)
         self.ollama_button = QPushButton("Install Ollama")
         self.ollama_button.setVisible(False)
-        # The same shape the window uses for a scan: a bar that means
-        # something, a line saying what is happening, and one red way to stop.
+        # Shaped like the window's scan progress: a bar, a line saying what is
+        # happening, and one red way to stop.
         self.ollama_progress = QProgressBar()
         self.ollama_progress.setRange(0, 100)
         self.ollama_progress.setTextVisible(True)
@@ -1133,10 +1115,9 @@ class SettingsDialog(QDialog):
         self.effort_combo.addItems(list(EFFORT_LEVELS))
         self.effort_label = QLabel("Reasoning effort")
 
-        # A probability on a two-decimal spinner reads as a number to be
-        # nudged. It is really "how sure before this files itself", which is a
-        # position on a range, so it is one - with the figure spelled out and
-        # what it means underneath.
+        # A slider rather than a spinner: this is how sure before a message
+        # files itself, a position on a range, with the figure and its meaning
+        # underneath.
         self.threshold_slider = QSlider(Qt.Orientation.Horizontal)
         self.threshold_slider.setRange(50, 100)
         self.threshold_slider.setSingleStep(1)
@@ -1241,18 +1222,18 @@ class SettingsDialog(QDialog):
         if not hasattr(self, "ollama_note"):
             return
         on_device = bool(getattr(spec, "on_device", False))
-        # Decided here and nowhere else. It used to be turned on further down,
-        # past two early returns, so a backend whose probe had not answered
-        # yet could leave it hidden with Ollama selected.
+        # Decided here and nowhere else: further down, past two early returns,
+        # a backend whose probe had not answered could leave it hidden with
+        # Ollama selected.
         self.manage_models_button.setVisible(on_device)
         if not on_device:
             self.ollama_note.setVisible(False)
             self.ollama_button.setVisible(False)
             return
 
-        # The network half of this is asked for in the background: an
-        # endpoint that drops packets costs the full timeout, and the endpoint
-        # is a field somebody can type anything into.
+        # The network half runs in the background: an endpoint that drops
+        # packets costs the full timeout, and the endpoint is whatever was
+        # typed.
         self._start_ollama_probe()
         state = getattr(self, "_ollama_state", None)
         self.ollama_note.setVisible(True)
@@ -1502,11 +1483,10 @@ class SettingsDialog(QDialog):
         self.model_combo.clear()
         for choice in spec.models:
             self.model_combo.addItem(choice.label, choice.value)
-        # Typing a name is right for a hosted backend - they release models
-        # faster than any bundled list can follow, and today's list going
-        # stale is a real thing that happened. It is wrong for a local one:
-        # there the valid names are exactly the models on this Mac, that set
-        # is knowable, and a typo becomes a scan that fails on every message.
+        # Typing a name suits a hosted backend, which releases models faster
+        # than a bundled list can follow. Not a local one: the valid names are
+        # exactly the models on this Mac, and a typo would fail on every
+        # message.
         self.model_combo.setEditable(not getattr(spec, "on_device", False))
         self._loading_models = False
 
@@ -1577,11 +1557,11 @@ class SettingsDialog(QDialog):
         self.refresh_models_button.setVisible(bool(spec.can_list_models))
 
     def _chosen_model(self) -> str:
-        """The selected model id, or whatever the user typed instead.
+        """The selected model id, or the name typed instead.
 
-        ``currentData()`` still points at the last *selected* item after the
-        user types a name of their own, so the visible text has to be checked
-        against that item's label before the id can be trusted.
+        ``currentData()`` still points at the last selected item after a
+        name is typed, so the visible text is checked against that item's
+        label first.
         """
         text = self.model_combo.currentText().strip()
         index = self.model_combo.currentIndex()
@@ -1672,9 +1652,9 @@ class SettingsDialog(QDialog):
         outer.addWidget(headline)
 
         top = QHBoxLayout()
-        # Two switches, because they are two different promises. A rule that
-        # only files and ticks has touched nobody's mailbox and runs at the
-        # end of every scan; one that writes a draft waits to be asked.
+        # Two switches for two promises: a rule that only files and ticks has
+        # spoken to nobody and runs after every scan; one that writes a draft
+        # waits to be asked.
         self.sorting_rules_check = QCheckBox("Apply filing rules after a scan")
         self.sorting_rules_check.setToolTip(
             "Rules that only file, tick or leave mail alone. They run "
@@ -1709,9 +1689,8 @@ class SettingsDialog(QDialog):
         order_note.setWordWrap(True)
         left.addWidget(order_note)
 
-        # A box to narrow the list by. Twenty rules is a normal number
-        # once somebody is using this properly, and twenty names in a
-        # column two hundred pixels wide is a list nobody reads.
+        # A box to narrow the list by: twenty rules is normal, and twenty names
+        # in a narrow column go unread.
         self.rule_search = QLineEdit()
         self.rule_search.setPlaceholderText("Find a rule…")
         self.rule_search.setClearButtonEnabled(True)
@@ -1725,8 +1704,8 @@ class SettingsDialog(QDialog):
         self.rule_list.setMaximumWidth(230)
         self.rule_list.setSizePolicy(QSizePolicy.Policy.Preferred,
                                      QSizePolicy.Policy.Expanding)
-        # Wrap rather than elide. A rule named for what it does is longer than
-        # this column, and half a name is no name at all.
+        # Wrap rather than elide: a rule named for what it does is longer than
+        # this column.
         self.rule_list.currentRowChanged.connect(self._rule_selected)
         self.rule_list.itemChanged.connect(self._rule_ticked)
         left.addWidget(self.rule_list, 1)
@@ -1747,9 +1726,8 @@ class SettingsDialog(QDialog):
         buttons.addStretch(1)
         left.addLayout(buttons)
 
-        # The same line the mailbox list carries: how many there are and
-        # how many of them would actually do something. A list of rules
-        # with no count is a list somebody has to audit by eye.
+        # Like the mailbox list: how many rules there are, and how many would
+        # do something.
         self.rules_summary = QLabel("")
         self.rules_summary.setWordWrap(True)
         self.rules_summary.setProperty("dim", "true")
@@ -1840,10 +1818,9 @@ class SettingsDialog(QDialog):
         right.addLayout(switches)
 
         # -- the limits that only apply to writing -------------------------
-        # In a box of their own, shown only for rules that draft, because
-        # they mean nothing to a rule that files. A rule that moves a
-        # message has not spoken to anybody, so holding it until nine in
-        # the morning would be a bug rather than a courtesy.
+        # In a box of their own, shown only for rules that draft: a rule that
+        # only moves a message has spoken to nobody, so holding it until nine
+        # in the morning would be a bug.
         self.reply_limits = QGroupBox("When this rule may write")
         limits = QFormLayout(self.reply_limits)
         limits.setSpacing(6)
@@ -1990,9 +1967,8 @@ class SettingsDialog(QDialog):
         self.rule_to_hour.setValue(rule.active_to)
         chosen = set(rule.active_days)
         for number, box in enumerate(self.rule_days):
-            # No days chosen means every day, so that is what is shown -
-            # seven empty boxes would read as "never", which is not a
-            # thing this can be set to.
+            # No days chosen means every day, so that is what is shown: seven
+            # empty boxes would read as never, which cannot be set.
             box.setChecked(not chosen or number in chosen)
         self._rebuild_condition_rows(rule)
         self._rebuild_action_rows(rule)
@@ -2053,9 +2029,7 @@ class SettingsDialog(QDialog):
 
     def _folder_choices(self) -> List[str]:
         """Folders a rule can file into: whatever this configuration creates.
-
-        Editable, so a folder that is not in this list is still allowed - the
-        list is a shortcut, not a fence.
+        Editable, so the list is a shortcut, not a fence.
         """
         root = (self.root_edit.text().strip() if hasattr(self, "root_edit")
                 else "") or self._settings.folder_root
@@ -2120,8 +2094,7 @@ class SettingsDialog(QDialog):
         rule.active_to = self.rule_to_hour.value()
         ticked = tuple(n for n, box in enumerate(self.rule_days)
                        if box.isChecked())
-        # Every day ticked is the same as no restriction, and storing it
-        # as "all seven" would freeze the rule if a day were ever added.
+        # Every day ticked means no restriction, and is stored as that.
         rule.active_days = () if len(ticked) == 7 else ticked
         rule.conditions = [row.value() for row in self._condition_rows]
         rule.actions = [row.value() for row in self._action_rows]
@@ -2174,11 +2147,9 @@ class SettingsDialog(QDialog):
         self._describe_rules()
 
     def _rule_status(self, rule) -> str:
-        """What this rule is doing, or what it still needs, in a few words.
-
-        The same shape as the mailbox list: a name is not enough to audit
-        a list by, and "ready" against "needs a folder" is the difference
-        between reading the list and opening every entry in it.
+        """What this rule is doing, or what it still needs, in a few words:
+        like the mailbox list, so the rules can be checked without opening
+        each one.
         """
         problems = rule.problems()
         if problems:
@@ -2224,12 +2195,9 @@ class SettingsDialog(QDialog):
             self._describe_rule()
 
     def _rule_row(self, listed: int) -> int:
-        """Which rule a row in the list is, now that the list can be filtered.
-
-        The two were the same number until the search box arrived, and a
-        row number used as a rule index while a filter is on edits
-        whichever rule happens to sit at that position in the full list -
-        which is a silent, wrong edit rather than a visible failure.
+        """Which rule a row in the list is, now that the list can be filtered:
+        a row number used as a rule index under a filter would silently edit
+        the wrong rule.
         """
         rows = getattr(self, "_rule_rows", None)
         if rows is None:
@@ -2281,12 +2249,9 @@ class SettingsDialog(QDialog):
         self._refresh_rule_list()
 
     def _try_rule(self) -> None:
-        """Run every switched-on rule over the messages already on screen.
-
-        Reading a rule and knowing what it will do are different things. This
-        answers the second question against real mail, without touching the
-        mailbox or the model - a rule that would ask the model reports that it
-        matched, and nothing is drafted.
+        """Run every switched-on rule over the messages on screen, without
+        touching the mailbox or the model: a rule that would ask the model
+        reports that it matched, and nothing is drafted.
         """
         self._capture_rule()
         samples = list(self._sample_items)
@@ -2427,8 +2392,8 @@ class SettingsDialog(QDialog):
         transfer_note.setProperty("dim", "true")
         form.addRow("", transfer_note)
 
-        # Applied as they are changed: a colour choice you cannot see until you
-        # press OK is a colour choice made blind.
+        # Applied as they change: a colour you cannot see until OK is chosen
+        # blind.
         for widget in (self.mode_combo, self.contrast_combo):
             widget.currentIndexChanged.connect(self._preview_appearance)
         self.readable_check.toggled.connect(self._preview_appearance)
@@ -2453,10 +2418,8 @@ class SettingsDialog(QDialog):
         self.status.setText(f"Exported to {Path(path).name}")
 
     def _import_settings(self) -> None:
-        """Read a settings file and load it into the open dialog.
-
-        Loaded into the form rather than applied straight away, so it can be
-        looked at, adjusted and cancelled like any other change.
+        """Read a settings file into the open dialog, to be looked at, adjusted
+        or cancelled like any other change.
         """
         path, _chosen = QFileDialog.getOpenFileName(
             self, "Import settings", str(Path.home() / "Downloads"),
@@ -2596,11 +2559,9 @@ class SettingsDialog(QDialog):
         return page
 
     def _build_learned_box(self) -> QWidget:
-        """What the app has picked up from being corrected, and a way out.
-
-        Anything that changes where mail goes has to be visible and has to be
-        undoable, or it stops being a feature and starts being the app having
-        opinions behind your back.
+        """What the app has picked up from being corrected, and a way out:
+        anything that changes where mail goes has to be visible and
+        undoable.
         """
         box = QWidget()
         layout = QVBoxLayout(box)
@@ -2806,11 +2767,9 @@ class SettingsDialog(QDialog):
         self._update_folder_preview()
 
     def _read_keychain(self, address: str) -> None:
-        """Fill in the stored password, off the thread that draws the window.
-
-        This used to be a plain call here. macOS asks permission whenever the
-        app's signature changes, which is every rebuild, and the window froze
-        behind the prompt asking about it.
+        """Fill in the stored password, off the drawing thread: macOS asks
+        permission whenever the app's signature changes, which is every
+        rebuild, and the window would freeze behind the prompt.
         """
         from workers import KeychainReadWorker
 
@@ -2905,10 +2864,9 @@ class SettingsDialog(QDialog):
     def _chosen_provider(self) -> str:
         """The backend to use, given what is in the key field.
 
-        Picking a cloud backend and leaving the key box empty would fail on
-        the first scan with an authentication error, which is a poor way to
-        find out. The offline sorter takes over instead; it needs nothing,
-        and the backend is one click away in the toolbar once a key exists.
+        A cloud backend with no key would fail the first scan on
+        authentication, so the offline sorter takes over; it needs nothing,
+        and the backend is one click away once a key exists.
         """
         wanted = self.provider_combo.currentData() or providers.DEFAULT_PROVIDER
         spec = providers.provider_class(wanted)
@@ -2994,10 +2952,9 @@ class SettingsDialog(QDialog):
                 f"{result['category']} at {result['confidence'] * 100:.0f}% confidence "
                 f"({result['input_tokens']:,} in / {result['output_tokens']:,} out, {price})."
             )
-            # On a hosted backend a few seconds is noise. On a model running
-            # here it is the whole story: at a minute a message, a scan of a
-            # full inbox is an afternoon, and knowing that up front is the
-            # difference between "it is broken" and "it is slow".
+            # On a hosted backend a few seconds is noise; on a local model it
+            # is the whole story: at a minute a message a full inbox is an
+            # afternoon, and knowing that up front tells slow from broken.
             seconds = float(result.get("seconds") or 0)
             if result.get("on_device") and seconds >= 8:
                 each = seconds
@@ -3028,11 +2985,11 @@ class SettingsDialog(QDialog):
             _abandon(worker)
 
     def _stop_ollama_workers(self) -> bool:
-        """Shut down the on-device threads. False means "do not close yet".
+        """Shut down the on-device threads. False means do not close yet.
 
-        A probe is thrown away without ceremony. An install is not: Homebrew
-        part-way through unpacking a cask is not a good thing to kill because
-        somebody pressed Escape, so they are asked first.
+        A probe is dropped. An install is not: Homebrew part-way through
+        unpacking a cask should not be killed by Escape, so the person is
+        asked first.
         """
         for name in ("_ollama_probe", "_keychain_worker"):
             spare = getattr(self, name, None)
@@ -3058,16 +3015,11 @@ class SettingsDialog(QDialog):
         return True
 
     def _stop_stray_workers(self) -> None:
-        """Stop every worker thread still running under this dialog.
+        """Stop every worker thread still running under this dialog: reading
+        the Keychain, listing installed models, probing an endpoint.
 
-        The named ones above are stopped deliberately, because stopping a
-        download is worth asking about. These are the quiet ones - reading
-        the Keychain, listing installed models, probing an endpoint - which
-        nobody needs to be consulted about but which are just as fatal if
-        they outlive the dialog: Qt calls qFatal and takes the process down
-        when a running QThread is destroyed, and a dialog destroys its
-        children. Closing Settings while a probe was in flight killed the
-        app.
+        Qt aborts the process when a running QThread is destroyed, and a
+        dialog destroys its children.
         """
         for thread in self.findChildren(QThread):
             if not thread.isRunning():
@@ -3097,11 +3049,10 @@ class SettingsDialog(QDialog):
         super().closeEvent(event)
 
     def event(self, incoming) -> bool:
-        """Last stop before Qt deletes this dialog and all its children.
+        """Last stop before Qt deletes this dialog and its children.
 
-        done() and closeEvent() cover a dialog somebody closes. One that is
-        simply deleted - deleteLater, or a parent going away - reaches its
-        destructor without either, so the sweep has to happen here too.
+        One deleted directly (deleteLater, or its parent going) never passes
+        through done() or closeEvent(), so the sweep happens here too.
         """
         if incoming.type() == QEvent.Type.DeferredDelete:
             self._stop_stray_workers()

@@ -115,15 +115,12 @@ from workers import (AttachmentWorker,
 
 log = logging.getLogger(__name__)
 
-#: How many filings to keep undoable. Deep enough that a session of ticking,
-#: filing, looking again and filing again stays reversible; shallow enough
-#: that the stack never describes mail from a scan two hours ago that has
-#: since been touched elsewhere.
+#: How many filings stay undoable: enough for a session of filing in passes,
+#: few enough that the oldest still describes the mail as it is.
 UNDO_DEPTH = 10
 
-#: What each choice actually means, said plainly. The enum labels are short
-#: enough to fit in a menu; these are what somebody needs to choose between
-#: them, and they are the difference between a setting and a decision.
+#: What each choice means, said plainly; the enum labels are only short enough
+#: to fit in a menu.
 _ROUTING_HELP = {
     NonJobRouting.LEAVE:
         "Other mail stays in your inbox and cannot be ticked.",
@@ -165,32 +162,29 @@ class MainWindow(QMainWindow):
         self.apply_worker: Optional[ApplyWorker] = None
         self.reply_worker = None
         self.undo_worker = None
-        #: The last batch of moves, so they can be reversed.
-        #: One entry per completed filing, newest last. A stack rather than
-        #: a single slot because filing is done in passes - tick the obvious
-        #: ones, file, look again, file again - and undoing only the last pass
-        #: leaves you stuck with the one before it.
+        #: Each completed filing, newest last, so filing done in passes can be
+        #: undone pass by pass.
         self._undo_stack: List[UndoBatch] = []
         #: Every background thread this window has started and not yet reaped.
         self._workers: List[QThread] = []
         self.folder_plan: Optional[FolderPlan] = settings.folder_plan()
-        #: Set only by an explicit Quit, so closeEvent can tell "put this
-        #: away" apart from "stop the app".
+        #: Set only by an explicit Quit, so closeEvent can tell hiding from
+        #: quitting.
         self._quitting = False
         #: The Settings window while it is open, so Quit can deal with it.
         self._settings_dialog = None
         #: What the primary button currently does, so it can be rewired
         #: without disconnecting slots that were never attached.
         self._scan_button_action = None
-        #: Whether the row height was chosen by hand. Until it is, it follows
-        #: the density, which is what somebody picking "compact" expects.
+        #: Whether the row height was chosen by hand; until then it follows the
+        #: density.
         self._row_lines_chosen = False
-        #: Whether the preview has been opened deliberately. The densest
-        #: setting starts it closed, but should not keep closing it.
+        #: Whether the preview was opened deliberately: the densest setting
+        #: starts it closed, but should not keep closing it.
         self._preview_opened = False
-        #: Mailboxes whose messages are shown, and whether "all" is in force.
-        #: The two are kept apart so that unticking the last mailbox means an
-        #: empty table rather than silently meaning every mailbox.
+        #: Mailboxes shown, and whether "all" is in force. Kept apart so
+        #: unticking the last mailbox empties the table rather than meaning
+        #: every mailbox.
         self._view_accounts: List[str] = []
         self._view_all = True
         #: Which providers have a key in the Keychain. See store_has_key.
@@ -200,16 +194,11 @@ class MainWindow(QMainWindow):
         self._prompt_engine_key: Optional[tuple] = None
 
         self.setWindowTitle(APP_DISPLAY_NAME)
-        # 580 tall rather than 520.
-        #
-        # What the window has to hold between the toolbars and the status
-        # bar is a table and a preview, and the preview has a floor of its
-        # own: a header, a row that files the message, and two halves with
-        # a row of controls and a couple of lines of text in each. At 560
-        # the three of them came to 319 px of a 310 px splitter and the
-        # preview drew nine pixels past the bottom of it. A window that
-        # cannot draw what is in it is not a smaller window, it is a
-        # broken one.
+        # 580 tall: between the toolbars and the status bar sit the table and
+        # the preview, and the preview has a floor of its own (a header, a
+        # filing row, and two halves with controls and text). At 560 they
+        # needed 319 px of a 310 px splitter, and the preview drew past its
+        # bottom.
         self.setMinimumSize(760, 580)
 
         self._build_ui()
@@ -228,8 +217,8 @@ class MainWindow(QMainWindow):
         self.menu_bar.modelChanged.connect(self._switch_model)
         self.menu_bar.rulesetChanged.connect(self._switch_ruleset)
         self.menu_bar.quitRequested.connect(self.quit_app)
-        # The window was built before the controller existed, so hand it the
-        # current choice now rather than waiting for the first change.
+        # Built before the controller existed, so it is handed the current
+        # choice now.
         self._sync_menu_bar_model()
         helpmode.install(QApplication.instance(), self.settings.help_mode)
         self._apply_spacing()
@@ -277,11 +266,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._build_filter_bar())
 
         self.table = QTableView()
-        # Room for a row or two, not for Qt's own idea of a table. The
-        # splitter has to fit this and the preview between them, and on
-        # an 800x560 window it has about 310 px: the preview needs 215 of
-        # those to hold what is in it, and the table's own minimum of 76
-        # left the two of them 8 px over.
+        # Room for a row or two, not Qt's default. On an 800x560 window the
+        # splitter has about 310 px and the preview needs 215; the table's own
+        # minimum of 76 left the two 8 px over.
         self.table.setMinimumHeight(40)
         self.table.setModel(self.proxy)
         self.table.setSortingEnabled(True)
@@ -316,9 +303,8 @@ class MainWindow(QMainWindow):
         self._rebuild_columns_menu()
         self._rebuild_view_menu()
 
-        # A blank grid on first launch tells the user nothing; this does.
-        #: Whether a scan has finished this session. Distinguishes "nothing
-        #: scanned yet" from "scanned, and there was nothing there".
+        #: Whether a scan has finished this session: "nothing scanned yet"
+        #: against "scanned, and nothing there".
         self._has_scanned = False
         self.empty_label = QLabel(EMPTY_STATE)
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -365,10 +351,9 @@ class MainWindow(QMainWindow):
         self.log_view.setFont(_mono_font())
         self.log_view.setVisible(self.settings.show_log_panel)
 
-        # Two splitters rather than one. The inner pair is the table and the
-        # preview, whose arrangement is a preference - beside each other on a
-        # wide screen, stacked on a tall one - and the outer one is the log,
-        # which is always along the bottom.
+        # Two splitters: the inner holds the table and the preview, beside or
+        # stacked as preferred; the outer holds the log, always along the
+        # bottom.
         self.splitter = QSplitter(Qt.Orientation.Vertical)
         self.splitter.addWidget(self.table_stack)
         self.splitter.addWidget(self.preview)
@@ -391,10 +376,9 @@ class MainWindow(QMainWindow):
         self.status_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.usage_label = QLabel("")
         self.usage_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        # Which build this is, in the corner. A version number alone does not
-        # identify one during development - every change between releases
-        # carries the same one - so it is the commit that makes a bug report
-        # answerable. Click it to copy the lot.
+        # The build, in the corner. During development every change between
+        # releases shares a version number, so the commit is what makes a bug
+        # report answerable. Click to copy.
         self.version_label = VersionLabel()
         self.statusBar().addWidget(self.status_label, 1)
         self.statusBar().addPermanentWidget(self.usage_label)
@@ -404,11 +388,8 @@ class MainWindow(QMainWindow):
         self._name_controls()
 
     def _name_controls(self) -> None:
-        """Name every control for a screen reader.
-
-        In one place rather than scattered through the layout code, because
-        the useful question about accessibility labels is "is anything
-        missing", and that is only answerable if they are all in a list.
+        """Name every control for a screen reader, in one list so anything
+        missing shows.
         """
         described = {
             self.table: ("Message triage table",
@@ -450,9 +431,9 @@ class MainWindow(QMainWindow):
         TriageTableModel.COL_CATEGORY: 150,
         TriageTableModel.COL_FOLDER: 118,
         TriageTableModel.COL_CONFIDENCE: 84,
-        # Summary is the column people read across, and it has the stretch, so
-        # everything beside it is sized to leave it room. Reasoning is here in
-        # one line and in full in the pane below, so it gives up the most.
+        # Summary has the stretch and is the column people read across, so the
+        # others leave it room. Reasoning gives up the most: it is in full in
+        # the pane below.
         TriageTableModel.COL_REASONING: 170,
         TriageTableModel.COL_ACCOUNT: 175,
     }
@@ -463,10 +444,8 @@ class MainWindow(QMainWindow):
         self._sync_account_column()
 
     def _sync_account_column(self) -> None:
-        """The mailbox column earns its space only when there is a choice.
-
-        A column the user hid stays hidden either way; this only decides the
-        one they have not expressed an opinion about.
+        """The mailbox column, shown only when there is more than one mailbox.
+        A column hidden by hand stays hidden either way.
         """
         if not hasattr(self, "table"):
             return
@@ -476,19 +455,17 @@ class MainWindow(QMainWindow):
             return
         multi = self.settings.multi_account
         self.table.setColumnHidden(column, not multi)
-        # It is the last column in the model, which puts it off the right edge
-        # of a table this wide - a column you have to go looking for does not
-        # answer "where did this come from?". Moved to the front visually; the
-        # model's own indices are untouched, so nothing else has to care.
+        # The model's last column would sit off the right edge of a table this
+        # wide, so it is moved to the front visually; the model's indices are
+        # untouched.
         header = self.table.horizontalHeader()
         wanted = 1 if multi else header.count() - 1
         current = header.visualIndex(column)
         if current != -1 and current != wanted:
             header.moveSection(current, wanted)
         if multi:
-            # Wide enough for the longest address on screen. A column that
-            # elides to "firstname.lastname@ic…" has dropped the one part
-            # that says which mailbox it is.
+            # Wide enough for the longest address on screen: an elided address
+            # loses the part that says which mailbox it is.
             metrics = QFontMetrics(self.table.font())
             longest = max(
                 (metrics.horizontalAdvance(i.email.mailbox_display)
@@ -498,18 +475,16 @@ class MainWindow(QMainWindow):
             self.table.setColumnWidth(
                 column, min(300, max(self.COLUMN_WIDTHS[column], longest + 24)))
 
-    #: Below this the summary is a word and an ellipsis, which is no use to
-    #: anybody. It is the column people read across, and it has the stretch.
+    #: Below this the summary is a word and an ellipsis.
     MIN_SUMMARY_WIDTH = 160
 
     def _heal_column_widths(self) -> None:
         """Undo a saved layout that leaves the summary too narrow to read.
 
-        Column widths are remembered, which is right - somebody who widened a
-        column meant it. But a layout saved on a narrower window, or before a
-        column was added, can add up to more than the window has, and the
-        stretch column is the one that gives way. Past a certain point that is
-        not a layout anybody chose, so it goes back to the defaults.
+        Widths are remembered, but a layout saved on a narrower window, or
+        before a column was added, can need more than the window has, and
+        the stretch column gives way. Past a point that is nobody's choice,
+        so it goes back to the defaults.
         """
         summary = TriageTableModel.COL_SUMMARY
         if self.table.isColumnHidden(summary):
@@ -536,8 +511,8 @@ class MainWindow(QMainWindow):
         height = metrics.lineSpacing() * lines + 12
         header = self.table.verticalHeader()
         header.setDefaultSectionSize(height)
-        # Rows that already exist keep whatever height they were given, so the
-        # change would otherwise only show up on the next scan.
+        # Rows that exist keep their height, so otherwise the change would show
+        # only on the next scan.
         for row in range(self.model.rowCount()):
             header.resizeSection(row, height)
         for column in (TriageTableModel.COL_SENDER, TriageTableModel.COL_SUBJECT,
@@ -564,10 +539,9 @@ class MainWindow(QMainWindow):
         self.window_buttons: Dict[TimeWindow, QToolButton] = {}
         for window in TimeWindow:
             button = QToolButton()
-            # These four are read as one control, so they are sized as one:
-            # the theme's button padding is meant for a lone button with a
-            # sentence on it, and four of them side by side wasted enough
-            # width to push Apply onto a row of its own.
+            # These four read as one control and are sized as one: the theme's
+            # button padding, four times over, pushed Apply onto a row of its
+            # own.
             button.setProperty("segment", "true")
             button.setText(window.label)
             button.setCheckable(True)
@@ -584,8 +558,8 @@ class MainWindow(QMainWindow):
         self.window_label.setToolTip("The period the next scan will cover.")
 
         # The calendar popup is not built here: setCalendarPopup constructs a
-        # full QCalendarWidget, which is about a tenth of a second per field.
-        # _sync_range_visibility turns it on the first time the fields show.
+        # QCalendarWidget, about a tenth of a second per field.
+        # _sync_range_visibility turns it on when the fields first show.
         self.start_date = QDateEdit()
         self.start_date.setDisplayFormat("d MMM yy")
         self.start_date.setToolTip("The first day to read, included.")
@@ -598,10 +572,9 @@ class MainWindow(QMainWindow):
         self.start_date.dateChanged.connect(self._refresh_window_label)
         self.end_date.dateChanged.connect(self._refresh_window_label)
 
-        # The dates take the label's place rather than being added beside it.
-        # Shown alongside, they put another 367 points into a row that is
-        # already full, so picking "Custom" wrapped the toolbar onto a second
-        # line and everything after it jumped.
+        # The dates replace the label rather than sit beside it: beside it they
+        # added 367 points to a full row, and the toolbar wrapped onto a second
+        # line.
         dates = QWidget()
         dates_row = QHBoxLayout(dates)
         dates_row.setContentsMargins(0, 0, 0, 0)
@@ -614,8 +587,8 @@ class MainWindow(QMainWindow):
         dates_row.addWidget(self.start_date)
         dates_row.addWidget(separator)
         dates_row.addWidget(self.end_date)
-        # The slot is as wide as the longest wording of the label, so without
-        # this the two fields stretch to fill it and drift apart.
+        # The slot is as wide as the label's longest wording; without this the
+        # two fields stretch apart.
         dates_row.addStretch(1)
         self.range_widgets = [self.start_date, separator, self.end_date]
 
@@ -636,8 +609,8 @@ class MainWindow(QMainWindow):
         self.progress.setVisible(False)
         row.addWidget(self.progress)
 
-        # The model is the single most consequential setting, so it gets a
-        # control in the window rather than only a page inside Settings.
+        # The model is the most consequential setting, so it has a control in
+        # the window, not only in Settings.
         self.model_button = QToolButton()
         self.model_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.model_button.setToolTip("Switch the model backend (⌘M)")
@@ -645,11 +618,8 @@ class MainWindow(QMainWindow):
         self.model_button.setMenu(self.model_menu)
         row.addWidget(self.model_button)
 
-        # What gets sorted, and what happens to everything else. This used
-        # to be a submenu inside the model button - a menu about which AI to
-        # use - and a combo box on the Folders tab of Settings. Neither is
-        # where somebody looks when they are staring at a row that will not
-        # tick and wondering why.
+        # What gets sorted, and what happens to the rest: in the window, where
+        # somebody looks when a row will not tick.
         self.sorting_button = QToolButton()
         self.sorting_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.sorting_menu = QMenu(self)
@@ -667,8 +637,8 @@ class MainWindow(QMainWindow):
         row.addWidget(self.account_button)
 
         self.scan_button = QPushButton("Scan && Analyze")
-        # Width is pinned to the wider of its two labels so the toolbar does
-        # not jump when it turns into Stop.
+        # Pinned to the wider of its two labels so the toolbar does not jump
+        # when it becomes Stop.
         self.scan_button.setMinimumWidth(
             self.scan_button.fontMetrics().horizontalAdvance("Scan & Analyze") + 34)
         self._set_scan_button(False)
@@ -810,18 +780,14 @@ class MainWindow(QMainWindow):
 
     # -- what gets sorted -------------------------------------------------
     def _rebuild_sorting_menu(self) -> None:
-        """Everything that decides where mail goes, in one menu.
-
-        Three questions, in the order somebody actually asks them: what am I
-        sorting, what happens to the rest, and which of "the rest" is worth a
-        folder. They were previously in three different places, one of them a
-        submenu of the model picker, and the third had no interface at all.
+        """Everything that decides where mail goes, in one menu, in the order
+        the questions come: what is sorted, what happens to the rest, and
+        which of the rest is worth a folder.
         """
         self.sorting_menu.clear()
 
-        # addSection rather than a disabled action. A disabled action is
-        # drawn exactly like a greyed-out option, so the heading read as a
-        # choice nobody was allowed to make.
+        # addSection, not a disabled action, which is drawn like a choice
+        # nobody may make.
         self.sorting_menu.addSection("What to sort")
         for name, label, blurb in profiles.choices():
             action = QAction(menu_text(label), self)
@@ -844,9 +810,8 @@ class MainWindow(QMainWindow):
                 lambda checked=False, r=member: self._switch_routing(r))
             self.sorting_menu.addAction(action)
 
-        # The topic list only means anything when non-job mail is being
-        # filed, so it is only offered then. An empty submenu that does
-        # nothing is worse than no submenu.
+        # Topics only matter when non-job mail is filed, so they are offered
+        # only then.
         if self.settings.routing is NonJobRouting.FILE:
             self.sorting_menu.addSeparator()
             topics_menu = self.sorting_menu.addMenu("Which topics get a folder")
@@ -920,11 +885,8 @@ class MainWindow(QMainWindow):
         self._rebuild_sorting_menu()
 
     def _reroute_rows(self) -> None:
-        """Re-point every row without re-analyzing anything.
-
-        Where a message goes is a routing decision, not a classification one,
-        so changing it is instant: no mailbox, no model, no waiting. Making
-        that obvious is half the point of putting the control in the window.
+        """Re-point every row without re-analysing: where a message goes is
+        routing, not classification, so the change is instant.
         """
         self.settings = self.settings.normalized()
         try:
@@ -986,8 +948,8 @@ class MainWindow(QMainWindow):
         self.account_menu.addAction(every)
         self.account_menu.addSeparator()
 
-        # Tick as many as you like. Unticking the last one means all of them,
-        # because scanning nothing is never what somebody meant.
+        # Tick any number. Unticking the last one means all of them: scanning
+        # nothing is never what somebody meant.
         self._account_actions = {}
         for account in mailboxes:
             action = QAction(menu_text(f"{account.label}  ({account.address})"), self)
@@ -1028,8 +990,8 @@ class MainWindow(QMainWindow):
             name = chosen[0].label
         else:
             name = f"{len(chosen)} mailboxes"
-        # Named for what it does, since the viewer has a picker of its own and
-        # two controls both reading "All mailboxes" is worse than none.
+        # Named for what it does: the viewer has a picker of its own, and two
+        # controls reading "All mailboxes" would be confusing.
         self.account_button.setText(menu_text(f"Scan: {name}"))
         self.account_button.setToolTip(
             "Which mailboxes the next scan reads.\n"
@@ -1055,10 +1017,10 @@ class MainWindow(QMainWindow):
     def store_has_key(self, provider: str, probe: bool = True) -> bool:
         """Whether a key is stored for `provider`.
 
-        Answers are cached: reading the Keychain is a system call, and the
-        first one also pays for importing ``keyring``. With `probe` false the
-        Keychain is left alone and an unknown provider is assumed to be set up,
-        which keeps that cost off the path between launch and a visible window.
+        Cached: reading the Keychain is a system call, and the first read
+        also imports ``keyring``. With `probe` false the Keychain is left
+        alone and an unknown provider is assumed set up, keeping that cost
+        off the way to the first window.
         """
         cached = self._key_present.get(provider)
         if cached is not None:
@@ -1141,11 +1103,9 @@ class MainWindow(QMainWindow):
         self.table.viewport().update()
 
     def _apply_spacing(self) -> None:
-        """Push the chosen density into the parts a stylesheet cannot reach.
-
-        Margins between the toolbar rows, how much of the window the message
-        preview takes, and whether it is open at all. A stylesheet can set
-        padding inside a widget but not the space a layout leaves around it.
+        """Push the density into what a stylesheet cannot reach: the margins
+        between toolbar rows, the preview's share of the window, and whether
+        it is open.
         """
         room = theme.density(self.settings.density)
         central = self.centralWidget()
@@ -1171,10 +1131,9 @@ class MainWindow(QMainWindow):
             self._apply_preview_share(room)
 
     def _apply_preview_share(self, room) -> None:
-        """Give the table everything the preview is not using.
-
-        Skipped while the splitter has no height of its own, which is the case
-        during construction; showEvent runs it again once it has.
+        """Give the table everything the preview is not using. Skipped while
+        the splitter has no height (during construction); showEvent runs it
+        again.
         """
         total = self.splitter.height()
         if total <= 1:
@@ -1316,9 +1275,8 @@ class MainWindow(QMainWindow):
         self.show_combo.addItem("Show: everything but job mail",
                                 SHOW_OTHER_ONLY)
         self.show_combo.addItem("Show: ticked only", SHOW_SELECTED)
-        # Wide enough for its longest entry, popup included. Left to size
-        # itself it elided them, so "Show: job mail only" arrived as
-        # "Show: job mail..." and the menu looked truncated.
+        # Wide enough for its longest entry, popup included; left to itself it
+        # elided them.
         metrics = self.show_combo.fontMetrics()
         widest = max(metrics.horizontalAdvance(self.show_combo.itemText(i))
                      for i in range(self.show_combo.count()))
@@ -1329,9 +1287,8 @@ class MainWindow(QMainWindow):
         row.addWidget(self.show_combo)
         self._show_filter_changed()
 
-        # Reading one mailbox at a time is a different question from scanning
-        # one at a time, so it gets its own control rather than reusing the
-        # scan picker.
+        # Reading one mailbox is a different question from scanning one, so it
+        # has its own control.
         self.view_button = QToolButton()
         self.view_button.setToolTip(
             "Which mailboxes' messages are shown in the table.")
@@ -1351,9 +1308,8 @@ class MainWindow(QMainWindow):
         row.addWidget(self.columns_button)
         # The table does not exist yet; both menus are filled in once it does.
 
-        # One menu rather than two buttons that each did something to every
-        # message in the mailbox regardless of what was on screen. Every
-        # entry here acts on the rows the table is showing, and says so.
+        # One menu, and every entry acts on the rows the table is showing, and
+        # says so.
         self.ticks_button = QToolButton()
         self.ticks_button.setText("Ticks")
         self.ticks_button.setToolTip(
@@ -1398,11 +1354,9 @@ class MainWindow(QMainWindow):
 
     # -- reading one mailbox at a time -----------------------------------
     def _rebuild_view_menu(self) -> None:
-        """Every linked mailbox, each one tickable, plus all and none.
-
-        Shown whenever the app knows about a mailbox, even a single one: a
-        control that appears and disappears depending on how many accounts you
-        have is harder to find than one that is always in the same place.
+        """Every linked mailbox, each tickable, plus all and none. Shown
+        whenever the app knows a mailbox, even one, so it is always in the
+        same place.
         """
         if not hasattr(self, "view_menu") or not hasattr(self, "proxy"):
             return
@@ -1430,9 +1384,8 @@ class MainWindow(QMainWindow):
         for account_id, label, count in linked:
             action = QAction(menu_text(f"{label}   ({count})" if count else label), self)
             action.setCheckable(True)
-            # Ticked before the signal is attached. setChecked emits toggled,
-            # and toggled rebuilds this menu, so connecting first turns
-            # rebuilding the menu into rebuilding it forever.
+            # Ticked before the signal is attached: setChecked emits toggled,
+            # which rebuilds this menu, which would tick it again, forever.
             action.setChecked(account_id in showing)
             action.toggled.connect(
                 lambda checked, a=account_id: self._toggle_view_account(a, checked))
@@ -1441,12 +1394,10 @@ class MainWindow(QMainWindow):
         self._refresh_view_button()
 
     def _linked_mailboxes(self):
-        """(id, label, messages on screen) for every mailbox the app knows.
-
-        Every configured account is listed whether or not this scan found
-        anything in it, so the menu describes the app's accounts rather than
-        the last scan's results. A mailbox that turned up messages the settings
-        no longer mention is listed too, so nothing is unreachable.
+        """(id, label, messages on screen) for every mailbox the app knows:
+        every configured account, found in this scan or not, and any mailbox
+        with messages that the settings no longer mention, so nothing is
+        unreachable.
         """
         counts: Dict[str, int] = {}
         for item in self.model.items:
@@ -1484,8 +1435,8 @@ class MainWindow(QMainWindow):
         every = [a for a, _l, _n in self._linked_mailboxes()]
         self._view_all = bool(not empty and (not chosen or set(chosen) >= set(every)))
         self._view_accounts = [] if self._view_all else chosen
-        # An empty filter means "everything" to the proxy, so a deliberate
-        # none is expressed as a filter nothing can match.
+        # An empty filter means everything to the proxy, so a deliberate none
+        # is a filter nothing matches.
         if self._view_all:
             self.proxy.set_account_filter(())
         elif not self._view_accounts:
@@ -1531,11 +1482,9 @@ class MainWindow(QMainWindow):
         self.columns_menu.addAction(reset)
 
     def _set_column_visible(self, column: int, visible: bool) -> None:
-        """Record an explicit choice, rather than reading back the table.
-
-        The mailbox column hides itself when there is only one mailbox. Reading
-        the table's state back would file that away as something the user asked
-        for, and they would never see it again once they added a second one.
+        """Record an explicit choice rather than reading back the table: the
+        mailbox column hides itself while there is one mailbox, and reading
+        that back would keep it hidden after a second is added.
         """
         self.table.setColumnHidden(column, not visible)
         if visible and self.table.columnWidth(column) <= 0:
@@ -1618,8 +1567,8 @@ class MainWindow(QMainWindow):
         file_menu.addAction(scan_action)
 
         rescan_action = QAction("Scan && &Re-analyze Everything", self)
-        # Not Ctrl+Shift+R, which is Reply. Qt resolves a duplicate shortcut
-        # by firing neither, so a clash here would silently break both.
+        # Not Ctrl+Shift+R, which is Reply: Qt fires neither of two duplicate
+        # shortcuts.
         rescan_action.setShortcut(QKeySequence("Ctrl+Alt+R"))
         rescan_action.setToolTip(
             "Scan without reusing any verdict kept from an earlier run.")
@@ -1642,8 +1591,7 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self.undo_action)
 
         reply_action = QAction("Run Reply &Rules…", self)
-        # Not Ctrl+R: that is Scan, and Qt resolves a duplicate by firing
-        # neither. Shift makes it the deliberate second action it is.
+        # Not Ctrl+R, which is Scan: Qt fires neither of two duplicates.
         reply_action.setShortcut(QKeySequence("Ctrl+Shift+R"))
         reply_action.setToolTip(
             "Run the auto-reply rules over what was scanned: draft, file, tick, "
@@ -1701,16 +1649,14 @@ class MainWindow(QMainWindow):
         quit_action = QAction("&Quit", self)
         quit_action.setShortcut(QKeySequence.StandardKey.Quit)
         quit_action.setMenuRole(QAction.MenuRole.QuitRole)
-        # Not QApplication.quit: that leaves without asking about a scan you
-        # have not applied, and without noticing that Settings is open.
+        # Not QApplication.quit, which skips asking about an unapplied scan and
+        # an open Settings.
         quit_action.triggered.connect(self.quit_app)
         file_menu.addAction(quit_action)
 
         edit_menu = menubar.addMenu("&Edit")
-        # The same four things the Ticks button offers, worded the same
-        # way and scoped the same way. They used to act on the whole
-        # mailbox while the button beside them acted on the whole mailbox
-        # too, which is how ticking became impossible to predict.
+        # The same four things the Ticks button offers, worded and scoped the
+        # same way.
         for label, what in (
             ("Tick everything shown", "all"),
             ("Tick only the confident ones shown", "confident"),
@@ -1827,9 +1773,8 @@ class MainWindow(QMainWindow):
         view_menu.addAction(open_logs)
 
         help_menu = menubar.addMenu("&Help")
-        # Named for what people come looking for. "Run setup again" reads as
-        # something you would only do after a disaster; linking a second
-        # mailbox is an ordinary Tuesday.
+        # Named for what people come looking for: linking another mailbox is
+        # ordinary, not a re-run of setup.
         setup = QAction("Add or Link &Mailboxes…", self)
         setup.setToolTip("The setup wizard: link another mailbox, or change "
                          "which folders get created.")
@@ -1864,9 +1809,8 @@ class MainWindow(QMainWindow):
             self.table.horizontalHeader().restoreState(
                 QByteArray.fromBase64(self.settings.table_state.encode())
             )
-        # A saved header remembers the world as it was. Adding a second mailbox
-        # would otherwise leave the Mailbox column hidden for good, because the
-        # state saved when there was only one said to hide it.
+        # A header saved while there was one mailbox would keep the Mailbox
+        # column hidden after a second is added.
         self._restore_hidden_columns()
         self._sync_account_column()
         for column in range(self.model.columnCount()):
@@ -1876,11 +1820,11 @@ class MainWindow(QMainWindow):
         self._heal_column_widths()
 
     def showEvent(self, event) -> None:  # noqa: N802
-        """Run the first-run prompt the first time the window actually appears.
+        """Lay out what needs a height, and the first time only, run the
+        first-run prompt and start the key probe and the update check.
 
-        A queued timer would be simpler but can fire after the window is gone,
-        or between two unrelated operations; tying it to the show event means it
-        happens exactly once, at the only moment it makes sense.
+        Tied to the show event rather than a timer queued at construction,
+        which could fire after the window is gone.
         """
         super().showEvent(event)
         # The splitter only has a height once the window has been laid out.
@@ -1895,11 +1839,9 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(5000, self, self._look_for_updates)
 
     def _unfinished_work(self) -> str:
-        """Results that would be lost by quitting, phrased for a person.
-
-        Deliberately only about a scan that has been approved and not applied.
-        A task that is still running is stopped cleanly on the way out and
-        costs nothing to start again, so it is not worth a question.
+        """Results that quitting would lose, phrased for a person: only an
+        approved scan not yet applied. A running task stops cleanly on the
+        way out and costs nothing to start again.
         """
         if self.demo or self.dry_run:
             return ""
@@ -1934,9 +1876,8 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         if not self._quitting and self._hides_to_menu_bar():
-            # The menu bar item is still there, so closing the window means
-            # "put it away", not "stop working". Quit from the menu bar, the
-            # app menu, or Cmd-Q to actually leave.
+            # The menu bar item stays, so closing the window puts it away; Quit
+            # (menu bar, app menu or Cmd-Q) leaves.
             event.ignore()
             self._put_away()
             return
@@ -1949,12 +1890,11 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _put_away(self) -> None:
-        """Hide the window, leaving full screen first if it is in it.
+        """Hide the window, leaving full screen first.
 
-        Hiding a window that owns a macOS full-screen space leaves the space
-        behind: the display stays on the empty desktop with no window and no
-        way back, which reads as the app having crashed. Leaving full screen is
-        animated, so the hide waits for it rather than racing it.
+        Hiding a window that owns a full-screen space leaves the display on
+        an empty desktop with no way back, which looks like a crash. Leaving
+        full screen is animated, so the hide waits for it.
         """
         if self.isFullScreen():
             self.setWindowState(
@@ -1967,11 +1907,9 @@ class MainWindow(QMainWindow):
         self.hide()
 
     def _save_layout(self) -> None:
-        """Remember the window's shape, whether it is closing or just hiding.
-
-        Not while it is full screen: restoring that on the next launch means
-        starting into a full-screen space, which is rarely what was meant and
-        is hard to get out of if anything then goes wrong.
+        """Remember the window's shape, closing or hiding. Not while full
+        screen: the next launch would start in a full-screen space, which is
+        rarely what was meant and hard to leave if anything goes wrong.
         """
         if not self.isFullScreen():
             self.settings.window_geometry = bytes(self.saveGeometry().toBase64()).decode()
@@ -1991,9 +1929,8 @@ class MainWindow(QMainWindow):
     def shutdown(self) -> None:
         """Leave no thread attached to this window.
 
-        Idempotent, and safe to call from ``aboutToQuit``. Anything that will
-        not stop in time is detached rather than terminated - see
-        :func:`_abandon` for why killing it would be worse.
+        Idempotent, and safe from ``aboutToQuit``. Anything that will not
+        stop in time is detached, not terminated: see :func:`_abandon`.
         """
         self.schedule_timer.stop()
         self.menu_bar.hide()
@@ -2123,10 +2060,9 @@ class MainWindow(QMainWindow):
     def _close_settings_first(self) -> bool:
         """Deal with an open Settings window before leaving. False = stay.
 
-        Settings is modal, so it owns the keyboard while it is up and Cmd-Q
-        never reaches the main window. Rather than ignore the request, ask
-        the question that is actually being asked - keep these changes or
-        not - and carry it out.
+        Settings is modal and owns the keyboard, so Cmd-Q never reaches this
+        window. Rather than ignore it, ask whether to keep the changes, and
+        carry that out.
         """
         dialog = getattr(self, "_settings_dialog", None)
         if dialog is None or not dialog.isVisible():
@@ -2255,22 +2191,18 @@ class MainWindow(QMainWindow):
                                 sample_items=self.model.items)
         if tab:
             dialog.tabs.setCurrentIndex(tab)
-        # Remembered so that Quit can deal with it. Settings is modal, so a
-        # Cmd-Q while it is open goes to the dialog and the app simply does
-        # not leave - which reads as a hang, not as a refusal.
+        # Remembered so Quit can deal with it: with modal Settings open, Cmd-Q
+        # goes to the dialog and the app looks hung.
         self._settings_dialog = dialog
         try:
             outcome = dialog.exec()
         finally:
             self._settings_dialog = None
-            # The dialog is parented to the window, so without this it lives
-            # as long as the window does and every visit leaves another copy
-            # behind - about three hundred and seventy widgets a time. That
-            # is not only memory: apply_appearance sets a stylesheet on the
-            # application, and Qt restyles every live widget when it does, so
-            # each abandoned copy makes every later repaint slower.
-            # deleteLater only queues the deletion, so the code below can
-            # still read the dialog it just closed.
+            # Parented to the window, the dialog would otherwise outlive every
+            # visit (about 370 widgets each), and apply_appearance restyles
+            # every live widget, so each copy slows every later repaint.
+            # deleteLater only queues the deletion, so the code below can still
+            # read the dialog.
             dialog.deleteLater()
         if outcome != QDialog.DialogCode.Accepted:
             self.apply_appearance()      # undo any live preview
@@ -2296,9 +2228,9 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Settings", f"Could not save settings: {exc}")
 
         self.folder_plan = self.settings.folder_plan()
-        # Appearance was previewed while the dialog was open but never applied
-        # when it was accepted, so anything without a preview - the row height
-        # in particular - was collected, saved, and then ignored.
+        # Previewed while the dialog was open, and applied here too: anything
+        # without a preview, such as row height, would otherwise be saved and
+        # ignored.
         self.apply_appearance()
         self.table.setItemDelegateForColumn(
             TriageTableModel.COL_CONFIDENCE,
@@ -2340,9 +2272,8 @@ class MainWindow(QMainWindow):
         def spell(moment) -> str:
             return f"{moment.strftime(fmt)}, {clock(moment)}"
 
-        # Three phrasings, longest first. The toolbar has to fit a row of
-        # buttons, two menus and two actions, and this is the part that can
-        # give up words without anything becoming unclear.
+        # Three phrasings, longest first: the toolbar is full, and this part
+        # can lose words without becoming unclear.
         brief = f"{start.strftime(fmt)} – {end.strftime(fmt)}"
         wordings = (
             f"<span style='opacity:0.7'>covering</span> <b>{spell(start)}</b> "
@@ -2401,19 +2332,15 @@ class MainWindow(QMainWindow):
     # -- scanning --------------------------------------------------------
     @Slot()
     def rescan_everything(self) -> None:
-        """Scan without reusing anything kept from a previous run.
-
-        The escape hatch for the case the cache cannot detect on its own:
-        something changed on the provider's side that the recipe hash has no
-        way of seeing.
+        """Scan without reusing anything kept from a previous run: for a change
+        on the provider's side that the recipe hash cannot see.
         """
         self._begin_scan(reuse_verdicts=False)
 
     @Slot()
     def start_scan(self) -> None:
-        # No parameters, deliberately. This is connected to clicked and to
-        # triggered, both of which emit a bool - which would arrive as the
-        # first positional argument and quietly turn the cache off.
+        # No parameters: clicked and triggered both emit a bool, which would
+        # arrive as the first argument and turn the cache off.
         self._begin_scan()
 
     def _begin_scan(self, reuse_verdicts: Optional[bool] = None) -> None:
@@ -2506,9 +2433,7 @@ class MainWindow(QMainWindow):
         if outcome.folder_plan is not None:
             self.folder_plan = outcome.folder_plan
         self._has_scanned = True
-        # Kept for the briefing, which has to be able to say what window
-        # it is reporting on - "nothing needs you" means nothing without
-        # "in the last six hours" after it.
+        # Kept for the briefing, which says what window it reports on.
         self._scanned_window = (outcome.window_start, outcome.window_end)
         self.model.set_items(outcome.items)
         self._view_accounts = []
@@ -2536,9 +2461,8 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Scan notes", "\n\n".join(outcome.warnings))
         self._update_status()
 
-        # “Run these rules after a scan” means exactly that. Queued rather than
-        # called, so this handler finishes and the table is on screen before
-        # the rules start touching it.
+        # The rules run after a scan, queued so the table is on screen before
+        # they start.
         if outcome.items and self.settings.replies_armed:
             QTimer.singleShot(0, lambda: self.draft_replies(prompted=False))
 
@@ -2620,10 +2544,9 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def draft_replies(self, prompted: bool = True) -> None:
-        """Run the reply rules over what was scanned.
-
-        ``prompted`` is False when a scan started this off rather than a
-        person, and it keeps the result in the status line instead of a box.
+        """Run the reply rules over what was scanned. ``prompted`` is False
+        when a scan started this, which keeps the result in the status line
+        rather than a box.
         """
         self._replies_prompted = prompted
         if self._busy():
@@ -2800,17 +2723,16 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def _on_apply_done(self, report: MoveReport) -> None:
-        # Remember where everything came from, so it can be put back. The app
-        # moves real mail; being able to undo that is what makes it safe to
-        # try rather than something to be careful with.
+        # Where everything came from, so it can be put back: undo is what makes
+        # moving real mail safe to try.
         plans: List[MovePlan] = []
         for item in self.model.items:
             filed_to = report.moved.get(item.email.uid)
             if not filed_to:
                 continue
-            # The UID the message has *now*, which a COPY changed. Without
-            # the server's receipt there is no way to name it, so it is left
-            # out rather than pointed at whatever else holds that number.
+            # The UID the message has now, after the COPY. Without the server's
+            # receipt it cannot be named, so it is left out rather than pointed
+            # at whatever holds that number.
             landed = report.new_uids.get(item.email.uid)
             if not landed:
                 continue
@@ -2852,11 +2774,9 @@ class MainWindow(QMainWindow):
 
     # -- shared UI plumbing ----------------------------------------------
     def _register(self, worker: QThread) -> QThread:
-        """Track a worker and reap it when it finishes.
-
-        Without this the window accumulates finished QThread children for the
-        life of the session, and a thread still running at quit becomes an
-        orphaned process.
+        """Track a worker and reap it when it finishes. Otherwise finished
+        QThreads pile up for the session, and one still running at quit is
+        orphaned.
         """
         self._workers.append(worker)
         worker.finished.connect(lambda w=worker: self._reap(w))
@@ -2877,10 +2797,8 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def stop_all(self) -> int:
-        """Stop every background task and drop its network connections.
-
-        Returns the number of tasks that were running. Safe to call when
-        nothing is running, and safe to call twice.
+        """Stop every background task and drop its connections. Returns how
+        many were running; safe with nothing running, and safe twice.
         """
         running = self.running_workers()
         if not running:
@@ -2890,9 +2808,9 @@ class MainWindow(QMainWindow):
         names = ", ".join(sorted({getattr(w, "task_name", "task") for w in running}))
         self._append_log(f"Stopping {len(running)} task(s): {names}…")
 
-        # Tell every worker to stop *before* blocking on any of them, and paint
-        # the stopped state immediately: a still-animating progress bar during
-        # the wait is exactly what "Stop" is supposed to disprove.
+        # Tell every worker to stop before waiting on any, and paint the
+        # stopped state at once: a progress bar still moving during the wait
+        # would contradict Stop.
         for worker in running:
             worker.cancel()
         self.stop_action.setEnabled(False)
@@ -2945,9 +2863,8 @@ class MainWindow(QMainWindow):
         return False
 
     def _set_busy(self, busy: bool, message: str = "") -> None:
-        # The primary button becomes the stop button while work is running:
-        # the thing you want during a scan is always in the same place, and it
-        # cannot be greyed out at the moment you most want to press it.
+        # The primary button becomes Stop while work runs, so it is always in
+        # the same place and never greyed out when it is wanted most.
         self._set_scan_button(busy)
         self.apply_button.setEnabled(not busy and self.model.summary().approved > 0)
         self.progress.setVisible(busy)
@@ -2968,14 +2885,10 @@ class MainWindow(QMainWindow):
     def _fitted_progress(self, message: str, counts: bool) -> str:
         """As much of ``message`` as the progress bar can hold.
 
-        Qt does not cut the text it draws inside a progress bar. It centres
-        it and lets it run out past the widget, and these messages are
-        twice as wide as the bar: "Analyzed 128 of 512 fetched so far…"
-        against a bar that is never wider than 320 pixels. That is the
-        status text going out of bounds.
-
-        The counts are expanded when the bar paints itself, so the room
-        they need is measured from the numbers rather than from "%v".
+        Qt does not cut text inside a progress bar; it centres it and lets
+        it run past the edges, and these messages are about twice the bar's
+        320 px. The counts are expanded at paint time, so their room is
+        measured from the numbers rather than "%v".
         """
         metrics = QFontMetrics(self.progress.font())
         head = "%v / %m - " if counts else ""
@@ -3041,14 +2954,10 @@ class MainWindow(QMainWindow):
             menu.exec(self.table.viewport().mapToGlobal(point))
 
     def build_table_menu(self) -> Optional[QMenu]:
-        """Right-click on the grid: act on everything selected, not just one.
-
-        Re-filing forty rejections one at a time is the kind of thing that
-        makes people stop using a tool, and the table has always allowed a
-        multiple selection - there was simply nothing to do with one.
+        """Right-click on the grid: act on everything selected.
 
         Built here and shown by the caller, so a test can read the menu
-        without a native modal loop that nothing can interrupt.
+        without a native modal loop.
         """
         rows = self._selected_rows()
         if not rows:
@@ -3166,11 +3075,9 @@ class MainWindow(QMainWindow):
             self.table.horizontalHeader().mapToGlobal(point))
 
     def build_header_menu(self) -> QMenu:
-        """Right-click on the header: show, hide and reset the columns.
-
-        The reset is the one that matters. Dragging a column to nothing is a
-        single careless movement, and until now the only way back was to find
-        the same invisible edge again.
+        """Right-click on the header: show, hide and reset the columns. The
+        reset matters most: dragging a column to nothing takes one careless
+        movement.
         """
         menu = QMenu(self)
         for action in self.columns_menu.actions():
@@ -3213,11 +3120,10 @@ class MainWindow(QMainWindow):
         self._update_status()
 
     def _learn_from(self, item: TriageItem, folder: str) -> None:
-        """Write down that this sender's mail belongs somewhere else.
+        """Record that this sender's mail belongs elsewhere.
 
-        Best-effort throughout. Being unable to record a correction is not
-        worth interrupting somebody mid-triage over, and the correction they
-        just made still applies to the message in front of them either way.
+        Best effort: failing to record it is not worth interrupting triage,
+        and the correction still applies to the message in front of them.
         """
         if not self.settings.learn_from_corrections:
             return
@@ -3275,17 +3181,15 @@ class MainWindow(QMainWindow):
         self.preview.set_folder_choices(folders)
 
     def _update_status(self, message: Optional[str] = None) -> None:
-        """Refresh the apply button and the status bar.
-
-        ``message`` pins a specific line (such as an apply result) instead of
-        the generic counts, which would otherwise overwrite it immediately.
+        """Refresh the apply button and the status bar. ``message`` pins a
+        line, such as an apply result, that the counts would otherwise
+        overwrite.
         """
         summary = self.model.summary()
         running = bool(self.running_workers())
         self.apply_button.setEnabled(summary.approved > 0 and not running)
-        # Short enough not to push the toolbar onto a second row, which cost
-        # forty pixels of height and left thirteen hundred of empty space
-        # beside it. The full wording is the tooltip.
+        # Short enough to keep the toolbar on one row; the full wording is the
+        # tooltip.
         self.apply_button.setText(
             f"Apply {summary.approved} Move{'s' if summary.approved != 1 else ''}"
             if summary.approved else "Apply Moves"
@@ -3315,12 +3219,9 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _sync_table_stack(self) -> None:
-        """Show the grid, or the reason there is nothing in it.
-
-        Three different empty states look identical on screen and mean
-        completely different things: nothing scanned, nothing found, and
-        everything found but filtered away. Only the third one has a fix the
-        user can press, so it gets a button.
+        """Show the grid, or why it is empty: nothing scanned, nothing found,
+        or everything filtered away. Only the last has a fix to press, so it
+        gets a button.
         """
         if self.proxy.rowCount():
             self.table_stack.setCurrentIndex(1)
@@ -3352,8 +3253,8 @@ class MainWindow(QMainWindow):
         self.status_label.setToolTip(message)
 
     def resizeEvent(self, event) -> None:  # noqa: N802
-        # All three re-fit something to the new width. The first two were
-        # once two separate resizeEvents, which meant only the second ran.
+        # All three re-fit something to the new width; as two resizeEvents,
+        # only the second ran.
         super().resizeEvent(event)
         self._fit_window_label()
         if getattr(self, "_status_text", None):
@@ -3368,23 +3269,16 @@ class MainWindow(QMainWindow):
             if sizes[-1] < 60:
                 self.outer_splitter.setSizes([max(240, sizes[0] - 140), 140])
 
-    #: How wide the window has to be before the preview will sit beside
-    #: the table.
-    #:
-    #: Beside is right on a wide screen and impossible on a narrow one: at
-    #: 800 px the preview gets about 306 of them, which is not enough for a
-    #: folder path and a button on one line, and the pane is too short to
-    #: give them two. The setting is kept either way - widen the window and
-    #: the preview goes back where it was asked to be.
+    #: How wide the window must be for the preview to sit beside the table. At
+    #: 800 px the preview would get about 306, too little for a folder path and
+    #: a button on one line. The setting is kept either way, so widening the
+    #: window puts the preview back.
     BESIDE_NEEDS = 1100
 
     def _apply_preview_position(self, position: str) -> None:
-        """Put the preview under the table or beside it.
-
-        Under is right on a laptop, where height is what there is least of in
-        a table and most of everywhere else. Beside is right on a wide screen,
-        where the table has more width than it can use and the preview would
-        otherwise be reading a paragraph across sixteen hundred pixels.
+        """Put the preview under the table or beside it: under on a laptop,
+        where height is scarce; beside on a wide screen, where the table
+        cannot use the width.
         """
         beside = position == "right" and self.width() >= self.BESIDE_NEEDS
         self.splitter.setOrientation(
@@ -3396,9 +3290,8 @@ class MainWindow(QMainWindow):
                 [int(span * (1 - share)), int(span * share)])
         if hasattr(self, "preview_actions"):
             for value, action in self.preview_actions.items():
-                # The choice, not where it ended up: a narrow window puts
-                # the preview below whatever was asked for, and the menu
-                # should still show what was asked for.
+                # The choice, not where it ended up: a narrow window puts the
+                # preview below whatever was chosen.
                 action.setChecked(value == position)
 
     @Slot(str)
@@ -3447,11 +3340,9 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _clear_filters(self) -> None:
-        """Put every filter control back to "everything".
-
-        The combo boxes and the proxy are told separately because the mailbox
-        filter lives only in the proxy - it is set from the View menu, which
-        has no single control to reset.
+        """Put every filter back to everything. The mailbox filter lives only
+        in the proxy (set from the View menu), so the proxy is told
+        separately.
         """
         self.search_edit.clear()
         self.category_filter.setCurrentIndex(0)
@@ -3496,11 +3387,9 @@ class MainWindow(QMainWindow):
 
     @Slot(int)
     def _visualise_a_file(self) -> None:
-        """The visualiser window: somebody's own music, not a message's.
-
-        One at a time, and never alongside an attachment window - both are
-        the same class and the second would fight the first over the audio
-        device and over which one the keyboard is talking to.
+        """The visualiser window, for the person's own music. One at a time,
+        never alongside an attachment window: the same class, and two would
+        fight over the audio device and the keyboard.
         """
         from PySide6.QtWidgets import QMessageBox
 
@@ -3532,10 +3421,8 @@ class MainWindow(QMainWindow):
         self._visualiser_window = None
 
     def _show_briefing(self) -> None:
-        """What the last scan found, read back as a briefing.
-
-        Off the rows already on screen, so it costs nothing and cannot
-        disagree with the table - it is the same list, counted.
+        """What the last scan found, as a briefing: counted from the rows on
+        screen, so it costs nothing and agrees with the table.
         """
         import briefing_dialog
 
@@ -3548,11 +3435,8 @@ class MainWindow(QMainWindow):
             on_row=self._reveal_row)
 
     def _reveal_row(self, row: int) -> None:
-        """Select a row the briefing pointed at, clearing any filter hiding it.
-
-        Clearing the filter first, because a briefing that says "this needs
-        you" and then selects nothing - because the row is hidden behind
-        "Show: job mail only" - is worse than one that says nothing at all.
+        """Select a row the briefing pointed at, first clearing any filter
+        hiding it.
         """
         items = getattr(self.model, "items", [])
         if not (0 <= row < len(items)):
@@ -3568,15 +3452,11 @@ class MainWindow(QMainWindow):
     def _clear_out_mail(self) -> None:
         """Open the window for deleting mail in bulk.
 
-        The rows already on screen go in with it, so the dialog can point out
-        the piles the last scan noticed - but only as suggestions, and only
-        ever as text typed into its filters. What it deletes is what the
-        server matches, counted first and confirmed by number.
-
-        Senders the app has been taught about are handed over as protected.
-        Taking the trouble to correct a sender is the clearest signal anybody
-        gives that their mail matters, and the suggestion list should not
-        then offer to delete it.
+        The rows on screen go with it, so it can suggest the piles the last
+        scan noticed, only as text in its filters; what it deletes is what
+        the server matches, counted and confirmed by number. Senders the app
+        has been taught about are protected: correcting a sender is the
+        clearest sign their mail matters.
         """
         from PySide6.QtWidgets import QMessageBox
 
@@ -3611,14 +3491,12 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _empty_a_folder(self) -> None:
-        """Clear one folder on the server, after saying how many that is.
+        """Clear one folder on the server, after saying how many messages that
+        is.
 
-        Deleting a few thousand messages by hand is a few thousand round
-        trips to the server. This is a handful of commands whatever the
-        number, which is the difference between minutes and seconds.
-
-        Nothing is guessed: the folder is typed or chosen, the count is
-        read back from the server, and the number is in the question.
+        A handful of commands whatever the number, against a round trip per
+        message by hand. The folder is typed or chosen, the count is read
+        from the server, and the number is in the question.
         """
         from PySide6.QtWidgets import QInputDialog, QMessageBox
 
@@ -3627,9 +3505,8 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "No mailbox",
                                     "Add a mailbox in Settings first.")
             return
-        # The bin is offered because it is the one folder that exists to be
-        # emptied: rules put mail there so it can go in one command, and
-        # having to remember its exact path would undo most of the point.
+        # The bin is offered because it exists to be emptied: rules put mail
+        # there so it can go in one command.
         plan = self.folder_plan or self.settings.folder_plan()
         folder, said = QInputDialog.getText(
             self, "Empty a folder",
@@ -3735,12 +3612,9 @@ class MainWindow(QMainWindow):
             self.settings.save()
 
     def _open_attachments(self, row: int) -> None:
-        """Fetch what was attached to one message, then show it.
-
-        The bytes are not already here. A scan downloads the first part of
-        each message and keeps the text, which is the right trade for sorting
-        a hundred of them and the wrong one for looking at a photograph, so
-        this asks the server again for that one message.
+        """Fetch one message's attachments, then show them. A scan keeps only
+        the start of each message's text, so this asks the server again for
+        that message.
         """
         import attachments as _attachments
         from attachment_view import AttachmentViewer
@@ -3796,11 +3670,8 @@ class MainWindow(QMainWindow):
         worker.start()
 
     def _present_attachments(self, found, subject: str, source) -> None:
-        """Open the viewer as a window rather than a trap.
-
-        It used to be modal, which meant Quit did nothing while it was up:
-        the menu item fired and the application-modal dialog swallowed it. A
-        viewer is something you leave open beside the window anyway.
+        """Open the viewer as a window, not modal: a modal viewer swallowed
+        Quit, and a viewer is something left open beside the window anyway.
         """
         from attachment_view import AttachmentViewer
 

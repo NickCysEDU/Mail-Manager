@@ -1,8 +1,8 @@
 """Settings persistence and Keychain-backed credential storage.
 
-Secrets (the app-specific password for iCloud and the Anthropic API key) never
-touch disk in plaintext - they live in the macOS Keychain via ``keyring``.
-Everything else lives in a JSON file under ``Application Support``.
+Secrets (mailbox passwords and API keys) never touch disk in plaintext: they
+live in the macOS Keychain via ``keyring``. Everything else is a JSON file
+under ``Application Support``.
 """
 
 from __future__ import annotations
@@ -34,8 +34,8 @@ from models import (
 
 log = logging.getLogger(__name__)
 
-#: Keychain service name. Visible in Keychain Access under this label.
-#: Unchanged from the first release so existing Keychain entries keep working.
+#: Keychain service name, shown in Keychain Access. Unchanged from the first
+#: release so existing entries keep working.
 KEYCHAIN_SERVICE = "iCloud Job Triage"
 ANTHROPIC_ACCOUNT = "anthropic-api-key"
 
@@ -77,9 +77,8 @@ def app_support_dir() -> Path:
     return base / APP_NAME
 
 
-#: The directory used before the app was renamed to Mail Manager. Settings
-#: written under the old name are moved across on first load, the same way the
-#: Keychain service name was left alone so stored credentials keep working.
+#: The directory used before the app was renamed. Settings written under the
+#: old name are moved across on first load.
 LEGACY_APP_NAME = "iCloud Job Triage"
 
 
@@ -99,8 +98,7 @@ def settings_path() -> Path:
 def migrate_legacy_support_files() -> list:
     """Carry pre-rename data across. Returns the paths that were brought over.
 
-    The originals are left where they are, so downgrading to an older build
-    still finds its own configuration.
+    The originals stay, so an older build still finds its own configuration.
     """
     legacy_dir = legacy_app_support_dir()
     if legacy_dir is None or not legacy_dir.is_dir():
@@ -132,10 +130,8 @@ def migrate_legacy_support_files() -> list:
 
 
 def cache_dir() -> Path:
-    """Files the app can always make again, such as the rider's sounds.
-
-    Kept out of Application Support, which is for what cannot be made
-    again, and in the place macOS clears when it needs the room.
+    """Files the app can always make again, such as the rider's sounds: outside
+    Application Support, in the place macOS clears when it needs room.
     """
     override = os.environ.get("ICLOUD_TRIAGE_HOME")
     if override:
@@ -161,9 +157,9 @@ def log_dir() -> Path:
 class Settings:
     """Non-secret, user-visible configuration."""
 
-    #: Every mailbox the app knows about. The five fields below it describe
-    #: the first one and are kept in step with it, because the app shipped
-    #: with a single mailbox and plenty of code still reads it that way.
+    #: Every mailbox the app knows about. The five fields below describe the
+    #: first one and are kept in step with it, since code written for a single
+    #: mailbox still reads them.
     mailboxes: List[Account] = field(default_factory=list)
     #: Which mailboxes the next scan reads. Empty means all of them.
     active_accounts: List[str] = field(default_factory=list)
@@ -188,8 +184,8 @@ class Settings:
 
     #: What the app is being used for, which decides the folder layout.
     sort_profile: str = profiles.DEFAULT_PROFILE
-    #: Topics the user has picked, overriding the profile's own list. Empty
-    #: means "whatever the profile says", which is the usual case.
+    #: Topics picked by hand, overriding the profile's list. Empty means
+    #: whatever the profile says, the usual case.
     topics: List[str] = field(default_factory=list)
 
     folder_root: str = DEFAULT_FOLDER_ROOT
@@ -197,13 +193,13 @@ class Settings:
     non_job_routing: str = NonJobRouting.LEAVE.value
     auto_approve_non_job: bool = False
     subscribe_new_folders: bool = True
-    #: Whether a scan should file mail the way it was corrected last time.
-    #: On by default: a sorter that keeps making the same mistake after being
-    #: told is the single most annoying thing one can do.
+    #: Whether a scan files mail the way it was corrected last time. On by
+    #: default: a sorter repeating a corrected mistake is the most annoying
+    #: thing it can do.
     learn_from_corrections: bool = True
     #: Whether verdicts from earlier scans may be reused when the message and
-    #: the settings behind them have not changed. On by default: re-reading
-    #: the same six days every morning is the common case, not the exception.
+    #: the settings behind them have not changed. On by default: re-reading the
+    #: same days every morning is the common case.
     reuse_verdicts: bool = True
     #: Whether rules that only file and tick run at the end of every scan.
     #: They change nothing on the server, so there is nothing to arm.
@@ -222,23 +218,23 @@ class Settings:
     table_state: str = ""
     show_log_panel: bool = False
     row_lines: int = 3
-    #: Columns the user has hidden, by index. The tick box is column 0 and is
-    #: never hideable, so it is never in here.
+    #: Columns hidden by hand, by index. The tick box, column 0, can never be
+    #: hidden.
     hidden_columns: List[int] = field(default_factory=list)
 
-    # Appearance. Three separate axes: which way round the colours go, how far
-    # apart the ends are, and whether the layout is tuned for reading.
+    # Appearance, on three axes: which way round the colours go, how far apart
+    # the ends are, and whether the layout is tuned for reading.
     appearance_mode: str = "system"      # system | light | dark
     contrast: str = "normal"             # normal | high | maximum
     readable: bool = False
     #: How much room the main window gives things. Separate from readable,
     #: which is about type rather than space, so the two compose.
     density: str = "comfortable"
-    #: False once the row height has been set by hand. Until then it follows
-    #: the spacing, which is what choosing "compact" is asking for.
+    #: False once the row height is set by hand; until then it follows the
+    #: spacing.
     row_lines_auto: bool = True
-    #: Hovering anything explains it. Off by default; a tooltip nobody asked
-    #: for is noise, and this makes asking explicit.
+    #: Hovering anything explains it. Off by default: tooltips nobody asked for
+    #: are noise.
     help_mode: bool = False
     #: Say where a link from a message goes before opening it.
     warn_on_links: bool = True
@@ -267,9 +263,9 @@ class Settings:
     hide_non_job: bool = False
 
     def __post_init__(self) -> None:
-        # An empty model means "whatever this backend's default is". Resolving
-        # it here means every Settings instance is usable, not just the ones
-        # that happen to have been through normalized().
+        # An empty model means this backend's default, resolved here so every
+        # Settings instance is usable, not only those that went through
+        # normalized().
         if not str(self.model).strip():
             self.model = providers.default_model_for(self.provider)
 
@@ -312,9 +308,8 @@ class Settings:
         data["folder_root"] = str(data["folder_root"]).strip() or DEFAULT_FOLDER_ROOT
         data["other_folder_root"] = str(data["other_folder_root"]).strip() or DEFAULT_OTHER_ROOT
         data["non_job_routing"] = NonJobRouting.parse(data["non_job_routing"]).value
-        # A profile whose whole point is sorting the rest of the inbox cannot
-        # also be set to leave the rest of the inbox alone; that combination
-        # would file nothing at all and look like a broken app.
+        # A profile that exists to sort the rest of the inbox cannot also leave
+        # the rest alone: that would file nothing and look broken.
         if (profiles.get(data["sort_profile"]).sorts_everything
                 and NonJobRouting.parse(data["non_job_routing"]) is NonJobRouting.LEAVE):
             data["non_job_routing"] = NonJobRouting.FILE.value
@@ -322,9 +317,8 @@ class Settings:
         data["row_lines"] = _clamp_int(data["row_lines"], 1, 6, 3)
         import autoreply as _autoreply
         raw_rules = data.get("reply_rules") or []
-        # Read every rule and write it back out, so a file written before
-        # rules had condition and action lists is upgraded once, here, rather
-        # than being converted again on every read.
+        # Every rule read and written back, so a file from before rules had
+        # condition and action lists is upgraded once, here.
         data["reply_rules"] = [
             _autoreply.Rule.from_dict(r).to_dict()
             for r in raw_rules if isinstance(r, (dict, Mapping))
@@ -391,11 +385,10 @@ class Settings:
     def _sync_mailboxes(self) -> None:
         """Reconcile the mailbox list with the original single-mailbox fields.
 
-        The app shipped with one mailbox described by five flat fields, and a
-        good deal of code still reads them. Rather than rewrite all of it, the
-        first mailbox and those fields are kept as two views of one thing: an
-        older settings file grows a mailbox, and a newer one keeps the flat
-        fields pointing at whichever mailbox comes first.
+        Code written for one mailbox still reads five flat fields, so the
+        first mailbox and those fields are two views of one thing: an older
+        settings file grows a mailbox, and a newer one keeps the flat fields
+        pointing at the first mailbox.
         """
         if not self.mailboxes and self.icloud_email:
             self.mailboxes = [Account.for_address(
@@ -435,11 +428,9 @@ class Settings:
 
     @property
     def primary_account(self) -> Account:
-        """The first mailbox, invented from the flat fields if there is none.
-
-        Settings built in code rather than loaded from disk may have no
-        mailbox list at all. Rather than make every caller handle that, this
-        always returns something connectable.
+        """The first mailbox, invented from the flat fields if there is none:
+        settings built in code may have no mailbox list, and every caller
+        gets something connectable.
         """
         if self.mailboxes:
             return self.mailboxes[0]
@@ -496,10 +487,9 @@ class Settings:
     def sorting_rules(self) -> list:
         """Enabled rules that only rearrange the table.
 
-        Separate from replies_armed because these are a different promise. A
-        rule that drafts mail should not run without being asked; a rule that
-        points a row at a folder has not done anything to anybody's mailbox
-        and can run at the end of every scan.
+        Apart from replies_armed: a rule that drafts should not run unasked,
+        while one that points a row at a folder has touched nobody's mailbox
+        and can run after every scan.
         """
         if not self.apply_sorting_rules:
             return []
@@ -539,32 +529,27 @@ class Settings:
         try:
             return cls(**filtered).normalized()
         except Exception as exc:      # noqa: BLE001 - see below
-            # Deliberately broad. This parses a file the user may have been
-            # sent by somebody else - Settings, Import is a button in the
-            # dialog - so it is untrusted input, and a parser of untrusted
-            # input has one job: return something usable, always.
-            #
-            # A narrower `except TypeError` was here, and fuzzing walked
-            # straight past it: infinity where an integer was expected raises
-            # OverflowError, and a dict where a string was expected raises
-            # AttributeError inside __post_init__. Both crashed the app.
+            # Deliberately broad. This parses a file that may have come from
+            # somebody else (Settings, Import), so it is untrusted input and
+            # must always return something usable. A narrower `except
+            # TypeError` let fuzzing through: infinity where an integer belongs
+            # raises OverflowError, and a dict where a string belongs raises
+            # AttributeError in __post_init__.
             log.warning("Settings file contained unusable values (%s); "
                         "falling back to defaults.", type(exc).__name__)
             return cls()
 
     # -- sharing a configuration -----------------------------------------
-    #: Never leaves the machine in an export: window geometry is meaningless
-    #: elsewhere, and the mailbox list is exported without its passwords,
-    #: which stay in the Keychain where they belong.
+    #: Never in an export: window geometry means nothing elsewhere. The mailbox
+    #: list is exported without passwords, which stay in the Keychain.
     PRIVATE_FIELDS = ("window_geometry", "splitter_state", "table_state")
 
     def export_text(self) -> str:
         """A readable copy of the settings, safe to send to somebody else.
 
-        JSON with a comment header rather than an opaque blob, so it can be
-        read and edited in any text editor and diffed like anything else.
-        No secret is ever in here: passwords and API keys live in the Keychain
-        and are not part of this object at all.
+        JSON with a comment header, readable and editable in any text
+        editor. No secret is ever in it: passwords and API keys live in the
+        Keychain, not in this object.
         """
         payload = {k: v for k, v in self.normalized().to_dict().items()
                    if k not in self.PRIVATE_FIELDS}
@@ -655,15 +640,11 @@ def backend_for_key(current: str, provider: str, key: str) -> str:
     """Which backend to use once a key has been typed in, or cleared.
 
     The app starts on the offline rules engine, which needs no account and
-    sends nothing anywhere. That is the right default precisely because it
-    asks nothing of anybody, but it should not be sticky: somebody who has
-    just gone and fetched an API key has said plainly what they want, and
-    leaving them on the rules engine would quietly ignore it.
-
-    So a key arriving adopts its backend, and a key being cleared hands the
-    work back to the rules engine rather than leaving a backend that can no
-    longer authenticate. A choice between two backends that both need a key
-    is left alone; that is a preference, not a default.
+    sends nothing anywhere, but that should not be sticky. A key arriving
+    adopts its backend, and a key cleared hands the work back to the rules
+    engine rather than leaving a backend that cannot authenticate. A choice
+    between two backends that both need a key is a preference, and left
+    alone.
     """
     provider = (provider or "").strip()
     if key and key.strip():
@@ -684,9 +665,8 @@ def _clamp_int(value: Any, low: int, high: int, default: int) -> int:
 def _valid_int(value: Any, low: int, high: int, default: int) -> int:
     """Like :func:`_clamp_int`, but an out-of-range value falls back.
 
-    Clamping suits preferences (a concurrency of 500 clearly means "as many as
-    you can"). A port number is an exact value: clamping 0 to 1 would silently
-    produce a connection attempt nobody asked for.
+    Clamping suits preferences, but a port is an exact value: clamping 0 to
+    1 would try a connection nobody asked for.
     """
     try:
         number = int(value)
@@ -716,10 +696,8 @@ def parse_iso(value: str) -> Optional[datetime]:
 # Credentials
 # --------------------------------------------------------------------------
 class CredentialStore:
-    """Thin, testable wrapper over ``keyring``.
-
-    ``keyring`` is imported lazily so that the domain and IMAP tests run on
-    machines (and CI images) with no Keychain available.
+    """Thin, testable wrapper over ``keyring``, imported lazily so the domain
+    and IMAP tests run where there is no Keychain.
     """
 
     def __init__(self, service: str = KEYCHAIN_SERVICE, backend: Any = None,
@@ -759,9 +737,8 @@ class CredentialStore:
             return "unavailable"
 
     # -- generic ---------------------------------------------------------
-    #: How long to wait for the Keychain before deciding it is not going to
-    #: answer. Only the headless paths use this; a window can afford to wait
-    #: because the person is there to click the button.
+    #: How long to wait for the Keychain before giving up. Only the headless
+    #: paths use this: a window has somebody there to click.
     read_timeout: Optional[float] = None
 
     def get(self, account: str) -> str:
@@ -779,16 +756,14 @@ class CredentialStore:
     def _with_timeout(self, what: str, account: str, timeout: float, call):
         """Run one Keychain call, giving up rather than waiting forever.
 
-        macOS asks permission the first time a particular build of an app
-        touches an entry, and identifies the app by its code signature. A
-        rebuilt or re-signed copy is a different app as far as the Keychain is
-        concerned, so it asks again. With a window on screen that is a dialog;
-        run from a launchd agent with nobody watching it is a process that
-        never returns, which is how a nightly scan silently stops happening.
+        macOS asks permission the first time a build touches an entry, and
+        knows the app by its signature, so a rebuilt or re-signed copy asks
+        again. With a window that is a dialog; from a launchd agent nobody
+        is watching, the call never returns, and a nightly scan silently
+        stops.
 
-        Writes need this as much as reads do, and for a reason that is easier
-        to hit: creating an entry in a keychain that is locked blocks in the
-        same place, and the app creates its data key on first use.
+        Writes need this too: creating an entry in a locked keychain blocks
+        in the same place, and the app creates its data key on first use.
         """
         outcome: Dict[str, Any] = {}
 
@@ -867,8 +842,8 @@ class CredentialStore:
             raise CredentialError("Enter the email address before saving the password.")
         self.set(self.icloud_account(email), password)
 
-    #: The original names. Keychain entries are keyed by address, so these
-    #: were never iCloud-specific in practice, only in what they were called.
+    #: The original names. Entries are keyed by address, so these were only
+    #: iCloud-specific in name.
     get_icloud_password = get_mailbox_password
     set_icloud_password = set_mailbox_password
 
@@ -876,8 +851,8 @@ class CredentialStore:
     def provider_account(provider: str) -> str:
         """Keychain account name for a provider's API key.
 
-        Anthropic keeps its original account name so an existing Keychain entry
-        keeps working after this app gained other backends.
+        Anthropic keeps its original name so an existing entry keeps
+        working.
         """
         name = (provider or "").strip().lower()
         return ANTHROPIC_ACCOUNT if name in ("", "anthropic") else f"apikey:{name}"
@@ -886,9 +861,7 @@ class CredentialStore:
         """The key for a backend: the Keychain first, then the environment.
 
         A Keychain that will not answer must not stop the environment being
-        read. Somebody with ANTHROPIC_API_KEY exported has told us the key
-        already, and refusing to look because a permission prompt went
-        unanswered would be a strange way to repay that.
+        read: an exported ANTHROPIC_API_KEY is an answer already.
         """
         trouble: Optional[CredentialError] = None
         try:

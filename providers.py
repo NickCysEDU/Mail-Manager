@@ -1,23 +1,20 @@
 """Pluggable model backends.
 
-The expensive, valuable parts of classification - the prompt, the schema, the
-validation guards, the routing rules, the retry policy - are provider
-independent. Only the transport differs, so that is all this module supplies.
+The prompt, the schema, the validation guards, the routing rules and the
+retry policy are the same for every backend; only the transport differs,
+and that is what this module supplies.
 
-Four backends ship:
+* ``anthropic``: Claude, via the official SDK. Best accuracy; costs money.
+* ``gemini``: Google AI Studio. Gemini Flash is very cheap and very fast.
+* ``openai``: OpenAI, and anything that speaks its ``/chat/completions``
+  shape: OpenRouter, Groq, Together, LM Studio, vLLM.
+* ``ollama``: a model running **on this Mac**. No API key, no network, no
+  cost, and nothing about your mail leaves the machine.
+* ``rules``: the offline rules engine, no model at all. The default.
 
-* ``anthropic``  - Claude, via the official SDK. Best accuracy; costs money.
-* ``gemini``     - Google AI Studio. Gemini Flash is very cheap and very fast.
-* ``openai``     - OpenAI, and anything that speaks its ``/chat/completions``
-                   shape: OpenRouter, Groq, Together, LM Studio, vLLM.
-* ``ollama``     - a model running **on this Mac**. No API key, no network, no
-                   cost, and nothing about your mail leaves the machine.
-
-A note on Chrome's built-in AI (Gemini Nano): it is reachable only from
-JavaScript inside a web page (``LanguageModel`` / ``window.ai``). There is no
-local endpoint a native application can call, so it cannot be used from here.
-Ollama and LM Studio are the equivalent for a desktop app - genuinely on-device,
-free, and private - and both are supported below.
+The model inside Chrome answers only JavaScript in a web page, with no local
+endpoint a native app can call; Ollama and LM Studio are the on-device
+equivalent.
 """
 
 from __future__ import annotations
@@ -48,11 +45,9 @@ def _summarise(text: str, limit: int = 240) -> str:
 def for_the_log(exc: BaseException) -> str:
     """An exception rendered without anything the server sent back.
 
-    A 4xx body can quote the request that caused it, and the request carries
-    the text of an email. That excerpt belongs on screen, where the person
-    reading it already has the mail - not in a file that outlives the scan.
-    SECURITY.md promises message bodies are never written to the log, and an
-    echoing provider is the one way that promise could have been broken.
+    A 4xx body can quote the request, which carries an email's text. That
+    belongs on screen, not in the log, which SECURITY.md promises never
+    holds a message body.
     """
     status = getattr(exc, "status_code", None)
     if status is not None:
@@ -63,9 +58,9 @@ def for_the_log(exc: BaseException) -> str:
 class ProviderError(RuntimeError):
     """The backend could not be reached, or returned something unusable.
 
-    ``permanent`` marks a failure that retrying cannot fix - a local server
-    that is not installed, say. Without it, every message in a scan would sit
-    through the full retry ladder for the same known-hopeless reason.
+    ``permanent`` marks a failure that retrying cannot fix, such as a local
+    server that is not installed, so a scan does not retry it for every
+    message.
     """
 
     def __init__(self, *args, permanent: bool = False) -> None:
@@ -111,9 +106,8 @@ class ModelChoice:
 class HttpSession:
     """A tiny JSON-over-HTTPS client with abortable connections.
 
-    Tracks live connections so :meth:`close` can drop them from another thread,
-    which is what makes the app's Stop button feel instant on every backend
-    rather than only on the one with a fancy SDK.
+    Live connections are tracked so :meth:`close` can drop them from another
+    thread, which makes Stop instant on every backend.
     """
 
     def __init__(self, timeout: float = DEFAULT_TIMEOUT) -> None:
@@ -128,8 +122,8 @@ class HttpSession:
             live, self._live = list(self._live), []
         for connection in live:
             # shutdown() before close(): closing the descriptor alone does not
-            # wake a thread already blocked in recv(), so the request would run
-            # to its full timeout and Stop All would appear to hang.
+            # wake a thread blocked in recv(), so the request would run to its
+            # full timeout.
             sock = getattr(connection, "sock", None)
             if sock is not None:
                 try:
@@ -177,14 +171,11 @@ class HttpSession:
         }
         request_headers.update(headers or {})
 
-        # Connecting and answering are different waits and deserve different
-        # patience. A server that is not there refuses at once, so waiting
-        # ninety seconds to discover that is pointless; a local model loading
-        # three gigabytes of weights needs far longer than the few seconds
-        # that discovery takes. One timeout for both meant whichever number
-        # was chosen was wrong for one of them - and it was: an on-device
-        # scan gave the model four seconds to answer and reported that Ollama
-        # was not installed when it did not.
+        # Connecting and answering are different waits. A server that is not
+        # there refuses at once, while a local model loading three gigabytes of
+        # weights needs far longer: one timeout for both gave an on-device
+        # model four seconds to answer, and reported Ollama missing when it did
+        # not.
         opening = min(connect_timeout or self.timeout, self.timeout)
         if parsed.scheme == "https":
             connection = http.client.HTTPSConnection(
@@ -213,8 +204,7 @@ class HttpSession:
             raise ProviderError(
                 f"{host} timed out after {waited:.0f}s"
                 + (" while answering." if connected else " while connecting."),
-                # Knowing which half timed out is the difference between "it
-                # is not running" and "it is thinking".
+                # Which half timed out tells "not running" from "thinking".
             ) from exc
         except (OSError, http.client.HTTPException) as exc:
             if self._closed:
@@ -316,10 +306,9 @@ class Provider:
         self.api_key = (api_key or "").strip()
         self.model = (model or "").strip() or self.default_model
         self.base_url = (base_url or "").strip().rstrip("/")
-        # A backend may need longer than the general default, and the general
-        # default is what it is given when nobody chose. Ninety seconds is a
-        # sensible wait for a data centre and far too short for a model
-        # running on the machine in front of you.
+        # A backend may need longer than the general default it gets when
+        # nobody chose: ninety seconds suits a data centre and is far too short
+        # for a model on this machine.
         if timeout == DEFAULT_TIMEOUT and self.request_timeout:
             timeout = self.request_timeout
         self.timeout = timeout
@@ -339,8 +328,7 @@ class Provider:
 
         ``message`` is the structured :class:`~models.EmailMessage`. Model
         backends work from ``prompt`` and ignore it; the local rules engine
-        uses it directly, since re-parsing its own rendered prompt would be
-        absurd.
+        uses it directly rather than re-parse its own prompt.
         """
         raise NotImplementedError
 
@@ -375,11 +363,9 @@ class Provider:
 
     @staticmethod
     def _extract_json(text: str) -> str:
-        """Pull a JSON object out of a response that may be fenced or padded.
-
-        Small local models frequently wrap JSON in ``` fences or add a sentence
-        of preamble even when told not to. Recovering here costs nothing and
-        turns a hard failure into a usable result.
+        """Pull a JSON object out of a response that may be fenced or padded:
+        small local models wrap JSON in ``` fences, or add a sentence of
+        preamble, even when told not to.
         """
         stripped = (text or "").strip()
         if stripped.startswith("```"):
@@ -387,8 +373,8 @@ class Provider:
             if stripped.lstrip().lower().startswith("json"):
                 stripped = stripped.lstrip()[4:]
             stripped = stripped.strip().rstrip("`").strip()
-        # Slice to the outermost braces: this also drops a trailing "Hope that
-        # helps!", which small models add as readily as they add a preamble.
+        # Slice to the outermost braces: this also drops a sentence after the
+        # JSON, which small models add as readily as a preamble.
         start = stripped.find("{")
         end = stripped.rfind("}")
         if start != -1 and end > start:
@@ -558,13 +544,11 @@ class GeminiProvider(Provider):
         ModelChoice("gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite", "pinned version"),
         ModelChoice("gemini-3.5-flash", "Gemini 3.5 Flash", "pinned version"),
     )
-    #: Only rates that are actually known. An unknown rate shows no price
-    #: rather than a made-up one.
+    #: Only rates that are actually known; an unknown rate shows no price.
     #:
-    #: The 2.x ids were removed on 8 September 2026 after the API answered a
-    #: request for gemini-2.5-flash with "no longer available". Offering a
-    #: retired id in a menu is worse than offering none: it fails at the point
-    #: the user is trying to check their settings work.
+    #: The 2.x ids were removed on 8 September 2026, when the API answered
+    #: gemini-2.5-flash with "no longer available": a retired id in a menu
+    #: fails just when the settings are being checked.
     pricing = {}
     ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models"
 
@@ -762,18 +746,17 @@ class OllamaProvider(Provider):
         ModelChoice("llama3.1:8b", "Llama 3.1 8B", "~4.7 GB"),
         ModelChoice("gemma3:12b", "Gemma 3 12B", "best local accuracy, ~8 GB"),
     )
-    #: 127.0.0.1 rather than localhost: on macOS "localhost" resolves to ::1
-    #: as well, Ollama listens on IPv4 only, and the wasted attempt shows up
-    #: as a pause on every single request.
+    #: 127.0.0.1 rather than localhost: on macOS "localhost" also resolves to
+    #: ::1, Ollama listens on IPv4 only, and the wasted attempt is a pause on
+    #: every request.
     ENDPOINT = "http://127.0.0.1:11434"
     #: A local server either accepts a connection at once or is not running.
     #: This is the wait to *reach* it, never the wait for it to answer.
     CONNECT_TIMEOUT = 4.0
-    #: Generating is another matter entirely. A 3B model answering a long
-    #: prompt took 56 seconds on an Intel Mac, and the first message of a
-    #: scan pays twelve more to load the weights. There is no meter running
-    #: on a local model, and Stop always works, so the only thing a short
-    #: timeout buys is a failed scan.
+    #: Generating is another matter. A 3B model answering a long prompt took 56
+    #: seconds on an Intel Mac, and a scan's first message pays twelve more to
+    #: load the weights. No meter runs on a local model and Stop always works,
+    #: so a short timeout only buys a failed scan.
     request_timeout = 600.0
 
     def __init__(self, *args, **kwargs) -> None:
@@ -800,18 +783,18 @@ class OllamaProvider(Provider):
             ],
         }
         try:
-            # A short leash on reaching it, the full allowance on answering.
-            # Loading a three-gigabyte model takes twelve seconds before it
-            # writes a word, and the first message of every scan pays that.
+            # A short leash on reaching it, the full allowance on answering:
+            # loading a three-gigabyte model takes twelve seconds, paid by
+            # every scan's first message.
             data = self._session.post_json(
                 f"{self.base()}/api/chat", payload,
                 connect_timeout=self.CONNECT_TIMEOUT)
         except ProviderError as exc:
             text = str(exc)
             if "while answering" in text:
-                # It is there and it is thinking - the opposite of missing.
-                # Saying "install Ollama" here sent people to reinstall
-                # software that was working.
+                # It is there and thinking, the opposite of missing: saying
+                # "install Ollama" here sent people to reinstall working
+                # software.
                 raise ProviderError(
                     f"“{self.model}” did not answer in time. A model this size "
                     "can take a minute to load the first time. Try again, or "
@@ -852,16 +835,12 @@ class OllamaProvider(Provider):
 # ==========================================================================
 # Local rules - no model at all
 # ==========================================================================
-# ==========================================================================
-# Local rules - no model at all
-# ==========================================================================
 class RulesProvider(Provider):
     """The hand-built classifier in :mod:`rules_engine`.
 
-    Instant, free, offline, and completely deterministic. It is markedly less
-    capable than any of the model backends at reading intent, so it leans on
-    the confidence threshold: uncertain mail goes to Needs Review rather than
-    into a folder.
+    Instant, free, offline and deterministic, but markedly weaker than any
+    model at reading intent, so it leans on the confidence threshold:
+    uncertain mail goes to Needs Review rather than into a folder.
     """
 
     name = "rules"
@@ -937,9 +916,8 @@ PROVIDERS: Tuple[type, ...] = (
 FALLBACK_PROVIDER = RulesProvider.name
 PROVIDERS_BY_NAME: Dict[str, type] = {cls.name: cls for cls in PROVIDERS}
 
-#: What a fresh install uses: no key, no network, no cost, and nothing to set
-#: up before the first scan. Swap to a model backend in Settings when you want
-#: the extra accuracy.
+#: What a fresh install uses: no key, no network, no cost, nothing to set up
+#: before the first scan. A model backend in Settings adds accuracy.
 DEFAULT_PROVIDER = RulesProvider.name
 
 
@@ -969,16 +947,15 @@ _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0", "host.dock
 
 
 def _is_local(host: str) -> bool:
-    """Whether plain HTTP to this host is safe, because it never leaves here.
+    """Whether plain HTTP to this host is safe because it never leaves here.
 
-    Parsed as an address rather than matched as a string. The prefix match
-    this replaces treated ``127.0.0.1.evil.com`` as loopback, because it
-    begins with "127." - which would have sent the text of every email to
-    somebody else's server in the clear.
+    Parsed as an address, not matched as a string: a prefix match took
+    ``127.0.0.1.evil.com`` for loopback, which would have sent every email's
+    text to somebody else's server in the clear.
 
-    Anything that does not parse as an address has to be an exact hostname
-    from the list, or an mDNS name under ``.local``, which is reserved and
-    not resolvable on the public internet.
+    Anything that is not an address has to be an exact hostname from the
+    list, or an mDNS name under ``.local``, which is reserved and not
+    resolvable on the public internet.
     """
     host = (host or "").strip().strip("[]").lower().rstrip(".")
     if not host:

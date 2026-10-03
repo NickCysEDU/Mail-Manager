@@ -1,55 +1,43 @@
 """The harmony of a track: its key, its tuning, its chords and its lead.
 
 Worked out once, before anything is played, in a process of its own (see
-attachment_audio._worker), from the same samples the rest of the analysis
-reads. Pure Python and the standard library, like the rest of it.
+attachment_audio._worker), from the samples the rest of the analysis reads.
+Pure Python and the standard library.
 
-What it is for. Music rider plays a note of its own for every block taken,
-and those notes were a pentatonic scale on a fixed root: against a record
-in another key they were wrong notes over somebody's melody, which is the
-one thing a sound in a music game must never be. Knowing the key puts them
-in it, knowing the chord under the moment puts them in *that*, and knowing
-the tuning puts them in tune with a record that is not at A = 440. Where
-the harmony cannot be told - a drum track, a noise - the answer says so,
-and the sounds stop being notes at all.
-
-The lead is for the road: a melody going up can take the blocks across
-the lanes with it.
+Music rider's notes are played in the record's key, on the chord under the
+moment, in the record's tuning; where the harmony cannot be told (a drum
+track, a noise) the answer says so, and the sounds stop being notes. The
+lead is for the road: a rising melody takes the blocks across the lanes.
 
 How it is found:
 
-**One mono track at 8 kHz.** Everything that decides a pitch class sits
-below two kilohertz, and a quarter of a second of 8 kHz audio is 2048
-samples rather than 12,000. The channels are summed and every six samples
-averaged, both with ``map`` over slices so the work is done in C rather
-than one sample at a time in Python.
+**One mono track at 8 kHz.** Everything that decides a pitch class is below
+two kilohertz, and a quarter second of 8 kHz audio is 2048 samples rather
+than 12,000. The channels are summed and every six samples averaged, with
+``map`` over slices so the work is done in C.
 
-**Peaks, not bins.** A 4096-point transform every quarter second, and only
-the local maxima of each spectrum counted, each placed between its bins by
-a parabola through the log magnitudes. A hi-hat is loud everywhere and a
-peak nowhere, so the noise a drum track is made of barely registers.
+**Peaks, not bins.** A 4096-point transform every quarter second, counting
+only each spectrum's local maxima, each placed between its bins by a
+parabola through the log magnitudes. A hi-hat is loud everywhere and a peak
+nowhere, so drum noise barely registers.
 
 **The tuning first.** Every peak's distance from the nearest equal-tempered
-semitone, averaged round the circle and weighted by how strong the peak
-was. A record mastered a quarter-tone flat has every peak a quarter-tone
-off, and read against A = 440 it would put half its notes in the wrong
-pitch class.
+semitone, averaged round the circle and weighted by strength. Read against A
+= 440, a record mastered a quarter-tone flat would put half its notes in the
+wrong pitch class.
 
-**The key** is the whole track's chroma held against the twelve rotations
-of a major and a minor key profile - how much each degree of a scale is
-heard - and the best fit wins. How far it wins by is the confidence. The
-profiles are fitted on electronic dance music (see MAJOR); the listeners'
-profiles they replaced are kept beside them. A key and its relative - A
-minor and C major - fit a chroma nearly equally, because they are the same
-seven notes, and when they are that close the chords decide: whichever
-key's own chord is heard for longer, and if that is even, whichever the
-track begins on.
+**The key** is the whole track's chroma against the twelve rotations of a
+major and a minor key profile (how much each degree of a scale is heard);
+the best fit wins, and how far it wins by is the confidence. The profiles
+are fitted on electronic dance music (see MAJOR). A key and its relative (A
+minor, C major) fit nearly equally, being the same seven notes; when they
+are that close the chords decide: whichever key's own chord is heard longer,
+and if that is even, whichever the track begins on.
 
-**The chords** are each quarter second's chroma held against the major and
-minor triads, with the bass boosting a chord whose root it is playing, a
-little favour for chords that belong to the key, and a Viterbi pass that
-makes changing chord cost something, so the answer is a sequence of chords
-rather than a flicker between two.
+**The chords** are each quarter second's chroma against the major and minor
+triads, with the bass boosting a chord whose root it plays, a little favour
+for chords in the key, and a Viterbi pass that makes changing chord cost
+something, so the answer is a sequence of chords rather than a flicker.
 """
 
 from __future__ import annotations
@@ -201,12 +189,11 @@ def _fft(values: List[complex]) -> List[complex]:
 def mono_at(samples, rate: int, channels: int) -> tuple:
     """The track as one channel at about RATE: (samples, their rate).
 
-    Averaged in blocks of ``rate // RATE`` rather than filtered properly,
-    which lets some of what is above the new half-rate fold back down -
-    a hi-hat at 7 kHz lands near 1 kHz, sixteen decibels down. That is
-    noise rather than a note, and the peak picking below is what makes
-    noise not count. What it buys is speed: the whole of it is ``map`` over
-    slices, so a seven minute track takes about a second.
+    Averaged in blocks of ``rate // RATE`` rather than filtered, so some of
+    what is above the new half-rate folds down (a hi-hat at 7 kHz lands near
+    1 kHz, sixteen decibels down): noise rather than a note, which the peak
+    picking below discounts. It buys speed: ``map`` over slices, about a
+    second for a seven minute track.
     """
     channels = max(1, channels)
     factor = max(1, int(rate // RATE))
@@ -352,14 +339,11 @@ TIGHT = 0.15
 def tonality(frames: Sequence, tuned: float) -> float:
     """How much of a track has a pitch to it, 0 to 1.
 
-    The share of its peaks' strength that sits in tune - within TIGHT of
-    the tuning's semitones - scaled so that what chance gives is 0 and a
-    record that is all notes is 1. Measured on written material: drums on
-    their own 0.35, drums over a bass line 0.55 to 0.6, chords 0.98.
-
-    Not how peaked the chroma is, which was the first measure: a drum kit
-    has few peaks, so its chroma is as peaked as a chord's, and a kit on
-    its own came out 0.71 tonal and got a key.
+    The share of its peaks' strength within TIGHT of the tuning's semitones,
+    scaled so that chance gives 0 and a record that is all notes 1. On
+    written material: drums alone 0.35, drums over a bass line 0.55 to 0.6,
+    chords 0.98. Not how peaked the chroma is: a drum kit has few peaks, and
+    a kit alone came out 0.71 tonal and got a key.
     """
     near = total = 0.0
     for peaks, _level in frames:
@@ -405,11 +389,10 @@ def chroma(frames: Sequence, tuned: float) -> tuple:
         lead = None
         if candidates:
             strongest = max(weight for _place, weight, _power in candidates)
-            # Not a note's own overtones: the octave, the twelfth and the
-            # two octaves above something with twice the power are that
-            # something. Twice, in power rather than on the log scale: a
-            # melody doubling a chord note an octave up is as loud as the
-            # chord note or louder, and it is the melody.
+            # Not a note's own overtones: the octave, the twelfth and the two
+            # octaves above something with twice the power are that something.
+            # Twice in power, not on the log scale: a melody doubling a chord
+            # note an octave up is as loud or louder, and it is the melody.
             notes_here = sorted(candidates)
             real = []
             for place, weight, power in notes_here:
@@ -598,16 +581,14 @@ KEY_HOME = 0.02
 
 def keys(notes: Sequence, key: Optional[dict], seconds_per: float,
          offset: float = 0.0, profiles=None) -> list:
-    """The key through the track, as [start, end, tonic, mode] with times
-    in seconds, or [] where no part of it has a key worth following.
+    """The key through the track, as [start, end, tonic, mode] with times in
+    seconds, or [] where no part of it has a key worth following.
 
-    Read as a key signature - which seven notes - rather than a key: C
-    major and A minor are one set of notes, and a key and its relative
-    swapping back and forth is not a change of anything a note is chosen
-    from. A signature that moves is the whole key moving, so the tonic
-    moves with it and the mode stays the track's. Sure or not is asked of
-    each stretch rather than of the whole: a song that changes key fits no
-    one key well over all of it.
+    Read as a key signature (which seven notes) rather than a key: a key and
+    its relative swapping is not a change of the notes chosen from. A moving
+    signature moves the tonic with it and keeps the track's mode. Each
+    stretch is asked whether it is sure, since a song that changes key fits
+    no one key over all of it.
     """
     if not notes:
         return []
@@ -705,12 +686,11 @@ def analyse(samples, rate: int, channels: int, should_stop=None,
     """The whole answer for a track, or None if there is nothing to read.
 
     ``{"key": {...}, "tuning": semitones, "chords": [...], "keys": [...],
-    "lead": [...],
-    "lead_from": seconds, "rate": readings a second, "tonal": 0..1}``.
-    ``lead`` is one entry a reading - reading ``i`` is centred at
-    ``lead_from + i / rate`` - a pitch in semitones (MIDI, tuned) or None.
-    ``tonal`` is how much of the track has a pitch to it at all: a drum
-    track is near 0.
+    "lead": [...], "lead_from": seconds, "rate": readings a second, "tonal":
+    0..1}``. ``lead`` is one entry a reading (reading ``i`` is centred at
+    ``lead_from + i / rate``): a pitch in semitones (MIDI, tuned) or None.
+    ``tonal`` is how much of the track has a pitch at all; a drum track is
+    near 0.
     """
     if not samples or rate <= 0:
         return None
@@ -733,10 +713,9 @@ def analyse(samples, rate: int, channels: int, should_stop=None,
     key = key_of(total, major, minor) if any(total) else None
     per = HOP / reduced
     key_found = key
-    # A reading is centred half a window into the samples it was taken
-    # from, and the share of the track it speaks for runs half a step
-    # either side of that. Timed from the start of its window instead,
-    # every chord changed a quarter of a second early.
+    # A reading is centred half a window into its samples and speaks for half a
+    # step either side; timed from the window's start, every chord changed a
+    # quarter of a second early.
     centre = WINDOW / (2.0 * reduced)
     tonal = tonality(frames, tuned)
     found = chords(notes, basses, key_found, per, centre - per / 2.0)

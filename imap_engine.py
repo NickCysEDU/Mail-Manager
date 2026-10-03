@@ -156,14 +156,12 @@ _SMART_QUOTES = {
 
 
 def clean_secret(secret: str) -> str:
-    """Tidy a pasted password without changing what it actually is.
+    """Tidy a pasted password without changing what it is: a trailing newline,
+    wrapping quotes, curly quotes, a non-breaking space.
 
-    Pasting is how most app passwords arrive, and a paste brings things with
-    it: a trailing newline, a wrapping pair of quotes from a note, curly
-    quotes from a web page, a non-breaking space. A newline is the damaging
-    one - imaplib puts the password inside a quoted string, and a line ending
-    inside that string ends the command early, so the server sees a quote that
-    never closes and answers "unmatch quote", which reads as a wrong password.
+    A newline is the damaging one. imaplib puts the password inside a quoted
+    string, a line ending inside it ends the command early, and the server's
+    "unmatch quote" reads as a wrong password.
     """
     text = str(secret or "")
     for wrong, right in _SMART_QUOTES.items():
@@ -471,10 +469,8 @@ class MoveReport:
     created_folders: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     expunged: bool = False
-    #: Where each message ended up: source uid -> the uid it was given in the
-    #: destination folder. A COPY assigns a new one, and without this the
-    #: only way back was to guess that it had not - which is wrong on every
-    #: server that has ever been written.
+    #: Where each message ended up: source uid -> its uid in the destination
+    #: folder. A COPY assigns a new one.
     new_uids: Dict[str, str] = field(default_factory=dict)
 
     @property
@@ -616,14 +612,13 @@ class IMAPEngine:
         conn.login(email_address, password)
 
     def _read_capabilities(self) -> Tuple[str, ...]:
-        """Read the server's capabilities *after* authenticating.
+        """Read the server's capabilities after authenticating.
 
-        This matters more than it looks. imaplib caches the capability list
-        from the pre-auth greeting, and iCloud's greeting advertises eight
-        capabilities while its post-login list advertises twenty-one - UIDPLUS
-        among them. Trusting the cached set would make the app believe UIDPLUS
-        is unavailable and fall back to a full EXPUNGE of the source mailbox,
-        which is exactly the destructive path this engine exists to avoid.
+        imaplib caches the list from the pre-auth greeting, and iCloud's
+        greeting advertises eight capabilities against twenty-one after
+        login, UIDPLUS among them. Trusting the cache would fall back to a
+        full EXPUNGE of the source mailbox: the destructive path this engine
+        exists to avoid.
         """
         conn = self._require_conn()
         found: List[str] = []
@@ -900,9 +895,9 @@ class IMAPEngine:
         workers = 1
         if connections > 1 and total >= PARALLEL_THRESHOLD:
             # Roughly 20 messages per connection: a sibling login costs about
-            # 0.9 s and saves about 27 ms per message it takes over, so it pays
-            # for itself well before 20. Measured on a live account: 120
-            # messages took 9.1 s on one connection and 3.7 s on four.
+            # 0.9 s and saves about 27 ms per message it takes over. On a live
+            # account 120 messages took 9.1 s on one connection and 3.7 s on
+            # four.
             workers = max(1, min(int(connections), 8, (total + 19) // 20))
 
         if workers > 1:
@@ -929,10 +924,9 @@ class IMAPEngine:
 
     # -- attachments ------------------------------------------------------
     def message_size(self, uid: str) -> int:
-        """RFC822.SIZE for one message, or 0 if the server will not say.
-
-        Asked before fetching, so a fifty-megabyte message can be declined
-        rather than discovered halfway down a hotel connection.
+        """RFC822.SIZE for one message, or 0 if the server will not say. Asked
+        first, so a fifty-megabyte message can be declined rather than
+        discovered halfway down a slow connection.
         """
         conn = self._require_conn()
         try:
@@ -949,11 +943,8 @@ class IMAPEngine:
         return 0
 
     def describe_attachments(self, uid: str) -> List["Attachment"]:
-        """What is attached, without downloading any of it.
-
-        One FETCH of BODYSTRUCTURE. The window can open on this alone, which
-        is the difference between a list appearing at once and waiting for
-        six megabytes of somebody's holiday photographs first.
+        """What is attached, without downloading any of it: one FETCH of
+        BODYSTRUCTURE, enough for the window to open at once.
         """
         import attachments as _attachments
 
@@ -984,12 +975,9 @@ class IMAPEngine:
 
     def fetch_part(self, uid: str, part: str, encoding: str = "",
                    limit: int = 0) -> bytes:
-        """One MIME section, decoded. Nothing else comes down the wire.
-
-        This is what makes opening an attachment quick: asking for section 3
-        of a message fetches that section, not the message. A six megabyte
-        mail with three attachments used to cost six megabytes to look at any
-        one of them.
+        """One MIME section, decoded. Nothing else comes down the wire, so
+        opening one attachment of a six megabyte message costs only that
+        attachment.
         """
         import attachments as _attachments
 
@@ -1009,11 +997,9 @@ class IMAPEngine:
     def fetch_attachments(self, uid: str, limit: int = 0) -> List["Attachment"]:
         """Every attached part of one message, with its bytes.
 
-        The whole message is fetched rather than individual sections: the
-        alternative is parsing BODYSTRUCTURE by hand, and Python's email
-        package already decodes base64, quoted-printable and the header
-        encodings correctly. BODY.PEEK keeps the message unread, as
-        everywhere else here.
+        The whole message is fetched: Python's email package already decodes
+        base64, quoted-printable and header encodings, where sections would
+        mean parsing BODYSTRUCTURE by hand. BODY.PEEK keeps it unread.
 
         ``limit`` caps the fetch. Zero means the module default.
         """
@@ -1061,11 +1047,9 @@ class IMAPEngine:
         result: ScanResult,
         on_batch: Optional[Callable[[List[EmailMessage]], None]] = None,
     ) -> List[EmailMessage]:
-        """Fetch across several connections at once.
-
-        iCloud spends roughly the same server time per message whatever its
-        size, and that cost parallelises cleanly: on a live account, 120
-        messages took 9.5 s on one connection and 3.7 s on four.
+        """Fetch across several connections at once. iCloud's server time per
+        message parallelises: 120 messages took 9.5 s on one connection and
+        3.7 s on four.
         """
         shards = [list(uids[index::workers]) for index in range(workers)]
         collected: List[EmailMessage] = []
@@ -1126,10 +1110,9 @@ class IMAPEngine:
         uid_set = ",".join(uids)
         body_item = f"BODY.PEEK[]<0.{int(max_bytes)}>" if max_bytes > 0 else "BODY.PEEK[]"
         # BODYSTRUCTURE costs nothing and is the only way to know what is
-        # attached to a message this fetch is deliberately truncating. Without
-        # it a six megabyte message reports whichever attachments happened to
-        # begin inside the first sixty-four kilobytes, which is not a number
-        # anybody can act on.
+        # attached to a message this fetch truncates; without it a six megabyte
+        # message reports only the attachments that begin in its first
+        # sixty-four kilobytes.
         data = self._cmd(
             "Fetching messages",
             conn.uid,
@@ -1177,9 +1160,8 @@ class IMAPEngine:
             messages.append(message)
         if len(messages) < len(uids):
             # Every skipped item above is a message the caller asked for and
-            # will never see. Nothing observed in the wild reaches this, but a
-            # silent shortfall is the kind of thing that should never be
-            # silent, so say so rather than quietly returning fewer.
+            # will not see. Nothing seen in practice reaches this, but a
+            # shortfall should never be silent.
             log.warning(
                 "Fetched %d of %d requested messages from %s; the server returned "
                 "something unparseable for the rest.",
@@ -1345,8 +1327,7 @@ class IMAPEngine:
                     progress(done, total, f"Filed {done} of {total} message(s)…")
 
         if missing_receipts:
-            # Named, because "this server" is no help to somebody with more
-            # than one account set up.
+            # Named: "this server" is no help with more than one account.
             report.warnings.append(
                 f"{self.host} gave no new UIDs for the copies in "
                 + ", ".join(f"\u201c{name}\u201d"
@@ -1365,16 +1346,12 @@ class IMAPEngine:
                      cancel: Optional[threading.Event] = None) -> int:
         """Delete everything in one folder, in as few commands as possible.
 
-        Clearing thousands of messages one at a time is the slow way: each
-        one is a round trip to the server, and a mailbox with five thousand
-        in it takes as long as five thousand round trips. This flags them
-        a hundred UIDs at a time and expunges once, which is a handful of
-        commands however many messages there are.
+        Flagged a hundred UIDs at a time and expunged once: a handful of
+        commands for any number of messages, against a round trip each.
+        Returns how many were removed; the folder itself stays.
 
-        Returns how many were removed. The folder itself stays.
-
-        Nothing here can touch another folder: the UIDs come from a SEARCH
-        of this one, and the STORE and EXPUNGE are addressed to those UIDs.
+        Nothing else can be touched: the UIDs come from a SEARCH of this
+        folder, and the STORE and EXPUNGE are addressed to those UIDs.
         """
         self.select(folder, readonly=False)
         return self.delete_uids(self._search_all(), progress=progress,
@@ -1389,15 +1366,10 @@ class IMAPEngine:
     def search_criteria(self, criteria, readonly: bool = True) -> List[str]:
         """UIDs matching a :class:`cleanup.Criteria`, in one command.
 
-        The server does the matching. That is the whole point: it already
-        indexes From, Subject and Date, so this costs one round trip against
-        a mailbox of any size, where fetching the headers and filtering them
-        here would cost one per message and be the slow thing all over again.
-
-        Non-ASCII is handled by asking for ``CHARSET UTF-8`` and sending the
-        terms as raw bytes. imaplib encodes ``str`` arguments as ASCII and
-        raises on anything else, so a search for a subject with an accent in
-        it would otherwise fail before it left the machine.
+        The server already indexes From, Subject and Date, so this is one
+        round trip for a mailbox of any size. Non-ASCII terms go as raw
+        bytes with ``CHARSET UTF-8``: imaplib encodes ``str`` arguments as
+        ASCII and would raise on an accent.
         """
         conn = self._require_conn()
         self.select(criteria.folder, readonly=readonly)
@@ -1418,11 +1390,9 @@ class IMAPEngine:
     def count_matching(self, criteria) -> int:
         """How many messages the criteria would delete. Changes nothing.
 
-        Its own read-only command rather than a number worked out from the
-        last scan, because the number in a "delete 4,312 messages?" question
-        has to be the server's answer to the same question that is about to
-        be asked destructively. A stale one is how somebody agrees to four
-        thousand and gets forty thousand.
+        The server's own read-only answer, not a number from the last scan:
+        the count in the question has to answer the same question that is
+        about to be asked destructively.
         """
         return len(self.search_criteria(criteria, readonly=True))
 
@@ -1430,10 +1400,9 @@ class IMAPEngine:
                         cancel: Optional[threading.Event] = None) -> int:
         """Delete everything matching the criteria. Returns how many went.
 
-        Refuses criteria that ask for nothing. An unarmed one matches the
-        whole folder, and "the text box was empty" is not a thing anybody
-        should be able to mean by it - emptying a folder wholesale is
-        :meth:`empty_folder`, which says so in its name and asks first.
+        Refuses criteria that ask for nothing, which match the whole folder.
+        Emptying a folder is :meth:`empty_folder`, which says so and asks
+        first.
         """
         if not criteria.is_armed:
             raise IMAPError(
@@ -1444,11 +1413,9 @@ class IMAPEngine:
     def delete_uids(self, uids: Sequence[str],
                     progress: Optional[ProgressCallback] = None,
                     cancel: Optional[threading.Event] = None) -> int:
-        """Flag and expunge a set of UIDs in the selected mailbox.
-
-        A hundred per command. The mailbox has already been selected by
-        whoever found the UIDs, and they are addressed by UID throughout, so
-        this cannot reach a message in another folder however long it runs.
+        """Flag and expunge a set of UIDs in the selected mailbox, a hundred
+        per command. Addressed by UID in the mailbox selected by whoever
+        found them, so it cannot reach another folder.
         """
         uids = list(uids)
         total = len(uids)
@@ -1661,10 +1628,10 @@ def attachments_of(raw: bytes) -> List["Attachment"]:
 
 
 # -- BODYSTRUCTURE ---------------------------------------------------------
-# The server will describe a message's parts without sending them, which is
-# the only way to know what is attached to a six megabyte message when the
-# scan only downloads the first sixty-four kilobytes of it. The reply is a
-# nested parenthesised list, so it needs a real parser rather than a regex.
+# The server describes a message's parts without sending them: the only way to
+# know what is attached when a scan downloads only the first sixty-four
+# kilobytes. The reply is a nested parenthesised list, so it needs a real
+# parser.
 
 def _tokenise(raw: bytes):
     """Atoms, quoted strings, literals and parentheses, in order."""

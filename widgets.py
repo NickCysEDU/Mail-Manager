@@ -1,11 +1,6 @@
-"""Small widgets and helpers the windows are built from.
-
-Split out of gui.py, which had grown to six and a half thousand lines - a
-third of the whole application in one file. Nothing here knows anything about
-mail: these are the pieces that make a window look like this application
-rather than a default Qt one, and they are used by every part of it.
-
-A pure move. Every definition is exactly as it was.
+"""Small widgets and helpers the windows are built from: the pieces that make a
+window look like this application rather than a default Qt one. Nothing here
+knows about mail.
 """
 
 from __future__ import annotations
@@ -32,18 +27,15 @@ import config
 log = __import__("logging").getLogger(__name__)
 
 
-#: Accent colours. Mid-tone and paired with white text, so the same value reads
-#: correctly in both light and dark mode without a second palette.
 def menu_text(label: str) -> str:
-    """Escape a label for use in a menu.
-
-    Qt reads a single ampersand as a keyboard mnemonic and swallows it, so
-    "Software & Data" renders as "Software  Data" - which reads as a stray
-    double space rather than as a missing character.
+    """Escape a label for use in a menu: Qt reads a single ampersand as a
+    mnemonic and swallows it, leaving a gap where it was.
     """
     return (label or "").replace("&", "&&")
 
 
+#: Accent colours: mid-tone and paired with white text, so one value reads in
+#: both light and dark mode.
 ACCENT_BLUE = "#2F6FE0"     # the primary action
 ACCENT_GREEN = "#2E9E63"    # a safe, confirmed action
 ACCENT_RED = "#C4534A"      # stop / destructive
@@ -64,8 +56,8 @@ EMPTY_STATE = (
     "until you tick it.</span></div>"
 )
 
-#: Shown after a scan that found nothing, which is not the same thing as
-#: never having scanned - and the advice for it is different.
+#: Shown after a scan that found nothing, which is not the same as never having
+#: scanned, and needs different advice.
 NOTHING_FOUND = (
     "<div style='text-align:center;line-height:170%'>"
     "<span style='font-size:15px'><b>No messages in this window</b></span><br>"
@@ -78,10 +70,9 @@ NOTHING_FOUND = (
 def describe(widget, name: str, hint: str = "") -> None:
     """Give a control a name a screen reader can read out.
 
-    VoiceOver falls back to the visible text, which is fine for a button
-    labelled "Scan & Analyze" and useless for a magnifying-glass icon, a bare
-    combo box, or a table nobody has labelled. Where a tooltip already says
-    the right thing it doubles as the description, so the two cannot drift.
+    VoiceOver falls back to the visible text, which is useless for an icon,
+    a bare combo box or an unlabelled table. A tooltip that already says the
+    right thing doubles as the description, so the two cannot drift.
     """
     widget.setAccessibleName(name)
     hint = hint or widget.toolTip()
@@ -99,16 +90,12 @@ def _one_of(names: Sequence[str]) -> str:
     return ", ".join(names[:-1]) + " and " + names[-1]
 
 
-# ==========================================================================
-# Table model
-# ==========================================================================
 class AdaptiveLineEdit(QLineEdit):
-    """A line edit whose hint text shrinks to fit the width it is given.
+    """A line edit whose hint text shrinks to fit its width.
 
-    No layout can make a long sentence fit a narrow field, and eliding it into
-    "Filter by sender, subj…" tells the reader less than a short phrase would.
-    So several phrasings are supplied and the longest one that actually fits is
-    shown. The full version is always the tooltip.
+    Several phrasings are supplied and the longest that fits is shown: an
+    elided sentence tells less than a short phrase. The full version is
+    always the tooltip.
     """
 
     def __init__(self, *hints: str, parent=None) -> None:
@@ -136,12 +123,12 @@ class AdaptiveLineEdit(QLineEdit):
 
 
 def _wrap_lines(text: str, width: int, metrics, max_lines: int) -> List[str]:
-    """Break `text` into at most `max_lines` lines that fit `width`.
+    """Break `text` into at most `max_lines` lines that fit `width`: word
+    first, falling back to character breaks for a word longer than the
+    column.
 
-    Done by hand rather than with QTextLayout: the layout's own line iteration
-    made it easy to draw only the final line, which is precisely the bug this
-    replaces. Word-first, falling back to character breaks for a single word
-    longer than the column.
+    By hand rather than with QTextLayout, whose line iteration made it easy
+    to draw only the last line.
     """
     words = text.split()
     lines: List[str] = []
@@ -201,19 +188,12 @@ def _confidence_rgb(ratio: float, threshold: float) -> tuple:
     return (198, 91, 78)
 
 
-# ==========================================================================
-# Preview pane
-# ==========================================================================
 class ElidingLabel(QLabel):
     """A label that shows as much of its text as it has room for.
 
-    Eliding once, when the text is set, is not enough. How much room a
-    label has is decided by the layout, and the layout changes for reasons
-    that have nothing to do with the text: the status bar's message was cut
-    to the width the label had at the time, and then the usage figure
-    beside it grew and took some of that width away, so a message that
-    fitted when it was set ran off the end of the label afterwards. This
-    re-cuts it whenever its width changes.
+    Re-cut whenever its width changes: the layout can take width away after
+    the text is set, as when the usage figure beside the status message
+    grows.
 
     ``text()`` is what is on screen and ``full_text()`` is all of it.
     """
@@ -247,19 +227,13 @@ class ElidingLabel(QLabel):
 class RoomyCombo(QComboBox):
     """A dropdown whose menu is as wide as its longest option.
 
-    Qt sizes the menu to the box, and these boxes are deliberately narrow:
-    they sit in rows that divide their width between three or four
-    controls. So a long option was cut short in the menu, where there is
-    nothing beside it and no reason to cut it, and the box went on showing
-    a shortened version of whatever was picked.
-
-    The menu is measured from the options. The box asks for enough room
-    for the option it is showing, up to ``MOST``, so an ordinary entry fits
-    and a pathological one still gives way rather than pushing the dialog
+    These boxes are narrow, sharing a row with three or four controls, and
+    Qt sizes the menu to the box, cutting long options short where nothing
+    is beside them. The box asks for room for the option it shows, up to
+    ``MOST``, so a pathological one gives way rather than pushing the dialog
     off the screen.
 
-    Tooltips are left alone. Several of these carry an explanation of the
-    field they are setting, which is worth more than a copy of the label.
+    Tooltips are left alone: several explain the field they set.
     """
 
     #: Room for the arrow, the padding either side and a scroll bar.
@@ -313,10 +287,9 @@ class VersionLabel(QLabel):
 class WrappingList(QListWidget):
     """A list whose items wrap onto as many lines as their text needs.
 
-    QListWidget will wrap, but it decides how many lines an item needs from a
-    width measured before the scroll bar is accounted for, so an entry that is
-    a few points too long is elided while its neighbours wrap. Measuring each
-    item here and saying how tall it is removes the guess.
+    QListWidget measures the width before the scroll bar, so an entry a few
+    points too long was elided while its neighbours wrapped; measuring each
+    item here removes the guess.
     """
 
     def __init__(self, parent=None) -> None:
@@ -340,11 +313,9 @@ class WrappingList(QListWidget):
             self.measure()
 
     def measure(self) -> None:
-        """Give every item the height its wrapped text actually needs.
-
-        The width the delegate lays text out in is asked for rather than
-        guessed at: the checkbox, the margins and the frame all take their cut
-        first, and guessing that cut is how an entry ends up a line short.
+        """Give every item the height its wrapped text needs, laid out in the
+        width the delegate actually uses once the checkbox, margins and
+        frame take their cut.
         """
         if not self.count():
             return
@@ -372,11 +343,8 @@ class WrappingList(QListWidget):
 
 
 def _compact_button(text: str, tip: str, slot) -> QToolButton:
-    """A small square button for adding and removing lines.
-
-    The theme gives every button generous padding, which is right for the ones
-    people press and wrong for a column of five that only need to hold one
-    character. These are sized to the character instead.
+    """A small square button for adding and removing lines, sized to its one
+    character rather than the theme's generous padding.
     """
     button = QToolButton()
     button.setText(text)
@@ -400,15 +368,14 @@ _ABANDONED: List[QThread] = []
 def _abandon(worker: QThread) -> None:
     """Detach a thread that will not stop in time.
 
-    ``QThread.terminate()`` is not an option: these threads run Python, so
-    killing one can leave the GIL held and deadlock the whole application -
-    exactly the failure this is meant to prevent. Instead the worker is cut
-    loose: its signals are disconnected so it can never touch the UI again, and
+    ``QThread.terminate()`` is not an option: these threads run Python, and
+    killing one can leave the GIL held and deadlock the app. Instead the
+    worker's signals are disconnected so it never touches the UI again, and
     a reference is kept so Qt does not abort on destroying a running thread.
 
-    Every operation the workers perform is bounded (IMAP and HTTP both carry
-    timeouts, and stopping closes the HTTP pool), so an abandoned thread ends
-    on its own shortly afterwards and the process exits normally.
+    Every worker operation is bounded (IMAP and HTTP carry timeouts, and
+    stopping closes the HTTP pool), so an abandoned thread ends on its own
+    soon after.
     """
     name = getattr(worker, "task_name", "task")
     log.warning("Detaching a %s thread that did not stop in time.", name)
@@ -431,11 +398,8 @@ def _format_duration(seconds: float) -> str:
 
 
 def _chip(label: str, value: str, color: str = "") -> str:
-    """One `label value` pair.
-
-    Spacing uses non-breaking spaces rather than CSS margins: Qt's rich-text
-    subset silently ignores `margin` on an inline span, which runs every chip
-    into the next one.
+    """One `label value` pair, spaced with non-breaking spaces: Qt's rich text
+    ignores `margin` on an inline span.
     """
     shade = f" style='color:{color}'" if color else ""
     return f"<span style='opacity:0.6'>{label}</span>&nbsp;<b{shade}>{value}</b>"
@@ -459,11 +423,8 @@ def _swatch(color: str, size: int = 12) -> "QIcon":
 def _paint_button(button, role: str, bold: bool = True) -> None:
     """Mark a button's role, and let the theme decide what that looks like.
 
-    Roles rather than colours, and a property rather than a stylesheet on the
-    widget. A per-widget stylesheet carries its own padding and radius, which
-    is why the coloured buttons used to be a different size from the plain ones
-    beside them; and it cannot follow a change of theme, because it does not
-    know one happened.
+    A property rather than a per-widget stylesheet, which would carry its own
+    padding and radius and could not follow a change of theme.
 
         primary      the main action, and only ever one of them
         confirm      it will change your mailbox, and you meant it to
@@ -516,31 +477,26 @@ def _wrap(text: str, width: int = 96) -> str:
 def _html(text: str) -> str:
     """Escape text for rich text, including both kinds of quote.
 
-    Both, because the callers interpolate into attributes as well as into
-    element content, and an unescaped apostrophe inside href='...' ends the
-    attribute early. A link is allowed to contain one, so a message could
-    close the href and append a second one - Qt keeps the last, which pointed
-    the click somewhere the displayed text never mentioned.
+    Callers interpolate into attributes too, and an apostrophe inside
+    href='...' would end the attribute, letting a message append a second
+    href, which Qt prefers.
     """
     return html_module.escape(text or "", quote=True)
 
 
-#: Characters that cannot sit literally inside href="..." - the quote that
-#: would close it, the brackets that would end the tag. None of them is legal
-#: unencoded in a URL either, so encoding them corrects the link rather than
-#: altering it.
+#: Characters that cannot sit literally inside href="...": the quote that would
+#: close it and the brackets that would end the tag. None is legal unencoded in
+#: a URL, so encoding them corrects the link rather than altering it.
 _UNSAFE_IN_ATTRIBUTE = {'"': "%22", "<": "%3C", ">": "%3E"}
 
 
 def _attr_url(url: str) -> str:
     """A URL safe to interpolate into href="...".
 
-    Qt's rich text parser does not expand entities inside attribute values,
-    so escaping a URL the way _html does puts a literal "&amp;" in the link
-    and corrupts every query string with more than one parameter. The fix is
-    to leave the characters a URL needs alone and percent-encode the few that
-    would break out of the attribute - which is what a browser would send for
-    them anyway.
+    Qt's rich text does not expand entities in attribute values, so escaping
+    the way _html does would put a literal "&amp;" in every query string.
+    The characters a URL needs are left alone, and the few that would break
+    out of the attribute are percent-encoded, as a browser would send them.
     """
     out = []
     for character in url or "":
@@ -559,12 +515,9 @@ def system_font() -> QFont:
 
 
 def _mono_font() -> QFont:
-    """The macOS system monospace font.
-
-    Asked for by role rather than by name: probing for "SF Mono" forces Qt to
-    populate its font-alias table on every launch, which costs ~85 ms and then
-    falls back to Menlo anyway, because SF Mono ships with Terminal rather than
-    as a general system family.
+    """The macOS system monospace font, asked for by role: probing for "SF
+    Mono" builds Qt's font-alias table on every launch (about 85 ms) and
+    falls back to Menlo anyway, since SF Mono ships with Terminal.
     """
     font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
     font.setStyleHint(QFont.StyleHint.Monospace)
@@ -583,18 +536,15 @@ def _scrollable(page: QWidget) -> QScrollArea:
 
 
 class SelectableMessages(QObject):
-    """Makes the text in every message box selectable, as it is shown.
-
-    Qt labels are not selectable by default, which is right for "are you
-    sure?" and wrong for an error: the one thing anybody wants to do with a
-    failure is paste it into a search or a bug report. Doing it here rather
-    than at each of the thirty-odd call sites means the ones written later
-    are covered too, including the boxes Qt raises itself.
+    """Makes the text in every message box selectable as it is shown, so an
+    error can be pasted into a search or a bug report. Here rather than at
+    each call site, so later ones and the boxes Qt raises itself are
+    covered.
     """
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
         # Every event in the application passes through here, so the cheapest
-        # possible test comes first and the work happens at most once per box.
+        # test comes first and the work happens at most once per box.
         if event.type() != QEvent.Type.Show:
             return False
         if not isinstance(watched, QMessageBox):
@@ -625,12 +575,8 @@ def remove_selectable_messages(app) -> None:
 
 
 def selectable(box: "QMessageBox") -> "QMessageBox":
-    """Let the text in a message box be selected and copied.
-
-    Qt makes label text unselectable by default, which is fine for "are you
-    sure?" and useless for an error: the one thing anybody wants to do with a
-    failure message is paste it somewhere. Cmd-C copies the whole box either
-    way; this makes the visible text behave like text.
+    """Let the text in a message box be selected and copied. Cmd-C copies the
+    whole box either way; this makes the visible text behave like text.
     """
     box.setTextInteractionFlags(
         Qt.TextInteractionFlag.TextSelectableByMouse

@@ -1,18 +1,15 @@
-"""Domain models for the iCloud Mail Job Triage application.
+"""Domain models.
 
-This module is deliberately free of Qt, IMAP and Anthropic imports so that the
-routing rules that make up the "xxxx-xxxxxxxxxxxxxxxxx protocol" can be unit
-tested in isolation and reasoned about on their own.
+Free of Qt, IMAP and model-provider imports, so the routing rules can be
+tested on their own. Three layers keep mail from being misfiled:
 
-The protocol has three layers:
-
-1. **Prompt layer** (``llm_engine.SYSTEM_PROMPT``) - strict category definitions
-   and an explicit instruction to fall back to ``UNCLASSIFIED_OTHER``.
-2. **Validation layer** (:meth:`Classification.from_payload`) - deterministic
+1. **Prompt layer** (``llm_engine.SYSTEM_PROMPT``): strict category
+   definitions and an explicit fallback to ``UNCLASSIFIED_OTHER``.
+2. **Validation layer** (:meth:`Classification.from_payload`): deterministic
    repair of anything the model returns that is internally inconsistent.
-3. **Routing layer** (:class:`TriageItem`) - a pure function from a validated
-   classification to a disposition. Nothing is ever moved into a category
-   folder unless the model was both confident *and* self-consistent.
+3. **Routing layer** (:class:`TriageItem`): a pure function from a validated
+   classification to a disposition. Nothing is moved into a category folder
+   unless the model was both confident *and* self-consistent.
 """
 
 from __future__ import annotations
@@ -130,19 +127,12 @@ CATEGORY_COLORS: Dict[Category, str] = {
     Category.UNCLASSIFIED_OTHER: "#D08A1E", # amber - needs a human
 }
 
-#: The neutral, for a topic this configuration is not sorting. It is meant to
-#: recede: a grey chip says "the app is not doing anything with this".
+#: The neutral, for a topic this configuration is not sorting: a grey chip
+#: means the app does nothing with it.
 OTHER_COLOR = "#6B7A8F"
 
-#: A colour per everyday topic, used only when that topic is one the current
-#: settings actually file into.
-#:
-#: Colouring all of them all the time would be thirteen more things to learn
-#: for no gain, since with non-job mail left alone none of them lead anywhere.
-#: Colouring none of them - which is what happened before - made a mailbox
-#: being sorted into thirteen folders look like a wall of identical grey.
-#: The rule is the honest one: a chip is coloured when the app is going to
-#: act on it.
+#: A colour per everyday topic, used only when the current settings file that
+#: topic: a chip is coloured when the app will act on it.
 TOPIC_COLORS: Dict["OtherCategory", str] = {}      # filled in below
 
 REVIEW_LEAF = "Needs Review"
@@ -152,19 +142,14 @@ COLLAPSED_JOB_LEAF = "Job Search"
 
 #: Root mailbox for filed non-job mail (only used when the user opts in).
 DEFAULT_OTHER_ROOT = "Sorted Mail"
-#: The leaf of the folder rules bin things into. "To Delete" rather than
-#: "Trash": Trash is the server's own, some providers empty it on a
-#: schedule, and mail the app put somewhere should not disappear on a timer
-#: nobody set here.
+#: The leaf of the folder rules bin things into: "To Delete", not the server's
+#: Trash, which some providers empty on a schedule.
 BIN_LEAF = "To Delete"
 
 
 class OtherCategory(str, Enum):
-    """Second-level classification for mail that is *not* job related.
-
-    The job pipeline answers "where in Job Search does this belong?". This enum
-    answers the follow-up question for everything else, so that non-job mail is
-    described rather than dumped into a single opaque bucket.
+    """Second-level classification for mail that is not job related, so it is
+    described rather than dumped into one bucket.
     """
 
     NOT_APPLICABLE = "NOT_APPLICABLE"
@@ -180,8 +165,8 @@ class OtherCategory(str, Enum):
     EVENT = "EVENT"
     TRAVEL = "TRAVEL"
     #: Mail from a church or place of worship: services, rotas, small groups,
-    #: giving, prayer. It overlaps Events, Newsletters and Personal by shape
-    #: and is none of them by subject, which is exactly why it earns its own.
+    #: giving, prayer. It overlaps Events, Newsletters and Personal in shape,
+    #: and is none of them in subject.
     CHURCH = "CHURCH"
     SPAM = "SPAM"
     OTHER = "OTHER"
@@ -228,9 +213,8 @@ _OTHER_LABELS: Dict["OtherCategory", str] = {
 TOPIC_COLORS.update({
     OtherCategory.SECURITY: "#C0453B",     # red - an alert, read it now
     OtherCategory.FINANCE: "#2F7D4F",      # green - money owed or moving
-    # A deeper teal than Application Received's, which is the same family and
-    # was for a while the same value: two meanings sharing a colour in the
-    # one column that shows both.
+    # A deeper teal than Application Received's, so the one column showing both
+    # does not give two meanings one colour.
     OtherCategory.RECEIPT: "#0B6E66",      # deep teal - money already spent
     OtherCategory.SHIPPING: "#B5701F",     # brown - a parcel
     OtherCategory.TRAVEL: "#2D8FC4",       # sky - somewhere to be
@@ -295,18 +279,15 @@ class NonJobRouting(Enum):
 def sanitize_folder_component(name: str) -> str:
     """Strip characters that are illegal or ambiguous in an IMAP mailbox name.
 
-    Also refuses the two names that mean "here" and "the level above". Plenty
-    of IMAP servers still store each mailbox as a directory, so a mailbox
-    called ".." is somewhere between confusing and a way out of the mail root,
-    and no legitimate folder is called that.
+    Also refuses "." and "..": many servers store each mailbox as a
+    directory, and no real folder has those names.
     """
     cleaned = re.sub(r'[\x00-\x1f\x7f"\\/]+', " ", str(name))
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     if set(cleaned) <= {".", " "} and cleaned:
         return ""
-    # Leading dots go, and go repeatedly: "../../etc" arrives here as
-    # ".. .. etc" once the slashes are spaces, and stripping once left the
-    # second pair in place. A mailbox called ".." is nobody's mailbox.
+    # Leading dots go, repeatedly: "../../etc" arrives as ".. .. etc" once the
+    # slashes are spaces, and one pass left the second pair.
     while cleaned.startswith(".") or cleaned.startswith(" "):
         cleaned = cleaned.lstrip(". ").strip()
     return cleaned or ""
@@ -335,15 +316,8 @@ class FolderPlan:
 
     @property
     def job_root(self) -> str:
-        """Where job mail is filed. Always the job root.
-
-        This used to move the whole tree under the non-job root when the
-        detailed folders were switched off, on the reasoning that job search
-        was then one topic among many. In a mailbox it read as a mistake:
-        "Sorted Mail/Job Search" and "Sorted Mail/Needs Review" sitting beside
-        a "Job Search" tree left over from the previous setting, with no way
-        to tell which was meant. Collapsing changes the shape of the tree, not
-        where it lives.
+        """Where job mail is filed: always the job root. Collapsing the
+        detailed folders changes the shape of the tree, not where it lives.
         """
         return self.root
 
@@ -373,11 +347,8 @@ class FolderPlan:
     def bin_folder(self) -> str:
         """Where mail goes when a rule decides it is not worth keeping.
 
-        A folder rather than a delete. Rules are written by people, people
-        write them wrong the first time, and a rule that deleted straight
-        off the server would turn a typo into lost mail. Everything a rule
-        bins is still there to be looked at until somebody empties the
-        folder, and emptying it is one command however much is in it.
+        A folder rather than a delete, so a mistaken rule loses nothing, and
+        emptying the folder is one command however much is in it.
         """
         return self.other_path(BIN_LEAF)
 
@@ -394,9 +365,9 @@ class FolderPlan:
     def all_folders(self) -> Tuple[str, ...]:
         """Root first, so parents are created before children.
 
-        Deduplicated, because with the detailed folders collapsed the root is
-        also where job mail is filed, and asking a server to create the same
-        mailbox twice is a needless round trip and a needless warning.
+        Deduplicated: with the detailed folders collapsed the root is also
+        where job mail goes, and creating a mailbox twice is a wasted round
+        trip and a warning.
         """
         ordered = [self.job_root]
         for folder in self.leaf_folders:
@@ -405,10 +376,8 @@ class FolderPlan:
         return tuple(ordered)
 
     def other_folders(self, categories: Iterable["OtherCategory"] = ()) -> Tuple[str, ...]:
-        """Root plus one leaf per supplied category, parents first.
-
-        Only the categories actually needed are returned - the app never
-        litters an account with a dozen empty mailboxes.
+        """Root plus one leaf per supplied category, parents first: only the
+        folders actually needed.
         """
         leaves: List[str] = []
         for category in categories:
@@ -423,9 +392,8 @@ class FolderPlan:
 class TimeWindow(Enum):
     """Quick-preset scan windows offered in the action bar."""
 
-    # "Past" is implied by the range spelled out beside these, and four
-    # buttons carrying a redundant word cost about a hundred and fifty pixels
-    # of a toolbar that has to fit a great deal else.
+    # "Past" is implied by the range spelled out beside these, and four buttons
+    # carrying it cost about 150 pixels of a full toolbar.
     LAST_24_HOURS = ("24 hours", 1)
     LAST_3_DAYS = ("3 days", 3)
     LAST_7_DAYS = ("7 days", 7)
@@ -508,10 +476,10 @@ class EmailMessage:
     to: str = ""
     reply_to: str = ""
     list_unsubscribe: str = ""
-    #: RFC 3834's header, set by anything that answered automatically, and
-    #: the older conventions that do the same job. Kept so a reply rule can
-    #: recognise another machine and say nothing - two autoresponders
-    #: talking to each other is the classic way this feature goes wrong.
+    #: RFC 3834's header, set by anything that answered automatically, and the
+    #: older conventions that do the same: so a reply rule can recognise
+    #: another machine and stay quiet. Two autoresponders answering each other
+    #: is the classic failure.
     auto_submitted: str = ""
     precedence: str = ""
     x_auto_response_suppress: str = ""
@@ -544,11 +512,9 @@ class EmailMessage:
 
     @property
     def mailbox_display(self) -> str:
-        """What the Mailbox column shows.
-
-        The domain is the part that tells one account from another at a
-        glance, so it is always there; the name is only worth the width when
-        it says something the address does not.
+        """What the Mailbox column shows: always the domain, which tells
+        accounts apart; the name only when it says something the address
+        does not.
         """
         address = (self.account_address or "").strip()
         label = (self.account_label or "").strip()
@@ -566,11 +532,9 @@ class EmailMessage:
         return local.strftime(fmt) if local else "(no date)"
 
     def date_human(self, now: Optional[datetime] = None) -> str:
-        """A date a person can read at a glance.
-
-        Recent mail is what a triage scan is mostly about, so the closer it is
-        the less of the date is spelled out: "14:53" today, a weekday this
-        week, a date this year, a full date beyond that.
+        """A date readable at a glance, less of it the closer it is: "14:53"
+        today, a weekday this week, a date this year, a full date beyond
+        that.
         """
         local = self.local_date()
         if local is None:
@@ -625,9 +589,8 @@ class Classification:
     #: rules engine always can; a model backend never does, and leaves this
     #: empty rather than inventing one.
     signals: Tuple[str, ...] = ()
-    #: What every category scored, so the runners-up can be shown. A verdict
-    #: that beat its nearest rival by a hair is a different kind of 90% from
-    #: one that beat it by five points, and only this says which.
+    #: What every category scored, so the runners-up can be shown: a 90% that
+    #: won by a hair differs from one that won by five points.
     scores: Dict[str, float] = field(default_factory=dict)
 
     @property
@@ -664,10 +627,9 @@ class Classification:
     def from_payload(cls, payload: Mapping[str, Any], model: str = "") -> "Classification":
         """Validate and repair a raw JSON payload from the model.
 
-        The structured-output schema already constrains shape, but this layer
-        assumes nothing: it exists so that a schema regression, a proxy, or a
-        future model change can never produce a confident-looking result that
-        the routing layer would act on.
+        The schema constrains shape, but this assumes nothing, so a schema
+        regression, a proxy or a model change cannot produce a
+        confident-looking result for routing to act on.
         """
         adjustments: List[str] = []
 
@@ -803,9 +765,8 @@ def _coerce_bool(value: Any) -> bool:
 def _coerce_confidence(value: Any) -> Tuple[Optional[float], Optional[str]]:
     """Coerce a confidence to [0, 1]. Returns ``(value, adjustment_note)``.
 
-    A value in (1, 100] is read as a percentage rather than clamped to 1.0.
-    Clamping would round *up* to maximum confidence, which is exactly the
-    direction this application must never guess in.
+    A value in (1, 100] is read as a percentage, not clamped: clamping would
+    round up to full confidence, the one direction this must never guess in.
     """
     if isinstance(value, bool):
         return None, None
@@ -825,10 +786,8 @@ def _coerce_confidence(value: Any) -> Tuple[Optional[float], Optional[str]]:
     note = None
     if number > 1.0:
         # A clear percentage (2..100, or a whole number) is rescaled. A small
-        # overshoot like 1.4 is not: it could equally be a percentage or a
-        # sloppy 1.0, and guessing "maximum confidence" is the one direction
-        # this application must never guess in. Treat it as unusable instead,
-        # which routes the message to Needs Review.
+        # overshoot like 1.4 could be a percentage or a sloppy 1.0, so it is
+        # treated as unusable, which routes the message to Needs Review.
         if number <= 100.0 and (number >= 2.0 or float(number).is_integer()):
             note = (
                 f"confidence_score {number:g} looked like a percentage; "
@@ -882,12 +841,10 @@ class TriageItem:
     def disposition(self) -> Disposition:
         """Where this message goes: filed, held for review, or left alone.
 
-        Whether it is job mail is decided before how sure the sorter is, which
-        is the other way round from how this used to read. Needs Review is a
-        folder inside the job-search tree, and it means "this is part of your
-        job search and I cannot tell which part". A promotion the sorter is
-        only 88% sure about is not that. It is simply not job mail, and the
-        right place for it is where it already is.
+        Whether it is job mail is decided before how sure the sorter is.
+        Needs Review is inside the job-search tree and means job search, but
+        which part is unclear; a promotion the sorter is 88% sure of is not
+        job mail, and stays where it is.
         """
         cls_ = self.classification
         if cls_.error is not None:
@@ -929,10 +886,9 @@ class TriageItem:
 
     @property
     def default_approved(self) -> bool:
-        """High-confidence, self-consistent, job-related mail is pre-checked.
-
-        Non-job mail is never pre-checked unless the user explicitly opts in:
-        misfiling a bank alert is a worse outcome than leaving it in the inbox.
+        """High-confidence, self-consistent job mail is pre-checked. Non-job
+        mail only when the user opts in: misfiling a bank alert is worse
+        than leaving it in the inbox.
         """
         if self.disposition is not Disposition.MOVE:
             return False
@@ -958,9 +914,8 @@ class TriageItem:
     def override_note(self) -> str:
         """Why this row is not going where the sorter said.
 
-        "Learned" and "manual" both mean the folder was overridden, but they
-        are worth telling apart: one is something you did to this message, the
-        other is something you did to a previous one.
+        "Learned" and "manual" both mean overridden: one by something done
+        to this message, the other by something done to an earlier one.
         """
         if not self.override_folder:
             return ""
@@ -995,9 +950,8 @@ class TriageItem:
         if self.classification.error:
             return "Analysis failed"
         if self.left_because_not_job:
-            # "Leave in place" reads as a fact about the message. It is a
-            # setting, and somebody staring at a row that will not tick
-            # deserves to be told which one.
+            # "Leave in place" read as a fact about the message; it is a
+            # setting, and the row says which.
             return "Not job mail - not sorted"
         if self.held_back_by_confidence:
             return "Not sure enough to file"
@@ -1005,11 +959,10 @@ class TriageItem:
 
     @property
     def topic_is_sorted(self) -> bool:
-        """Whether this configuration files mail on this topic anywhere.
-
-        Job mail always is. An everyday topic is only when non-job mail is
-        being filed *and* that topic has a folder of its own - a topic left
-        out of the list goes to Other, and the app is not really acting on it.
+        """Whether this configuration files mail on this topic anywhere: job
+        mail always; an everyday topic only when non-job mail is filed and
+        the topic has its own folder (one left out of the list goes to
+        Other).
         """
         if self.classification.is_job_related:
             return True
@@ -1020,11 +973,9 @@ class TriageItem:
 
     @property
     def left_because_not_job(self) -> bool:
-        """Whether this row is inert only because non-job mail is left alone.
-
-        The distinction that matters to a person: there is nothing wrong with
-        this message and nothing wrong with the analysis. It is sitting still
-        because of a choice, and the choice can be changed in one click.
+        """Whether this row is inert only because non-job mail is left alone:
+        nothing is wrong with the message or the analysis, and the choice is
+        one click to change.
         """
         return (self.disposition is Disposition.LEAVE
                 and not self.classification.is_job_related
@@ -1033,10 +984,8 @@ class TriageItem:
 
     @property
     def held_back_by_confidence(self) -> bool:
-        """Non-job mail that would be filed if the sorter were surer.
-
-        The second reason a row sits still, and the one that looks most like
-        a bug: the setting says file it, and it is not being filed.
+        """Non-job mail that would be filed if the sorter were surer: the
+        setting says file it, and it is not being filed.
         """
         return (self.disposition is Disposition.LEAVE
                 and not self.classification.is_job_related
