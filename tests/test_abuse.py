@@ -190,8 +190,8 @@ class TestFolderNamesAreSafe:
 # ==========================================================================
 class TestAutoReplyIsHardToFireByAccident:
     def _message(self, **overrides):
-        base = dict(uid="1", subject="Chat?", sender_name="Xxxxxx Xxxxx",
-                    sender_email="x.xxxxx@example.com", body_text="Shall we meet?")
+        base = dict(uid="1", subject="Chat?", sender_name="Alex Ward",
+                    sender_email="a.ward@example.com", body_text="Shall we meet?")
         base.update(overrides)
         return EmailMessage(**base)
 
@@ -249,7 +249,7 @@ class TestAutoReplyIsHardToFireByAccident:
         rendered = autoreply.render_template(
             "Hi {first_name}, about {nonsense} and {me}",
             self._message(), me="Rowan")
-        assert "{nonsense}" in rendered and "Imogen" in rendered and "Rowan" in rendered
+        assert "{nonsense}" in rendered and "Alex" in rendered and "Rowan" in rendered
 
     def test_a_template_cannot_be_used_to_read_attributes(self):
         """A format string is user input; it must not reach .format()."""

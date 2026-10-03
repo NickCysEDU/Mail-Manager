@@ -90,7 +90,7 @@ class TestKnowingWhereAirportsAre:
             assert lexicon.is_airport(code) is False
 
     def test_a_flight_is_recognised(self):
-        assert lexicon.airport_pair("XX0000 STN to DUB, Tuesday") == ("STN", "DUB")
+        assert lexicon.airport_pair("FR1234 STN to DUB, Tuesday") == ("STN", "DUB")
 
     def test_a_file_conversion_is_not_a_flight(self):
         """Three capitals either side of "to" is also "PDF to DOC".
@@ -105,7 +105,7 @@ class TestKnowingWhereAirportsAre:
         assert lexicon.airport_pair("LHR to LHR") is None
 
     def test_the_entity_layer_uses_the_real_list(self):
-        real = entity_scores("", "", "Seat 14C", "XX0000 STN to DUB Tuesday")
+        real = entity_scores("", "", "Seat 22A", "FR1234 STN to DUB Tuesday")
         assert OtherCategory.TRAVEL in real[0]
         fake = entity_scores("", "", "Convert", "Convert PDF to DOC quickly")
         assert OtherCategory.TRAVEL not in fake[0]
