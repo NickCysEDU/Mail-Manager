@@ -1,9 +1,9 @@
 """What the sorter knows about the world outside the message.
 
 A phrase list can tell you a message says "your flight". It cannot tell you
-ryanair.com is an airline, STN is an airport, or argos.co.uk sells things,
-and those are what a person uses to read a message that never says what it
-is. Two public datasets, 330 KB, no network at run time.
+an airline's domain is an airline's, that LHR is an airport, or that a shop's
+domain sells things, and those are what a person uses to read a message that
+never says what it is. Two public datasets, 330 KB, no network at run time.
 """
 
 from __future__ import annotations
@@ -115,19 +115,19 @@ class TestWordsBeatShape:
     """Shape decides when there are no words. It never overrules them."""
 
     def test_a_code_from_a_bank_is_a_security_notice(self, ):
-        """"halifax is a bank" plus an amount of money outscored the code."""
+        """A bank's domain plus an amount of money once outscored the code."""
         got = RuleClassifier().classify(
-            subject="023844",
-            body="Xxxxx 000000 xx xxxxxxx x xxxxxxx xx 000.00 xx X XXXXXX. "
-                 "Xx xxx xxx xxx xxxxx xxxx, xxxx xx xx xxx xxxxxx xx xxxx xxxx.",
-            sender="Halifax <no-reply@halifax.example>")
+            subject="581204",
+            body="Enter 581204 to approve a payment of 95.00 to ACME LETTINGS. "
+                 "If this was not you, call the number on the back of your card.",
+            sender="Barclays <no-reply@barclays.example>")
         assert got.other_category is OtherCategory.SECURITY
 
     def test_knowing_the_sender_does_not_authorise_a_move(self):
         got = RuleClassifier().classify(
-            subject="Seat 14C",
-            body="XX0000 XXX xx XXX, Xxxxxxx. Xxxx xxxxx 00 xxxxxxx xxxxxx.",
-            sender="noreply@ryanair.example")
+            subject="Seat 22A",
+            body="BA1442 LHR to EDI, Friday. Bag drop shuts half an hour ahead.",
+            sender="noreply@britishairways.example")
         assert got.other_category is OtherCategory.TRAVEL
         assert got.confidence < 0.95
 

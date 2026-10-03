@@ -1,19 +1,10 @@
 """The commonest mail in a job search, and the least interesting.
 
-Every applicant-tracking vendor writes "we got it, we'll read it, we'll be in
-touch" differently and no two share a phrase, so a list of phrases catches
-whichever vendor happened to be in the corpus. What they all do is the same
-three moves, and counting moves catches the family.
-
-Three real failures this fixes, all from one mailbox:
-
-  * iCIMS mail, "Thank xxx xxxx xxxx xxx xxxx xxxxxx xxxxxxxxxxx xx xxx X
-    position", matched nothing and sat in Needs Review at 0.55.
-  * "We have xxxxxxxx xxxx xxxxxxxxxxx. Xx xxxx xxxxxxxxxx aligns, we will
-    reach out to discuss next steps" was read as an action item at 0.70,
-    because every acknowledgement ends that way.
-  * "We have filled the position with another candidate" was not a rejection,
-    because the phrase list only had the passive voice.
+Applicant-tracking systems each word "we got it, we'll read it, we'll be in
+touch" differently, so a list of phrases only catches the ones it was written
+from. They all make the same three moves, and counting moves catches the
+family. A promise of next steps is not a request, and a rejection in the
+active voice is still a rejection.
 """
 
 from __future__ import annotations
@@ -80,23 +71,23 @@ class TestAcknowledgementScore:
         one = normalize("Thank you for applying to the Analyst position.")
         assert acknowledgement_score("", one)[0] == 0.0
 
-    def test_the_icims_wording_is_recognised(self):
+    def test_a_long_winded_acknowledgement_is_recognised(self):
         body = normalize(
-            "Thank you very much for xxxx xxxxxx xxxxxxxxxxx xx xxx "
-            "Xxxxxxxxxxxxx Xxxxxxx xxxxxxxx. Xxxx xxxxxx xxxx xx xxxxxxxx xx "
-            "xxx xxxxxxxxxx xxxxx, xxx xx xxxx xxxxxxx xxx xxxx.")
+            "Thank xxx xxxx xxxx xxx xxxx xxxxxx xxxxxxxxxxx xx xxx "
+            "Xxxxxxxxx Xxxxxxx position. Your details xxxx xx xxxxxxxx xx "
+            "xxx xxxxxx team, and we will contact you in due course.")
         score, why = acknowledgement_score("", body)
         assert score >= 2.4 and len(why) >= 2
 
     @pytest.mark.parametrize("body", [
-        "We have received xxxx xxxxxxxxxxx xxx xxx xxxx xxxx review it. "
-        "We xxxx xx xx xxxxx xx xxxx xxxxxxxxxxxxxx xxxxx.",
-        "Xxxx xxxxxxxxxxx xxx xxxx xxxxxxxxxxxx xxxxxxxxx. We xxxx xxxxxxx "
-        "xxx xx xxxxx xx x xxxxxxxx xxxxx.",
-        "Thanks for applying! Our recruiting team is reviewing applications "
-        "and someone will reach out if you are selected to progress.",
-        "Xxxx xxxxxxx xxxxxxxx xxxx xxx xxxx xxxxxxxxx xx xxxxxxxxxx "
-        "application. Xxxx xxxxxxxxxxx xxxx xx xxxxxxxx xx xxx xxxxxxxxxx.",
+        "We have received your application, and our team is reviewing your "
+        "background. You will hear from us if it is a fit.",
+        "Your application has been submitted. Should there be a suitable "
+        "opening, we will be in touch.",
+        "Thanks for applying! We are reviewing applications now and someone "
+        "will contact you if you are selected.",
+        "This confirms you have submitted an employment application, which "
+        "xxxx xx xxxxxxxx xx xxx xxxxxx office.",
     ])
     def test_the_family_is_covered_however_it_is_worded(self, body):
         assert acknowledgement_score("", normalize(body))[0] >= 2.4
@@ -117,9 +108,9 @@ class TestAcknowledgementScore:
 class TestPromisedNextSteps:
     @pytest.mark.parametrize("text", [
         "we will reach out to discuss next steps",
-        "xxxxxx xx xx x xxxx xxx, xx xxxx xxxxxxx xxx about next steps",
-        "xx xxxxxxxx xx xxxxxxxx xx xxx xxxxxxx, xx xxxx xx xx xxxxx with next steps",
-        "you will receive an email with next steps",
+        "if it looks like a xxx, xx xxxx xxxxxxx xxx xxxxx xxxx xxxxx",
+        "should you be shortlisted, xx xxxx xx xx xxxxx xxxx xxxx xxxxx",
+        "xxx will receive an email with next steps",
         "someone will contact you regarding next steps",
     ])
     def test_a_promise_is_not_a_request(self, text):
@@ -141,10 +132,10 @@ class TestPromisedNextSteps:
     def test_an_acknowledgement_is_not_turned_into_an_action(self, sorter):
         got = sorter.classify(
             subject="We have received your application",
-            body="Thank you xxx xxxx xxxxxxxx xx xxx Xxxxxxxxx Xxxxxxxx "
-                 "xxxxxxxx. We have xxxxxxxx xxxx xxxxxxxxxxx. Xx xxxx "
-                 "xxxxxxxxxx xxx xxxxxx xxxxx xxxx xxx xxxxx, xx xxxx xxxxx "
-                 "xxx to discuss next steps.",
+            body="Thank you for your interest in the Xxxxxxxxx Xxxxxxx "
+                 "position. Xx xxxx xxxxxxxx xxxx xxxxxxxxxxx. Xx xxxx "
+                 "background matches what the team xxxxx, xx xxxx xxxxx "
+                 "xxx xx discuss next steps.",
             sender="careers@northgate.example")
         assert got.category.value == "APPLICATION_RECEIVED"
         assert got.confidence >= 0.95

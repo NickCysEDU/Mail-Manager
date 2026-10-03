@@ -406,11 +406,9 @@ class TestHeadAndTail:
 class TestZeroFontSizeIsALayoutIdiom:
     """`font-size:0` on a container is not the same as hidden text.
 
-    Every responsive email builder puts it on the element holding the columns,
-    to close the whitespace between inline-blocks, and each column sets its
-    own size again. Reading it as "hidden" threw away the entire body of every
-    Workday message, seven of a hundred and fifty-six in one real mailbox,
-    none of which contained a `display:none` anywhere.
+    Responsive email builders put it on the element holding the columns, to
+    close the whitespace between inline-blocks, and each column sets its own
+    size again. Read as "hidden", it threw away whole message bodies.
     """
 
     def test_a_child_that_sets_a_size_is_visible_again(self):

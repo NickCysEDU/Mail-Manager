@@ -1,12 +1,12 @@
 """Meetings that are about a job, postings that carry no process words.
 
-Two shapes the sorter used to score at exactly zero, both found in real mail:
+Two shapes a phrase list scores at zero:
 
-  * "Xxxxxx xxx xxxx xxxx xx xxxxxxxx x 00-xxxxxx Xxxxxx Xxxx xxxx", a call
-    is being proposed, and every fixed phrase for that ("schedule a call")
-    breaks the moment somebody says how long it will take.
-  * A job description mailed to yourself. It contains not one word a hiring
-    process uses. It is all headings.
+  * A call being proposed with its length in it ("schedule a 25-minute video
+    call"): every fixed phrase for that breaks the moment somebody says how
+    long it will take.
+  * A job description mailed to yourself, which contains not one word a
+    hiring process uses. It is all headings.
 
 The near-misses matter as much as the hits. A dentist, a school and a sales
 team all book calls in the same words, and a job board quotes the same
@@ -60,11 +60,11 @@ class TestTheWholeSet:
 
 class TestMeetingRequests:
     @pytest.mark.parametrize("text", [
-        "xxxxxx xxx xxxx xxxx xx xxxxxxxx x 00-xxxxxx Xxxxxx Xxxx xxxx xxxx Xxxx",
-        "X'x xxxx xx xxx xx x xxxxx 00 xxx xxxxx xxxx xxxx xxxx",
-        "xxx'x xxxx x 00 xxxxxx Xxxx xxxxxxxxxxxx xxxxx xxxx xxxx",
-        "xxxxx xxx xx xxxx xx xxxx xx x xxxxx Xxxxx xxxx xx Xxxxxxxx?",
-        "xxxxx xx xxxxxxx x 00-xxxxxx xxxxx xxxxxxxxxxxx",
+        "xxx xxx xxxx xxxxx xx xxxxxxxx x 00-xxxxxx xxxxx xxxx xxxx Xxxx",
+        "could we set up a short 10 min catch-up chat on Monday",
+        "shall we book a 40 minute Zoom chat later this week",
+        "are you free to hop on a quick Teams call on Wednesday?",
+        "glad to arrange a 50-minute phone conversation",
         "can we find some time to talk next week",
         "let me know your availability",
         "what times work for you?",
@@ -86,7 +86,7 @@ class TestMeetingRequests:
 
     def test_a_meeting_alone_says_nothing_about_a_job(self):
         """This is the whole design: the two questions are kept apart."""
-        dentist = "xxxxxx xxx xxxx xxxx xx xxxxxxxx x 00-xxxxxx xxxxxxxxxxx"
+        dentist = "use the link to book a 30-minute check-up appointment"
         assert meeting_request_score(normalize(dentist), "")[0] > 0
         assert professional_context_score(normalize(dentist), "")[0] == 0.0
 
@@ -94,9 +94,9 @@ class TestMeetingRequests:
 class TestJobPostings:
     def test_a_description_is_recognised_without_process_words(self):
         body = normalize(
-            "JOB SUMMARY\nContributes to the Distributed Apps team.\n"
-            "JOB RESPONSIBILITIES\nCodes, tests and debugs programs.\n"
-            "QUALIFICATIONS\nBachelor's degree or equivalent.")
+            "JOB SUMMARY\nJoins the data platform team.\n"
+            "JOB RESPONSIBILITIES\nBuilds and looks after pipelines.\n"
+            "QUALIFICATIONS\nA degree or equivalent experience.")
         score, why = job_posting_score("", body)
         assert score >= 2.6 and len(why) >= 2
 
@@ -117,7 +117,7 @@ class TestJobBoardBlasts:
     def test_a_board_writing_to_a_list_is_not_a_job_search(self):
         score, why = job_board_blast(
             normalize("companies hiring analysts now"),
-            normalize("xxxxxx xxxxxxxx xx xxxxxxxx xxx xxxxx xx xxx xxxxx"),
+            normalize("see dozens of new roles and apply with one tap"),
             "<https://board.example/unsub>")
         assert score > 0 and "job board" in why
 
@@ -125,13 +125,13 @@ class TestJobBoardBlasts:
         """No unsubscribe header means somebody wrote to you."""
         assert job_board_blast(
             normalize("companies hiring analysts now"),
-            normalize("browse hundreds of openings"), "")[0] == 0.0
+            normalize("see dozens of new roles"), "")[0] == 0.0
 
 
 class TestWrappedLinks:
     def test_a_tracker_does_not_hide_the_destination(self):
-        wrapped = ("xxxxx://xx0x.xxxxxx-xxxx.xxxxxxx/XXx0/"
-                   "xxxxx%0X%0X%0Xxxxxxxxx.xxx.xxxxxx%0XXxXxx")
+        wrapped = ("https://t1.tracker.example/x9/"
+                   "https%3A%2F%2Fcalendar.app.google%2Fabc123")
         assert "calendar.app.google" in unwrap_links([wrapped])
 
     def test_a_doubly_wrapped_link_is_opened_too(self):

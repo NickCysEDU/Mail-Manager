@@ -174,13 +174,11 @@ class _TextExtractor(HTMLParser):
             return True
         if "opacity:0" in style and "height:0" in style:
             return True
-        # font-size:0 on its own is a layout idiom, not a hiding one. Every
-        # responsive email builder puts it on the container that holds the
-        # columns, to kill the whitespace between inline-block elements, and
-        # the children set their own size back. Treating it as hidden threw
-        # away the entire body of every Workday message - seven of a hundred
-        # and fifty-six in one real mailbox, none of which had a display:none
-        # anywhere in them. It only means hidden alongside a second cue.
+        # font-size:0 on its own is a layout idiom, not a hiding one:
+        # responsive email builders put it on the container of the columns to
+        # kill the whitespace between inline-blocks, and the children set
+        # their own size back. Read as hidden, it threw away whole message
+        # bodies. It only means hidden alongside a second cue.
         if _ZERO_FONT.search(style) and _ALSO_HIDDEN.search(style):
             return True
         return False
@@ -383,12 +381,9 @@ def notable_links(links: Iterable[str], domains: Sequence[str] = NOTABLE_DOMAINS
     return tuple(result)
 
 
-#: A zero font size. On its own this is a layout idiom, not a hiding one:
-#: every responsive email builder puts it on the container that holds the
-#: columns, to kill the whitespace between inline-block elements, and the
-#: children set their own size back. Treating it as hidden threw away the
-#: whole body of every Workday message - seven of a hundred and fifty-six in
-#: one real mailbox, none of which contained a display:none anywhere.
+#: A zero font size: on its own a layout idiom, not a hiding one. Responsive
+#: email builders put it on the container of the columns, and the children set
+#: their own size back; read as hidden, it threw away whole message bodies.
 _ZERO_FONT = re.compile(r"font-size:0(?:px|pt|em|rem)?(?:;|$)")
 
 #: What a preheader actually does as well as shrinking the text. Matched

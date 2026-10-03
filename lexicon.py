@@ -1,11 +1,11 @@
 """What the sorter knows about the world outside the message.
 
 A phrase list can tell you a message says "your flight". It cannot tell you
-that ryanair.com is an airline, that STN is an airport, or that argos.co.uk
-sells things, and those are exactly what a person uses to read a message
-that never says what it is:
+that an airline's domain is an airline's, that LHR is an airport, or that a
+shop's domain sells things, and those are what a person uses to read a
+message that never says what it is:
 
-    "Seat 14C — XX0000 XXX xx XXX, Xxxxxxx. Xxxx xxxxx 00 xxxxxxx xxxxxx."
+    "Seat 22A — BA1442 LHR to EDI, Friday. Bag drop shuts half an hour ahead."
 
 Two public datasets, fetched by ``tools/build_lexicon.py`` and committed as
 one 330 KB file so nothing here ever touches the network: every large and
@@ -13,8 +13,8 @@ medium airport's IATA code (OurAirports, public domain) and 44,000 company
 domains with the sector each belongs to (Wikidata, CC0).
 
 Matching is on the brand name rather than the whole domain, because one shop
-writes from argos.co.uk, email.argos.co.uk and argos-mail.com and all three
-are Argos.
+writes from shop.co.uk, email.shop.co.uk and shop-mail.com and all three are
+the same shop.
 
 Loaded on first use and never again. Everything here answers in constant time
 and never raises: a missing or damaged file leaves the sorter exactly as

@@ -1,12 +1,10 @@
 """Everyday sorting: the topics that have nothing to do with a job search.
 
-The labelled set in tests/fixtures is drawn from a real inbox during a job
-hunt, so it barely covers these - six of the twelve topics have no example in
-it at all. These cases are written rather than collected, which makes them a
-specification of intended behaviour and a guard against the topics bleeding
-into one another, not a measurement of accuracy. The pairs at the bottom are
-the point: receipts against bank statements, couriers against shops, real
-travel against travel used as a metaphor.
+The labelled evaluation set has few examples of these topics, so these cases
+are written rather than collected: a specification of intended behaviour and a
+guard against topics bleeding into one another, not a measure of accuracy. The
+pairs at the bottom are the point: receipts against bank statements, couriers
+against shops, real travel against travel used as a metaphor.
 """
 
 from __future__ import annotations
@@ -116,20 +114,19 @@ CASES = [
         OtherCategory.SPAM,
     ),
     (
-        "This Sunday at St Alban's",
-        "Morning worship is at 10, with Holy Communion. The sermon series on "
-        "Romans continues, and the coffee rota for October is on the "
-        "noticeboard. Please pray for the Hendersons.",
-        "office@stalbans-parish.example", "",
+        "This Sunday at St Brendan's",
+        "Morning worship is at 10, with Holy Communion. The sermon series "
+        "continues, and the coffee rota for October is on the noticeboard. "
+        "Please keep the youth group in your prayers.",
+        "office@stbrendans-parish.example", "",
         OtherCategory.CHURCH,
     ),
     (
-        # The one that made the category worth having: in form this is a
-        # newsletter, and to the person reading it, it is not.
+        # A newsletter in form, and church mail to the person reading it.
         "xXxxx xxxx xxx xxxxxx - 4 September",
-        "Xxxxxxxxx xx xxx xxxx xx xxx Xxxx. Inside this week's bulletin: "
-        "Sunday school restarts, the choir needs two more singers, and our "
-        "Lutheran neighbours have invited us to their harvest festival.",
+        "Grace and peace to you all. In this week's bulletin: Sunday school "
+        "begins again, the choir is looking for two more voices, and the "
+        "Methodist church nearby has invited us to its harvest supper.",
         "office@parish.example", "",
         OtherCategory.CHURCH,
     ),
@@ -173,7 +170,7 @@ class TestTellingSimilarMailApart:
         assert shipped.other_category is OtherCategory.SHIPPING
 
     def test_travel_words_in_marketing_are_not_filed_as_travel(self, rules):
-        """The case that caught this: a course sold as a holiday.
+        """A course sold as a holiday.
 
         Travel vocabulary with nothing behind it should not be confident
         enough to file. It is allowed to guess travel, and it does; what it
@@ -181,7 +178,7 @@ class TestTellingSimilarMailApart:
         rather than the label.
         """
         metaphor = sort(
-            rules, "Xxxxxxx xx Xxxx Xxxxx. Xxxxx-xx xx xxx xxxx.",
+            rules, "Welcome to Sunpeak Academy. Xxxxx-xx xx xxx xxxx.",
             "Xxxx xxxx xxxxxx xxxxx. Xxxxx xx xx xxx xxxx xxx xxx xxx xxxxxx, "
             "and there is a room booked for you on the leaderboard.",
             "hello@learning.example", unsub="unsubscribe")

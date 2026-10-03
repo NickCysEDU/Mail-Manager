@@ -1,19 +1,10 @@
 """Recognising a message that contains no word saying what it is.
 
-This is the gap between a phrase list and a reader. Taken from a held-out set
-the sorter scored 16.7% on:
-
-    "It's here"      Collection point 4, Xxxxxxxxx. Xxxxx xxx XX xxxx xx xxx
-                     xxxxx xxxxxx. Xx'xx xxxx xx xxx xxxxx xxxx.
-    "Seat 14C"       XX0000 XXX xx XXX, Xxxxxxx. Xxxx xxxxx 00 xxxxxxx xxxxxx.
-    "that thing on   Xxx xx xxxx xx xx xxxx xxxx? Xxxxxx xxx xxx xxxxx.
-     Thursday"
-
-A parcel, a flight and a friend. Not one of them contains "delivery",
-"flight" or any other word a list could hold, and no list can ever be long
-enough, because there is no phrase to list. What a person reads instead is
-the shape of the thing: a flight number next to an airport pair, a mailbox
-called bookings@, two people arranging something.
+A parcel notice that never says "delivery", a flight confirmation that never
+says "flight", a friend moving a plan: no phrase list can hold these, because
+there is no phrase to list. A person reads their shape instead: a flight
+number next to an airport pair, a mailbox called bookings@, two people
+arranging something.
 """
 
 from __future__ import annotations
@@ -39,15 +30,15 @@ class TestWhoTheSenderIs:
     """The part before the @ says what the mailbox is for, and was unused."""
 
     @pytest.mark.parametrize("address, topic", [
-        ("offers@boots.example", OtherCategory.PROMOTION),
+        ("offers@chemist.example", OtherCategory.PROMOTION),
         ("deals@shop.example", OtherCategory.PROMOTION),
         ("newsletter@paper.example", OtherCategory.NEWSLETTER),
-        ("billing@vodafone.example", OtherCategory.FINANCE),
+        ("billing@phoneco.example", OtherCategory.FINANCE),
         ("accounts@utility.example", OtherCategory.FINANCE),
-        ("shipping@argos.example", OtherCategory.SHIPPING),
+        ("shipping@parcelco.example", OtherCategory.SHIPPING),
         ("tracking@courier.example", OtherCategory.SHIPPING),
         ("security@bank.example", OtherCategory.SECURITY),
-        ("bookings@barsesta.example", OtherCategory.EVENT),
+        ("bookings@trattoria.example", OtherCategory.EVENT),
         ("tickets@venue.example", OtherCategory.EVENT),
     ])
     def test_the_mailbox_name_points_at_a_topic(self, address, topic):
@@ -55,13 +46,13 @@ class TestWhoTheSenderIs:
         assert topic in found and why
 
     @pytest.mark.parametrize("address", [
-        "x.xxxxxxxx@fastmail.example", "jane.doe@example.com", "sam@example.com",
+        "k.halberd@mailbox.example", "jane.doe@example.com", "sam@example.com",
     ])
     def test_a_person_is_recognised(self, address):
         assert looks_like_a_person(address) is True
 
     @pytest.mark.parametrize("address", [
-        "noreply@argos.example", "no-reply@bank.example", "info@company.example",
+        "noreply@parcelco.example", "no-reply@bank.example", "info@company.example",
         "support@vendor.example", "notifications@app.example",
         "mailer-daemon@host.example",
     ])
@@ -80,47 +71,48 @@ class TestWhoTheSenderIs:
 class TestShapesRatherThanWords:
     def test_a_flight(self):
         found, why = entity_scores(
-            "", "", "Seat 14C",
-            "XX0000 XXX xx XXX, Xxxxxxx. Xxxx xxxxx 00 xxxxxxx xxxxxx. "
-            "Xxxx xxxxxxxxx xx X0XX0X.")
+            "", "", "Seat 22A",
+            "BA1442 LHR to EDI, Friday. Bag drop shuts half an hour ahead. "
+            "Booking QX7R2M.")
         assert OtherCategory.TRAVEL in found
-        assert any("STN" in reason for reason in why), why
+        assert any("LHR" in reason for reason in why), why
 
     def test_a_parcel(self, sorter):
         """"Collection point" is a phrase, so it lives with the words now,
         what matters is that the message still reads as a parcel."""
         got = sorter.classify(
-            subject="It's here",
-            body="Collection point 4, Xxxxxxxxx. Xxxxx xxx XX xxxx xx xxx "
-                 "xxxxx xxxxxx. Xx'xx xxxx xx xxx xxxxx xxxx.",
-            sender="noreply@argos.example")
+            subject="Ready to collect",
+            body="Your parcel is waiting at the collection point on Mill "
+                 "Lane. Bring the QR code or your order number; we'll keep it "
+                 "for five days.",
+            sender="noreply@shop.example")
         assert got.other_category is OtherCategory.SHIPPING
 
     def test_a_direct_debit(self):
         found, _why = entity_scores(
-            "", "", "Sorry we missed you",
-            "Xxxx Xxxxxx Xxxxx xx 00.00 xxxxx xxx xx xxxxxxxxx xx xxx 0xx. "
-            "Xx'xx xxx xxxxx xx xxx 00xx.")
+            "", "", "Payment missed",
+            "We couldn't collect your Direct Debit of 41.50 on the 5th. "
+            "We'll try again on the 19th.")
         assert OtherCategory.FINANCE in found
 
     def test_a_meter_reading(self):
         found, _why = entity_scores(
-            "", "", "Meter reading needed",
-            "Xx xxxxx'x xxx x xxxxxxx xxxxx Xxxx xx xxx xxxx xxxxx xxxxx xxxx "
-            "xxxxxxxxx. Xxxx xxx xxxx xxxx xxx xx'xx xxxx xx xx.")
+            "", "", "Time for a reading",
+            "We still need a meter reading: your last two bills were "
+            "estimated. Please send it this week so we can put them right.")
         assert OtherCategory.FINANCE in found
 
     def test_a_restaurant_table(self):
         found, _why = entity_scores(
-            "", "", "Table for 4, Friday 8pm",
-            "Xxxxxxxxx xxxxx Xxxx. Xx xxxx xxxxxx xxx xxxxxxx xxxxxxx.")
+            "", "", "Table for 2, Saturday 7:30pm",
+            "Booked under Moss. We keep tables for ten minutes.")
         assert OtherCategory.EVENT in found
 
     def test_case_matters_and_is_not_folded_away(self):
         """Normalising lowercases, and case is half of what makes a flight
         number look like a flight number."""
-        upper = entity_scores("", "", "", "XX0000 STN to DUB")[0]
-        lower = entity_scores("", "", "", "xx0000 stn to dub")[0]
+        upper = entity_scores("", "", "", "BA1442 LHR to EDI")[0]
+        lower = entity_scores("", "", "", "ba1442 lhr to edi")[0]
         assert OtherCategory.TRAVEL in upper
         assert lower.get(OtherCategory.TRAVEL, 0) < upper[OtherCategory.TRAVEL]
 
@@ -132,8 +124,8 @@ class TestShapesRatherThanWords:
     def test_shapes_never_exceed_their_ceiling(self):
         found, _why = entity_scores(
             "", "", "Everything at once",
-            "XX0000 STN to DUB seat 14C gate B12 boarding reference X0XX0X "
-            "bags close")
+            "BA1442 LHR to EDI seat 22A gate C7 boarding reference QX7R2M "
+            "bag drop closes")
         assert all(value <= 3.4 for value in found.values())
 
     @pytest.mark.parametrize("junk", ["", "\x00", "%" * 200, "A" * 5000])
@@ -144,10 +136,10 @@ class TestShapesRatherThanWords:
 class TestOnePersonWritingToAnother:
     def test_a_note_from_a_friend(self):
         score, why = personal_register(
-            "that thing on Thursday",
-            "Xxx xx xxxx xx xx xxxx xxxx? Xxxxxx xxx xxx xxxxx. Xxxxx, X xxxx "
-            "xxx xxxxxxxxxx xxxx xxxxxxx.",
-            "Rob <x.xxxxxxxx@fastmail.example>")
+            "about Saturday",
+            "Could we make it eleven instead? The car is in for its service. "
+            "Sorry, I know we moved it once already.",
+            "Jo <j.ashdown@mailbox.example>")
         assert score >= 2.0 and why
 
     def test_a_mailing_list_is_never_a_person(self):
@@ -187,9 +179,9 @@ class TestItStillRefusesToBeCertain:
 
     def test_a_reading_built_on_shape_alone_is_not_filed(self, sorter):
         got = sorter.classify(
-            subject="Seat 14C",
-            body="XX0000 XXX xx XXX, Xxxxxxx. Xxxx xxxxx 00 xxxxxxx xxxxxx.",
-            sender="noreply@ryanair.example")
+            subject="Seat 22A",
+            body="BA1442 LHR to EDI, Friday. Bag drop shuts half an hour ahead.",
+            sender="noreply@flyaway.example")
         assert got.other_category is OtherCategory.TRAVEL
         assert got.confidence < 0.95, "shape alone must not authorise a move"
 
@@ -261,9 +253,9 @@ class TestAHiringMailbox:
     """Who sent it is context a phrase table cannot read."""
 
     @pytest.mark.parametrize("sender,word", [
-        ("Careers <no-reply@brightpath.example>", "careers"),
-        ("Talent <hiring@vellum.example>", "talent"),
-        ("Recruitment <careers@stanfield.example>", "recruitment"),
+        ("Careers <no-reply@brackenford.example>", "careers"),
+        ("Talent <hiring@lindell.example>", "talent"),
+        ("Recruitment <careers@tillworth.example>", "recruitment"),
         ("recruiter@acme.example", "recruiter"),
         ("Talent Acquisition <ta@acme.example>", "talent acquisition"),
         ("People Team <people.team@acme.example>", "people team"),
@@ -274,10 +266,10 @@ class TestAHiringMailbox:
         assert hiring_mailbox(sender) == word
 
     @pytest.mark.parametrize("sender", [
-        "Xxxxxx Xxxxx <x.xxxxx@xxxxxx-xxxx.xxxxxxx>",
+        "Martha Quill <m.quill@lantern-labs.example>",
         "no-reply@amazon.example",
         "billing@utility.example",
-        "Xxxxx Xxxxx <hazel@xxxxxxxxxx.example>",
+        "Owen Pryce <owen@pryceandsons.example>",
         "",
         "not an address at all",
     ])
@@ -288,15 +280,15 @@ class TestAHiringMailbox:
     def test_it_stops_a_rejection_reading_as_a_note_from_a_friend(self):
         """The warmth in a rejection was what made personal_register fire."""
         from rules_engine import personal_register
-        body = ("Xxxxx xxx xxx xxx xxxx xxx xxx xxxx xxxx. Xx xxxx xxxxxxxx "
-                "xxx xxxxx xxx xxxxxx xxxxxxx xxxxx xxxxxxxxxx xxxx xxxxxx "
-                "xx xxx xxxxx. Xx'x xx xxxx xx xxxx xxxx xxx xxxxx.")
+        body = ("Thanks for all the effort you put in. On this occasion we "
+                "have chosen someone whose experience is a closer match. "
+                "We hope you will apply again.")
         warm, _ = personal_register("An update", body,
-                                    "Imogen <x.xxxxx@harlow.example>")
+                                    "Martha <m.quill@lantern.example>")
         assert warm > 0, "the same words from a person do read as personal"
 
         from_careers, why = personal_register(
-            "An update", body, "Careers <no-reply@brightpath.example>")
+            "An update", body, "Careers <no-reply@brackenford.example>")
         assert from_careers == 0.0
         assert why == []
 
@@ -309,8 +301,9 @@ class TestConditionalSignals:
         engine = RuleClassifier()
         verdict = engine.classify(
             subject="Terms attached",
-            body="The paperwork is attached. Xx xx xxxxxxxxx, xxxxxxxx xxx 0xx.",
-            sender="Xxxxx Xxxxx <hazel@xxxxxxxxxx.example>")
+            body="As we discussed, the paperwork is attached. Starting the "
+                 "1st, the keys are yours.",
+            sender="Owen Pryce <owen@pryceandsons.example>")
         assert not verdict.is_job_related, "a letting agent is not an offer"
 
     def test_they_fire_from_a_careers_mailbox(self):
@@ -319,10 +312,10 @@ class TestConditionalSignals:
         engine = RuleClassifier()
         verdict = engine.classify(
             subject="Got it",
-            body=("Xxxx xx xxxx xx xxx xxxx xxxxxxx xxx xxxx xx xxx xxx xxxx "
-                  "xxxx xxxx xx xxxx xxxx xxx xxxx xxxxxxxxx. Xx xxxx xx xx "
-                  "xxxxxxxx."),
-            sender="Recruitment <careers@stanfield.example>")
+            body=("Thanks - your details are now on file, and the team will "
+                  "go through them in the next couple of weeks. No need to do "
+                  "anything."),
+            sender="Recruitment <careers@tillworth.example>")
         assert verdict.is_job_related
         assert verdict.category is Category.APPLICATION_RECEIVED
 
@@ -332,10 +325,10 @@ class TestConditionalSignals:
         engine = RuleClassifier()
         verdict = engine.classify(
             subject="An update",
-            body=("Xxxxx xxx xxx xxx xxxx xxx xxx xxxx xxxx. Xx xxxx xxxxxxxx "
-                  "xxx xxxxx xxx xxxxxx xxxxxxx xxxxx xxxxxxxxxx xxxx xxxxxx "
-                  "xx xxx xxxxx. Xx'x xx xxxx xx xxxx xxxx xxx xxxxx."),
-            sender="Careers <no-reply@brightpath.example>")
+            body=("Thanks for all the effort you put in. On this occasion we "
+                  "have chosen someone whose experience is a closer match. "
+                  "We hope you will apply again."),
+            sender="Careers <no-reply@brackenford.example>")
         assert verdict.is_job_related
         assert verdict.category is Category.NOT_INTERESTED
 

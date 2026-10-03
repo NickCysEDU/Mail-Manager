@@ -205,7 +205,7 @@ as the candidate:
 background or an opening - even when no role is named, no company is named, and \
 the message is only "would you like to find 20 minutes to talk". A named role is \
 NOT required. This is the most commonly missed case: the wording is ordinary \
-("xxxxxxxx x 00-xxxxxx Xxxxxx Xxxx xxxx", "set up a quick intro chat") and the \
+("book a 25-minute video call", "set up a short catch-up chat") and the \
 only thing marking it out is that a stranger wants to talk to you about your work
 - a job description, posting or advert the user saved, forwarded, or mailed to \
 themselves. These carry no hiring-process wording at all - they are headings \
@@ -214,7 +214,7 @@ and they are still the user's job search. Category UNCLASSIFIED_OTHER, since a \
 posting is not a stage of a process
 
 Set false for everything else, including these near-misses:
-- job-board digests ("00 xxx xxxx xxxxxxxx xxxx xxxxxx"), career newsletters, \
+- job-board digests ("8 new roles for you this week"), career newsletters, \
 salary-report marketing, "companies hiring now" blasts
 - LinkedIn / Indeed / Glassdoor engagement mail: profile views, post reactions, \
 connection requests, "your job alert", premium upsells

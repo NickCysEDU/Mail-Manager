@@ -1,30 +1,17 @@
-"""A local, LLM-free classifier for job-search email.
+"""A local classifier for job-search email, with no model.
 
-This is a hand-built expert system, not a trained model: there is no corpus and
-no weights file, and it makes no pretence of being one. What it encodes is the
-same domain knowledge the system prompt describes - the phrases, sender shapes,
-link domains and structural tells that separate a rejection from a receipt -
-expressed as weighted signals that can be read, argued with, and unit tested.
+A hand-built rule set, not a trained model: the phrases, sender shapes, link
+domains and structural tells that separate a rejection from a receipt, as
+weighted signals that can be read and tested. It is the fallback when a
+model backend is unavailable, the private and free default, and a second
+opinion beside a model.
 
-It exists for three reasons:
-
-* **Fallback.** When the model backend is unreachable, out of quota, or has no
-  key, a scan still produces something better than a wall of "Needs Review".
-* **Privacy and cost.** It runs on this Mac, instantly, for nothing, and no
-  message text leaves the machine.
-* **A second opinion.** Its verdict is computed for every message even when a
-  model is in use, so a disagreement can be surfaced rather than hidden.
-
-Robustness to messy text is a first-class concern. Real mail arrives with
-mojibake ("weâ€™ve"), smart quotes, accents, zero-width padding, Cyrillic
-homoglyphs, hyphenation across line breaks, and deliberate obfuscation
-("i n t e r v i e w"). Every pattern is matched against two normalisations of
-the text: a readable one, and a "tight" one with all punctuation and spacing
-removed, which defeats most character-level evasion.
-
-Its confidence is deliberately capped below the auto-file threshold for
-anything but overwhelming evidence, so the routing layer keeps doing the safety
-work.
+Mail arrives with mojibake ("weâ€™ve"), smart quotes, accents, zero-width
+padding, homoglyphs, broken hyphenation and spaced-out words ("i n t e r v i
+e w"), so every pattern is matched against a readable normalisation and a
+"tight" one with all punctuation and spacing removed. Confidence is capped
+below the auto-file threshold except on overwhelming evidence, so routing
+still does the safety work.
 """
 
 from __future__ import annotations
@@ -40,8 +27,8 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 import lexicon
 from models import Category, OtherCategory
 
-#: Confidence this engine will never exceed. It is a rule set, not a reader:
-#: even a textbook rejection could be quoted inside a different message.
+#: The most confidence this engine gives: even a textbook rejection could be
+#: quoted inside another message.
 MAX_CONFIDENCE = 0.96
 #: Below this total score nothing is claimed at all.
 MIN_SCORE = 1.6
@@ -51,34 +38,29 @@ SATURATION = 5.0
 DECISIVE_WEIGHT = 3.0
 #: Evidence a category needs before it enters the precedence contest.
 QUALIFY_SCORE = 2.5
-#: UNSOLICITED sits first in precedence, so it has to clear a higher bar -
-#: otherwise one enthusiastic phrase would outrank a real interview invitation.
+#: UNSOLICITED comes first in precedence, so it must clear a higher bar, or one
+#: eager phrase would outrank a real interview invitation.
 QUALIFY_SCORE_UNSOLICITED = 3.5
 #: Multiplier applied when a phrase matched only with words inserted into it.
 GAPPED_PENALTY = 0.75
 
-#: What the phrase "next steps" is worth, and so what to take back off when
-#: every mention of it turns out to be a promise rather than a request.
+#: What "next steps" is worth, and so what comes off when every mention is a
+#: promise rather than a request.
 PROMISED_STEPS_WEIGHT = 1.6
 
-#: The most a reading can be trusted when it rests mainly on shape - the
-#: mailbox it came from, a flight number, the way two people write - rather
-#: than on words that say what the message is. Deliberately below the filing
-#: threshold: these signals are right often enough to sort by and not often
-#: enough to move somebody's mail unasked.
+#: The most a reading resting mainly on shape (the mailbox, a flight number,
+#: how two people write) can be trusted: below the filing threshold, so it
+#: sorts but never moves mail unasked.
 SOFT_EVIDENCE_CEILING = 0.90
 
-#: How much of a message the rules look at. What a message is gets settled in
-#: its opening; past this it is quoted threads, footers and legal boilerplate.
-#: Five hundred signals against a hundred and sixty thousand characters costs
-#: seconds and changes nothing.
+#: How much of a message the rules read: what a message is gets settled early,
+#: and beyond this is quoted threads, footers and boilerplate.
 MAX_SCANNED_CHARS = 20000
 
-#: How much to discount transactional topics on mail that carries an
-#: unsubscribe header. The lighter figure applies when the sender vouches for
-#: the topic - a courier, an airline, a bank writing from its own domain. The
-#: heavier one applies when nothing corroborates the wording, which is the
-#: case a marketing email borrowing travel or shopping language falls into.
+#: How much to discount transactional topics on mail with an unsubscribe
+#: header: lightly when the sender vouches for the topic (a courier, an
+#: airline, a bank on its own domain), more when nothing corroborates the
+#: wording, as with marketing that borrows travel or shopping language.
 TRANSACTIONAL_IN_BULK = 0.72
 TRANSACTIONAL_IN_BULK_UNVOUCHED = 0.45
 
@@ -89,15 +71,15 @@ TRANSACTIONAL_TOPICS: Tuple["OtherCategory", ...] = ()
 # ==========================================================================
 # Normalisation - the part that makes everything else work on real mail
 # ==========================================================================
-#: UTF-8 read as Latin-1, the most common corruption in forwarded mail.
+# UTF-8 read as Latin-1, the commonest corruption in forwarded mail.
 _MOJIBAKE = {
     "â€™": "'", "â€˜": "'", "â€œ": '"', "â€\x9d": '"', "â€“": "-", "â€”": "-",
     "â€¦": "...", "â€¢": "-", "Â ": " ", "Ã©": "e", "Ã¨": "e", "Ã¡": "a",
     "Ã­": "i", "Ã³": "o", "Ãº": "u", "Ã±": "n", "Ã§": "c", "â€": '"',
 }
 
-#: Letters from other scripts that render identically in a Latin word. Spam
-#: uses these to slip past naive keyword filters.
+#: Letters from other scripts that look identical in a Latin word, used to slip
+#: past keyword filters.
 _HOMOGLYPHS = {
     "а": "a", "е": "e", "о": "o", "р": "p", "с": "c",
     "у": "y", "х": "x", "і": "i", "ј": "j", "һ": "h",
@@ -113,29 +95,20 @@ _TRANSLITERATE = {
 
 _ZERO_WIDTH = re.compile("[​-‏ - ⁠-⁤﻿­᠎]")
 _PUNCT_RUN = re.compile(r"[^\w\s]{3,}")
-#: Any run of three or more characters that are not letters or digits: a rule
-#: of underscores, a row of dashes, a line of equals signs.
-#:
-#: This is the reason phrase matching cannot be made to hang. The gapped
-#: matcher allows separator characters between the words of a phrase, and a
-#: long run of them can be divided between those gaps in exponentially many
-#: ways - a real message beginning with seventy underscores took forty-three
-#: seconds to classify. Collapsing the run removes the ambiguity at the source
-#: and costs nothing: no phrase this app looks for contains one.
-#: Six, not three. Three catches ordinary punctuation between words - an em
-#: dash with a quote either side is four characters - and flattening that
-#: loses meaning for no benefit. What has to go is decoration, and decoration
-#: is never four characters long.
+#: Any run of six or more characters that are not letters or digits: a rule of
+#: underscores, a row of dashes. The gapped matcher allows separators between a
+#: phrase's words, and a long run can be divided between the gaps in
+#: exponentially many ways (seventy underscores took forty-three seconds), so
+#: runs are collapsed. Six, because ordinary punctuation between words reaches
+#: four, and decoration is longer.
 _GAP_RUN = re.compile(r"[^a-z0-9]{6,}")
 _SPACED_OUT = re.compile(r"(?:(?<=\s)|^)(?:[a-z]\s){3,}[a-z](?=\s|$)")
 
 
 def normalize(text: str) -> str:
-    """Fold real-world mail into something patterns can match.
-
-    Fixes mojibake, maps homoglyphs back to Latin, strips accents and
-    zero-width padding, repairs words hyphenated across a line break, and
-    un-spaces deliberately spread-out words.
+    """Fold real-world mail into something patterns can match: mojibake,
+    homoglyphs, accents, zero-width padding, words hyphenated across lines,
+    and spaced-out words.
     """
     if not text:
         return ""
@@ -187,34 +160,26 @@ def tighten(text: str) -> str:
 
 
 def _loose(phrase: str) -> str:
-    """A regex matching ``phrase`` with any punctuation or spacing between words.
-
-    The joiner is an atomic group. Without it, a phrase of several words tried
-    against a long run of separator characters gives the engine an exponential
-    number of ways to divide that run between the gaps, and it tries them all.
-    Nothing is lost by refusing to reconsider: the gap either fits or it does
-    not.
+    """A regex matching ``phrase`` with any punctuation or spacing between
+    words. The joiner is an atomic group: otherwise a long run of separators
+    can be divided between the gaps in exponentially many ways, all tried.
     """
     words = [re.escape(word) for word in phrase.split()]
     return r"\b" + r"[\W_]{0,4}".join(words)
 
 
 def _gapped(phrase: str, max_inserted: int = 2) -> Optional[str]:
-    """A regex allowing a couple of extra words inside the phrase.
-
-    Real sentences interleave: "your **September** statement is ready",
-    "we have **now** received your application". Requiring an exact adjacency
-    misses those, and they are the same statement. Only phrases of three or
-    more words get this treatment - two-word phrases with gaps match far too
-    eagerly to be worth the recall.
+    """A regex allowing a couple of extra words inside the phrase, since
+    sentences interleave ("your **September** statement is ready"). Only for
+    phrases of three or more words; two-word phrases with gaps match too
+    eagerly.
     """
     words = [re.escape(word) for word in phrase.split()]
     if len(words) < 3:
         return None
-    # A repetition inside a repetition, which is the shape that backtracks
-    # catastrophically. What keeps it safe is normalize(), which leaves no run
-    # of separator characters long enough to divide up in many ways; the guard
-    # is upstream rather than here, because bounding it here costs accuracy.
+    # A repetition inside a repetition, which can backtrack catastrophically;
+    # it is safe because normalize() leaves no long run of separators. Bounding
+    # it here would cost accuracy.
     gap = r"(?:[\W_]+\w+){0,%d}[\W_]+" % max_inserted
     return r"\b" + gap.join(words) + r"\b"
 
@@ -239,8 +204,8 @@ class _Matcher:
 
     __slots__ = ("signal", "loose", "gapped", "tight", "anchor")
 
-    #: An anchor shorter than this appears in almost every message, so testing
-    #: for it costs a scan and saves nothing.
+    #: An anchor shorter than this is in almost every message, so testing for
+    #: it saves nothing.
     MIN_ANCHOR = 5
 
     def __init__(self, signal: Signal) -> None:
@@ -254,16 +219,11 @@ class _Matcher:
 
     @staticmethod
     def _anchor(phrase: str) -> str:
-        """The longest word of the phrase, as it appears in a tightened blob.
-
-        Both the loose and the gapped patterns join whole words with separator
-        classes, so every word of a matching phrase survives into the text
-        with its own letters adjacent - and ``tighten`` only removes what is
-        between them. So if the longest word is not in the tightened text, no
-        form of the phrase can match, and a substring test settles it in a
-        fraction of what running the regex would cost.
-
-        This is a filter, never a decision: it can only say "definitely not".
+        """The longest word of the phrase as it appears in a tightened blob.
+        Both pattern kinds join whole words with separators, so a matching
+        phrase leaves every word intact in the tightened text: if the
+        longest is absent, nothing can match, and a substring test settles
+        it cheaply. It only ever says "definitely not".
         """
         words = [re.sub(r"[^a-z0-9]+", "", word.lower())
                  for word in phrase.split()]
@@ -277,12 +237,9 @@ class _Matcher:
         return self._hit(normalized, tightened)
 
     def sender_hit(self, sender: str) -> float:
-        """Match against a sender, which arrives untightened.
-
-        The prefilter is skipped rather than applied to the wrong blob: an
-        address is a hundred characters at most, so nothing is saved by
-        filtering it, and applying the test to text that was never tightened
-        would reject matches the loose pattern would have found.
+        """Match against a sender, which arrives untightened, so the prefilter
+        is skipped: an address is short, and the tightened-text test would
+        reject real matches.
         """
         return self._hit(sender, sender)
 
@@ -299,9 +256,9 @@ class _Matcher:
 # ==========================================================================
 # Signal tables
 # ==========================================================================
-# Weights: 3.0 decisive · 2.0 strong · 1.2 moderate · 0.6 supporting.
-# Phrases are matched loosely, so one entry covers a family of spellings:
-# "move forward" also matches "move  forward", "move-forward", "moveforward".
+# Weights: 3.0 decisive, 2.0 strong, 1.2 moderate, 0.6 supporting. Phrases
+# match loosely, so "move forward" also matches "move-forward" and
+# "moveforward".
 
 REJECTION_SIGNALS: Tuple[Signal, ...] = (
     Signal("move forward with other candidates", 3.0),
@@ -329,8 +286,8 @@ REJECTION_SIGNALS: Tuple[Signal, ...] = (
     Signal("gone with another candidate", 2.6),
     Signal("position has been filled", 2.6),
     Signal("role has been filled", 2.6),
-    # The same news in the active voice, which half of them use. Word order
-    # is the only difference and a literal list does not see past it.
+    # The same news in the active voice; a literal list does not see past word
+    # order.
     Signal("filled the position", 2.6),
     Signal("filled the role", 2.6),
     Signal("filled this position", 2.6),
@@ -363,9 +320,8 @@ REJECTION_SIGNALS: Tuple[Signal, ...] = (
     Signal("better aligned with our needs", 1.4),
     Signal("withdraw your application", 2.0),
     Signal("application has been withdrawn", 2.4),
-    # Everything below was taken from real rejection mail. The polite opener
-    # "thank you for your interest" is shared with acknowledgements, so the
-    # decisive phrase is always further in.
+    # The polite opener "thank you for your interest" is shared with
+    # acknowledgements, so the decisive phrase is always further in.
     Signal("we have moved forward with other candidates", 3.0),
     Signal("moved forward with other candidates", 3.0),
     Signal("more closely match the listed requirements", 3.0),
@@ -497,15 +453,11 @@ INTERVIEW_SIGNALS: Tuple[Signal, ...] = (
     Signal("vorstellungsgesprach", 2.2, label="German interview"),
 )
 
-#: The interview phrases that any meeting could use. A dentist asks for your
-#: availability; a school asks you to pick a time; a sales team books a slot.
-#: Everything NOT in this set names a hiring process outright - "phone screen",
-#: "technical interview" - and needs no corroboration to be about a job.
-#:
-#: The split exists because discounting all interview evidence when a message
-#: lacks other job wording threw away the clearest signals there are: "please
-#: let me know your availability for a phone screen" scored eight and was cut
-#: to two and a half.
+#: Interview phrases any meeting could use: a dentist asks for your
+#: availability, a sales team books a slot. Everything else names a hiring
+#: process outright ("phone screen") and needs no corroboration. Discounting
+#: all interview evidence without other job wording threw away the clearest
+#: signals there are.
 GENERIC_SCHEDULING: frozenset = frozenset({
     "schedule a call", "set up a call", "set up some time", "book a time",
     "pick a time", "choose a time", "find a time", "grab some time",
@@ -710,8 +662,7 @@ SCHEDULING_LINK_DOMAINS: Tuple[str, ...] = (
     "calendly.com", "cal.com", "savvycal.com", "meetings.hubspot.com",
     "hubspot.com/meetings", "chilipiper.com", "goodtime.io", "youcanbook.me",
     "acuityscheduling.com", "doodle.com", "when2meet.com", "calendarhero.com",
-    # Google's and Microsoft's own booking pages, which are what somebody
-    # without a scheduling product reaches for.
+    # Google's and Microsoft's own booking pages.
     "calendar.app.google", "calendar.google.com", "bookings.microsoft.com",
     "outlook.office.com/bookwithme", "outlook.office365.com/book",
     "koalendar.com", "tidycal.com", "zcal.co", "usemotion.com", "clara.com",
@@ -727,9 +678,8 @@ ASSESSMENT_LINK_DOMAINS: Tuple[str, ...] = (
     "byteboard.dev", "filtered.ai", "pymetrics.ai", "criteriacorp.com",
     "shl.com", "predictiveindex.com", "leetcode.com",
 )
-#: Subject lines follow a handful of shapes across every applicant-tracking
-#: system, and the shape alone establishes that this is about a real
-#: application the reader submitted.
+#: Subject lines follow a few shapes across applicant-tracking systems, and the
+#: shape alone says this is about an application the reader made.
 SUBJECT_PATTERNS: Tuple[Tuple[re.Pattern, float, str], ...] = tuple(
     (re.compile(pattern), weight, label)
     for pattern, weight, label in (
@@ -770,23 +720,11 @@ ATS_LINK_DOMAINS: Tuple[str, ...] = (
     "indeed.com", "linkedin.com/jobs", "monster.com", "dice.com",
 )
 
-#: Signals that a message is about employment at all.
 #: Phrases that mean nothing on their own and a great deal from a careers
-#: mailbox.
-#:
-#: This is the thing a language model does that a phrase table does not: read
-#: the same words differently depending on who said them. "Got it - your
-#: details are with us, xxx xxxx xxxx xxxx xx xxxx xxxx xxx xxxx xxxxxxxxx"
-#: contains no hiring vocabulary whatever. It is an application
-#: acknowledgement, and the only thing that makes it one is the From line
-#: saying Recruitment.
-#:
-#: So these are scored only when the sender is a hiring mailbox or the message
-#: has already established a named hiring process. Off that leash they would
-#: be a disaster - "the paperwork is attached" is a sentence from a solicitor,
-#: an accountant and a letting agent - which is exactly why they live here
-#: rather than in the tables proper, and why their weights are modest even
-#: when they do fire.
+#: mailbox: "your details are with us" is an acknowledgement only because of
+#: who sent it. Scored only when the sender is a hiring mailbox or a named
+#: hiring process is established; elsewhere "the paperwork is attached" is a
+#: solicitor or a letting agent. Weights are modest even then.
 CONDITIONAL_SIGNALS: Dict[Category, Tuple[Signal, ...]] = {
     Category.NOT_INTERESTED: (
         Signal("chosen someone", 2.4), Signal("chosen another", 2.4),
@@ -855,7 +793,7 @@ JOB_CONTEXT_SIGNALS: Tuple[Signal, ...] = (
     Signal("developer at", 0.8),
 )
 
-#: Things that mean "definitely not this person's job search".
+#: Things that mean "not this person's job search".
 NON_JOB_SIGNALS: Tuple[Signal, ...] = (
     Signal("new jobs matching", 2.6, label="job-board digest"),
     Signal("jobs matching your search", 2.8, label="job-board digest"),
@@ -884,10 +822,8 @@ NON_JOB_SIGNALS: Tuple[Signal, ...] = (
 # ==========================================================================
 # Non-job topic signals
 # ==========================================================================
-#: Everyday topics, for mail that is not part of a job search. These carry the
-#: same weights as the job tables (3.0 decisive, 2.0 strong, 1.2 moderate) and
-#: are scored the same way. Sender-field signals are the sharpest of the lot: a
-#: courier's own domain settles the question in a way prose rarely does.
+# Everyday topics, weighted and scored like the job tables. Sender signals are
+# the sharpest: a courier's own domain settles what prose rarely does.
 TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
     OtherCategory.SECURITY: (
         Signal("app specific password", 3.0),
@@ -981,9 +917,7 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("squareup.com", 2.2, field="sender", label="a payment processor"),
     ),
     OtherCategory.SHIPPING: (
-        # Collecting a parcel, in the words the notice actually uses. These
-        # were briefly filed as "shapes"; they are nothing of the sort, they
-        # are phrases, and as evidence they are worth as much as any other.
+        # Collecting a parcel, in the words the notices use.
         Signal("collection point", 2.8),
         Signal("pick up point", 2.4),
         Signal("ready to collect", 2.8),
@@ -1125,11 +1059,8 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("hilton.com", 2.4, field="sender", label="a hotel chain"),
     ),
     OtherCategory.CHURCH: (
-        # A church writes about a handful of things and calls them by name.
-        # Almost none of this vocabulary appears anywhere else in an inbox,
-        # which is why the topic is worth having: by shape alone this mail is
-        # a newsletter, an event invitation or a note from a friend, and it is
-        # none of those to the person reading it.
+        # A church writes about a handful of things and names them; little of
+        # this vocabulary appears elsewhere in an inbox.
         Signal("sunday service", 3.0), Signal("sunday services", 3.0),
         Signal("morning service", 2.6), Signal("evening service", 2.6),
         Signal("this sunday", 2.4), Signal("next sunday", 2.4),
@@ -1189,12 +1120,8 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("in christ", 2.4), Signal("grace and peace", 2.6),
         Signal("the lord", 1.8), Signal("the gospel", 2.4),
         Signal("faith community", 2.6),
-        # Denominations. Reading a xxxx xxxxxx xxxxxxx xxxx made the gap
-        # obvious: the word that appears in every message, in the masthead
-        # and the footer and the signature, is the denomination - and none of
-        # it was here. This is also the most portable vocabulary in the whole
-        # table, since it identifies a church anywhere in the world without
-        # knowing anything about any particular one.
+        # Denominations: the word in a church's masthead, footer and signature,
+        # which identifies one anywhere.
         Signal("lutheran", 2.8), Signal("baptist", 2.6),
         Signal("methodist", 2.8), Signal("presbyterian", 2.8),
         Signal("episcopal", 2.8), Signal("anglican", 2.8),
@@ -1239,9 +1166,8 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("beneficiary", 2.4), Signal("barrister", 2.6),
         Signal("lottery", 2.8), Signal("bitcoin", 2.4),
         Signal("risk free", 2.0), Signal("no obligation", 1.8),
-        # Categories of junk that have outlived every change of wording around
-        # them. Kept to what is unambiguous: none of these turns up in mail
-        # somebody actually wanted.
+        # Categories of junk that have outlived every change of wording; only
+        # the unambiguous ones.
         Signal("debt consolidation", 3.0), Signal("consolidate your debt", 3.0),
         Signal("credit repair", 2.8), Signal("repair your credit", 3.0),
         Signal("refinance your", 2.6), Signal("mortgage rates", 2.2),
@@ -1316,10 +1242,8 @@ TRANSACTIONAL_TOPICS = (
 )
 
 
-#: Places the words application, interview, offer and candidate turn up
-#: meaning something else entirely. A tenancy application, a radio interview
-#: and an offer on a house are all ordinary mail, and the job tables have no
-#: way of telling on vocabulary alone.
+#: Where application, interview, offer and candidate mean something else: a
+#: tenancy application, a radio interview, an offer on a house.
 _OTHER_WORLD = re.compile(
     r"\b(?:tenanc\w+|landlord|lettings?|letting agent|rent(?:al)?|deposit "
     r"protection|estate agent|vendor|conveyanc\w+|mortgage adviser|viewing|"
@@ -1332,10 +1256,9 @@ _OTHER_WORLD = re.compile(
 )
 
 
-#: Families of unsolicited-commercial-mail language. Any one of these turns up
-#: in ordinary mail; two or three together almost never do. Counting families
-#: rather than phrases is what keeps this from being a list of the spam that
-#: happened to be in one corpus - the wording moves, the shape does not.
+#: Families of unsolicited-commercial-mail language: one turns up in ordinary
+#: mail, two or three together almost never. Families rather than phrases,
+#: because the wording moves and the shape does not.
 _SOLICITATION = (
     ("a claim about money you could make", re.compile(
         r"\b(?:earn (?:up to )?\$?\d|\$\d[\d,]*(?:\.\d+)? (?:a|per) "
@@ -1368,11 +1291,9 @@ _SHOUTED = re.compile(r"\b[A-Z]{4,}\b")
 
 
 def solicitation_score(subject: str, body: str, raw_subject: str = "") -> Tuple[float, List[str]]:
-    """How strongly this reads as unsolicited commercial mail.
-
-    Scored by how many different families of solicitation language appear, not
-    by how many phrases match, so a message repeating one phrase does not out-
-    score one doing three separate things.
+    """How strongly this reads as unsolicited commercial mail: by how many
+    families of solicitation language appear, so repeating one phrase does
+    not outscore doing three things.
     """
     blob = f"{subject} {body}"
     reasons = []
@@ -1391,11 +1312,10 @@ def solicitation_score(subject: str, body: str, raw_subject: str = "") -> Tuple[
     return score, reasons
 
 
-#: A meeting being proposed, in the shapes real mail uses. The verb and the
-#: noun are allowed up to forty characters between them and may not cross a
-#: sentence, which is what lets one entry cover "schedule a call", "xxxxxxxx x
-#: 00-xxxxxx Xxxxxx Xxxx xxxx" and "set up a quick intro chat" alike. Fixed
-#: phrases cannot: they break the moment somebody says how long it will take.
+#: A meeting being proposed: the verb and the noun may be forty characters
+#: apart within a sentence, so one entry covers "schedule a call" and "set up a
+#: quick half-hour video chat"; fixed phrases break when someone says how long
+#: it will take.
 _MEETING_VERB = (r"(?:schedule|set ?up|book|arrange|organi[sz]e|line up|find|"
                  r"pick|choose|grab|hop on|jump on|get on|put in|coordinate)")
 _MEETING_NOUN = (r"(?:call|chat|meeting|conversation|sync|catch ?up|zoom|"
@@ -1426,13 +1346,9 @@ _MEETING_REQUEST = (
 
 
 def meeting_request_score(subject: str, body: str) -> Tuple[float, List[str]]:
-    """How strongly this message proposes a meeting. Says nothing about why.
-
-    A dentist, a sales team and a hiring manager all book calls in the same
-    words, so this is deliberately blind to the reason. What the meeting is
-    *for* is a separate question, answered by professional_context_score, and
-    keeping the two apart is what stops a reminder about a cleaning being
-    filed as an interview.
+    """How strongly this message proposes a meeting, blind to why: a dentist
+    and a hiring manager book calls in the same words. What it is for is
+    professional_context_score's question.
     """
     blob = f"{subject} {body}"
     reasons = [describes for describes, pattern in _MEETING_REQUEST
@@ -1441,10 +1357,9 @@ def meeting_request_score(subject: str, body: str) -> Tuple[float, List[str]]:
     return score, reasons
 
 
-#: Language that places a conversation in somebody's working life rather than
-#: their dentist's diary. None of it is decisive alone - "the team" is a phrase
-#: every workplace uses - which is why it is counted in families and only ever
-#: qualifies other evidence.
+#: Language that places a conversation in a working life. None of it is
+#: decisive alone, so it is counted in families and only qualifies other
+#: evidence.
 _PROFESSIONAL_CONTEXT = (
     ("an interest in your background", re.compile(
         r"\b(?:learn more about you|hear about (?:your|you)|about your "
@@ -1480,10 +1395,8 @@ def professional_context_score(subject: str, body: str,
     return score, reasons
 
 
-#: The sections a job description is built out of. A posting almost always
-#: carries several; ordinary mail that happens to use one of these headings
-#: carries exactly one. Counting sections rather than phrases is what tells a
-#: description apart from a digest that quotes one line of it.
+#: The sections a job description is built from: a posting carries several,
+#: ordinary mail at most one.
 _POSTING_SECTIONS = (
     ("a role summary", re.compile(
         r"\b(?:job summary|position summary|role summary|job description|"
@@ -1516,33 +1429,25 @@ _POSTING_SECTIONS = (
 
 def job_posting_score(subject: str, body: str,
                       list_unsubscribe: str = "") -> Tuple[float, List[str]]:
-    """How strongly the message *is* a job description, rather than about one.
-
-    Somebody mailing a posting to themselves is doing their job search, and
-    the sorter used to score that at zero because a description contains none
-    of the words a hiring process uses - no "your application", no "we would
-    like to", no "recruiter". It is all headings.
-
-    A digest quoting one heading is not a posting, which is why this counts
-    sections and discounts bulk mail: a description arrives from a person, or
-    from you, and a blast about "hundreds of openings" arrives from a list.
+    """How strongly the message is a job description rather than about one. A
+    posting mailed to yourself is part of a job search but contains no
+    hiring process words; it is all headings. A digest quoting one heading
+    is not a posting, and bulk mail is discounted.
     """
     blob = f"{subject} {body}"
     reasons = [describes for describes, pattern in _POSTING_SECTIONS
                if pattern.search(blob)]
-    # One heading is not a description. Ordinary mail uses "requirements" and
-    # "about the role" in passing; a posting carries several sections at once.
+    # One heading is not a description; a posting carries several at once.
     score = {0: 0.0, 1: 0.0, 2: 2.6, 3: 3.4}.get(len(reasons), 4.0)
     if list_unsubscribe.strip() and score:
-        # A posting you were sent by a mailing list is a job board writing to
-        # everybody, not a description you kept.
+        # A posting from a mailing list is a job board writing to everybody.
         score *= 0.45
         reasons.append("(discounted: it arrived on a mailing list)")
     return score, reasons
 
 
-#: What a job board's broadcast does that a single posting does not: it offers
-#: many roles, and it asks you to go and look at them.
+#: What a job board's broadcast does that a posting does not: offers many roles
+#: and asks you to go and look.
 _JOB_BOARD_BLAST = (
     ("more than one opening at once", re.compile(
         r"\b(?:\d{1,4}\+? (?:new )?(?:jobs|roles|openings|positions|vacancies)|"
@@ -1563,11 +1468,8 @@ _JOB_BOARD_BLAST = (
 
 def job_board_blast(subject: str, body: str,
                     list_unsubscribe: str = "") -> Tuple[float, str]:
-    """How strongly this is a job board broadcasting, not a job being offered.
-
-    The vocabulary is identical to a real posting - that is the whole problem.
-    What differs is the shape: a board offers many roles at once and sends you
-    somewhere to look at them, and it arrives on a mailing list.
+    """How strongly this is a job board broadcasting, not a job offered: the
+    vocabulary matches a posting; the shape does not.
     """
     if not list_unsubscribe.strip():
         return 0.0, ""
@@ -1580,19 +1482,15 @@ def job_board_blast(subject: str, body: str,
     return score, "a job board writing to a list (" + ", ".join(reasons[:2]) + ")"
 
 
-#: How many times to unwrap a redirect. Trackers nest - a mail platform wraps
-#: a link the sender had already wrapped - but never deeply.
+#: How many times to unwrap a redirect: trackers nest, but never deeply.
 MAX_LINK_UNWRAPS = 3
 
 
 def unwrap_links(links: Sequence[str]) -> str:
-    """One lower-case blob of link text, with redirects opened out.
-
-    Click trackers keep the real destination inside the URL, percent-encoded:
-    ``streak-link.com/XXx0/xxxxx%0X%0X%0Xxxxxxxxx.xxx.google%2F…``. Matching a
-    domain list against that finds the tracker and never the destination, so a
-    scheduling link sent through any mail platform - which is most of them -
-    was invisible. Decoding costs nothing and makes the evidence readable.
+    """One lower-case blob of link text, with redirects opened out. Click
+    trackers keep the real destination inside the URL, percent-encoded
+    (``tracker.example/x/https%3A%2F%2Fcalendar.example%2F…``), so matching
+    domains against it finds only the tracker. Decoding makes it readable.
     """
     seen: List[str] = []
     for link in links:
@@ -1607,11 +1505,9 @@ def unwrap_links(links: Sequence[str]) -> str:
     return " ".join(seen)
 
 
-#: What an acknowledgement of an application actually does. Every vendor
-#: writes it differently and no two share a phrase, but all of them do the
-#: same three things: say the application arrived, promise to read it, and
-#: promise to be in touch if it is a match. Counting those moves catches the
-#: whole family; listing phrases catches whichever vendor was in the corpus.
+#: What an application acknowledgement does: say it arrived, promise to read
+#: it, promise to be in touch if it fits. Counting those moves catches the
+#: whole family; listing phrases catches only the vendors listed.
 _ACKNOWLEDGEMENT = (
     ("it says the application arrived", re.compile(
         r"\b(?:receiv\w+ your (?:recent )?(?:application|resume|cv|submission)|"
@@ -1645,46 +1541,29 @@ _ACKNOWLEDGEMENT = (
 
 
 def acknowledgement_score(subject: str, body: str) -> Tuple[float, List[str]]:
-    """How strongly this is "we got your application, we will be in touch".
-
-    The commonest thing in a job-search inbox and the least interesting, which
-    is exactly why it should be filed without being read. One move is not
-    enough - "thank you for applying" opens a rejection too - so it takes two.
+    """How strongly this is "we got your application, we will be in touch": the
+    commonest and least interesting job mail. It takes two moves, since
+    "thank you for applying" opens a rejection too.
     """
     blob = f"{subject} {body}"
     reasons = [describes for describes, pattern in _ACKNOWLEDGEMENT
                if pattern.search(blob)]
-    # Two moves is worth 2.6 rather than 3.0, which was tried and rejected:
-    # 3.0 filed eight more messages on the labelled set and one wrong one on
-    # the held-out set, which is the only set whose opinion counts here.
+    # Two moves score 2.6: at 3.0 one held-out message was filed wrongly.
     score = {0: 0.0, 1: 0.0, 2: 2.6, 3: 3.2}.get(len(reasons), 3.6)
     return score, reasons
 
 
 # ==========================================================================
 # What a message *is*, when it contains no word that says so
-# ==========================================================================
-# The three layers below exist because of mail like this, taken from a
-# held-out set the sorter scored 16.7% on:
-#
-#   "It's here" - Collection point 4, Xxxxxxxxx. Xxxxx xxx XX xxxx xx xxx
-#   xxxxx xxxxxx. Xx'xx xxxx xx xxx xxxxx xxxx.        -> a parcel
-#
-#   "Seat 14C" - XX0000 XXX xx XXX, Xxxxxxx. Xxxx xxxxx 00 xxxxxxx xxxxxx.
-#   Xxxx xxxxxxxxx xx X0XX0X.                          -> a flight
-#
-#   "that thing on Thursday" - Xxx xx xxxx xx xx xxxx xxxx? Xxxxxx xxx xxx
-#   xxxxx.                                             -> a friend
-#
-# None contains "delivery", "flight" or any other keyword. A person reads the
-# shape of the thing: a flight number, an airport pair, a booking reference; a
-# mailbox called bookings@; two people talking. A phrase list cannot, however
-# long it gets, because there is no phrase to list.
+# ========================================================================== A
+# parcel notice that never says "delivery", a flight confirmation that never
+# says "flight", a friend moving a plan: a person reads their shape (a flight
+# number beside an airport pair, a booking reference, a bookings@ mailbox, two
+# people talking), and a phrase list has nothing to list.
 
-#: Who the sender is, from the part before the @. A company that sends several
-#: kinds of mail uses a different mailbox for each, and the name says which:
-#: offers@, billing@, bookings@, security@. It is nearly free to read and it
-#: is right far more often than it is wrong.
+#: Who the sender is, from the part before the @: a company uses a mailbox per
+#: kind of mail, and the name says which (offers@, billing@, bookings@,
+#: security@). Nearly free to read, and right far more often than not.
 _SENDER_PURPOSE: Tuple[Tuple[str, "OtherCategory", float], ...] = (
     (r"offers?|deals?|promo\w*|marketing|savings?|voucher|sale", OtherCategory.PROMOTION, 1.8),
     (r"news(letter)?|digest|weekly|monthly|bulletin|update[sz]?", OtherCategory.NEWSLETTER, 1.6),
@@ -1703,9 +1582,9 @@ _SENDER_PURPOSE_COMPILED = tuple(
     (re.compile(rf"(?:^|[._-])(?:{pattern})(?:$|[._-])", re.I), topic, weight)
     for pattern, topic, weight in _SENDER_PURPOSE)
 
-#: A local part shaped like somebody's name rather than a department:
-#: "x.xxxxxxxx", "jane.doe", "sam_hale". Two name-ish pieces, no digits worth
-#: speaking of, and not one of the role words above.
+#: A local part shaped like a name rather than a department ("jane.doe",
+#: "a_smith"): two name-ish pieces, few digits, and none of the role words
+#: above.
 _PERSON_LOCAL = re.compile(
     r"^[a-z]{1,20}[._-][a-z]{2,20}\d{0,2}$|^[a-z]{2,20}\d{0,2}$", re.I)
 _ROLE_WORDS = re.compile(
@@ -1715,16 +1594,11 @@ _ROLE_WORDS = re.compile(
 
 
 def sender_sector(sender: str) -> Tuple[Dict["OtherCategory", float], List[str]]:
-    """What the company sending this does for a living.
-
-    A phrase table cannot know that ryanair.com is an airline or that
-    argos.co.uk sells things. Forty-four thousand company domains can, and
-    that is most of what is left between a rule set and a reader on mail that
-    never says what it is.
-
-    A sector describes the sender, never the message - a bank sends security
-    codes and marketing alike - so it is weighed as a hint and capped with
-    the rest of the soft evidence.
+    """What the company sending this does for a living. A phrase table cannot
+    know which domains are airlines or shops; tens of thousands of company
+    domains can. A sector describes the sender, never the message (a bank
+    sends codes and marketing alike), so it is a hint, capped with the other
+    soft evidence.
     """
     sector, matched = lexicon.sector_of(sender)
     if not sector:
@@ -1745,11 +1619,8 @@ def sender_sector(sender: str) -> Tuple[Dict["OtherCategory", float], List[str]]
 
 
 def sender_purpose(sender: str) -> Tuple[Dict["OtherCategory", float], List[str]]:
-    """What the mailbox this came from is *for*.
-
-    Reading the local part is the cheapest useful signal there is and nothing
-    was using it. "offers@boots" is a promotion before a single word of the
-    body has been read.
+    """What the mailbox this came from is for: "offers@" is a promotion before
+    a word of the body is read.
     """
     local = (sender or "").split("@")[0]
     local = local.split("<")[-1].strip().lower()
@@ -1765,9 +1636,8 @@ def sender_purpose(sender: str) -> Tuple[Dict["OtherCategory", float], List[str]
     return found, why
 
 
-#: Mailboxes that exist to talk to candidates. Checked against the display
-#: name as well as the address, because "Careers <no-reply@brightpath>" tells
-#: you what it is in the half a phrase table would never read.
+#: Mailboxes that exist to talk to candidates, checked against the display name
+#: as well as the address ("Careers <no-reply@company>").
 _HIRING_MAILBOX = re.compile(
     r"(?:^|[\W_])(?:careers?|recruit(?:ing|ment|er|ers)?|talent"
     r"(?:[\W_]?acquisition)?|hiring|jobs?|vacanc(?:y|ies)|"
@@ -1778,15 +1648,10 @@ _HIRING_MAILBOX = re.compile(
 
 def hiring_mailbox(sender: str) -> str:
     """The word that says this mailbox exists to talk about hiring, if any.
-
-    "Got it - your details are with us" is a sentence from every part of
-    life. From ``Recruitment <careers@stanfield>`` it is an application
-    acknowledgement and nothing else, and no amount of reading the body was
-    going to establish that: the evidence is in the From line.
-
-    Both halves are read. A company that sends candidate mail from
-    ``no-reply@`` still puts "Careers" or "Talent" in the display name,
-    because a person has to know who it is from.
+    "Your details are with us" could come from anywhere; from a recruitment
+    mailbox it is an application acknowledgement, and only the From line
+    says so. Both halves are read: a company sending from no-reply@ still
+    puts "Careers" or "Talent" in the display name.
     """
     sender = sender or ""
     name = sender.split("<")[0]
@@ -1799,14 +1664,10 @@ def hiring_mailbox(sender: str) -> str:
     return ""
 
 
-#: Words that make a sender a place of worship rather than a person or a
-#: company. Checked against the display name and the domain, because a church
-#: writes from its own domain and puts its name in the From line - and its
-#: mail is written by whoever is on the office rota that week, so the words
-#: inside vary far more than the address ever does.
-#:
-#: "churchill" is excluded by name. It is the one collision that matters and
-#: a lookahead is cheaper than being clever.
+#: Words that make a sender a place of worship, checked against the display
+#: name and the domain: a church writes from its own domain under its own name,
+#: while the wording inside varies with whoever writes it. "churchill" is
+#: excluded by name.
 _CHURCH_SENDER = re.compile(
     r"church(?!ill)|chapel|parish|cathedral|congregation|diocese|"
     r"tabernacle|synagogue|mosque|ministries|"
@@ -1817,16 +1678,11 @@ _CHURCH_SENDER = re.compile(
 
 
 def church_sender(sender: str) -> str:
-    """The word that says this sender is a place of worship, if any.
-
-    "Xxxx X. Xxxxxx Funeral Arrangements" is a note about a bereavement from
-    anywhere else and a parish notice from a church - and the message itself
-    says nothing that separates the two. The From line does, every time, which
-    is why this is worth more than any amount of reading the body.
-
-    The domain is checked as one string rather than by label, because church
-    domains run their words together: a parish is far more likely to be
-    ``xxxxxxxxxxxxxxx.org`` than ``st-johns-lutheran.org``.
+    """The word that says this sender is a place of worship, if any. A notice
+    about a bereavement reads the same from anyone; the From line is what
+    makes it a church notice. The domain is checked as one string, since
+    church domains run their words together (``stmarysparish.example``, not
+    ``st-marys-parish.example``).
     """
     sender = sender or ""
     name = sender.split("<")[0]
@@ -1846,8 +1702,7 @@ def looks_like_a_person(sender: str) -> bool:
     return bool(_PERSON_LOCAL.match(local))
 
 
-#: Structured things a person recognises on sight. Each is a shape, not a
-#: word, which is exactly what a phrase list cannot hold.
+#: Structured things a person recognises on sight: shapes, not words.
 _ENTITIES: Tuple[Tuple[str, "re.Pattern", "OtherCategory", float], ...] = (
     ("a flight number", re.compile(
         r"\b(?:[A-Z]{2}|[A-Z]\d|\d[A-Z])\s?\d{2,4}\b(?!\s*(?:%|mb|gb|kb))"), 
@@ -1886,10 +1741,9 @@ _ENTITIES: Tuple[Tuple[str, "re.Pattern", "OtherCategory", float], ...] = (
 def entity_scores(subject: str, body: str,
                   raw_subject: str = "", raw_body: str = "") -> Tuple[
                       Dict["OtherCategory", float], List[str]]:
-    """Topics implied by the shapes in a message rather than its words.
-
-    Runs on the *raw* text, because normalising folds case, and case is half
-    of what makes a flight number look like a flight number.
+    """Topics implied by the shapes in a message rather than its words, on the
+    raw text, since case is half of what makes a flight number look like
+    one.
     """
     blob = f"{raw_subject or subject}\n{raw_body or body}"[:MAX_SCANNED_CHARS]
     found: Dict[OtherCategory, float] = {}
@@ -1898,22 +1752,21 @@ def entity_scores(subject: str, body: str,
         if pattern.search(blob):
             found[topic] = found.get(topic, 0.0) + weight
             why.append(describes)
-    # Two real airports either side of "to" is a flight. Two arbitrary
-    # capitals are "PDF to DOC", which is why this is checked against four
-    # and a half thousand codes rather than a regular expression.
+    # Two real airports either side of "to" is a flight; two arbitrary capitals
+    # are "PDF to DOC", hence the list of four and a half thousand codes.
     pair = lexicon.airport_pair(blob)
     if pair:
         found[OtherCategory.TRAVEL] = found.get(OtherCategory.TRAVEL, 0.0) + 2.4
         why.append(f"a flight between {pair[0]} and {pair[1]}")
-    # Several shapes agreeing is worth more than the sum suggests, but one on
-    # its own should never decide anything.
+    # Several shapes agreeing count for more than their sum; one alone never
+    # decides.
     for topic in list(found):
         found[topic] = min(3.4, found[topic])
     return found, why
 
 
-#: How two people write to each other, as opposed to how a company writes to
-#: a customer. None of it is decisive; together it is unmistakable.
+#: How two people write to each other rather than how a company writes to a
+#: customer: none decisive, together unmistakable.
 _CONVERSATIONAL = (
     ("a question", re.compile(r"\?")),
     ("first and second person", re.compile(
@@ -1931,28 +1784,23 @@ _CONVERSATIONAL = (
 def personal_register(subject: str, body: str, sender: str,
                       list_unsubscribe: str = "", links: Sequence[str] = ()) -> Tuple[
                           float, List[str]]:
-    """How strongly this reads as one person writing to another.
-
-    "that thing on Thursday - xxx xx xxxx xx xx xxxx xxxx? Xxxxxx xxx xxx
-    xxxxx." has no topic word in it at all. What marks it out is everything
-    around the words: a person's address, no unsubscribe, no links, a short
-    body, and two people arranging something.
+    """How strongly this reads as one person writing to another. A note moving
+    a plan may have no topic word at all; what marks it is a person's
+    address, no unsubscribe, no links, a short body and two people arranging
+    something.
     """
     if list_unsubscribe.strip():
         return 0.0, []                      # a list is not a person
-    # Sounding like a friend is the oldest trick in unsolicited mail - "Re:
-    # our conversation", "sorry for the delay, here is that link". Warmth is
-    # evidence of a person only when nothing is being sold.
+    # Sounding like a friend is the oldest trick in unsolicited mail ("Re: our
+    # conversation"), so warmth counts only when nothing is being sold.
     selling, _why = solicitation_score(normalize(subject), normalize(body), subject)
     if selling >= 2.6:
         return 0.0, []
     fake, _fake_why = impersonation_score(sender, normalize(subject), normalize(body))
     if fake:
         return 0.0, []
-    # A careers mailbox is not a person writing to you, however warmly it is
-    # written. "Xxxxx xxx xxx xxx xxxx xxx xxx xxxx xxxx" from Careers@ is a
-    # rejection in a friendly register, not a note from a friend - and the
-    # warmth is exactly what made this fire on it.
+    # A careers mailbox is not a person writing to you, however warm: a
+    # friendly rejection is still a rejection.
     if hiring_mailbox(sender):
         return 0.0, []
     text = f"{subject}\n{body}"
@@ -1984,16 +1832,11 @@ def other_world_context(subject: str, body: str) -> Tuple[float, str]:
 # ==========================================================================
 # Structural features
 # ==========================================================================
-# Phrase tables only recognise mail that is written the way the table expects.
-# Real transactional mail mostly is - it comes out of templates - which is why
-# a phrase-only sorter scores well on a collected inbox and then falls over on
-# anything a person actually typed.
-#
-# These look at the shape of a message instead of its wording: whether a human
-# or a machine sent it, whether there is money in it and which direction it
-# went, whether there is a code, a flight, a delivery window, a date. They are
-# deliberately about form rather than vocabulary, so paraphrasing does not
-# defeat them.
+# Phrase tables only recognise mail written the way they expect, which
+# templated mail mostly is and typed mail is not. These read form rather than
+# vocabulary, so paraphrase does not defeat them: whether a person or a machine
+# sent it, money and which way it went, a code, a flight, a delivery window, a
+# date.
 
 #: Local parts that mean nobody is reading replies.
 _ROBOT_SENDER = re.compile(
@@ -2040,8 +1883,8 @@ _EDITORIAL = re.compile(
     r"long read|links?|subscrib\w+|unsubscribe|in this)\b")
 
 
-#: Brands whose name in a From line is worth impersonating. Only used to check
-#: the name against the domain it actually came from.
+#: Brands worth impersonating in a From line, checked against the domain the
+#: mail came from.
 _IMPERSONATED = (
     "apple", "icloud", "google", "gmail", "microsoft", "outlook", "office365",
     "amazon", "paypal", "netflix", "meta", "facebook", "instagram", "linkedin",
@@ -2049,8 +1892,8 @@ _IMPERSONATED = (
     "monzo", "wise", "coinbase", "binance", "dhl", "fedex", "ups", "usps",
     "evri", "royalmail", "hmrc", "irs", "dvla",
 )
-#: Pressure plus a threat plus a link: the shape of a phishing message,
-#: whatever brand it happens to be wearing this week.
+#: Pressure plus a threat plus a link: the shape of phishing, whatever brand it
+#: wears.
 _URGENCY = re.compile(
     r"\b(?:within \d+ hours?|immediately|urgent(?:ly)?|right away|act now|"
     r"as soon as possible|before it is too late|final (?:notice|warning))\b")
@@ -2067,21 +1910,18 @@ def _registrable(domain: str) -> str:
     parts = [p for p in domain.split(".") if p]
     if len(parts) < 2:
         return domain
-    # Good enough here: two labels, or three where the middle is a known
-    # second-level suffix. This never needs to be exactly right, only to
-    # notice that apple-account-verify.example is not apple.com.
+    # Good enough: two labels, or three where the middle is a known
+    # second-level suffix. It only has to notice that
+    # apple-account-verify.example is not apple.com.
     if len(parts) >= 3 and parts[-2] in ("co", "com", "org", "gov", "ac", "net"):
         return ".".join(parts[-3:])
     return ".".join(parts[-2:])
 
 
 def impersonation_score(sender: str, subject: str, body: str) -> Tuple[float, str]:
-    """Whether the From line claims to be somebody the domain says it is not.
-
-    A display name is free text; the domain is not. When the name says Apple
-    and the mail came from apple-account-verify.example, that gap is the single
-    most reliable thing about the message, and it does not depend on the
-    wording at all.
+    """Whether the From line claims to be somebody the domain says it is not: a
+    display name is free text and the domain is not, so the gap between them
+    is the most reliable thing about the message.
     """
     display, _, address = sender.rpartition("<")
     address = address.rstrip(">").strip() or sender
@@ -2094,8 +1934,8 @@ def impersonation_score(sender: str, subject: str, body: str) -> Tuple[float, st
     if claimed and claimed != stem and not stem.endswith(claimed):
         return 3.0, f"the name says {claimed} but the mail came from {root}"
 
-    # A brand buried in a longer hyphenated domain is the other half of the
-    # same trick: apple-account-verify, paypal-secure-login.
+    # A brand buried in a longer hyphenated domain is the same trick:
+    # apple-account-verify, paypal-secure-login.
     if "-" in stem and any(brand in stem for brand in _IMPERSONATED):
         return 2.6, f"a brand name inside a longer domain ({root})"
 
@@ -2136,12 +1976,11 @@ def structural_topic_scores(
 
     selling, selling_why = solicitation_score(subject, body, subject)
     if selling >= 2.6:
-        # Three or more separate solicitation moves, or two with shouting, is
-        # junk rather than a shop you have heard of.
+        # Three or more separate solicitation moves, or two with shouting:
+        # junk, not a shop you know.
         add(OtherCategory.SPAM, min(3.4, selling), selling_why[0])
-        # A bank telling you your statement is ready and a stranger offering
-        # you a mortgage use the same words. What separates them is that one
-        # reports something that happened and the other is selling.
+        # A bank reporting a statement and a stranger selling a mortgage use
+        # the same words; one reports something that happened, the other sells.
         for topic in (OtherCategory.FINANCE, OtherCategory.RECEIPT,
                       OtherCategory.SHIPPING, OtherCategory.TRAVEL):
             if topic in scores:
@@ -2227,9 +2066,9 @@ def structural_topic_scores(
 # ==========================================================================
 # Classifier
 # ==========================================================================
-#: Sentences that tell the reader to do something. Real applicant-tracking mail
-#: buries the request in the middle of an otherwise cheerful acknowledgement,
-#: so the phrase tables alone put it in the wrong folder.
+# Sentences that tell the reader to do something. Applicant-tracking mail
+# buries the request in a cheerful acknowledgement, which phrase tables alone
+# misfile.
 _ACTION_PATTERNS: Tuple[Tuple[re.Pattern, float, str], ...] = tuple(
     (re.compile(pattern), weight, label)
     for pattern, weight, label in (
@@ -2255,9 +2094,9 @@ _ACTION_PATTERNS: Tuple[Tuple[re.Pattern, float, str], ...] = tuple(
     )
 )
 
-#: An instruction inside one of these is hypothetical ("if you need to reset
-#: your password") or describes something already done ("thank you for xxxxxx
-#: xxx xxxx xx xxxxxx xxxx xxxxxxxxxxx"). Neither is a request.
+#: An instruction in one of these is hypothetical ("if you need to reset your
+#: password") or already done ("thank you for submitting your application"):
+#: not a request.
 _NOT_A_REQUEST = re.compile(
     r"(?:\bif\b|\bin case\b|\bshould you\b|\bunless\b|\bwhen you\b|"
     r"\bmay have been\b|\bin the event\b|\bwhenever\b|"
@@ -2266,11 +2105,9 @@ _NOT_A_REQUEST = re.compile(
 )
 
 
-#: "Next steps" as something that will happen to you later, rather than
-#: something being asked of you now. Every acknowledgement ends this way -
-#: "if your experience aligns, we will reach out to discuss next steps" - and
-#: reading it as a request turns the commonest mail in a job search into an
-#: action item.
+#: "Next steps" as something that will happen later rather than something asked
+#: now: acknowledgements end this way, and reading it as a request makes them
+#: action items.
 _PROMISED_STEPS = re.compile(
     r"(?:\bwe(?:'| a|'?ll| will)?\b[^.!?]{0,40}(?:contact|reach out|be in touch|"
     r"share|discuss|send|let you know|follow up|advise|update)|"
@@ -2284,10 +2121,8 @@ _PROMISED_STEPS = re.compile(
 
 def steps_are_only_promised(body: str) -> bool:
     """Whether every mention of next steps is a promise rather than a request.
-
-    True means the message says somebody else will do something later. False
-    means at least one mention is addressed to the reader, or that the phrase
-    does not appear at all.
+    True means someone else will act later; False means at least one mention
+    is addressed to the reader, or there is none.
     """
     mentions = list(re.finditer(r"\bnext steps?\b", body))
     if not mentions:
@@ -2319,12 +2154,9 @@ class RuleVerdict:
     matched: Tuple[str, ...] = ()
 
     def to_payload(self) -> Dict[str, object]:
-        """The same JSON shape the model backends produce.
-
-        Plus two keys they do not fill in: the phrases that fired and what
-        each category scored. A model cannot produce these honestly - it
-        would be describing its own reasoning after the fact - so it leaves
-        them out and the panel that shows them stays empty.
+        """The same JSON shape the model backends produce, plus the phrases
+        that fired and each category's score, which a model could only
+        invent after the fact.
         """
         return {
             "summary": self.summary,
@@ -2349,27 +2181,18 @@ _CATEGORY_TABLES: Tuple[Tuple[Category, Tuple[Signal, ...]], ...] = (
     (Category.UNSOLICITED, UNSOLICITED_SIGNALS),
 )
 
-#: Precedence, matching the system prompt exactly. Ties break toward the
-#: earlier entry.
-#: How to settle a tie between two topics with the same score.
-#:
-#: ``max`` on a dict returns whichever key happened to be inserted first,
-#: which means the answer to "is this a receipt or a promotion" was decided by
-#: the order the tables are written in - invisible, arbitrary, and liable to
-#: change the moment somebody reorders a literal. This is the order instead,
-#: and it runs from specific to generic: a topic that describes one kind of
-#: message beats one that describes a category of them, and the two catch-alls
-#: come last because "something else" should never win a tie against a real
-#: answer.
+#: How to settle a tie between two topics with the same score, matching the
+#: system prompt; ties break toward the earlier entry. From specific to
+#: generic, with the two catch-alls last: dict order would have made the answer
+#: depend on how the tables happen to be written.
 _TOPIC_PRECEDENCE: Tuple[OtherCategory, ...] = (
     OtherCategory.SECURITY,     # a code or a sign-in alert is unmistakable
     OtherCategory.TRAVEL,       # a flight number is not a metaphor
     OtherCategory.SHIPPING,     # nor is a tracking number
     OtherCategory.RECEIPT,      # money that already moved
     OtherCategory.FINANCE,      # money that has not
-    # More specific than the three it is most often mistaken for: a carol
-    # service is an event, arrives as a newsletter and is written like a note
-    # from a friend, and is none of those to the person reading it.
+    # More specific than the three it is often mistaken for: a carol service is
+    # an event, arrives as a newsletter and reads like a note from a friend.
     OtherCategory.CHURCH,
     OtherCategory.EVENT,
     OtherCategory.SOCIAL,
@@ -2382,14 +2205,10 @@ _TOPIC_PRECEDENCE: Tuple[OtherCategory, ...] = (
 )
 
 
-#: Topics that describe how a message is written or packaged rather than what
-#: it is about. A church's weekly bulletin is a newsletter in form and church
-#: mail in substance, and the person filing it wants it with the rest of their
-#: church mail; a funeral notice from the parish office is written in a
-#: personal register and is still parish business.
-#:
-#: So these lose to a topic that names a subject, provided the subject topic
-#: has real evidence behind it rather than a stray word.
+#: Topics that describe how a message is packaged rather than what it is about.
+#: A church bulletin is a newsletter in form and church mail in substance, and
+#: belongs with the church mail. So these lose to a subject topic with real
+#: evidence behind it, not a stray word.
 FORM_TOPICS = frozenset({
     OtherCategory.NEWSLETTER,
     OtherCategory.PROMOTION,
@@ -2397,13 +2216,12 @@ FORM_TOPICS = frozenset({
     OtherCategory.OTHER,
 })
 
-#: What a subject topic has to score before it may overrule the form.
-#: Roughly two solid phrases. Below this a single stray word would start
-#: reclassifying newsletters.
+#: What a subject topic must score to overrule the form: about two solid
+#: phrases, so a stray word does not reclassify newsletters.
 SUBJECT_BEATS_FORM = 4.0
 
-#: And it must be at least this fraction of the winning form score, so a
-#: message that really is mostly a newsletter stays one.
+#: And at least this share of the winning form score, so mostly-newsletter mail
+#: stays a newsletter.
 SUBJECT_BEATS_FORM_SHARE = 0.35
 
 
@@ -2427,11 +2245,10 @@ _PRECEDENCE: Tuple[Category, ...] = (
 
 
 class RuleClassifier:
-    """Scores an email against the signal tables. Deterministic and offline.
-
-    ``ruleset`` names a field-specific overlay from :mod:`rulesets`, which adds
-    vocabulary on top of the shared hiring language. Overlays are additive, so
-    choosing the wrong one costs recall, never correctness.
+    """Scores an email against the signal tables, deterministically and
+    offline. ``ruleset`` names a field overlay from :mod:`rulesets`, added
+    to the shared hiring language; overlays are additive, so the wrong one
+    costs recall, never correctness.
     """
 
     def __init__(self, threshold: float = 0.95, ruleset: str = "general") -> None:
@@ -2501,7 +2318,7 @@ class RuleClassifier:
             )
             if signal.field == "sender":
                 # Who sent it is worth more than what it says: a courier's own
-                # domain settles the topic in a way prose never quite does.
+                # domain settles the topic.
                 if sender and matcher.sender_hit(sender):
                     total += signal.weight
                     strongest = max(strongest, signal.weight)
@@ -2546,34 +2363,31 @@ class RuleClassifier:
             strongest[category] = peak
 
         # ---- is this a working conversation? ---------------------------
-        # Asked before the link evidence, because a booking link says a
-        # meeting is being arranged and nothing whatever about what for. A
-        # dentist, a sales team and a hiring manager all send the same link.
+        # Asked before the link evidence: a booking link says a meeting is
+        # being arranged and nothing about what for.
         professional, professional_why = professional_context_score(
             subject_n, body_n, sender_n)
         meeting, meeting_why = meeting_request_score(subject_n, body_n)
         posting, posting_why = job_posting_score(subject_n, body_n, list_unsubscribe)
-        # The job-search vocabulary counts as working context too. A bare
-        # calendar invite whose subject is "Interview - Roadrunner" says what
-        # it is without any of the phrasings above.
+        # Job-search vocabulary counts as working context too: a bare invite
+        # titled "Interview - Acme" says what it is.
         context_now, _context_why = self._score(
             self._context, subject_n, subject_t, body_n, body_t)
         named_process, _named_why = self._score(
             HIRING_SPECIFIC_SIGNALS, subject_n, subject_t, body_n, body_t)
-        # Who it came from is context in its own right. A careers mailbox has
-        # one job, and mail from it is about that job even when the body is
-        # four words long - which is exactly the case a phrase table cannot
-        # reach, because there are no phrases in it.
+        # Who it came from is context too: a careers mailbox has one job, and
+        # its mail is about that job even at four words, where no phrase table
+        # reaches.
         from_hiring = hiring_mailbox(sender)
         if from_hiring:
             context_now += 1.6
         working = (professional > 0.0 or context_now >= 1.0
                    or named_process > 0.0 or bool(from_hiring))
 
-        # ---- weak evidence the context has licensed --------------------
-        # Only now, with the sender and the process established, are the
-        # conditional phrases allowed to count. Read without that licence
-        # they would file a solicitor's letter under Offer.
+        # ---- weak evidence the context has licensed -------------------- Only
+        # with the sender and the process established may the conditional
+        # phrases count; without that they would file a solicitor's letter
+        # under Offer.
         licensed = bool(from_hiring) or named_process > 0.0
         if licensed:
             for category, table in CONDITIONAL_SIGNALS.items():
@@ -2592,8 +2406,8 @@ class RuleClassifier:
                 strongest[Category.INTERVIEW] = max(strongest[Category.INTERVIEW], 3.0)
                 matches[Category.INTERVIEW].append("a scheduling link")
             else:
-                # Kept as a weak hint rather than dropped: it is still a
-                # meeting, it is just nobody's job search.
+                # Kept as a weak hint: still a meeting, just nobody's job
+                # search.
                 scores[Category.INTERVIEW] += 0.6
                 matches[Category.INTERVIEW].append(
                     "a scheduling link, with nothing to say it is about work")
@@ -2602,10 +2416,9 @@ class RuleClassifier:
             strongest[Category.NEXT_STEPS] = max(strongest[Category.NEXT_STEPS], 3.0)
             matches[Category.NEXT_STEPS].append("an assessment-platform link")
         if meeting and working:
-            # Neither half is worth much alone. "Let's find 20 minutes" is a
-            # sentence from every part of life, and "the team" is a phrase
-            # every workplace uses; together they are somebody proposing to
-            # talk to you about your working life.
+            # Neither half is worth much alone ("let's find 20 minutes", "the
+            # team"); together they are someone proposing to talk about your
+            # working life.
             weight = min(3.0, meeting * min(1.0, max(professional, context_now) / 2.0))
             scores[Category.INTERVIEW] += weight
             strongest[Category.INTERVIEW] = max(strongest[Category.INTERVIEW], weight)
@@ -2613,19 +2426,15 @@ class RuleClassifier:
                        else "job-search wording elsewhere in the message")
             matches[Category.INTERVIEW].append(meeting_why[0] + ", and " + because)
         elif meeting and not working:
-            # Somebody is arranging a meeting and nothing in the message says
-            # it has anything to do with work. "Pick a time", "book a slot"
-            # and a calendar link are how a dentist, a school and a sales team
-            # all write, and reading them as an interview is how a reminder
-            # about a cleaning ends up in the job-search folder.
+            # A meeting with nothing tying it to work: "pick a time" and a
+            # calendar link are how a dentist, a school and a sales team write.
             if scores[Category.INTERVIEW]:
                 scores[Category.INTERVIEW] *= 0.3
                 strongest[Category.INTERVIEW] *= 0.3
                 matches[Category.INTERVIEW].append(
                     "(discounted: a meeting, but nothing says it is about work)")
 
-        # An acknowledgement is the commonest thing in a job-search inbox and
-        # the least interesting: it is the absence of a decision. A rejection
+        # An acknowledgement is the absence of a decision. A rejection
         # acknowledges the application too, and there the decision is the
         # point, so this never outweighs one.
         acknowledged, acknowledged_why = acknowledgement_score(subject_n, body_n)
@@ -2645,9 +2454,9 @@ class RuleClassifier:
         job_bonus = 0.0
         structure_notes: List[str] = []
 
-        # ---- subject shape ---------------------------------------------
-        # A subject line is short, deliberate, and written last: it is the most
-        # reliable single feature in applicant-tracking mail.
+        # ---- subject shape --------------------------------------------- A
+        # subject line is short, deliberate and written last: the most reliable
+        # single feature in applicant-tracking mail.
         for pattern, weight, label in SUBJECT_PATTERNS:
             if pattern.search(subject_n):
                 job_bonus += weight
@@ -2673,8 +2482,8 @@ class RuleClassifier:
         job_score += job_bonus
         job_matches.extend(structure_notes)
         if posting:
-            # A description is job-search material even though it contains not
-            # one word a hiring process uses. It is all headings.
+            # A description is job-search material without one hiring-process
+            # word: it is all headings.
             job_score += posting
             job_matches.append("it reads as a job description (" +
                                ", ".join(posting_why[:2]) + ")")
@@ -2693,10 +2502,9 @@ class RuleClassifier:
             job_score += 2.5
             job_matches.append("an applicant-tracking-system address")
 
-        # ---- explicit requests to act ----------------------------------
-        # Only once the message is established as job mail: "please confirm
-        # your email address" is a request in any inbox, and on its own it says
-        # nothing about a hiring process.
+        # ---- explicit requests to act ---------------------------------- Only
+        # once the message is established as job mail: "please confirm your
+        # email address" is a request in any inbox.
         if job_score >= 2.0 or scores[Category.APPLICATION_RECEIVED] >= 2.5:
             action_score = 0.0
             action_notes: List[str] = []
@@ -2710,7 +2518,7 @@ class RuleClassifier:
                 if match is None:
                     continue
                 # A request in the closing half is what the reader is left
-                # with, and applicant-tracking mail puts it there.
+                # with, where applicant-tracking mail puts it.
                 position = match.start() / max(1, len(body_n))
                 action_score += weight * (1.0 + 0.35 * position)
                 peak_action = max(peak_action, weight)
@@ -2723,10 +2531,8 @@ class RuleClassifier:
                 )
                 matches[Category.NEXT_STEPS].extend(action_notes[:3])
 
-        # "We will reach out to discuss next steps" is a promise about the
-        # future, not a step for the reader. Every acknowledgement ends that
-        # way, so reading it as a request turned the commonest mail in a job
-        # search into an action item.
+        # "We will reach out to discuss next steps" is a promise, not a step
+        # for the reader.
         if scores[Category.NEXT_STEPS] and steps_are_only_promised(body_n):
             scores[Category.NEXT_STEPS] = max(
                 0.0, scores[Category.NEXT_STEPS] - PROMISED_STEPS_WEIGHT)
@@ -2755,18 +2561,18 @@ class RuleClassifier:
         )
 
         # ---- job related? ----------------------------------------------
-        # Measured before the reply discount: a reply in an existing thread is
-        # *more* clearly part of a job search, not less.
+        # Measured before the reply discount: a reply in a thread is more
+        # clearly part of a job search, not less.
         job_evidence = job_score + max(max(raw_scores.values(), default=0.0), best_score)
 
-        # "Application", "interview" and "offer" belong to plenty of other
-        # parts of life. Where the message is plainly about one of those, that
-        # counts against the job reading rather than for it.
+        # "Application", "interview" and "offer" belong to other parts of life
+        # too; where a message is plainly about one of those, it counts against
+        # the job reading.
         selling, selling_why = solicitation_score(subject_n, body_n, subject)
         if selling >= 2.6:
-            # Unsolicited commercial mail borrows the vocabulary of everything
-            # else, job mail included: "fill out the form below" reads as a
-            # next step until you notice what it is asking you to fill in.
+            # Unsolicited mail borrows every vocabulary, job mail's included:
+            # "fill out the form below" reads as a next step until you see what
+            # is being asked.
             job_evidence = max(0.0, job_evidence - selling)
             non_job_score += selling
             non_job_matches.append(
@@ -2791,8 +2597,8 @@ class RuleClassifier:
                 subject_n, subject_t, body_n, body_t, sender_n,
                 non_job_score, non_job_matches, job_evidence, truncated,
                 list_unsubscribe, links,
-                # The raw text as well: normalising folds case, and case is
-                # half of what makes "XX0000 STN to DUB" a flight.
+                # The raw text as well: case is half of what makes "BA1442 LHR
+                # to EDI" a flight.
                 raw_subject=subject, raw_body=body, raw_sender=sender,
             )
 
@@ -2845,8 +2651,8 @@ class RuleClassifier:
             topic_matches[topic] = matched
             topic_peak[topic] = peak
 
-        # Shape, as opposed to wording. Phrase tables are blind to anything a
-        # person typed themselves; these are not.
+        # Shape as opposed to wording, which phrase tables cannot see in typed
+        # mail.
         shape, shape_notes = structural_topic_scores(
             subject_n, body_n, sender_n, list_unsubscribe, links)
         for topic, weight in shape.items():
@@ -2854,14 +2660,11 @@ class RuleClassifier:
             topic_matches.setdefault(topic, []).extend(shape_notes.get(topic, ()))
             topic_peak[topic] = max(topic_peak.get(topic, 0.0), weight)
 
-        # Three more ways to recognise a message that contains no word saying
-        # what it is: which mailbox it came from, the shapes in it, and
-        # whether it reads like one person writing to another.
-        #: How much of each topic's score came from shape rather than words.
-        #: These layers are allowed to decide *which* topic wins and never how
-        #: certain that is: a mailbox called offers@ and an amount of money
-        #: are good reasons to rank promotions first, and no reason at all to
-        #: move somebody's mail without asking.
+        # Three more ways to recognise a message with no word saying what it
+        # is: the mailbox, the shapes in it, and whether it reads as one person
+        # to another. How much of each topic's score came from these: they may
+        # decide which topic wins, never how certain that is, so they never
+        # move mail unasked.
         soft: Dict[OtherCategory, float] = {}
         for source, notes in (
             sender_purpose(raw_sender or sender_n),
@@ -2876,10 +2679,9 @@ class RuleClassifier:
         chatty, chatty_why = personal_register(
             raw_subject or subject_n, raw_body or body_n,
             raw_sender or sender_n, list_unsubscribe, links)
-        # A recruiter is a human too. The register tells you a person wrote
-        # this, not what it is about, so it only speaks where nothing else
-        # has anything to say. Without this gate it pulled interviews, offers
-        # and rejections into "personal" purely because they were friendly.
+        # A recruiter is a person too: the register says who wrote it, not what
+        # it is about, so it only speaks where nothing else does, or friendly
+        # interviews and offers become "personal".
         hard_elsewhere = max(
             (score - soft.get(topic, 0.0)
              for topic, score in topic_scores.items()
@@ -2899,12 +2701,11 @@ class RuleClassifier:
             for topic in (OtherCategory.NEWSLETTER, OtherCategory.PROMOTION, OtherCategory.SOCIAL):
                 topic_scores[topic] += 0.8
             topic_scores[OtherCategory.PERSONAL] = max(0.0, topic_scores[OtherCategory.PERSONAL] - 1.5)
-            # A boarding pass, a receipt or a login code is not marketing, and
-            # transactional mail almost never carries an unsubscribe header.
-            # Where one is present, travel and shopping vocabulary is usually
-            # metaphor - "check-in is now open" selling a training course. This
-            # is a discount rather than a veto, so a genuine confirmation that
-            # happens to carry the header still wins on its own evidence.
+            # Transactional mail rarely carries an unsubscribe header; where
+            # one is present, travel and shopping words are usually metaphor
+            # ("check-in is now open" selling a course). A discount, not a
+            # veto, so a genuine confirmation with the header still wins on its
+            # evidence.
             for topic in TRANSACTIONAL_TOPICS:
                 vouched = self._sender_backs(TOPIC_SIGNALS[topic], sender_n)
                 topic_scores[topic] *= (
@@ -2912,21 +2713,17 @@ class RuleClassifier:
                     else TRANSACTIONAL_IN_BULK_UNVOUCHED
                 )
 
-        # Words decide when there are words; shape decides when there are
-        # none. A one-time code from a bank is a security notice, and the
-        # sender being a bank is not a reason to call it a bank statement -
-        # but that is exactly what happened, because "halifax is a bank" plus
-        # an amount of money outscored the code itself.
+        # Words decide when there are words; shape decides when there are none.
+        # A bank's one-time code is a security notice: the sender being a bank
+        # plus an amount of money once outscored the code itself.
         hard = {topic: score - soft.get(topic, 0.0)
                 for topic, score in topic_scores.items()}
 
         def strength(topic) -> tuple:
-            """What settles it, in order, when two topics score the same.
-
-            The score first, then the strongest single phrase behind it - one
-            decisive sentence beats three vague ones - then how much of the
-            score was words rather than shape, and only then the written
-            precedence. Every step of that is a reason; dict order was not.
+            """What settles a tie, in order: the score, then the strongest
+            single phrase, then how much of the score was words rather than
+            shape, then the written precedence. Each step is a reason; dict
+            order was not.
             """
             return (round(topic_scores[topic], 6),
                     round(topic_peak.get(topic, 0.0), 6),
@@ -2939,10 +2736,9 @@ class RuleClassifier:
         else:
             best_topic = max(topic_scores, key=strength)
 
-        # What it is about beats how it is written. Newsletter, Promotion and
-        # Personal describe a message's form; every other topic describes its
-        # subject, and a subject with real evidence behind it is the more
-        # useful answer - "the church bulletin" rather than "a newsletter".
+        # What it is about beats how it is written: Newsletter, Promotion and
+        # Personal describe form, every other topic a subject, and a subject
+        # with real evidence is the more useful answer.
         if best_topic in FORM_TOPICS:
             form_score = topic_scores.get(best_topic, 0.0)
             floor = max(SUBJECT_BEATS_FORM,
@@ -2969,9 +2765,8 @@ class RuleClassifier:
         )
         if best_topic is OtherCategory.OTHER:
             confidence = min(confidence, 0.70)
-        # A reading held up mostly by shape is a good guess, not a certainty.
-        # Without this the new layers pushed wrong answers past the filing
-        # threshold, which costs far more than an extra row to look at.
+        # A reading held up mostly by shape is a good guess, not a certainty;
+        # without this, wrong answers passed the filing threshold.
         gentle = soft.get(best_topic, 0.0)
         if best > 0 and gentle >= best * 0.5:
             confidence = min(confidence, SOFT_EVIDENCE_CEILING)
@@ -3003,18 +2798,11 @@ class RuleClassifier:
     ) -> float:
         """Map evidence to a calibrated, deliberately humble probability.
 
-        Three things raise it: total weight of evidence, how far ahead the
-        winner is, and whether any single decisive phrase fired. A competing
-        second category suppresses it hard, which is the behaviour that keeps
-        ambiguous mail out of category folders.
-
-        Being far ahead of the field only counts for as much as the evidence
-        behind it. One weak phrase that nothing happens to contradict is not a
-        confident reading, it is a thin one, and undamped it scored the same
-        separation as an overwhelming case. The damping is by the square root
-        of the strength rather than the strength itself: a lone weak signal
-        should lose most of that credit, but an unambiguous message that
-        simply has nothing to argue with should keep nearly all of it.
+        Total evidence, the winner's lead and any decisive phrase raise it;
+        a competing second category suppresses it hard, keeping ambiguous
+        mail out of category folders. The lead is damped by the square root
+        of the evidence, so a lone weak signal loses most of its credit
+        while an unambiguous message keeps nearly all of it.
         """
         if best <= 0:
             return 0.0
