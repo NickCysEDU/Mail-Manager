@@ -1,35 +1,28 @@
 #!/usr/bin/env python3
 """Replace real people and organisations in a fixture with stand-ins.
 
-The labelled set is the project's accuracy benchmark and it was built from a
-real inbox. That is what makes it worth having - hand-written samples do not
-contain the things that actually break a sorter - and it is also what stops it
-being publishable: it names the people who wrote to one person, the companies
-that interviewed them, the ones that turned them down, and the church they
-attend.
+The labelled set is the project's accuracy benchmark, built from real mail:
+hand-written samples do not contain what actually breaks a sorter. That is
+also why it cannot be published as it is, so the names are replaced and
+everything else is kept. What matters to a sorter is the language ("we have
+decided to move forward with other candidates", "your details are with us"),
+and that is nobody's private business; who sent it is.
 
-So the names are replaced and everything else is kept. What matters to a
-sorter is the *language* - "we have decided to move forward with other
-candidates", "your details are with us", "this Sunday's service" - and none of
-that is anybody's private business. Who sent it is.
+Three rules keep the result worth measuring against:
 
-Three rules make the result still worth measuring against:
+**Consistency.** One real name maps to exactly one stand-in everywhere it
+appears (display name, address, subject, body, signature), so a sender who
+wrote four times still wrote four times.
 
-**Consistency.** One real name maps to exactly one stand-in, everywhere it
-appears - display name, address, subject line, body, signature. A sender who
-wrote four times still wrote four times, which is what the threading and the
-corrections memory are tested against.
+**Shape.** A two-word name becomes a two-word name and a one-word company a
+one-word company, so length, capitalisation and truncation do not change
+under the tests.
 
-**Shape.** A two-word name becomes a two-word name and a one-word company
-becomes a one-word company, so nothing about length, capitalisation or
-truncation changes underneath the tests.
+**Vendors stay.** Workday, iCIMS, Greenhouse and the rest are products the
+sorter has signals for; replacing them would measure a different app.
 
-**Vendors stay.** Workday, iCIMS, Greenhouse and the rest are products, not
-people, and the sorter has signals that name them. Replacing those would be
-measuring a different app.
-
-Run it, then run tools/evaluate.py against both files. A score that moves means
-a signal was keyed on somebody's name, which is worth knowing on its own.
+Run it, then run tools/evaluate.py against both files: a score that moves
+means a signal was keyed on somebody's name.
 """
 
 from __future__ import annotations
@@ -44,12 +37,9 @@ from typing import Dict, List
 ROOT = Path(__file__).resolve().parents[1]
 
 def _protected_by_the_sorter() -> set:
-    """Every host and sender word the rules engine actually reads.
-
-    Taken from the engine rather than typed out here, because a hand-kept
-    list drifts and the drift is invisible: rewriting a domain the sorter
-    has a signal for changes the verdict, and the fixture then measures a
-    different app. Deriving it means the two can never disagree.
+    """Every host and sender word the rules engine actually reads, taken from
+    the engine rather than typed out: a hand-kept list drifts invisibly, and
+    rewriting a domain the sorter has a signal for changes the verdict.
     """
     sys.path.insert(0, str(ROOT))
     import rules_engine
@@ -104,9 +94,8 @@ COMPANIES = [
     "Thornfield", "Uppingham", "Varley", "Westmoor", "Yarrow",
 ]
 
-#: Ordinary English that also turns up inside a company name. Replacing these
-#: at token level would corrupt the prose the sorter is measured on, which is
-#: the one thing this must not do.
+#: Ordinary English that also turns up inside company names. Replacing these at
+#: token level would corrupt the prose the sorter is measured on.
 COMMON = {
     "the", "and", "for", "with", "from", "group", "team", "teams", "careers",
     "career", "talent", "acquisition", "human", "resources", "recruiting",
@@ -116,9 +105,9 @@ COMMON = {
     "university", "college", "school", "audio", "mission", "estore", "store",
     "trip", "snap", "chat", "workday", "candidate",
     "example", "com", "org", "net", "www", "mail", "email", "reply", "noreply",
-    # Generic labels that turn up as subdomains and as ordinary words. A
-    # domain label is not evidence that a word is a name, and mapping "help"
-    # to a company put a company's name in the middle of a sentence.
+    # Generic labels that turn up as subdomains and as ordinary words: a domain
+    # label is not evidence of a name, and mapping "help" to a company put a
+    # company's name mid-sentence.
     "help", "info", "news", "blog", "shop", "store", "login", "secure",
     "account", "accounts", "static", "cdn", "assets", "images", "media",
     "click", "link", "links", "track", "tracking", "notify", "notifications",
@@ -127,13 +116,12 @@ COMMON = {
     "events", "event", "jobs", "job", "apply", "hire", "hiring", "people",
     "here", "your", "this", "that", "with", "have", "will", "from", "more",
     "view", "open", "read", "sent", "time", "date", "name", "page", "list",
-    # Months and weekdays, so a date never becomes a person. "xxxxxx xxxx xxx
-    # Xxxx xx Xxxx 00" came out of an earlier run as "xx Xxxx 00".
+    # Months and weekdays, so a date never becomes a person.
     "january", "february", "march", "april", "may", "june", "july", "august",
     "september", "october", "november", "december", "monday", "tuesday",
     "wednesday", "thursday", "friday", "saturday", "sunday",
-    # Books of the Bible, which are church vocabulary rather than people.
-    # "John 5:24" is a citation; "Xxxx Xxxxxxxxx" is somebody.
+    # Books of the Bible, which are vocabulary rather than people: "John 5:24"
+    # is a citation.
     "john", "matthew", "mark", "luke", "acts", "romans", "psalm", "psalms",
     "genesis", "exodus", "isaiah", "jeremiah", "daniel", "corinthians",
     "galatians", "ephesians", "philippians", "colossians", "thessalonians",
@@ -142,8 +130,8 @@ COMMON = {
     "lord", "god", "jesus", "christ", "christian", "gospel", "bible",
 }
 
-#: Places of worship, kept recognisably so - the Church category is measured
-#: against these and the vocabulary is the point.
+#: Places of worship, kept recognisably so: the Church category is measured
+#: against these.
 CHURCHES = ["St Alban's Lutheran Church", "St Brendan's Parish Church",
             "Holy Cross Methodist Church"]
 
@@ -193,13 +181,11 @@ class Anonymiser:
         if key in self.map:
             return self.map[key]
         # A public product is not somebody's identity, and the sorter has
-        # signals that name several of them. Leaving them alone is what keeps
-        # the anonymised fixture measuring the same app.
+        # signals that name several.
         #
-        # Only when the *whole* name is one, though. "Xxxx xxxx Xxxxxxxx"
-        # and "Ironvale Systems - Workday" each contain a vendor and each
-        # also contain somebody's name or employer, and keeping the whole
-        # string because of the vendor left both standing.
+        # Only when the *whole* name is one, though: a display name or an
+        # employer can carry a vendor's name too, and keeping the whole string
+        # because of the vendor left both standing.
         if self._is_all_vendor(real):
             self.map[key] = real
             return real
@@ -223,17 +209,13 @@ class Anonymiser:
             if suffix:
                 fake = f"{fake} {suffix.group(0)}"
         self.map[key] = fake
-        # A name written one way in the From line turns up written another
-        # way in the subject and the signature. Mapping only the form that
-        # was collected leaves the others standing, which is how a real name
-        # survived the first run of this.
+        # A name written one way in the From line turns up another way in the
+        # subject and the signature, so every variant is mapped.
         for variant in variants:
             self.map.setdefault(variant.lower(), self._shape(fake, variant))
-        # And every distinctive word of it on its own. A surname turns up in
-        # a signature without its first name, and a one-word trading name
-        # turns up in the middle of a sentence; the full-string mapping
-        # catches neither, and twenty-five real names survived the second run
-        # of this because of it.
+        # And every distinctive word of it on its own: a surname turns up in a
+        # signature without its first name, and a one-word trading name in the
+        # middle of a sentence, and the full-string mapping catches neither.
         self._map_tokens(real, fake)
         return fake
 
@@ -283,10 +265,10 @@ class Anonymiser:
                 continue
             fake = self.map[real]
             if fake.lower() == real.lower():
-                # A protected vendor maps to itself. Rewriting it anyway would
-                # change nothing but the capitalisation, and that is enough:
-                # link matching is case-sensitive, so "instagram.com" became
-                # "Instagram.com" and stopped being recognised.
+                # A protected vendor maps to itself. Rewriting it would change
+                # only the capitalisation, and that is enough to break
+                # case-sensitive link matching: "instagram.com" became
+                # "Instagram.com".
                 continue
             # Word boundaries, so "Ramp" never eats the "ramp" in "ramp up"
             # and a token mapping cannot corrupt the middle of a word.
@@ -300,13 +282,12 @@ class Anonymiser:
         return text
 
 
-#: Names that only ever appear in the prose, never in a From line. A parish
-#: writes from the secretary's own address and names itself in the body, so
-#: collecting display names alone leaves the church standing - which is how
-#: the third run of this still identified one.
+#: Names that appear only in the prose, never in a From line: an organisation
+#: can write from a person's own address and name itself in the body, so
+#: collecting display names alone misses it.
 _IN_THE_PROSE = (
-    # "St John's", "Saint Brendan's" - a dedication, which names a parish
-    # exactly.
+    # "St Alban's", "Saint Brendan's": a dedication, which names a place of
+    # worship exactly.
     re.compile(r"\b(?:St\.?|Saint)\s+[A-Z][a-z]+(?:'s)?\b"),
     # "<Something> Lutheran Church", "<Something> Parish"
     re.compile(r"\b(?:[A-Z][A-Za-z'\-]+\s+){1,3}"
@@ -317,17 +298,13 @@ _IN_THE_PROSE = (
                r"Anglican|Catholic|Orthodox|Pentecostal|Adventist)\b"),
 )
 
-#: Prose that names somebody who is not the sender - a bereavement notice
-#: naming the deceased, their maiden name, their age and the home they died
-#: in. This is flagged rather than rewritten.
+#: Prose that names somebody who is not the sender, such as a death notice.
+#: Flagged rather than rewritten.
 #:
-#: Detecting a person's name in running prose is not something a regular
-#: expression does well, and both attempts proved it: an unrestricted version
-#: replaced eight hundred "names" including "Software Engineer" and took the
-#: fixture from 87% to 57%, and a restricted one rewrote the middle of a
-#: scripture verse and still missed the name it was written for. A tool that
-#: says "this one needs a person" is worth more than one that quietly does it
-#: badly.
+#: Finding a person's name in running prose is not a job for a regular
+#: expression: an unrestricted attempt replaced eight hundred "names",
+#: "Software Engineer" among them, and took the fixture from 87% to 57%. Saying
+#: "this one needs a person" beats doing it badly.
 _BEREAVEMENT = re.compile(
     r"\b(?:passed away|passed onto|passed into|died peacefully|died on|"
     r"obituary|survived by|n[e\u00e9]e\s|in loving memory|"
@@ -355,8 +332,8 @@ def collect(rows: List[dict], mapper: Anonymiser) -> None:
         hosts = re.findall(r"(?:@|//)([A-Za-z0-9][A-Za-z0-9.\-]*\.[A-Za-z]{2,})",
                            text)
         for host in hosts:
-            # Every label, not just the first - "www.xxxxxxxxxxxxxx.org" is
-            # "www" at the front, and taking that leaves the identity intact.
+            # Every label, not just the first: "www" leads many hosts, and
+            # taking only that leaves the identity intact.
             for label in host.split("."):
                 if len(label) >= 4 and label.lower() not in KEEP \
                         and label.lower() not in COMMON:
@@ -379,9 +356,8 @@ def anonymise(rows: List[dict]) -> tuple:
         for field in ("sender", "subject", "body"):
             if field in clean:
                 clean[field] = mapper.rewrite(clean[field])
-        # Every address becomes a reserved one, whatever it was - including
-        # one that turned up as a display name, which is how a redacted
-        # address ended up on the front of a company's name.
+        # Every address becomes a reserved one, including one that turned up as
+        # a display name.
         clean["sender"] = re.sub(
             r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}",
             "sender@example.example", clean.get("sender", ""))
@@ -392,12 +368,11 @@ def anonymise(rows: List[dict]) -> tuple:
         clean["body"] = re.sub(
             r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}",
             "someone@example.example", clean.get("body", ""))
-        # Links keep their hosts. A Teams invitation, a Calendly page and a
-        # Greenhouse portal are products the sorter recognises by name, and
-        # blanking them measures a different app - the first run of this
-        # turned two interviews into Unclassified by doing exactly that. Only
-        # names that were mapped are rewritten, which covers a company's own
-        # careers site without touching anybody's vendor.
+        # Links keep their hosts: a Teams invitation, a Calendly page and a
+        # Greenhouse portal are products the sorter recognises, and blanking
+        # them turned two interviews into Unclassified. Only names that were
+        # mapped are rewritten, which covers a company's own careers site
+        # without touching a vendor.
         if "links" in clean:
             clean["links"] = [mapper.rewrite(u) for u in clean["links"]]
         out.append(clean)

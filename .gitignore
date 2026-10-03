@@ -17,14 +17,10 @@ dist/
 *.dmg
 assets/icon.iconset/
 
-# Anything that could hold a credential or personal mail.
-#
-# The app writes these into ~/Library/Application Support and never into the
-# checkout, but ICLOUD_TRIAGE_HOME can point anywhere, and a developer who
-# points it at "." should not be one `git add .` away from publishing their
-# own inbox.
-# gitignore has no trailing comments: a "#" after a pattern is part of the
-# pattern, and these two matched nothing at all until that was noticed.
+# Anything that could hold a credential or personal mail. The app writes
+# these under ~/Library/Application Support, but ICLOUD_TRIAGE_HOME can point
+# anywhere, including here.
+# gitignore has no trailing comments: a "#" after a pattern is part of it.
 #   settings.json     what is configured
 #   corrections.json  every sender you have corrected, and where to
 #   verdicts.json     a verdict per message, keyed by mailbox and UID
@@ -52,22 +48,19 @@ secrets*
 BUILD_STAMP
 
 # Anything the tuning tool writes out of a real inbox. It refuses to write
-# inside the repository at all; this is the second lock on that door.
+# inside the repository; this is the second lock.
 *-set.json
 tuning/
 inbox-*.json
 
-# The two fixtures built from a real inbox. Everything in them has been
-# anonymised, but anonymising a hundred real messages is not a thing you can
-# prove finished - four passes each found something the previous one missed.
-# They stay on the machine that made them; the hand-written sets ship.
+# The fixtures built from real mail. They are anonymised, but that cannot be
+# proved finished, so they stay on the machine that made them; the
+# hand-written sets ship.
 tests/fixtures/private/
 
-# Audio, video and images dropped in the working folder to test against.
-# Somebody's music is somebody's copyright, and a reference photograph is
-# not this project's to publish - and a xxx xxxxxxxx XX0 reached the
-# public repository this way once already. Ignored wherever it lands
-# rather than only at the top, because the test material sits in tests/.
+# Audio, video and images dropped in the working folder to test against,
+# which are not this project's to publish. Ignored wherever they land, since
+# test material sits in tests/.
 *.mp3
 *.m4a
 *.aac
@@ -84,13 +77,9 @@ tests/fixtures/private/
 *.m4v
 *.avi
 *.mkv
-# Reference pictures and screenshots taken while working.
-#
-# PNG included, and it is not only screenshots: ./dev playtest --save
-# writes out a frame of the scene *while somebody's music is playing*,
-# which is a picture of their music. The exceptions at the bottom of
-# this file keep the icons and the documentation's own pictures, which
-# are committed deliberately.
+# Pictures and screenshots taken while working. PNG too: ./dev playtest
+# --save writes out a frame of the scene while somebody's music plays. The
+# exceptions at the bottom keep the icons and the documentation's pictures.
 *.png
 *.jpg
 *.jpeg
@@ -101,10 +90,7 @@ tests/fixtures/private/
 *.tif
 *.webp
 
-# Documents. Somebody working on this drops a CV, an offer letter, a
-# bank statement or a set of interview notes in the folder to test
-# against, and none of those are things a public repository should ever
-# be one "git add -A" away from publishing.
+# Documents dropped in the working folder.
 *.pdf
 *.doc
 *.docx
@@ -113,9 +99,6 @@ tests/fixtures/private/
 *.odt
 *.pages
 *.key
-# Reference material dropped in the working folder to build from - somebody
-# else's writing, not this project's to publish.
-xxxxxxxxx_0_xxxxxxxxxx_xxxxxxxxxx_xxxxxxxxx.xx
 *.numbers
 *.xls
 *.xlsx

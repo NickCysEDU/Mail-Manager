@@ -1,31 +1,24 @@
-"""Nothing personal is allowed to end up in the source tree.
+"""Nothing personal may end up in the source tree.
 
-The sorter is tuned against a real inbox, and the shipped lexicon was built
-from public data about airports and companies. Both of those are processes
-that leak if nobody is watching: a phrase copied out of a real email into a
-signal table, an address pasted into a fixture, a domain that turned out to
-be somebody's employer rather than a household name.
+The sorter is tuned against real mail and the shipped lexicon was built from
+public data, and both can leak: a phrase copied from a real email into a
+signal table, an address pasted into a fixture, a domain that is somebody's
+employer rather than a household name. This file reads every tracked file
+the app ships and fails on any address that could belong to a real person.
 
-This file is the watch. It reads every tracked file the app ships and fails
-if it finds an address that could belong to a real person.
+The two halves of an address are judged differently.
 
-What counts as "could belong to a real person" is deliberately narrow, and
-the two halves of an address are treated differently:
+*The domain.* Reserved names (anything under ``.example``, plus ``.test``,
+``.invalid`` and ``localhost``) are safe by construction: RFC 2606 set them
+aside. Single-letter stand-ins like ``b.com`` are nobody. Everything else is
+a real domain somebody owns.
 
-*The domain.* Reserved names - anything under ``.example``, plus ``.test``,
-``.invalid`` and ``localhost`` - are safe by construction: RFC 2606 set them
-aside so they can never be registered. Single-letter stand-ins like ``b.com``
-are obviously nobody. Everything else is a real domain somebody owns.
+*The local part.* ``no-reply@`` and ``careers@`` at a real company are
+published addresses; a first name at the same domain is a person, and a
+person's address must never be committed.
 
-*The local part.* ``no-reply@`` and ``careers@`` at a real company are public
-addresses printed on websites; a first name at the same domain is a person.
-That distinction is the one that matters, because the fixtures are built from
-real mail and it is the human correspondents in them, not the robots, whose
-addresses must never be committed.
-
-If this fails on something genuinely harmless, add it to the allow-lists on
-purpose rather than loosening the pattern. Making somebody type the exception
-out is the entire point.
+If this fails on something harmless, add it to an allow-list on purpose
+rather than loosening the pattern.
 """
 
 from __future__ import annotations
@@ -36,10 +29,9 @@ import re
 
 import hashlib
 
-#: SHA-256 of handles belonging to whoever built the fixtures. Digests, not
-#: strings, so that the repository does not carry the thing it is checking
-#: for. A failure names the fixture rather than the handle, for the same
-#: reason - the fixture is where the fix goes.
+#: SHA-256 of handles that must never appear: digests, so the repository does
+#: not carry what it checks for. A failure names the fixture rather than the
+#: handle, for the same reason.
 FORBIDDEN_HANDLES = {
     "9285665e35ffb099ebf8efd1babb23207b2fd57f69c5ea21b249bdbcd0ce4581",
     "f315793b62a69f02975fcb56b091e69d7621186b2cc5e8f3c7ae10fa0ef6f471",
@@ -52,12 +44,9 @@ _PARTS = re.compile(r"[._+-]")
 
 
 def _handle_candidates(blob: str):
-    """Every handle the blob could be said to contain.
-
-    A handle turns up as a whole token ("lastname"), as one part of a dotted
-    one ("first.lastname"), or as a run of parts ("first.last@host" giving
-    "first.last"). All three are generated so the digest comparison sees what
-    a substring search would have seen.
+    """Every handle the blob could be said to contain: a whole token, one part
+    of a dotted one, or a run of parts, so the digest comparison sees what a
+    substring search would.
     """
     for token in _TOKEN.findall(blob):
         yield token
@@ -94,8 +83,7 @@ KNOWN_DOMAINS = {
     "anthropic.com", "claude.com", "github.com",
 }
 
-#: Local parts that are published addresses rather than people. A company
-#: prints these on its website; nobody reads mail sent to them personally.
+#: Local parts that are published addresses rather than people.
 ROLE_ACCOUNTS = {
     "abuse", "account", "accounts", "admin", "alert", "alerts", "billing",
     "care", "career", "careers", "contact", "customercare", "do-not-reply",
@@ -108,11 +96,9 @@ ROLE_ACCOUNTS = {
     "webmaster",
 }
 
-#: Mail providers, where the domain proves nothing - the accounts tests have
-#: to name them because that is how the app recognises a provider. The local
-#: part is what is checked at these, and only these placeholder handles pass:
-#: anything that looks like somebody's actual handle fails, which is the
-#: whole point, because the author's own mailbox is at one of these.
+#: Mail providers, where the domain proves nothing: tests name them because the
+#: app recognises a provider by them. At these the local part is checked, and
+#: only these placeholder handles pass.
 FREE_MAIL = {
     "aol.com", "fastmail.com", "gmail.com", "gmx.com", "hey.com",
     "hotmail.co.uk", "hotmail.com", "icloud.com", "live.com", "mac.com",
@@ -161,7 +147,7 @@ def personal_addresses(text: str) -> list:
             continue
         if domain in FREE_MAIL:
             # At a mail provider the domain is meaningless, so the handle has
-            # to carry the whole burden of proving it is nobody.
+            # to prove it is nobody.
             if local.lower() in PLACEHOLDER_HANDLES:
                 continue
             found.append(address)
@@ -234,9 +220,8 @@ def fixture_rows(name: str) -> list:
     return json.loads(found.read_text(encoding="utf-8"))
 
 
-#: Platforms that appear in everybody's mail. The sorter recognises these by
-#: name on purpose, and seeing one in a fixture says nothing about whose
-#: mailbox it came from, which is the only question this file asks.
+#: Platforms that appear in everybody's mail. The sorter recognises them by
+#: name, and one in a fixture says nothing about whose mailbox it came from.
 PUBLIC_PLATFORMS = {
     "linkedin.com", "indeed.com", "glassdoor.com", "ziprecruiter.com",
     "myworkday.com", "workday.com", "greenhouse.io", "lever.co",
@@ -249,9 +234,9 @@ PUBLIC_PLATFORMS = {
     "paypal.com", "amazon.com", "ebay.com", "substack.com", "eventbrite.com",
 }
 
-#: The invented organisations the fixtures are written around. Adding one is
-#: how you say "this name is made up" - which is the point: a name that is
-#: not on either list fails, and somebody has to look at it.
+#: The invented organisations the fixtures are written around. Adding one says
+#: the name is made up; a name on neither list fails until somebody looks at
+#: it.
 INVENTED = {
     "acme", "aerodell", "alderfen", "alderton", "ashcombe", "ashford",
     "ashgrove", "bellhaven", "benefitbridge", "benefitspan", "bexley",
@@ -297,41 +282,59 @@ def registrable(host: str) -> str:
 #: Apple's is in every Apple Account email anybody has ever had.
 PUBLIC_POSTCODES = {"95014", "90405"}
 
-#: Postcodes made up for the fixtures. Listing them is the point: a postcode
-#: that is on neither list is one nobody has vouched for.
+#: Postcodes made up for the fixtures. A postcode on neither list is one nobody
+#: has vouched for.
 INVENTED_POSTCODES = {"41022", "41025", "41088", "41107"}
 
-#: Real places. A fixture may not name one: a town plus a street number is
-#: somebody's address, and a region plus an employer names the employer.
+#: Real places, as digests of their normalised names, for the same reason as
+#: the handles. A fixture may not name one: a town and a street number is
+#: somebody's address, and a region and an employer names the employer.
 REAL_PLACES = {
-    "xxxxxxx", "xxxxxxx xxxxx", "xxxxxxxxxx", "xxxxxxx", "xxxxxxxx", "xxxxxxx",
-    "illinois", "chicago", "milwaukee", "wisconsin", "new york", "rochester",
-    "buffalo", "syracuse", "xxxxxxx xxx xxxx", "xxxxxx xxxxx", "maryland",
-    "boston", "massachusetts", "stanford", "menlo park", "san francisco",
-    "seattle", "portland", "denver", "atlanta", "houston", "dallas", "austin",
+    "0a50c50f4e6ef1208e4508a0a84ecb98ec1bc2ce2bbbb1d96f5b1dcf834dab34",
+    "198becaf9c45016fec5d9bcd2e8d748de6b44a26cd4cc35ea72b670e665dff79",
+    "1a2290470e0aa7549ab1e04b2453274374149ffee517a57715e5206e4142c233",
+    "2b7b5dd4587e8545cc153c9c739bef276f32afe028ab2e46e73087d6a2c1eb32",
+    "3151a8f227c0e11fd9a7fd1aa24ebfee734503dea095c22c3b2fae09d62eeb25",
+    "35439e40a0dcce876f9885ccba67769b4b3f021659ebfe7cd6b38261c848811e",
+    "3c66157844fa8ce7e9b67b0022383d7709ba2b30f8306d3c9b2eceb2cd91e4dc",
+    "402eed114f0a583fb72bce76196539c9a25688cc8840c7fa44d54f811ac5ea32",
+    "484f4c1577130fdb27d8c586d3033e777695750da8bbd3d4f9c592e60152a426",
+    "4c6eb87b502e3e019acbd4b1e579bd1566104abc0914f5186df63e4833c993c2",
+    "52c279ad597187db0cdc6246fd652bfd0ad9b299bfae17faca29906fe3523a6a",
+    "56fe43f748e258de06b4955e2b8978bbc1c28ff9ba53917387d6dca8fb920018",
+    "6aa006809ea4f9c949f90b00bfd937a1d3ab3045e17a6a0907d66f3007b25df3",
+    "6f3d359b22fc37936263e600ce63cde96474ee3fadcc5c75350c20fdcf25cfc7",
+    "701392d6e9b9065cd6b1a0bdce93e0e5b6c07bf28349560408cd07f2510143ce",
+    "81b8c84b83a8f5dbd68b02528503bae8629bb13726eab5e68612014d21a9f78c",
+    "8400a073ca06ffa7c07cd46c7aedddec4db916dd0b32ecf78e279be88e4a02ec",
+    "8818439acbcf3df08a17b89b37053f0f0aa399150df725274364d597bcdf4116",
+    "a2470c9d137c1c5d3567d1180a64cb43a9269c4d6f1ff13ac8cdbaf6fc5df3b7",
+    "ba06d6c4c9d0191b41ff3759d13d94ff5778256d35b532bf48b7d9b067952135",
+    "bd732730bd39834d83bf92a114960180d3bd4a6f1309307165e6f30ed9846fdd",
+    "c4fdd12ee15f8fbd050c6083a70d4f7191b35cb23a1284f5ebf7c7bd6288f91a",
+    "c7c1319276e936c8d64f1d5ed80cd8a0cf54e6dea7b0125533eb4163e03a2c11",
+    "d3ecc5b7fe38ffd3397473362f2c42321fb82deb23083ed13cf6f20320ab6c92",
+    "de19c97d557a0e8a8cb2eb074915a22154e5f7606bd248aaf4ae6d24782f1409",
+    "e82ff084c039c952d986b0844bf67733dbcc03e1f32c094bedb9cda01c534015",
+    "ed2891817314563f01329d59e48b1b7f3bfc3efc568945b217591fd074148c48",
+    "f49c6320e08eb5ed523dc99e8c512888e2718ec6020201997d01b41754a61502",
+    "fa2115f8d576a6ab722956697fc759c31d1cd6b93c8336bfebf73ed5cba2ff49",
 }
 
 
 @pytest.mark.parametrize("name", sorted(p.name for p in _all_fixtures()))
 class TestNobodysAddressIsInAFixture:
-    """A rejection letter is addressed to somebody, at their house.
-
-    One row in the labelled set carried the xxxxx'x xxxxxxx in capitals and
-    the street, town, state and postcode it was posted to. Nothing caught it:
-    the address check wanted a street suffix and that line had none, and the
-    name check was looking for a different spelling. A postcode is the part
-    that cannot be written off as coincidence, so that is what is checked
-    here, along with the towns that would place somebody.
+    """A letter is addressed to somebody, at their house. A postcode cannot be
+    written off as coincidence, so it is checked here, with the towns that
+    would place somebody.
     """
 
     def test_no_postcode_that_is_not_public_boilerplate(self, name):
         import json
         blob = json.dumps(fixture_rows(name))
-        # Five digits next to a two-letter state, or on its own after a comma,
-        # is a postcode rather than a requisition number.
-        # "Town, ST 12345" or "Town, Statename 12345". A bare five-digit run
-        # is a requisition number far more often than a postcode, so the
-        # comma and the place before it are what make this a postcode.
+        # "Town, ST 12345" or "Town, Statename 12345". A bare five-digit run is
+        # a requisition number far more often than a postcode, so the comma and
+        # the place before it are what make this a postcode.
         found = set(re.findall(
             r"\b[A-Z][A-Za-z]+,\s+(?:[A-Z]{2}|[A-Z][a-z]+)\s+(\d{5})\b", blob))
         unexplained = found - PUBLIC_POSTCODES - INVENTED_POSTCODES
@@ -342,11 +345,10 @@ class TestNobodysAddressIsInAFixture:
 
     def test_no_real_town_or_region(self, name):
         import json
-        blob = json.dumps(fixture_rows(name)).lower()
-        named = sorted(p for p in REAL_PLACES if re.search(
-            r"\b" + re.escape(p) + r"\b", blob))
-        # Cupertino is allowed for the same reason Apple is.
-        named = [p for p in named if p not in {"cupertino"}]
+        blob = json.dumps(fixture_rows(name))
+        named = sorted(phrase for phrase in set(_phrases(blob))
+                       if hashlib.sha256(phrase.encode()).hexdigest()
+                       in REAL_PLACES)
         assert not named, (
             f"{name} names real place(s) {named}. Together with an employer "
             "that identifies the employer; together with a street number it "
@@ -355,12 +357,9 @@ class TestNobodysAddressIsInAFixture:
 
 @pytest.mark.parametrize("name", sorted(p.name for p in _all_fixtures()))
 class TestNoRealOrganisationIsNamed:
-    """Addresses were guarded; the links in the bodies were not.
-
-    That gap is how a fixture kept pointing at the website of an agency xxx
-    xxxxxx xxxxxxxx xxxxxxx xx - a link host is not an address, so nothing
-    looked at it. Every host now has to be reserved, invented on purpose, or
-    a platform that appears in everybody's mail.
+    """The hosts of links in the bodies, not only addresses: a link can point
+    at the website of somewhere a person applied. Every host has to be
+    reserved, invented on purpose, or a platform in everybody's mail.
     """
 
     def test_every_link_host_is_accounted_for(self, name):
@@ -385,12 +384,10 @@ class TestNoRealOrganisationIsNamed:
 
 @pytest.mark.parametrize("name", sorted(p.name for p in _all_fixtures()))
 class TestNoRealMailIsCommitted:
-    """The labelled set was built from one person's inbox.
-
-    That is what makes it worth measuring against - hand-written samples do
-    not contain what actually breaks a sorter - and it is why every name in
-    it had to go before this repository could be public. tools/anonymise.py
-    does that; these are the standing checks that it stayed done.
+    """The labelled set came from real mail, which is what makes it worth
+    measuring against, and every name in it had to go before this repository
+    could be public. tools/anonymise.py does that; these check it stayed
+    done.
     """
 
     def test_every_address_is_reserved(self, name):
@@ -407,11 +404,8 @@ class TestNoRealMailIsCommitted:
         assert not re.search(r"\b\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}\b", blob)
 
     def test_the_owner_is_not_named(self, name):
-        """Whoever built a fixture should not be identifiable from it.
-
-        The handles are compared as digests because this file is public.
-        Writing them down here would publish exactly what the check exists
-        to keep out of the repository, which is a strange way to test it.
+        """Whoever built a fixture must not be identifiable from it. The
+        handles are compared as digests because this file is public.
         """
         import json
         blob = json.dumps(fixture_rows(name)).lower()
@@ -421,12 +415,11 @@ class TestNoRealMailIsCommitted:
         assert not found, f"a handle belonging to the fixture's owner is in {name}"
 
     def test_no_bereavement_record_survives(self, name):
-        """A xxxxxx xxxxxx xxxxx xxx xxxx, their family and where they died.
+        """A death notice names the dead, their family and where they died.
 
-        tools/anonymise.py flags these rather than rewriting them, because
-        finding a person's name in running prose is not something a regular
-        expression does well. The two in the labelled set were rewritten by
-        hand; this is the check that no new one arrives unread.
+        tools/anonymise.py flags these rather than rewriting them, since
+        finding a name in running prose is not a job for a regular
+        expression; this checks that no new one arrives unread.
         """
         import sys
         sys.path.insert(0, str(ROOT / "tools"))
@@ -445,11 +438,7 @@ class TestNoRealMailIsCommitted:
 # What reaches the log, and what SECURITY.md promises does not
 # ==========================================================================
 class TestNothingSensitiveIsLogged:
-    """SECURITY.md makes two promises about the log. These are them.
-
-    A promise in a security document that nothing checks is a promise about
-    the day it was written.
-    """
+    """SECURITY.md makes two promises about the log; these check them."""
 
     def _captured(self, run) -> str:
         import io
@@ -542,10 +531,10 @@ class TestNothingSensitiveIsLogged:
 class TestNothingSensitiveCanBeCommitted:
     """The second lock on the door.
 
-    The app writes its data into ~/Library/Application Support and the tuning
-    tool refuses to write inside the repository at all. But ICLOUD_TRIAGE_HOME
-    can point anywhere, and somebody who points it at "." should not be one
-    `git add .` away from publishing their own inbox.
+    The app writes its data under ~/Library/Application Support and the
+    tuning tool refuses to write inside the repository, but
+    ICLOUD_TRIAGE_HOME can point anywhere, and pointing it at "." must not
+    leave an inbox one `git add .` away from public.
     """
 
     @pytest.mark.parametrize("name", [
@@ -565,11 +554,9 @@ class TestNothingSensitiveCanBeCommitted:
         "inbox-2026.json",
     ])
     def test_it_is_ignored(self, name, tmp_path):
-        """git check-ignore, rather than reading the file and hoping.
-
-        gitignore has no trailing comments - a "#" after a pattern becomes
-        part of the pattern - and two of these matched nothing at all until
-        this test was written.
+        """git check-ignore, rather than reading the file: gitignore has no
+        trailing comments (a "#" after a pattern becomes part of it), and
+        two of these once matched nothing.
         """
         path = ROOT / name
         existed = path.exists()
@@ -612,11 +599,10 @@ def test_the_lexicon_holds_no_addresses():
 
 
 class TestTheFixturesDoNotReadAsMachineOutput:
-    """An anonymiser leaves tells, and tells are their own kind of leak.
+    """An anonymiser leaves tells, and tells are a leak of their own.
 
-    "Acme 47" is not a name anybody's inbox contains, and a doubled prefix
-    like "St. St Alban's" is a rewrite that ran twice. Both say the corpus
-    was processed, and both were in the published fixtures.
+    "Acme 47" is no real name, and a doubled prefix like "St. St Alban's" is
+    a rewrite that ran twice. Both say the corpus was processed.
     """
 
     @pytest.mark.parametrize("name", sorted(p.name for p in _all_fixtures()))
@@ -634,7 +620,7 @@ class TestTheFixturesDoNotReadAsMachineOutput:
 
     @pytest.mark.parametrize("name", sorted(p.name for p in _all_fixtures()))
     def test_no_doubled_proper_nouns(self, name):
-        """"Dear Alex Alex" and "St. St Alban's" both shipped."""
+        """A rewrite that ran twice: "Dear Alex Alex", "St. St Alban's"."""
         import json
         blob = json.dumps(fixture_rows(name))
         doubled = sorted(set(re.findall(r"\b([A-Z][a-zA-Z.']{1,14})\s+\1\b", blob)))
@@ -650,15 +636,11 @@ _CALENDAR_WORDS = {
     "Thu","Fri","Sat","Sun",
 }
 
-#: Organisations that were in the fixtures and should not come back, as
-#: digests of their normalised names. Digests because the last version of
-#: this list wrote every one of them out in full, in a public repository -
-#: a denylist of real employers is a record of where somebody applied, which
-#: is the thing it exists to remove. Same reason the owner's handles above
-#: are hashed. Universal consumer platforms are deliberately not here: the
-#: sorter needs them and everybody's mail has them. Nor are the
-#: anonymiser's own stand-ins, which are invented and may legitimately
-#: come back the next time tools/anonymise.py runs.
+#: Organisations that must not come back, as digests of their normalised names:
+#: a list of real employers would record where somebody applied, which is what
+#: it exists to remove. Universal consumer platforms are not here (the sorter
+#: needs them), nor are the anonymiser's invented stand-ins, which may come
+#: back when tools/anonymise.py runs again.
 FORBIDDEN_ORGANISATIONS = {
     "ff74877a49f7202b4100be1464d6f191df378325192c3c5d61ea323b4da72e81",
     "d6db21ddecbbd0eeccb901c7fae837ca86cec4c289d7784e9a7016855f10859b",
@@ -713,9 +695,8 @@ class TestNoRealEmployerSurvives:
 class TestAProviderCannotEchoMailIntoTheLog:
     """A 4xx body can quote the request, and the request carries the email.
 
-    The excerpt belongs on screen, where the reader already has the mail. In
-    a log file it outlives the scan, and SECURITY.md promises message bodies
-    are never written there.
+    On screen that is fine; a log file outlives the scan, and SECURITY.md
+    promises message bodies are never written there.
     """
 
     def test_the_log_form_drops_the_server_text(self):
@@ -754,12 +735,8 @@ class TestAProviderCannotEchoMailIntoTheLog:
 
 
 class TestNoEvaluationDataIsTracked:
-    """The sets are ignored, but ignoring is not the same as untracked.
-
-    git mv moves a file and stages it at the new path, ignore rules and all.
-    That very nearly committed the two inbox-derived sets into the
-    repository they were being removed from; the gitignore said the right
-    thing and git had already been told otherwise.
+    """Ignored is not the same as untracked: git mv stages a file at its new
+    path, ignore rules or not.
     """
 
     @staticmethod
@@ -789,29 +766,20 @@ class TestNoEvaluationDataIsTracked:
 
 
 class TestNobodyElsesMediaIsPublished:
-    """Music and pictures dropped in the working folder to test against.
-
-    A xxx xxxxxxxx XX0 of somebody's album reached the public repository
-    this way - committed by accident along with a fix it was used to
-    check. Nothing in the privacy guards noticed, because they were all
-    looking for credentials and personal data and this is neither: it is
-    a copyright that is not this project's to give away.
+    """Music and pictures dropped in the working folder to test against: not
+    credentials or personal data, but nobody's to give away.
     """
 
-    #: Things somebody would reasonably drop in the folder while working.
-    #: Not only music: the folder this was written in had xxxxxxxxx xxxxx,
-    #: x XX xxx xxxx xxxxx from a session sitting next to it, and any one
-    #: of them is worse to publish than the album was.
+    #: Things somebody would reasonably drop in the folder while working:
+    #: music, pictures, documents, mail, archives.
     DROPPED = [
         # Sound and pictures
         "Some Album - Track 01.mp3", "recording.wav", "loop.aif",
         "take.aiff", "master.flac", "voice.m4a", "stem.ogg", "cut.opus",
         "reference.jpg", "photo.jpeg", "grab.heic", "sketch.gif",
         "scan.tif", "shot.webp", "clip.mp4", "screen.mov", "take.m4v",
-        # PNG was the hole in this list and in the ignore file both.
-        # It is not only screenshots: ./dev playtest --save writes out a
-        # frame of the scene while somebody's music is playing, which is
-        # a picture of their music.
+        # PNG too: ./dev playtest --save writes out a frame of the scene while
+        # somebody's music plays, a picture of their music.
         "reference.png", "frame.png", "rider.png",
         # Documents
         "CV.pdf", "offer letter.docx", "notes.rtf", "budget.xlsx",
