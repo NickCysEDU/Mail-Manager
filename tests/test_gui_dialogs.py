@@ -14,13 +14,8 @@ from PySide6.QtWidgets import QApplication, QDialog, QFileDialog, QMessageBox  #
 
 import gui as gui_module  # noqa: E402
 from config import InMemoryCredentialStore, Settings  # noqa: E402
-from gui import (  # noqa: E402
-    LEAVE_IN_PLACE,
-    MainWindow,
-    SettingsDialog,
-    _disposition_badge,
-    _reasoning_html,
-)
+from gui import MainWindow, SettingsDialog  # noqa: E402
+from triage_table import _disposition_badge, _reasoning_html  # noqa: E402
 from imap_engine import MoveReport  # noqa: E402
 from models import (  # noqa: E402
     CATEGORY_COLORS,
@@ -322,7 +317,7 @@ class TestColorCoding:
         assert category_color(item.classification) == OTHER_COLOR
 
     def test_shade_lightens_and_darkens(self):
-        from gui import _shade
+        from widgets import _shade
 
         assert _shade("#808080", 1.5) == "#C0C0C0"
         assert _shade("#808080", 0.5) == "#404040"

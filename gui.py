@@ -82,26 +82,18 @@ from models import (
     resolve_window,
 )
 from flowlayout import FlowLayout, Spacer
-from widgets import (  # noqa: F401 - re-exported; gui was the home of these
-    ACCENT_AMBER, ACCENT_BLUE, ACCENT_GREEN, ACCENT_RED, AdaptiveLineEdit,
-    ElidingLabel, SelectableMessages, VersionLabel, WrappingList, _abandon, _chip,
-    _compact_button, _confidence_rgb, _draw_wrapped, _format_duration, _html,
-    _is_dark, _mono_font, _one_line, _paint_button, _scrollable, _separator,
-    _shade, _stored_date, _swatch, _tint, _wrap, _wrap_lines,
-    describe, install_selectable_messages, menu_text,
-    remove_selectable_messages,
-    say, selectable, system_font,
-    EMPTY_STATE, NOTHING_FOUND, SHOW_ALL, SHOW_JOB_ONLY,
-    SHOW_OTHER_ONLY, SHOW_SELECTED,
-    _ABANDONED, _one_of)
+from widgets import (
+    ACCENT_AMBER, ACCENT_BLUE, ACCENT_GREEN, AdaptiveLineEdit, ElidingLabel,
+    VersionLabel, _abandon, _chip, _format_duration, _html, _mono_font,
+    _paint_button, _stored_date, _swatch, describe, menu_text, selectable,
+    EMPTY_STATE, NOTHING_FOUND, SHOW_ALL, SHOW_JOB_ONLY, SHOW_OTHER_ONLY,
+    SHOW_SELECTED, _one_of)
 import helpmode
 import theme
-from settings_dialog import (  # noqa: F401 - re-exported; gui was their home
-    ActionRow, ConditionRow, ModelsDialog, SettingsDialog, _RuleRow)
-from triage_table import (  # noqa: F401 - re-exported; gui was their home
+from settings_dialog import SettingsDialog
+from triage_table import (
     CategoryDelegate, ConfidenceDelegate, PreviewPane, TriageFilterProxy,
-    TriageTableModel, WrapDelegate, _disposition_badge, _reasoning_html,
-    category_color, LEAVE_IN_PLACE)
+    TriageTableModel, WrapDelegate, category_color)
 from menubar import MenuBarController
 from welcome import SetupWizard
 from workers import (AttachmentWorker,
@@ -205,6 +197,9 @@ class MainWindow(QMainWindow):
         self._status_text = ""
         self._window_wordings = ()
         self.schedule_actions: Dict[int, QAction] = {}
+        self.density_actions: Dict[int, QAction] = {}
+        self.preview_actions: Dict[str, QAction] = {}
+        self.menu_bar: Optional[MenuBarController] = None
 
         self.setWindowTitle(APP_DISPLAY_NAME)
         # 580 tall: between the toolbars and the status bar sit the table and
@@ -459,8 +454,6 @@ class MainWindow(QMainWindow):
         """The mailbox column, shown only when there is more than one mailbox.
         A column hidden by hand stays hidden either way.
         """
-        if not hasattr(self, "table"):
-            return
         column = TriageTableModel.COL_ACCOUNT
         if column in self.settings.hidden_columns:
             self.table.setColumnHidden(column, True)
@@ -538,9 +531,8 @@ class MainWindow(QMainWindow):
         self.table.setItemDelegateForColumn(
             TriageTableModel.COL_CATEGORY, CategoryDelegate(self.table)
         )
-        if hasattr(self, "density_actions"):
-            for value, action in self.density_actions.items():
-                action.setChecked(value == lines)
+        for value, action in self.density_actions.items():
+            action.setChecked(value == lines)
 
     def _build_action_bar(self) -> QWidget:
         frame = QFrame()
@@ -852,8 +844,6 @@ class MainWindow(QMainWindow):
 
     def _refresh_sorting_button(self) -> None:
         """Say what the current arrangement is, on the button itself."""
-        if not hasattr(self, "sorting_button"):
-            return
         profile = self.settings.profile
         routing = self.settings.routing
         self.sorting_button.setText(menu_text(f"Sorting: {profile.label}"))
@@ -941,8 +931,6 @@ class MainWindow(QMainWindow):
 
     def _rebuild_account_menu(self) -> None:
         """Which mailboxes the next scan reads: any of them, or all of them."""
-        if not hasattr(self, "account_menu"):
-            return
         self.account_menu.clear()
         mailboxes = self.settings.enabled_accounts
         self.account_button.setVisible(len(mailboxes) > 1)
@@ -1070,13 +1058,12 @@ class MainWindow(QMainWindow):
                 if not self.store.get_mailbox_password(a.address)]
 
     def _sync_menu_bar_model(self) -> None:
-        if hasattr(self, "menu_bar"):
+        if self.menu_bar is not None:
             self.menu_bar.set_model(
                 self.settings.provider, self.settings.model, self.settings.ruleset)
 
     def _refresh_model_button(self) -> None:
-        if hasattr(self, "preview"):
-            self.preview.set_backend_label(self.settings.provider_label.split(" (")[0])
+        self.preview.set_backend_label(self.settings.provider_label.split(" (")[0])
         spec = self.settings.provider_class
         pretty = next(
             (c.label for c in spec.models if c.value == self.settings.model),
@@ -1095,14 +1082,11 @@ class MainWindow(QMainWindow):
     def apply_appearance(self) -> None:
         """Repaint everything from the current appearance settings."""
         app = QApplication.instance()
-        if app is None:
-            return
         theme.apply(app, self.settings.appearance_mode, self.settings.contrast,
                     self.settings.readable, self.settings.density)
         self._apply_spacing()
         helpmode.install(app, self.settings.help_mode)
-        if hasattr(self, "help_button") and \
-                self.help_button.isChecked() != self.settings.help_mode:
+        if self.help_button.isChecked() != self.settings.help_mode:
             self.help_button.blockSignals(True)
             self.help_button.setChecked(self.settings.help_mode)
             self.help_button.blockSignals(False)
@@ -1116,27 +1100,19 @@ class MainWindow(QMainWindow):
         it is open.
         """
         room = theme.density(self.settings.density)
-        central = self.centralWidget()
-        if central is not None and central.layout() is not None:
-            central.layout().setContentsMargins(
-                room.margin, room.margin, room.margin, room.margin)
-            central.layout().setSpacing(room.spacing)
-        for bar in ("action_bar_layout", "filter_bar_layout"):
-            layout = getattr(self, bar, None)
-            if layout is not None:
-                layout.setSpacing(max(4, room.spacing))
-                layout.setVerticalSpacing(max(3, room.spacing - 2))
-        if hasattr(self, "metrics_bar"):
-            self.metrics_bar.setContentsMargins(
-                room.margin, max(2, room.cell_pad), room.margin, max(2, room.cell_pad))
+        outer = self.centralWidget().layout()
+        outer.setContentsMargins(room.margin, room.margin, room.margin, room.margin)
+        outer.setSpacing(room.spacing)
+        for layout in (self.action_bar_layout, self.filter_bar_layout):
+            layout.setSpacing(max(4, room.spacing))
+            layout.setVerticalSpacing(max(3, room.spacing - 2))
+        self.metrics_bar.setContentsMargins(
+            room.margin, max(2, room.cell_pad), room.margin, max(2, room.cell_pad))
 
         # Row height follows the density unless the user has said otherwise.
         self.settings.row_lines = self.settings.effective_row_lines
-        if hasattr(self, "table"):
-            self._apply_density(self.settings.row_lines)
-
-        if hasattr(self, "splitter"):
-            self._apply_preview_share(room)
+        self._apply_density(self.settings.row_lines)
+        self._apply_preview_share(room)
 
     def _apply_preview_share(self, room) -> None:
         """Give the table everything the preview is not using. Skipped while
@@ -1365,8 +1341,6 @@ class MainWindow(QMainWindow):
         whenever the app knows a mailbox, even one, so it is always in the
         same place.
         """
-        if not hasattr(self, "view_menu") or not hasattr(self, "proxy"):
-            return
         self.view_menu.clear()
         linked = self._linked_mailboxes()
         self.view_button.setVisible(bool(linked))
@@ -1471,8 +1445,6 @@ class MainWindow(QMainWindow):
         )
 
     def _rebuild_columns_menu(self) -> None:
-        if not hasattr(self, "columns_menu") or not hasattr(self, "table"):
-            return
         self.columns_menu.clear()
         for column in range(1, self.model.columnCount()):
             header = self.model.HEADERS[column]
@@ -2261,8 +2233,6 @@ class MainWindow(QMainWindow):
 
     def _refresh_window_label(self) -> None:
         """Spell out the period the next scan covers, before it runs."""
-        if not hasattr(self, "window_label"):
-            return
         try:
             start, end = self._current_window()
         except ValueError:
@@ -2295,7 +2265,7 @@ class MainWindow(QMainWindow):
     def _fit_window_label(self) -> None:
         """Pick the longest wording that fits beside everything else."""
         wordings = self._window_wordings
-        if not wordings or not hasattr(self, "action_bar_layout"):
+        if not wordings:
             return
         bar = self.action_bar_layout.geometry().width()
         if bar <= 0:
@@ -2307,7 +2277,7 @@ class MainWindow(QMainWindow):
             # The slot the label lives in is what we are measuring for, so
             # it must not also count as something to fit around.
             if (widget is None or widget.isHidden()
-                    or widget is getattr(self, "range_stack", self.window_label)):
+                    or widget is self.range_stack):
                 continue
             others += item.sizeHint().width() + self.action_bar_layout.spacing()
         room = bar - others
@@ -2525,8 +2495,6 @@ class MainWindow(QMainWindow):
 
     def _sync_undo_action(self) -> None:
         """Say what pressing undo would actually do."""
-        if not hasattr(self, "undo_action"):
-            return
         self.undo_action.setEnabled(bool(self._undo_stack))
         if not self._undo_stack:
             self.undo_action.setText("Undo Last Filing")
@@ -3200,10 +3168,8 @@ class MainWindow(QMainWindow):
             if summary.approved
             else "Tick the messages you want filed, then press this."
         )
-        if hasattr(self, "scan_button"):
-            self._set_scan_button(running)
-        if hasattr(self, "stop_action"):
-            self.stop_action.setEnabled(running)
+        self._set_scan_button(running)
+        self.stop_action.setEnabled(running)
         if message is not None:
             self._set_status(message)
         elif summary.total and not running:
@@ -3259,8 +3225,7 @@ class MainWindow(QMainWindow):
         self._fit_window_label()
         if self._status_text:
             self._set_status(self._status_text)
-        if hasattr(self, "splitter"):
-            self._apply_preview_position(self.settings.preview_position)
+        self._apply_preview_position(self.settings.preview_position)
 
     def _toggle_log(self, visible: bool) -> None:
         self.log_view.setVisible(visible)
@@ -3288,11 +3253,10 @@ class MainWindow(QMainWindow):
             share = 0.42 if beside else 0.40
             self.splitter.setSizes(
                 [int(span * (1 - share)), int(span * share)])
-        if hasattr(self, "preview_actions"):
-            for value, action in self.preview_actions.items():
-                # The choice, not where it ended up: a narrow window puts the
-                # preview below whatever was chosen.
-                action.setChecked(value == position)
+        for value, action in self.preview_actions.items():
+            # The choice, not where it ended up: a narrow window puts the
+            # preview below whatever was chosen.
+            action.setChecked(value == position)
 
     @Slot(str)
     def set_preview_position(self, position: str) -> None:
@@ -3616,7 +3580,6 @@ class MainWindow(QMainWindow):
         that message.
         """
         import attachments as _attachments
-        from attachment_view import AttachmentViewer
 
         items = self.model.items
         item = items[row] if 0 <= row < len(items) else None

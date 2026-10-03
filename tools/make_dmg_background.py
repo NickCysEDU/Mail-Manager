@@ -11,7 +11,6 @@ window coming out twice the size it should be.
 
 from __future__ import annotations
 
-import math
 import shutil
 import subprocess
 import sys

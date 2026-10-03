@@ -1904,8 +1904,6 @@ class RiderWorld:
         p.release()
 
     def _draw_road(self, frame) -> None:
-        import colorsys
-
         scene = frame["scene"]
         p = self.road
         p.bind()
@@ -1953,8 +1951,6 @@ class RiderWorld:
         p.set("uCoin", 0.0)
 
     def _draw_blocks(self, frame) -> None:
-        import colorsys
-
         scene = frame["scene"]
         p = self._solid(frame)
         beat = frame["beat"]
@@ -2297,7 +2293,6 @@ class RiderWorld:
         self._particles_dirty = True
 
     def _spawn_exhaust(self, frame, place, colour) -> None:
-        scene = frame["scene"]
         rng = self._rng
         travel = frame["travel"]
         for _ in range(2):
@@ -2699,7 +2694,6 @@ class Hud:
         painter.setOpacity(painter.opacity() * fade)
         # Rises a little as it goes, so it reads as leaving.
         y = rect.top() + rect.height() * (0.34 - through * 0.04)
-        from PySide6.QtCore import QRectF
 
         self._text(painter, QPointF(rect.center().x(), y), words, size,
                    colour, glow)

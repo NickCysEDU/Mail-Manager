@@ -1097,7 +1097,7 @@ def decode(path, on_done, on_fail, on_progress=None,
     copies buffers.
     """
     try:
-        from PySide6.QtCore import QLoggingCategory, QUrl
+        from PySide6.QtCore import QUrl
         from PySide6.QtMultimedia import QAudioDecoder, QAudioFormat
     except ImportError:
         on_fail("audio decoding is unavailable in this build")

@@ -8,7 +8,7 @@ bringing the window forward. Toggled from View, or from Settings.
 from __future__ import annotations
 
 import logging
-from typing import Callable, Optional
+from typing import Optional
 
 from PySide6.QtCore import QObject, QRectF, Qt, Signal
 from PySide6.QtGui import (

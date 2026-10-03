@@ -8,7 +8,6 @@ right. Nothing here is adjusted to match what the code happens to do.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -19,7 +18,7 @@ import profiles
 import theme
 from accounts import Account
 from config import Settings
-from models import Category, Classification, EmailMessage, FolderPlan, OtherCategory
+from models import Category, Classification, EmailMessage, FolderPlan
 from rules_engine import RuleClassifier
 
 

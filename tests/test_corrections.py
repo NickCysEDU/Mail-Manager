@@ -7,7 +7,7 @@ import json
 import pytest
 
 import corrections
-from corrections import Correction, Memory, domain_of, is_shared_host
+from corrections import Memory, domain_of, is_shared_host
 
 
 def teach(memory: Memory, sender: str, folder: str, suggested: str = "") -> bool:

@@ -276,7 +276,6 @@ class TestTheAnalysis:
         assert max(max(row) for row in frames) < 0.05
 
     def test_a_tone_lands_in_the_right_part_of_the_spectrum(self):
-        import math
         from array import array
 
         import attachment_audio
@@ -289,7 +288,6 @@ class TestTheAnalysis:
         assert sum(middle[:8]) > sum(middle[-8:]), "a bass tone lit the treble"
 
     def test_quiet_and_loud_both_fill_the_strip(self):
-        import math
         from array import array
 
         import attachment_audio
@@ -693,7 +691,6 @@ class TestTheSpectrumGetsRoomToDrawIn:
 
     def test_the_audio_pane_reveals_it_on_play(self, qtbot):
         """End to end: a real WAV, decoded, analysed, revealed."""
-        import math
         import struct
 
         import attachments
@@ -752,7 +749,6 @@ class TestTheBandsAreARealEqualiser:
         2048-point window is 23 Hz a bin, so the lowest bands share bins.
         From 100 Hz up they land exactly.
         """
-        import math
         from array import array
 
         import attachment_audio
@@ -769,7 +765,6 @@ class TestTheBandsAreARealEqualiser:
 
     def test_the_scale_is_decibels_not_amplitude(self):
         """Halving amplitude should cost about 6 dB, not half the bar."""
-        import math
         from array import array
 
         import attachment_audio
@@ -1073,8 +1068,6 @@ class TestWaitingForTheAnalysis:
     def test_it_does_not_throw_the_render_buffer_away(self, qtbot):
         """Progress reports must not rebuild the post-processor or drop the
         buffer."""
-        from attachment_widgets import PostProcess
-
         spectrum = self._spectrum(qtbot)
         spectrum._buffer = object()
         effects = spectrum._effects
@@ -1096,7 +1089,6 @@ class TestTheMeterScene:
 
     @staticmethod
     def _spectrum(qtbot, position=1500, clock=None):
-        import math
         from array import array
 
         import attachment_audio
@@ -1339,7 +1331,6 @@ class TestTheVisualiserControlsAreReachable:
 
     @staticmethod
     def _pane(qtbot):
-        import math
         import struct
 
         import attachments
@@ -1432,7 +1423,6 @@ class TestAnAnalysisThatOutlivesItsWindow:
 
     @staticmethod
     def _pane(qtbot):
-        import math
         import struct
 
         import attachments
@@ -1460,8 +1450,6 @@ class TestAnAnalysisThatOutlivesItsWindow:
         viewer._sweep()
 
     def test_frames_for_a_previous_file_are_dropped(self, qtbot):
-        import attachment_audio
-
         viewer = self._pane(qtbot)
         pane = viewer.audio
         stale = pane._analysis_token
@@ -1492,7 +1480,6 @@ class TestTheVisualiserCanBeSwitchedOff:
 
     @staticmethod
     def _pane(qtbot):
-        import math
         import struct
 
         import attachments
@@ -1604,7 +1591,6 @@ def _machine_factor() -> float:
     (antialiased strokes and a smooth blit). A scene that slows relative to
     the rest still fails.
     """
-    import math
     import time
 
     from PySide6.QtCore import QPointF, QRectF, Qt
@@ -1653,7 +1639,6 @@ class TestItHoldsSixtyFramesASecond:
 
     @staticmethod
     def _spectrum(qtbot, width, height):
-        import math
         from array import array
 
         import attachment_audio
@@ -1981,8 +1966,6 @@ class TestTheVuScaleIsARealOne:
             "is decoration rather than a scale")
 
     def test_the_marks_are_where_the_arithmetic_puts_them(self):
-        import math
-
         import visualizers
 
         meters = visualizers.by_name("VU meters")
@@ -2513,7 +2496,6 @@ class TestOscilloscopeMusic:
         assert "setChannelCount(2)" in code
 
     def test_a_stereo_circle_comes_back_as_a_circle(self):
-        import math
         from array import array
 
         import attachment_audio
@@ -2560,8 +2542,6 @@ class TestOscilloscopeMusic:
         """A beam rounds the corners it is asked to draw, so the trace is
         curved rather than joined with straight lines.
         """
-        import math
-
         from PySide6.QtGui import QPainterPath
 
         import visualizers
@@ -3145,8 +3125,6 @@ class TestAWideLineIsDrawnTheQuickWay:
 
     @staticmethod
     def _draw(how, width=2.4, size=(420, 260), scale=1.0):
-        import math
-
         from PySide6.QtCore import QPointF, Qt
         from PySide6.QtGui import (QColor, QImage, QPainter, QPainterPath,
                                    QPen)
@@ -3417,8 +3395,6 @@ class TestTheKeysThatPlayIt:
     def test_reaching_for_the_strobe_switches_it_on(self, qtbot):
         """The strobe key ticks the strobe on: the scenes ask the tick box
         before they light up."""
-        from PySide6.QtCore import Qt as _Qt
-
         pane, window = self._full(qtbot)
         pane.strobe_box.setChecked(False)
         self._press(window, self._flash_key())
@@ -3491,7 +3467,6 @@ class TestTheSunInTheVaporwaveScene:
     DARK = 70
 
     def _drawn(self, bass=None, flash=None):
-        from PySide6.QtCore import Qt as _Qt
         from PySide6.QtGui import QColor, QImage, QPainter
 
         import visualizers
@@ -3533,8 +3508,6 @@ class TestTheSunInTheVaporwaveScene:
         """Each bar stays within the disc. The glow may spill past it, so only
         where the dark is matters, and the dark is only ever a gap.
         """
-        import math
-
         _scene, image, radius = self._drawn()
         centre = self.W // 2
         found = 0
@@ -3855,7 +3828,6 @@ class TestTheScopesTimeBase:
     @staticmethod
     def _figure(hertz=50.0, seconds=1.2, ratio=3, rate=None, noise=False):
         """A Lissajous at a known figure rate, or noise, as stereo PCM."""
-        import math
         import random
         from array import array
 
@@ -3881,7 +3853,6 @@ class TestTheScopesTimeBase:
 
     @staticmethod
     def _of_length(period, seconds=0.9, ratio=3):
-        import math
         from array import array
 
         import attachment_audio
@@ -4336,7 +4307,6 @@ class TestTheListOfPlayingKeys:
                     "J", "K", "L", "space", "esc"):
             assert key in listed, f"{key} does something and is not listed"
         # And every letter the pane acts on is in there.
-        from PySide6.QtCore import Qt as _Qt
 
         for key, (action, _value) in AudioPane.VJ_KEYS.items():
             letter = chr(key) if key < 0x110000 else "?"
@@ -4722,7 +4692,6 @@ class TestTheRaveIsWiredToTheKit:
         """The bass moves the room; the kick shakes the shape. Shared, the two
         read as one effect, since a kick and a loud bassline mostly arrive
         together."""
-        from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
         def core(hit):
@@ -4743,7 +4712,6 @@ class TestTheRaveIsWiredToTheKit:
                    if sum(image.pixelColor(x, y).getRgb()[:3]) > 60]
             return lit
 
-        import math
         import statistics
 
         def ragged(lit):
@@ -4819,8 +4787,6 @@ class TestTheRibbonsAreCurvesNotPolygons:
 
     @staticmethod
     def _points():
-        import math
-
         from PySide6.QtCore import QPointF
 
         out = []
@@ -4838,8 +4804,6 @@ class TestTheRibbonsAreCurvesNotPolygons:
         """The biggest change of direction along the path, in degrees between
         consecutive chords: a polyline turns its whole corner in one step.
         """
-        import math
-
         from PySide6.QtCore import QPointF
 
         at = [path.pointAtPercent(n / samples) for n in range(samples + 1)]
@@ -4882,8 +4846,6 @@ class TestTheRibbonsAreCurvesNotPolygons:
     def test_it_passes_through_the_music_rather_than_near_it(self):
         """The curve stays on the ribbon: smoothing that wanders is a different
         shape."""
-        import math
-
         import visualizers
 
         points = self._points()
@@ -5134,7 +5096,6 @@ def _drum_track(seconds: float, lean: float = 0.0, rate: int = 48000):
     """Stereo 16-bit PCM: a kick every half second over a quiet tone. ``lean``
     places it from -1 (left) to +1 (right).
     """
-    import math
     from array import array
 
     left_gain = min(1.0, 1.0 - lean)
@@ -5669,7 +5630,6 @@ class TestTheAirIsColouredByTheBass:
         the wall clock made this a measure of the machine.
         """
         import statistics
-        import time
 
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
@@ -5846,8 +5806,6 @@ class TestTheAirIsAsVividAtFullScreenAsInAWindow:
         of the frame. Filling the air to match the window's colour took it
         from 0.216 to 0.247.
         """
-        import statistics
-
         def darkest(width, height):
             image = self._frame(width, height)
             seen = [image.pixelColor(x, y)
@@ -5884,7 +5842,6 @@ class TestTheAirIsAsVividAtFullScreenAsInAWindow:
         with a hue worth naming.
         """
         import cmath
-        import math
 
         hues = []
         for y in range(0, image.height(), 6):
@@ -6357,8 +6314,6 @@ class TestTheRoomTravelsSteadily:
 
     def _travel(self, tempo=128.0, noise=0.10, seconds=8):
         """How far the room moves each frame, over a steady tempo."""
-        import math
-
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -6622,7 +6577,6 @@ class TestTheLaserRigRunsThroughTheDrop:
         if seconds in self._runs:
             return self._runs[seconds]
 
-        import math
 
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
@@ -6846,7 +6800,7 @@ class TestTheFullScreenControlsWork:
     def test_a_click_brings_the_controls_back(self, qapp, qtbot):
         """On a trackpad the pointer can be where the bar faded from, and the
         first thing anybody does is click."""
-        from PySide6.QtCore import QPoint, QPointF, Qt as _Qt
+        from PySide6.QtCore import QPointF, Qt as _Qt
         from PySide6.QtGui import QMouseEvent
 
         pane = self._pane(qtbot)
@@ -7653,8 +7607,6 @@ class TestTheRiderIsPlayable:
                        if block[2] in ("wall", "block", "run")}), scene
 
     def test_the_figures_are_far_enough_apart_to_read(self):
-        import visualizers
-
         times, scene = self._laid()
         assert times, "nothing was laid at all"
         # Inside a run the blocks are close on purpose; between figures they
@@ -8606,8 +8558,6 @@ class TestTheRoadIsAlwaysARoad:
     def test_the_near_edge_runs_off_the_bottom_of_every_frame(self, qapp):
         """Otherwise the road stops in the picture with a hard edge across
         it."""
-        import math
-
         for width, height in self.SIZES:
             highest, worst_at = -1e9, 0.0
             for step in range(0, 628, 7):
@@ -8990,8 +8940,6 @@ class TestTheRiderIsDecorated:
 
     def test_a_block_is_mirrored_in_the_road_under_it(self, qapp):
         """Reflections make the blocks stand on the road rather than hover."""
-        import visualizers
-
         # Two seconds out, two thirds of the way down the road with the
         # playhead at 1.0 s.
         block = (2.0, 1, "wall", False, True)
@@ -9274,7 +9222,6 @@ class TestSeekingOnTheWaveform:
             self, qapp, tmp_path):
         """The real dialog and player, in the order a person goes: open the
         track, then switch the visualiser on."""
-        import math
         import struct
         import time
         import wave
@@ -9635,7 +9582,6 @@ class TestTheScopeIsATube:
     @staticmethod
     def _trace(place):
         """A figure, as the interleaved int16 a record carries."""
-        import math
         from array import array
 
         out = array("h")
@@ -9657,8 +9603,6 @@ class TestTheScopeIsATube:
         strokes do not cross, which would double their light and read as
         dwell.
         """
-        import math
-
         fast = 112
         slow = cls.POINTS - fast
 
@@ -9736,8 +9680,6 @@ class TestTheScopeIsATube:
     def test_a_beam_that_stops_still_draws(self, qapp):
         """A parked beam is the brightest thing on a scope, and Qt strokes
         nothing for a zero-length stretch."""
-        import visualizers
-
         scene = self._scene()
         parked = self._trace(lambda t: (0.5, -0.25))
         points = scene._vector_points(parked)
@@ -9755,7 +9697,6 @@ class TestTheScopeIsATube:
         and everything moving falls to the faintest level."""
         import visualizers
 
-        import math
 
         scene = self._scene()
 
@@ -9780,8 +9721,6 @@ class TestTheScopeIsATube:
     def test_a_figure_is_shaded_whatever_size_it_is(self, qapp):
         """The reference is the trace's own speed, like turning the intensity
         up until the figure looks right."""
-        import math
-
         scene = self._scene()
         for radius in (0.15, 0.9):
             trace = self._trace(lambda t, r=radius: (
@@ -9933,7 +9872,7 @@ class TestTheRaveRoomTravelsForwards:
     @classmethod
     def _trusses(cls, scene, at_z):
         """The boxes the trusses are drawn in, with the room at ``at_z``."""
-        from PySide6.QtCore import QPointF, QRectF
+        from PySide6.QtCore import QPointF
         from PySide6.QtGui import QColor, QImage, QPainter
 
         scene._z = at_z
@@ -10019,8 +9958,6 @@ class TestTheRaveRoomIsShapedLikeTheBar:
         against the same frame with no chart, since frames at different
         distances differ in perspective.
         """
-        import math
-
         import visualizers
 
         scene = self._scene()
@@ -10468,8 +10405,6 @@ class TestTheRiderCameraIsOnABoom:
     def test_the_road_banks_into_its_own_turn(self, qapp):
         """It rolled on a phase of its own, tumbling the world independently of
         the road, leaning one way while turning the other."""
-        import visualizers
-
         scene = self._posed()
         turns, rolls = [], []
         for step in range(120):
@@ -10724,7 +10659,6 @@ class TestTheRoadIsBuiltFromTheSong:
     def _song(cls, seconds=24.0, loud_from=8.0, loud_to=16.0,
               pan_at=12.0):
         """Quiet, then loud, then quiet; panned left, then right."""
-        import math
         from array import array
 
         pcm = array("h")
@@ -11576,7 +11510,6 @@ class TestTheRiderUnderAPlaythrough:
     @classmethod
     def _song(cls, seconds=14.0, bpm=120.0):
         """Something with a beat, a chorus and a stereo image."""
-        import math
         from array import array
 
         pcm = array("h")
@@ -11849,7 +11782,6 @@ class TestTheRiderUnderAPlaythrough:
         got = self._analysed()
         marks = (4.0, 6.0, 8.0, 9.5)
         watched = self._play(got, keep=marks)
-        scene = watched["scene"]
         worst = None
         for mark in marks:
             shot = watched["shots"].get(mark)
@@ -12381,8 +12313,6 @@ class TestTheCoinsBesideTheObstacles:
         rim strays 6.0 per cent from the best-fit ellipse as ten points, 1.5
         as an ellipse.
         """
-        import math
-
         lit = self._close_coin()
         assert len(lit) > 4000, "the coin is not close enough to measure"
         count = len(lit)
@@ -12446,8 +12376,6 @@ class TestTheCoinsBesideTheObstacles:
     def test_a_coin_turns_and_never_turns_to_nothing(self, qapp):
         """Never so narrow it vanishes: exactly edge-on, a disc is one pixel
         wide."""
-        import math
-
         def across(lit):
             xs = [x for x, _ in lit]
             return max(xs) - min(xs)
@@ -13364,8 +13292,6 @@ class TestTheBeatHitsHardEnoughToFeel:
         """It is the beat that hits, not the clock, with the play sounds
         silenced (a prize lights the edge too, tested elsewhere).
         """
-        import statistics
-
         import visualizers
 
         scene = visualizers.Rider()
@@ -13387,8 +13313,6 @@ class TestTheBeatHitsHardEnoughToFeel:
 
     def test_the_edge_is_what_lights_rather_than_the_road(self, qapp):
         """Where the beat may hit: not the middle, where blocks are read."""
-        import statistics
-
         import visualizers
 
         scene = visualizers.Rider()
@@ -13553,8 +13477,6 @@ class TestTheRoadIsNeverBare:
 
     def test_it_stays_on_the_beat(self, qapp):
         """Everything on this road is on the grid, including this."""
-        import visualizers
-
         scene = self._laid({"Kick": (1.0, 2.0, 3.0)})
         # The figures, not every block: a run's steps are a sixth of a beat
         # apart on purpose.
@@ -13659,9 +13581,7 @@ class TestATempoIsCountedTheWayAPersonWouldCountIt:
         """
         from array import array
 
-        import attachment_widgets
         import beatmap
-        import visualizers
         from attachment_widgets import Spectrum
 
         pane = Spectrum()

@@ -14,7 +14,7 @@ import pytest
 from conftest import FakeAnthropic, FakeResponse, build_mime
 from imap_engine import IMAPEngine
 from llm_engine import LLMEngine
-from models import Category, NonJobRouting, OtherCategory, TriageItem
+from models import NonJobRouting, OtherCategory, TriageItem
 from workers import build_move_plans, required_folders
 
 UTC = timezone.utc

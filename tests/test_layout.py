@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import contextlib
 import inspect
@@ -786,8 +786,6 @@ class TestTheAnalysisHasRoomToBeRead:
     def test_it_does_not_flip_back_and_forth_on_one_pixel(self, qapp):
         """A pane dragged across the threshold would otherwise re-lay
         itself on every pixel of the drag."""
-        from PySide6.QtCore import Qt
-
         pane = self._pane(qapp, 1200)
         try:
             seen = []

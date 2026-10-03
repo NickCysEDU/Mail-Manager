@@ -327,6 +327,7 @@ class TestTheMainWindow:
 
         import gui
         import update_dialog
+        import widgets
         from config import InMemoryCredentialStore, Settings
 
         release = threading.Event()
@@ -342,7 +343,7 @@ class TestTheMainWindow:
                                 lambda self, *_args: False)
             window.shutdown()
             assert look.parent() is None, "a running check is still the window's"
-            assert look in gui._ABANDONED
+            assert look in widgets._ABANDONED
         finally:
             release.set()
             update_dialog.QThread.wait(look, 5000)
@@ -354,6 +355,7 @@ class TestTheMainWindow:
 
         import gui
         import updates
+        import widgets
         from config import InMemoryCredentialStore, Settings
         from update_dialog import Fetch, UpdateDialog
 
@@ -380,7 +382,7 @@ class TestTheMainWindow:
             window.shutdown()
             assert fetch.installer.cancelled
             assert not fetch.isRunning(), "the download was left running"
-            assert fetch not in gui._ABANDONED
+            assert fetch not in widgets._ABANDONED
         finally:
             fetch.installer.cancelled = True
             fetch.wait(5000)

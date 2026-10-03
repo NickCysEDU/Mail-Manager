@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from models import Category, Classification, EmailMessage, FolderPlan, NonJobRouting, OtherCategory, TriageItem
 from workers import build_move_plans, required_folders

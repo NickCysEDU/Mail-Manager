@@ -9,7 +9,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QThread, Signal  # noqa: E402
+from PySide6.QtCore import Signal  # noqa: E402
 from PySide6.QtGui import QAction  # noqa: E402
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox  # noqa: E402
 
@@ -202,7 +202,7 @@ class TestWindowStopAll:
 
     def test_stop_all_detaches_a_wedged_worker_instead_of_killing_it(self, window):
         """Terminating a thread running Python can deadlock on the GIL."""
-        from gui import _ABANDONED
+        from widgets import _ABANDONED
 
         worker = StuckWorker(window)
         worker.start()
@@ -247,7 +247,7 @@ class TestWindowStopAll:
         assert window._workers == []
 
     def test_shutdown_detaches_a_wedged_worker(self, window):
-        from gui import _ABANDONED
+        from widgets import _ABANDONED
 
         worker = StuckWorker(window)
         worker.start()

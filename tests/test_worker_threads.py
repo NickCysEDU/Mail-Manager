@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import threading
 import time
 from datetime import datetime, timezone
 
@@ -16,7 +15,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 import workers as workers_module  # noqa: E402
 from conftest import FakeAnthropic, FakeResponse, build_mime  # noqa: E402
 from config import Settings  # noqa: E402
-from imap_engine import IMAPAuthError, IMAPEngine, MovePlan  # noqa: E402
+from imap_engine import IMAPEngine, MovePlan  # noqa: E402
 from llm_engine import LLMEngine  # noqa: E402
 from models import Category, NonJobRouting  # noqa: E402
 from workers import ApplyWorker, ConnectionTestWorker, ScanWorker  # noqa: E402

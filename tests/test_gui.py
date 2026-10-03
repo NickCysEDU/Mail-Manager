@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from datetime import datetime, timezone
 
 import pytest
@@ -14,22 +13,20 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from config import InMemoryCredentialStore, Settings  # noqa: E402
 from gui import (  # noqa: E402
-    LEAVE_IN_PLACE,
     _stored_date,
     ConfidenceDelegate,
     MainWindow,
     TriageFilterProxy,
     TriageTableModel,
-    _confidence_rgb,
     _export_row,
     _html,
-    _one_line,
 )
+from triage_table import LEAVE_IN_PLACE  # noqa: E402
+from widgets import _confidence_rgb, _one_line  # noqa: E402
 from imap_engine import MoveReport  # noqa: E402
 from models import (  # noqa: E402
     Category,
     Classification,
-    Disposition,
     EmailMessage,
     FolderPlan,
     NonJobRouting,
@@ -133,7 +130,7 @@ class TestTableModel:
 
     def test_dates_are_human_readable(self):
         """Pinned to a fixed midday so the test cannot straddle midnight."""
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         now = datetime.now().astimezone().replace(hour=12, minute=0, second=0, microsecond=0)
         subject = TriageTableModel()

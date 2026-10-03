@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import imaplib
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import pytest
 

@@ -25,7 +25,6 @@ import argparse
 import collections
 import pathlib
 import random
-import subprocess
 import sys
 import os
 import tarfile

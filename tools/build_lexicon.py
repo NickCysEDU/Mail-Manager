@@ -31,7 +31,7 @@ import urllib.parse
 import urllib.request
 from collections import Counter
 from pathlib import Path
-from typing import Dict, Iterable, Set, Tuple
+from typing import Dict, Set, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))

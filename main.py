@@ -626,7 +626,7 @@ def main(argv: Optional[list] = None) -> int:
     install_exception_hook(app)
 
     from config import CredentialStore, Settings
-    import gui
+    import widgets
     from gui import MainWindow
 
     settings = Settings.load()
@@ -638,7 +638,7 @@ def main(argv: Optional[list] = None) -> int:
 
     # Every message box, including the ones Qt raises itself, gets text you
     # can select and copy.
-    gui.install_selectable_messages(app)
+    widgets.install_selectable_messages(app)
 
     # Each window's controls on the Touch Bar, on a Mac that has one.
     import touchbar

@@ -25,12 +25,12 @@ from PySide6.QtCore import (QEvent, QSize, Qt, QThread, QTimer, QUrl,
                             Signal, Slot)
 from PySide6.QtGui import (QAction, QGuiApplication, QImage, QKeySequence,
                            QPixmap)
-from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
-                               QDialogButtonBox, QFileDialog, QFrame,
-                               QHBoxLayout, QLabel, QListWidget,
-                               QListWidgetItem, QMessageBox, QPlainTextEdit,
-                               QPushButton, QScrollArea, QSizePolicy,
-                               QSlider, QStackedWidget, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+                               QFileDialog, QFrame, QHBoxLayout,
+                               QLabel, QListWidget, QListWidgetItem,
+                               QMessageBox, QPlainTextEdit, QPushButton,
+                               QScrollArea, QSizePolicy, QSlider,
+                               QStackedWidget, QVBoxLayout, QWidget)
 
 import shiboken6
 

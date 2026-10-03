@@ -9,7 +9,6 @@ belonging to this app without the system asking first.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 

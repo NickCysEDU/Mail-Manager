@@ -22,7 +22,7 @@ import re
 import unicodedata
 import urllib.parse
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import lexicon
 from models import Category, OtherCategory

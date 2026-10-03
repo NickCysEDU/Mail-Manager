@@ -15,7 +15,7 @@ a reasonable answer.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Tuple
 
 from models import Category
 from rules_engine import Signal

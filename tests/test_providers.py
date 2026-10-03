@@ -11,10 +11,8 @@ from llm_engine import CLASSIFICATION_SCHEMA, SYSTEM_PROMPT, LLMEngine
 from models import Category
 from providers import (
     AnthropicProvider,
-    Completion,
     GeminiProvider,
     HttpSession,
-    ModelChoice,
     OllamaProvider,
     OpenAIProvider,
     ProviderAuthError,

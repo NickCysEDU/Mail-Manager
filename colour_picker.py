@@ -18,7 +18,7 @@ from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QColor, QCursor, QImage, QImageReader, QPixmap
 from PySide6.QtWidgets import (QColorDialog, QDialog, QDialogButtonBox,
                                QFileDialog, QHBoxLayout, QLabel, QMessageBox,
-                               QPushButton, QVBoxLayout, QWidget)
+                               QPushButton, QVBoxLayout)
 
 #: A photograph is decoded to look at, not to keep. Anything past this is
 #: scaled down first, so a forty megapixel picture cannot fill memory.

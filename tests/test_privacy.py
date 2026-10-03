@@ -56,7 +56,6 @@ def _handle_candidates(blob: str):
             for end in range(index + 2, min(index + 4, len(parts)) + 1):
                 yield ".".join(parts[index:end])
                 yield "_".join(parts[index:end])
-import subprocess
 from pathlib import Path
 
 import pytest

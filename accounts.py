@@ -14,8 +14,8 @@ from __future__ import annotations
 import hashlib
 import re
 import uuid
-from dataclasses import asdict, dataclass, field, fields
-from typing import Any, Dict, Mapping, Optional, Tuple
+from dataclasses import asdict, dataclass, fields
+from typing import Any, Dict, Mapping, Tuple
 
 #: Every provider below still advertises AUTH=PLAIN, so an app-specific
 #: password is enough and none of this needs OAuth. Checked against the live

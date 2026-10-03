@@ -14,8 +14,8 @@ a small bundle of settings rather than a second engine.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Dict, Optional, Tuple
+from dataclasses import dataclass
+from typing import Dict, Tuple
 
 from models import (
     DEFAULT_FOLDER_ROOT,

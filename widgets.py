@@ -6,10 +6,8 @@ knows about mail.
 from __future__ import annotations
 
 import html as html_module
-import re
 import textwrap
-from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import List, Sequence
 
 from PySide6.QtCore import QDate, QEvent, QObject, QRect, QSize, Qt
 from PySide6.QtGui import (QColor, QFont, QFontDatabase, QFontMetrics, QIcon,

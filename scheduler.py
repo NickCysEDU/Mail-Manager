@@ -229,7 +229,7 @@ def run_once(settings=None, store=None, apply_moves: Optional[bool] = None) -> R
     from config import CredentialStore, Settings
     from imap_engine import IMAPEngine, MovePlan
     from llm_engine import LLMEngine
-    from models import FolderPlan, TriageItem, resolve_window
+    from models import TriageItem
 
     settings = settings or Settings.load()
     store = store or CredentialStore()

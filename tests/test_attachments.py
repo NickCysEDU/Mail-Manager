@@ -648,7 +648,6 @@ class TestTwoSpectraFromOneTransform:
 
     def test_the_two_come_back_exactly(self):
         """Against a transform of each one on its own."""
-        import math
         import random
 
         import attachment_audio as audio

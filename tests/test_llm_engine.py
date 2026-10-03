@@ -7,13 +7,12 @@ import threading
 
 import pytest
 
-from conftest import ApiStatusError, APIConnectionError, FakeAnthropic, FakeResponse, RateLimitError
+from conftest import ApiStatusError, FakeAnthropic, FakeResponse, RateLimitError
 from llm_engine import (
     BATCH_INSTRUCTION,
     BATCH_SCHEMA,
     CLASSIFICATION_SCHEMA,
     FALLBACK_BETA,
-    PRICING,
     SYSTEM_PROMPT,
     ClassificationCancelled,
     LLMAuthError,

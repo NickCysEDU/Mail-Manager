@@ -21,16 +21,15 @@ from PySide6.QtCore import (QAbstractAnimation, QEasingCurve, QPoint, QPointF,
                             QRect, QRectF, QSize, Qt,
                             QTimer, QVariantAnimation, Signal)
 from PySide6.QtGui import (QColor, QFont, QFontMetricsF, QImage, QLinearGradient,
-                           QPainter, QPainterPath, QPixmap,
-                           QPen, QRadialGradient, QGuiApplication)
+                           QPainter, QPixmap, QPen,
+                           QRadialGradient, QGuiApplication)
 from PySide6.QtOpenGL import (QOpenGLFramebufferObject,
                               QOpenGLFramebufferObjectFormat,
                               QOpenGLPaintDevice, QOpenGLTextureBlitter)
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
-from PySide6.QtWidgets import (QGraphicsOpacityEffect, QHBoxLayout, QLabel,
-                               QLayout, QSizePolicy,
-                               QSlider, QStyle, QStyleOptionSlider,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QGraphicsOpacityEffect, QLayout, QSizePolicy,
+                               QSlider, QStyle,
+                               QStyleOptionSlider, QVBoxLayout, QWidget)
 
 
 class SeekBar(QSlider):
@@ -1356,8 +1355,6 @@ class Spectrum(QWidget):
 
     def set_frames(self, frames: List, rate: int) -> None:
         """The analysis, which lands a moment after playback starts."""
-        import attachment_audio
-
         if frames and frames is self._frames and max(1, rate) == self._rate:
             # The same analysis again: starting over would zero every level
             # mid-song.

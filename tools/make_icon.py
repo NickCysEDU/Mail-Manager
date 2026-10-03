@@ -27,7 +27,6 @@ from pathlib import Path
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import (
     QBrush, QColor, QFont, QImage, QLinearGradient, QPainter, QPainterPath, QPen,
-    QRadialGradient,
 )
 from PySide6.QtWidgets import QApplication
 

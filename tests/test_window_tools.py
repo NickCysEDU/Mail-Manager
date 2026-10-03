@@ -13,7 +13,6 @@ from PySide6.QtWidgets import QApplication, QLabel, QMessageBox  # noqa: E402
 
 import accounts as accounts_module  # noqa: E402
 import autoreply  # noqa: E402
-import helpmode  # noqa: E402
 import providers  # noqa: E402
 from accounts import Account  # noqa: E402
 from config import InMemoryCredentialStore, Settings  # noqa: E402
@@ -420,7 +419,6 @@ class TestTheMailboxColumnIsActuallyVisible:
 
     def test_a_saved_header_cannot_hide_it_forever(self, qapp, tmp_path, monkeypatch):
         """The state saved when there was one mailbox said to hide the column."""
-        from PySide6.QtCore import QByteArray
         monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
         single = Settings(icloud_email="you@icloud.example").normalized()
         first = MainWindow(single, InMemoryCredentialStore())
@@ -1051,7 +1049,7 @@ class TestTheModelsDialog:
     """What is installed, with status, and a way to remove it."""
 
     def _dialog(self, window, models, error=""):
-        from gui import ModelsDialog
+        from settings_dialog import ModelsDialog
 
         dialog = ModelsDialog(parent=window)
         # Answer the background probe by hand rather than needing a server.
@@ -1206,11 +1204,11 @@ class TestTheModelFieldIsADropdownForLocalModels:
 
 class TestErrorTextCanBeCopied:
     def test_a_message_box_becomes_selectable_when_shown(self, window):
-        import gui
+        import widgets
         from PySide6.QtCore import Qt as QtNS
 
         app = QApplication.instance()
-        gui.install_selectable_messages(app)
+        widgets.install_selectable_messages(app)
         box = QMessageBox(QMessageBox.Icon.Critical, "Connection failed",
                           "Could not reach Ollama at http://127.0.0.1:11434.",
                           parent=window)
@@ -1227,7 +1225,7 @@ class TestErrorTextCanBeCopied:
             box.deleteLater()
             # An application-wide filter must not outlive the test that
             # wanted it: it runs on every event of every test after this one.
-            gui.remove_selectable_messages(app)
+            widgets.remove_selectable_messages(app)
 
 
 class TestADialogDoesNotOutliveItsVisit:
