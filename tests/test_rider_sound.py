@@ -1,11 +1,9 @@
 """Music rider's sounds, in the record's key. See rider_sound.
 
-"Xxx xxxxx xxxx xx xxxxx xxxxx xx xxxxxxx: xxxxxxx xxx xxxxx, xxxxxxx xxx
-xxxxxxxx, xxxxxxx xxxx xxxxxx xx xxxxx xx xxxxxxx xxx xxxxxxxxx." A note
-for every block taken, climbing as the run goes on; a thump with the music
-ducking under it for a hit. And since "the sounds clash with the melodic
-elements", the notes are the record's own: the chord under the moment, in
-the record's tuning - or no notes at all where there is no key to be in.
+A note for every block taken, climbing as the run goes on; a thump with the
+music ducking under it for a hit. The notes are the record's own, so they
+never fight it: the chord under the moment, in the record's tuning, or no
+notes at all where there is no key.
 """
 
 from __future__ import annotations
@@ -657,7 +655,7 @@ class TestTheSwitch:
 
 
 class TestTheEffectsSlider:
-    """"Xxxxx xxxx xx xxx xxxxxx xx xxxxx xxxxxxx xxxx x xxxxxx." """
+    """The slider for the game's sound effects."""
 
     @staticmethod
     def _pane():

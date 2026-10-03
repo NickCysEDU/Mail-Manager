@@ -1,19 +1,14 @@
 """Appearance: light and dark, contrast, and a mode built for reading.
 
-The app used to take whatever palette macOS handed it, which meant its
-readability was somebody else's decision. This module owns that instead: it
-builds a palette and a stylesheet from three settings, and nothing else in the
-app hard-codes a colour that a person has to read text against.
+A palette and a stylesheet from three settings, so nothing else in the app
+hard-codes a colour text is read against:
 
-Three separate axes, deliberately:
+``mode`` follow the system, or pin light or dark ``contrast`` normal, or
+pushed to the ends of the range ``readable`` larger type, more air, stronger
+separators
 
-``mode``      follow the system, or pin light or dark
-``contrast``  normal, or pushed to the ends of the range
-``readable``  larger type, more air, and stronger separators
-
-They compose. High contrast is about telling foreground from background;
-readable is about the eye finding its place on a dense table. Somebody who
-needs one often does not need the other.
+They compose: contrast separates foreground from background, readable helps
+the eye keep its place in a dense table, and people often need only one.
 """
 
 from __future__ import annotations
@@ -36,9 +31,8 @@ MODES: Tuple[Tuple[str, str], ...] = (
     ("dark", "Always dark"),
 )
 
-#: How much room the window gives things. One axis, about space only - type
-#: size and weight are the separate reading toggle, so the two compose: dense
-#: spacing with larger type is a reasonable thing to want.
+#: How much room the window gives things: spacing only. Type size is the
+#: separate reading setting, so dense spacing with larger type is possible.
 DENSITIES: Tuple[Tuple[str, str, str], ...] = (
     ("comfortable", "Comfortable",
      "The default. Room to read, and to hit things without aiming."),
@@ -118,8 +112,7 @@ class Palette:
         return QColor(self.window).lightness() < 128
 
 
-#: Normal light. The accent is the Scan & Analyze blue, which is also the
-#: icon's colour, so the app reads as one thing.
+#: Normal light. The accent is the Scan & Analyze blue, also the icon's colour.
 LIGHT = Palette(
     window="#F4F5F7", surface="#FFFFFF", surface_alt="#EFF2F6",
     text="#15181D", text_dim="#5A626E", border="#D2D7DE",
@@ -137,7 +130,7 @@ DARK = Palette(
 )
 
 #: High contrast keeps the hues but pushes the ends apart and darkens the
-#: supporting colours until they pass against their own background.
+#: supporting colours until they pass against their background.
 LIGHT_HIGH = Palette(
     window="#FFFFFF", surface="#FFFFFF", surface_alt="#E4E4E4",
     text="#000000", text_dim="#2E2E2E", border="#6B6B6B",
@@ -154,9 +147,8 @@ DARK_HIGH = Palette(
     selection="#7FB2FF", selection_text="#000000",
 )
 
-#: Maximum is monochrome by design: no colour carries meaning on its own, and
-#: every pairing is black on white or white on black. It is deliberately plain
-#: rather than pretty, because that is the point of it.
+#: Maximum is monochrome by design: no colour carries meaning alone, and every
+#: pairing is black on white or white on black.
 LIGHT_MAX = Palette(
     window="#FFFFFF", surface="#FFFFFF", surface_alt="#E8E8E8",
     text="#000000", text_dim="#000000", border="#000000",
@@ -256,10 +248,8 @@ def stylesheet(colours: Palette, readable: bool = False,
                base_point: float = 13.0, spacing: str = "comfortable") -> str:
     """The parts a palette cannot express: spacing, borders, focus rings."""
     room = density(spacing)
-    # One vertical padding for every control. Height is content plus padding
-    # plus border, so controls only line up if all three agree - a minimum
-    # height on its own leaves each widget type at whatever its own padding
-    # makes it.
+    # One vertical padding for every control: height is content plus padding
+    # plus border, so controls only line up if all three agree.
     vpad = room.control_pad + (2 if readable else 0)
     pad = f"{vpad}px {18 if readable else 15}px"
     radius = 7
@@ -267,14 +257,12 @@ def stylesheet(colours: Palette, readable: bool = False,
     cell_pad = room.cell_pad + (2 if readable else 0)
     border = 2 if colours.dark or readable else 1
     focus = 3 if readable else 2
-    # Steppers and drop-downs sized to be hit rather than aimed at. Apple's own
-    # guidance puts the smallest comfortable target at 28 points; Qt's defaults
-    # for these are closer to twelve.
+    # Steppers and drop-downs sized to be hit: Apple's smallest comfortable
+    # target is 28 points, and Qt's defaults are nearer twelve.
     control_height = 24 if readable else 20
     stepper = 22 if readable else 18
-    # Two of these plus their margins have to fit inside the field. Sized from
-    # the field's own height rather than guessed, or the top one is clipped
-    # away and the control ends up with a single arrow.
+    # Two of these and their margins must fit the field, so they are sized from
+    # it; guessed, the top one was clipped away.
     stepper_half = max(8, (control_height - 6) // 2)
     scroll = 14 if readable else 12
     drop_width = 30 if readable else 26
@@ -284,9 +272,8 @@ def stylesheet(colours: Palette, readable: bool = False,
     right_arrow = arrow_image(colours.text, "right", arrow_px)
     dim_arrow = arrow_image(colours.text_dim, "down", arrow_px)
 
-    # Scroll bars: on a Mac, the system's own, which lie over what they
-    # scroll and show only while it moves. Drawn by the stylesheet they are
-    # always there, a track down the side of every list and pane.
+    # Scroll bars: on a Mac, the system's own, which overlay what they scroll
+    # and show only while it moves.
     if sys.platform == "darwin":
         scroll_bars = ""
     else:
@@ -565,12 +552,9 @@ def stylesheet(colours: Palette, readable: bool = False,
 
 
 class ArrowStyle(QProxyStyle):
-    """Draws the little arrows, instead of leaving them to the stylesheet.
-
-    A stylesheet can only describe an arrow as a border triangle or a bitmap.
-    The triangle renders as a filled rectangle in a spin box, and a bitmap
-    cannot follow the palette or the display's scale factor. Drawing them is
-    both smaller and better: a chevron, in the current text colour, crisp at
+    """Draws the little arrows itself: a stylesheet can only give a border
+    triangle (a filled rectangle in a spin box) or a bitmap that cannot
+    follow the palette or the scale. A chevron in the text colour, crisp at
     any size.
     """
 
@@ -592,8 +576,8 @@ class ArrowStyle(QProxyStyle):
         rect = option.rect
         if rect.width() <= 2 or rect.height() <= 2:
             return
-        # A chevron rather than a filled triangle: lighter, and it matches the
-        # rest of the system's iconography.
+        # A chevron rather than a filled triangle: lighter, and matching the
+        # system's icons.
         side = min(rect.width(), rect.height()) * 0.42
         centre = QPointF(rect.center()) + QPointF(0.5, 0.5)
 
@@ -620,10 +604,9 @@ class ArrowStyle(QProxyStyle):
         painter.restore()
 
 
-#: Rendered chevrons, cached by colour and size. A stylesheet can only point
-#: at an image for a sub-control it has styled - it will not call back into
-#: the style - so the arrows on spin boxes and combo boxes have to exist as
-#: files. They are drawn here rather than shipped so they follow the palette.
+#: Rendered chevrons, cached by colour and size: a stylesheet can only point at
+#: an image file for a styled sub-control, so they are drawn here to follow the
+#: palette.
 _ARROW_CACHE: Dict[Tuple[str, str, int], str] = {}
 
 
@@ -683,16 +666,10 @@ def base_font(app, readable: bool) -> QFont:
     return font
 
 
-#: The contrast the application was last painted with.
-#:
-#: Widgets that paint themselves read the palette, which is enough for
-#: nearly everything. What it is not enough for is a colour chosen for what
-#: it means rather than for how it reads: a grey for a row already filed, a
-#: hue for a category. Those were written out as fixed values, so at
-#: maximum contrast - which is monochrome on purpose - the text in every
-#: unselected row of the table stayed exactly as it was at normal
-#: contrast, which is "xxx xxxxxxxx xxxxxxxxx xxx xxxx xxxxx xx xxxxxxxx
-#: xxx xxxx xx xxxxxxxxxx xxxx".
+#: The contrast the application was last painted with. Self-painted widgets
+#: read the palette, except colours chosen for meaning (a grey for a filed row,
+#: a category hue), which are written out; at maximum contrast those must give
+#: way, or unselected rows kept their normal-contrast greys.
 _ACTIVE_CONTRAST = "normal"
 
 
@@ -702,11 +679,8 @@ def active_contrast() -> str:
 
 
 def monochrome() -> bool:
-    """Whether no colour is allowed to carry meaning on its own.
-
-    True at maximum contrast, where every pairing is black on white or
-    white on black and a decorative colour has to give way to the
-    palette's own text colour.
+    """Whether no colour may carry meaning alone: true at maximum contrast,
+    where a decorative colour gives way to the palette's text colour.
     """
     return _ACTIVE_CONTRAST == "maximum"
 

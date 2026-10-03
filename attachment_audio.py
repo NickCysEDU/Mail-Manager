@@ -480,8 +480,7 @@ BASS_BANDS = 3
 
 def bass_line(frames: Sequence, columns: int) -> List[float]:
     """How much bass there is across the track, 0 to 1 a column: the lowest
-    bands averaged per column, scaled so the 95th percentile is full.
-    """
+    bands averaged per column, scaled so the 95th percentile is full."""
     if not frames or columns <= 0:
         return []
     out = []
@@ -988,8 +987,7 @@ class _Analysis(QObject_base):
     def _release_decoder(self) -> None:
         """Stop the decoder and delete it: its signals hold closures that hold
         it and the decoded track, a cycle through Qt the collector cannot
-        see.
-        """
+        see."""
         decoder, self._decoder = self._decoder, None
         if decoder is not None:
             try:
@@ -1076,8 +1074,7 @@ class _Analysis(QObject_base):
         """The thread's own signal: run() has returned, so the decoder and the
         track go. Qt sends this just before the thread ends, and the last
         reference to it can be in the decoder's callbacks, so it is waited
-        for first (a moment at most).
-        """
+        for first (a moment at most)."""
         if self._thread is not None:
             self._thread.wait()
             self._thread._samples = None

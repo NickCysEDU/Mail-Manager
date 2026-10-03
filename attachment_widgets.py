@@ -993,8 +993,7 @@ class Spectrum(QWidget):
 
     def set_change(self, seconds: float) -> None:
         """How long a newly chosen scene takes to replace the one before, in
-        seconds; 0 cuts.
-        """
+        seconds; 0 cuts."""
         self._change = max(0.0, float(seconds))
         if self._change <= 0.0:
             self._fresh = 1.0
@@ -1333,15 +1332,13 @@ class Spectrum(QWidget):
 
     def set_rhythm(self, rhythm) -> None:
         """The drums' tempo, beat and pattern once known; None when they could
-        not be.
-        """
+        not be."""
         self._rhythm = rhythm
         self._rhythm_due = False
 
     def expect_rhythm(self) -> None:
         """The drums' beat is still being worked out: a scene that needs it can
-        wait.
-        """
+        wait."""
         self._rhythm_due = True
 
     def rhythm(self):
@@ -1413,8 +1410,7 @@ class Spectrum(QWidget):
     def clear(self, keep_open: bool = False) -> None:
         """Put the track down, and the strip away with it, unless
         ``keep_open``: a new track in a showing pane keeps its room while it
-        is read.
-        """
+        is read."""
         if not keep_open:
             self._flow.stop()
             self._away.stop()
@@ -1973,8 +1969,7 @@ class Spectrum(QWidget):
         """The player was sent to ``milliseconds``: go there at once and wait
         until the player is heard moving on. Qt's player holds the new
         position for most of a tenth of a second while it restarts; run on
-        from the seek, the picture was ahead and spent a second easing back.
-        """
+        from the seek, the picture was ahead and spent a second easing back."""
         import time as _time
 
         self._seek_from = self._heard_now
@@ -1988,8 +1983,7 @@ class Spectrum(QWidget):
         """The moment the music is at: the player's last report run on from
         when it landed and eased towards each new one, since it only moves
         every 50 ms. Exact while paused, held after a seek until the player
-        moves on; an unannounced jump is taken at once.
-        """
+        moves on; an unannounced jump is taken at once."""
         import time as _time
 
         now = _time.monotonic()
@@ -2055,8 +2049,7 @@ class Spectrum(QWidget):
 
     def _ahead(self) -> float:
         """How far ahead of the player's position the picture is shown (see
-        av_sync); nothing without an allowance.
-        """
+        av_sync); nothing without an allowance."""
         if self.allowance is None:
             return 0.0
         screen = self.screen()
@@ -2293,8 +2286,7 @@ class Spectrum(QWidget):
 
     def set_listener(self, listener) -> None:
         """Something handed the scene after every frame (the rider's sounds,
-        which answer what the game did); None to stop.
-        """
+        which answer what the game did); None to stop."""
         self._listener = listener
 
     def _tell_listener(self) -> None:
@@ -3235,8 +3227,7 @@ class CardSharpness:
     @staticmethod
     def rungs(ratio: float) -> tuple:
         """(samples a pixel, share of the screen's pixels), best first: every
-        pixel, whatever the screen.
-        """
+        pixel, whatever the screen."""
         return ((4, 1.0), (2, 1.0), (0, 1.0))
 
     def choice(self, pixels: float, ratio: float, scene) -> tuple:

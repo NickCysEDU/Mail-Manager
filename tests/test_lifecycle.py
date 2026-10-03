@@ -550,9 +550,8 @@ class TestMetrics:
 class TestQuittingWithSettingsOpen:
     """Settings is modal, so Cmd-Q goes to it and the app appears to hang.
 
-    Reported as "Xxxx Xxxxxxx xxxx xxx xxxx xxxx xxxxxxxx xx xxxx". It was
-    two faults: the Quit action went straight to QApplication.quit, skipping
-    every check, and nothing knew the dialog was there.
+    Two faults: the Quit action went straight to QApplication.quit,
+    skipping every check, and nothing knew the dialog was there.
     """
 
     @pytest.fixture

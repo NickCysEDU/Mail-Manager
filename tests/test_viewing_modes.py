@@ -1,24 +1,14 @@
 """Every viewing mode the window can be in, with room for everything.
 
-"Xxxxxx xxx xxxxxxx xxxxx xxx xxxxxx xxx xxx xxx xx xx xxx xxxxxx xxxx xx
-xxxxxxxx xxx xxxxxx xxxxx xxx xxxxxxxxxx xx xx xxxxxx."
+Every visible widget in a window is checked: inside what holds it, and at
+least as big as it says it needs to be. For the main window with the
+preview under the table and beside it, the attachment viewer with each
+scene that carries extra controls, the full-screen visualiser, and the
+dialogs, at the sizes each can be.
 
-The individual layout tests elsewhere each check one control at one size.
-This walks *every* visible widget in a window and asks two questions of
-each: is it inside the thing that holds it, and is it at least as big as
-it says it needs to be. Then it does that for the main window with the
-preview under the table and beside it, for the attachment viewer with
-each of the scenes that carry extra controls, for the full-screen
-visualiser, and for the dialogs - at the sizes each of them can be.
-
-Two things are deliberately not faults:
-
-*A fixed width.* ``setFixedWidth`` is a decision, and the style's own
-minimum for a push button is 80 px whatever is written on it - the
-transport's play button is 52 and carries one glyph.
-
-*Anything inside a scroll area.* Being taller than the view is what a
-scroll area is for.
+Not faults: a fixed width, which is a decision (the style's minimum for a
+push button is 80 px, and the play button is 52 with one glyph), and
+anything inside a scroll area, which may be taller than the view.
 """
 
 from __future__ import annotations

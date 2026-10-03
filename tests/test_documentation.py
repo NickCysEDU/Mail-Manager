@@ -212,14 +212,8 @@ class TestTheLicencesTravelWithTheBinary:
 
 
 class TestTheWordingStaysPlain:
-    """"Xxxxx xxx xxxx xxxx xxx xxxx xx xxx xxxxxxxxxxx. Xxxx xx xxxx
-    xxxxxxx, xxx XX xxxxxxxx xx xxxxxxxxx. Xx xx xxxxxx. Xx 'this isn't
-    this, it's this'. No 'x, because y' structured sentences. Users don't
-    xxxx xxxxx xxxxxx xxxxxxx xxxxxxxxx xxxx xxxxx xxxxxx xx."
-
-    Thirty-seven tooltips, labels and dialogs explained themselves at
-    length. A tooltip says what a control does; why it works that way
-    belongs in the code, where this file's own comments live.
+    """Tooltips, labels and dialogs say what a control does, briefly; why
+    it works that way belongs in the code.
 
     Only text that reaches a person is checked. The sample inbox is
     pretend mail and the prompts are written for a model, so both keep
@@ -267,7 +261,7 @@ class TestTheWordingStaysPlain:
             f"{f}:{line}" for f, line in bad)
 
     def test_nothing_shown_explains_itself_with_because(self):
-        """"No 'x, because y' structured sentences." """
+        """No reason tacked on after a comma: because, so that, since."""
         import re
 
         bad = [(f, line, text) for f, line, text in self._shown_strings()

@@ -1,12 +1,11 @@
 """When the music is heard, and when a frame is seen: the picture's allowance
 for both.
 
-"Xxxxxx xxx xxxxxxxxxxx xxx xxxxxxxxx xx xxxx xxx xxx xxxxxxx." A media
-player's position is the sound it has handed to the machine's audio, not the
-sound anybody is hearing: that is the output device's latency later - a
-fifth of a millisecond per sample of buffer on built-in speakers, a sixth
-of a second on Bluetooth headphones. And a frame drawn now is on the glass a
-frame or two later. So the picture shows the music at
+A media player's position is the sound it has handed to the machine's audio,
+not the sound anybody is hearing, which comes the output device's latency later
+(a fifth of a millisecond per sample of buffer on built-in speakers, a sixth of
+a second on Bluetooth headphones). A frame drawn now is on the glass a frame or
+two later. So the picture shows the music at
 
     position + display latency - audio latency + trim
 

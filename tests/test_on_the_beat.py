@@ -1,9 +1,8 @@
 """Every scene on the beat you hear. See Spectrum._now and trackstyle.on_the_hits.
 
-"Xxxxxx xxx xxxxxxxxxxx xxx xxxxxxxxx xx xxxx xxx xxx xxxxxxx." A click
-track whose every beat is known to the sample, through the real analysis,
-into the real pane, driven by a player that moves its position every 50 ms
-the way the media player measurably does - and each frame's answer to each
+A click track whose every beat is known to the sample, through the real
+analysis, into the real pane, driven by a player that moves its position every
+50 ms the way the media player measurably does, and each frame's answer to each
 click timed against the click.
 
 What these cannot see is the audio device and the display: how long the

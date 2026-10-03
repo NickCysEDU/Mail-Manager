@@ -1555,8 +1555,8 @@ def acknowledgement_score(subject: str, body: str) -> Tuple[float, List[str]]:
 
 # ==========================================================================
 # What a message *is*, when it contains no word that says so
-# ========================================================================== A
-# parcel notice that never says "delivery", a flight confirmation that never
+# ==========================================================================
+# A parcel notice that never says "delivery", a flight confirmation that never
 # says "flight", a friend moving a plan: a person reads their shape (a flight
 # number beside an airport pair, a booking reference, a bookings@ mailbox, two
 # people talking), and a phrase list has nothing to list.
@@ -2384,10 +2384,10 @@ class RuleClassifier:
         working = (professional > 0.0 or context_now >= 1.0
                    or named_process > 0.0 or bool(from_hiring))
 
-        # ---- weak evidence the context has licensed -------------------- Only
-        # with the sender and the process established may the conditional
-        # phrases count; without that they would file a solicitor's letter
-        # under Offer.
+        # ---- weak evidence the context has licensed --------------------
+        # Only with the sender and the process established may the
+        # conditional phrases count; without that they would file a
+        # solicitor's letter under Offer.
         licensed = bool(from_hiring) or named_process > 0.0
         if licensed:
             for category, table in CONDITIONAL_SIGNALS.items():
@@ -2454,9 +2454,9 @@ class RuleClassifier:
         job_bonus = 0.0
         structure_notes: List[str] = []
 
-        # ---- subject shape --------------------------------------------- A
-        # subject line is short, deliberate and written last: the most reliable
-        # single feature in applicant-tracking mail.
+        # ---- subject shape ---------------------------------------------
+        # A subject line is short, deliberate and written last: the most
+        # reliable single feature in applicant-tracking mail.
         for pattern, weight, label in SUBJECT_PATTERNS:
             if pattern.search(subject_n):
                 job_bonus += weight
@@ -2502,9 +2502,9 @@ class RuleClassifier:
             job_score += 2.5
             job_matches.append("an applicant-tracking-system address")
 
-        # ---- explicit requests to act ---------------------------------- Only
-        # once the message is established as job mail: "please confirm your
-        # email address" is a request in any inbox.
+        # ---- explicit requests to act ----------------------------------
+        # Only once the message is established as job mail: "please confirm
+        # your email address" is a request in any inbox.
         if job_score >= 2.0 or scores[Category.APPLICATION_RECEIVED] >= 2.5:
             action_score = 0.0
             action_notes: List[str] = []

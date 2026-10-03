@@ -965,8 +965,7 @@ class TestTheBuildKeepsWhatTheViewerNeeds:
     def test_the_dial_face_and_its_licence_are_bundled(self):
         """Every file beside the dial face goes where visualizers.dial_face
         looks. The bundle's self-test (main._dial_face) stops a build
-        without them; this is the recipe's half.
-        """
+        without them; this is the recipe's half."""
         spec = self._spec()
         assert 'ROOT / "assets" / "fonts"' in spec
         assert '"assets/fonts"' in spec
@@ -974,8 +973,7 @@ class TestTheBuildKeepsWhatTheViewerNeeds:
     def test_the_self_test_runs_an_analysis_in_a_worker(self):
         """A built app's worker process is the app started again and told to be
         one, which works from source and not always from a bundle, so the
-        self-test runs it for real.
-        """
+        self-test runs it for real."""
         import inspect
 
         import attachment_audio
@@ -1050,8 +1048,7 @@ class TestWaitingForTheAnalysis:
     def test_it_slows_the_clock_down_while_it_waits(self, qtbot):
         """While analysing, the pane repaints slowly: the analysis and the
         scenes share the interpreter lock, and full-rate painting made the
-        analysis 1.6 times slower.
-        """
+        analysis 1.6 times slower."""
         spectrum = self._spectrum(qtbot)
         spectrum.set_working(0.1)
         assert spectrum._timer.interval() >= 60
@@ -1060,8 +1057,7 @@ class TestWaitingForTheAnalysis:
 
     def test_it_does_not_reset_what_the_user_chose(self, qtbot):
         """Progress reports must not reset the aspect ratio or the strobe
-        settings.
-        """
+        settings."""
         spectrum = self._spectrum(qtbot)
         spectrum.set_aspect(16 / 9)
         spectrum.set_strobe_rate(0.9)
@@ -1076,8 +1072,7 @@ class TestWaitingForTheAnalysis:
 
     def test_it_does_not_throw_the_render_buffer_away(self, qtbot):
         """Progress reports must not rebuild the post-processor or drop the
-        buffer.
-        """
+        buffer."""
         from attachment_widgets import PostProcess
 
         spectrum = self._spectrum(qtbot)
@@ -1181,8 +1176,7 @@ class TestTheMeterScene:
     def test_no_single_frame_throws_it_across_the_face(
             self, qapp, monkeypatch):
         """A ten-decibel jump between two frames must not throw the needle
-        across the scale in one of them.
-        """
+        across the scale in one of them."""
         track = self._step_response(monkeypatch)
         biggest = max(abs(track[i + 1] - track[i])
                       for i in range(len(track) - 1))
@@ -1191,8 +1185,7 @@ class TestTheMeterScene:
 
     def test_it_overshoots_a_little_and_not_a_lot(self, qapp, monkeypatch):
         """A real movement overshoots slightly and comes back; past a couple of
-        percent it wobbles, and on the way down it slaps the zero pin.
-        """
+        percent it wobbles, and on the way down it slaps the zero pin."""
         track = self._step_response(monkeypatch)
         assert max(track) <= 1.03, f"it overshot to {max(track):.3f}"
         assert abs(track[-1] - 1.0) < 0.01, "it never settled"
@@ -1221,8 +1214,7 @@ class TestTheMeterScene:
 
     def test_a_late_frame_does_not_fling_it(self, qapp, monkeypatch):
         """A stalled window hands back a step measured in seconds; the
-        integrator is only stable for short steps, so a big one is walked.
-        """
+        integrator is only stable for short steps, so a big one is walked."""
         import attachment_widgets
         from attachment_widgets import Spectrum
 
@@ -1407,8 +1399,7 @@ class TestTheVisualiserControlsAreReachable:
 
     def test_a_scenes_own_controls_belong_to_that_scene(self, qtbot):
         """Colours are for the meters and decay for the scope; neither exists
-        while the visualiser is off.
-        """
+        while the visualiser is off."""
         viewer = self._pane(qtbot)
         audio = viewer.audio
         audio.enable_box.setChecked(True)
@@ -1976,8 +1967,7 @@ class TestTheAnalysisStaysOffTheUiThread:
 
 class TestTheVuScaleIsARealOne:
     """A VU movement deflects in proportion to voltage, which fixes every mark
-    on the face, so 0 dB and 100 per cent are computed to the same point.
-    """
+    on the face, so 0 dB and 100 per cent are computed to the same point."""
 
     def test_zero_db_and_one_hundred_per_cent_are_the_same_point(self):
         import visualizers
@@ -2012,8 +2002,7 @@ class TestTheVuScaleIsARealOne:
 class TestTheTunnelIsRound:
     def test_bass_swells_the_rings_rather_than_squashing_them(self):
         """Circles, not ellipses: up to 18 per cent flatter on a kick read as a
-        mistake.
-        """
+        mistake."""
         import inspect
 
         import visualizers
@@ -2115,8 +2104,7 @@ class TestTheVisualiserControlsFitTheirRow:
 
     def test_it_lays_out_inside_its_margins(self, qapp):
         """A QLayout subclass must inset its rectangle by its own contents
-        margins.
-        """
+        margins."""
         from PySide6.QtWidgets import QPushButton, QWidget
 
         from attachment_widgets import FlowRow
@@ -2138,8 +2126,7 @@ class TestTheVisualiserControlsFitTheirRow:
 
     def test_the_height_it_asks_for_includes_its_margins(self, qapp):
         """Counted in one place and not the other, a panel is shorter than its
-        contents.
-        """
+        contents."""
         from PySide6.QtWidgets import QPushButton, QWidget
 
         from attachment_widgets import FlowRow
@@ -2163,8 +2150,7 @@ class TestTheVisualiserControlsFitTheirRow:
 
     def test_the_full_screen_bar_is_the_size_of_what_is_in_it(self, qapp):
         """The panel is inset by the shadow's reach, and the controls must land
-        inside it.
-        """
+        inside it."""
         from PySide6.QtWidgets import QPushButton
 
         from attachment_widgets import (FullScreenSpectrum, Spectrum,
@@ -2387,8 +2373,7 @@ class TestTheControlsAreNeverInsideThePicture:
     @pytest.mark.timeout(120)
     def test_every_control_can_actually_be_clicked(self, qapp, tmp_path):
         """childAt, not a rectangle comparison: a widget can be in place and
-        covered.
-        """
+        covered."""
         from attachment_widgets import Spectrum
 
         dialog = self._viewer(qapp, tmp_path)
@@ -2675,8 +2660,7 @@ class TestOscilloscopeMusic:
 
     def test_the_shape_does_not_depend_on_the_window(self):
         """A resize is a transform, so the screen the trace is burned into can
-        be kept between frames.
-        """
+        be kept between frames."""
         import visualizers
 
         scope = visualizers.by_name("Oscilloscope")
@@ -2711,8 +2695,7 @@ class TestOscilloscopeMusic:
 
     def test_a_repeated_trace_is_not_burned_in_twice(self, qapp):
         """A paused track hands back the same trace every frame; drawing it
-        each time would pile brightness into a solid disc.
-        """
+        each time would pile brightness into a solid disc."""
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QPainter, QPixmap
 
@@ -2878,8 +2861,7 @@ class TestTheDialsMatchTheReference:
 
     def test_the_face_is_as_wide_and_as_short_as_the_reference(self):
         """Too wide makes the faces small: the radius is whichever dimension
-        runs out first.
-        """
+        runs out first."""
         import visualizers
 
         meters = visualizers.Meters
@@ -2893,8 +2875,7 @@ class TestTheDialsMatchTheReference:
 
     def test_the_shape_it_asks_for_is_the_shape_it_draws(self):
         """The reserved box and the drawing use the same constants, so they
-        cannot disagree.
-        """
+        cannot disagree."""
         import visualizers
 
         meters = visualizers.Meters
@@ -2913,8 +2894,7 @@ class TestTheDialsMatchTheReference:
 
     def test_the_needle_is_a_radius_of_its_own_arc(self):
         """Hinged at the centre: below it, the needle was half as long again
-        and the face taller.
-        """
+        and the face taller."""
         import visualizers
         from PySide6.QtCore import QRectF
 
@@ -2956,8 +2936,7 @@ class TestTheDialsMarkingsMatchTheReference:
 
     def test_the_ticks_reach_outward_past_the_arc(self):
         """The ticks run outward to about 1.05 radii, with nothing inside the
-        arc.
-        """
+        arc."""
         import visualizers
 
         meters = visualizers.Meters
@@ -2967,8 +2946,7 @@ class TestTheDialsMarkingsMatchTheReference:
 
     def test_the_dots_are_few_and_outside(self):
         """Eight or nine ticks, evenly spread outside the arc; one per decibel
-        crowded the left half.
-        """
+        crowded the left half."""
         import visualizers
 
         meters = visualizers.Meters
@@ -2990,8 +2968,7 @@ class TestTheDialsMarkingsMatchTheReference:
     def test_the_numbers_ask_for_a_squarish_face(self, qapp):
         """The reference's "0" is a rounded rectangle (the Eurostile family).
         The face is shipped, so it does not fall back to the system's
-        default.
-        """
+        default."""
         import visualizers
         from PySide6.QtGui import QFontDatabase
 
@@ -3013,8 +2990,7 @@ class TestTheDialsMarkingsMatchTheReference:
 
     def test_the_dB_numbers_clear_the_arc(self):
         """The dB numbers sit clear of the arc: this face's numerals are a
-        shade taller than the reference's.
-        """
+        shade taller than the reference's."""
         import visualizers
 
         meters = visualizers.Meters
@@ -3061,8 +3037,7 @@ class TestTheSceneIsDrawnAtTheScreensResolution:
 
     def test_a_scene_that_cannot_hold_it_gives_up_resolution(self):
         """The floor gives way when even a thirtieth of a second will not cover
-        it.
-        """
+        it."""
         from attachment_widgets import Sharpness
 
         settled, _ = self._settled(
@@ -3071,8 +3046,7 @@ class TestTheSceneIsDrawnAtTheScreensResolution:
 
     def test_below_the_floor_it_buys_frames_before_it_buys_pixels(self):
         """A scene costing 15 ms at logical keeps the resolution and takes the
-        longer frame rather than going soft.
-        """
+        longer frame rather than going soft."""
         from attachment_widgets import Sharpness
 
         governor = Sharpness()
@@ -3085,8 +3059,7 @@ class TestTheSceneIsDrawnAtTheScreensResolution:
     def test_a_cold_first_frame_is_not_believed(self):
         """A scene's first frame is fonts and tiles being built (the
         Equaliser's: 64 ms against 1.4 settled) and must not convince the
-        governor.
-        """
+        governor."""
         from attachment_widgets import Sharpness
 
         governor = Sharpness()
@@ -3259,8 +3232,7 @@ class TestAWideLineIsDrawnTheQuickWay:
 
     def test_a_line_too_thick_to_stack_is_drawn_with_a_real_pen(self):
         """All or nothing: a ring cut off where it stopped fitting draws a
-        thinner line.
-        """
+        thinner line."""
         import visualizers
 
         assert visualizers._hair_spots(2.0) == ()
@@ -3328,8 +3300,8 @@ class TestTheKeysThatPlayIt:
             assert pane.scene_box.currentText() == visualizers.SCENES[index].name
 
     def test_a_number_past_the_last_scene_does_nothing(self, qtbot):
-        """Nine number keys and fewer scenes, so one key lands past the list.
-        """
+        """Nine number keys and fewer scenes, so one key lands past the
+        list."""
         import visualizers
         from PySide6.QtCore import Qt as _Qt
 
@@ -3443,8 +3415,7 @@ class TestTheKeysThatPlayIt:
 
     def test_reaching_for_the_strobe_switches_it_on(self, qtbot):
         """The strobe key ticks the strobe on: the scenes ask the tick box
-        before they light up.
-        """
+        before they light up."""
         from PySide6.QtCore import Qt as _Qt
 
         pane, window = self._full(qtbot)
@@ -3455,8 +3426,7 @@ class TestTheKeysThatPlayIt:
 
     def test_holding_a_key_down_is_not_a_stream_of_presses(self, qtbot):
         """The keyboard repeats a held key; a held light must not switch itself
-        off at that rate.
-        """
+        off at that rate."""
         from PySide6.QtCore import QEvent, Qt as _Qt
         from PySide6.QtGui import QKeyEvent
 
@@ -3481,8 +3451,7 @@ class TestTheKeysThatPlayIt:
 
     def test_the_bar_says_what_the_keys_did(self, qtbot):
         """A key that changes the picture must change the box in front of it
-        too.
-        """
+        too."""
         from PySide6.QtCore import Qt as _Qt
         from PySide6.QtWidgets import QCheckBox, QComboBox
 
@@ -3613,8 +3582,7 @@ class TestTheSunInTheVaporwaveScene:
 
     def test_the_sun_has_an_edge_rather_than_fading_away(self):
         """The disc has an edge: just inside its top is bright, just outside is
-        sky.
-        """
+        sky."""
         _scene, image, radius = self._drawn()
         centre = self.W // 2
         inside = image.pixelColor(centre, int(self.HORIZON - radius) + 4)
@@ -3665,8 +3633,7 @@ class TestTheSunInTheVaporwaveScene:
 
     def test_the_flare_is_smoothed_before_it_reaches_the_sun(self):
         """One frame at full height and five coming down is a glitch; this is
-        the envelope Ambience uses.
-        """
+        the envelope Ambience uses."""
         import visualizers
         from attachment_widgets import SpectrumState
 
@@ -3820,8 +3787,7 @@ class TestTheStrobeInAmbienceIsSmooth:
 
     def test_the_light_outlasts_the_beat(self):
         """The hit is gone in seven frames, too soon to be seen, so the scene
-        keeps its own slower envelope.
-        """
+        keeps its own slower envelope."""
         scene, state = self._scene(), self._state(hit=1.0)
         scene._ease(state)
         state.hit = 0.0
@@ -3952,8 +3918,7 @@ class TestTheScopesTimeBase:
 
     def test_one_trace_holds_one_figure(self):
         """One figure: not half, as 512 samples was, nor four, as a fixed 1024
-        is at 194 Hz.
-        """
+        is at 194 Hz."""
         import attachment_audio
 
         for hertz in (25.0, 50.0, 120.0):
@@ -4002,8 +3967,7 @@ class TestTheScopesTimeBase:
 
     def test_a_slow_figure_is_thinned_and_not_cut_short(self):
         """A whole figure at half the samples is still the figure, and a trace
-        never holds more points than before.
-        """
+        never holds more points than before."""
         import attachment_audio
 
         pcm, rate = self._figure(11.0, seconds=2.4)
@@ -4023,8 +3987,7 @@ class TestTheScopesTimeBase:
 
     def test_it_follows_the_rate_as_it_changes(self):
         """The rate belongs to the passage: across one record it went 25 Hz,
-        200, 132, 123, 25, 104, 10.6, 50.5.
-        """
+        200, 132, 123, 25, 104, 10.6, 50.5."""
         from array import array
 
         import attachment_audio
@@ -4277,8 +4240,7 @@ class TestTheRaveIsARoom:
 
     def test_there_are_frames_down_the_corridor(self):
         """A grid says where the floor is; a truss says how far down the room
-        you are.
-        """
+        you are."""
         scene = self._rave()
         with_them = self._drawn(scene)
         whole = scene._trusses
@@ -4303,8 +4265,7 @@ class TestTheRaveIsARoom:
     def test_the_walls_are_not_drawn_as_densely_as_the_floor(self):
         """The corridor is about eight times wider than tall, so the floor's
         line count on a wall would space them a twentieth of a unit apart,
-        like hatching.
-        """
+        like hatching."""
         surfaces = self._rave()._surfaces(0.55, 4.5)
         floor_lines = next(n for place, shift, n in surfaces if shift == 0.0)
         # The two walls are one surface with two faces; its count covers both.
@@ -4393,8 +4354,7 @@ class TestTheListOfPlayingKeys:
 
     def test_the_playing_keys_do_not_bring_the_bar_up(self, qtbot):
         """The playing keys must not wake the bar: each number would slide the
-        controls over the picture.
-        """
+        controls over the picture."""
         from PySide6.QtCore import Qt as _Qt
 
         _pane, window = self._full(qtbot)
@@ -4408,8 +4368,8 @@ class TestTheListOfPlayingKeys:
             assert woke == [], f"{chr(key)} brought the control bar back"
 
     def test_the_transport_keys_still_bring_it_up(self, qtbot):
-        """The transport keys do: they move the playhead, which the bar shows.
-        """
+        """The transport keys do: they move the playhead, which the bar
+        shows."""
         from PySide6.QtCore import Qt as _Qt
 
         pane, window = self._full(qtbot)
@@ -4517,8 +4477,7 @@ class TestTheRackOfDials:
 
     def test_nothing_runs_off_the_bottom(self, qtbot):
         """Each meter fits its cell: the reserved height was 1.02 radii where
-        the drawing needs 1.17, and every row overflowed by fourteen pixels.
-        """
+        the drawing needs 1.17, and every row overflowed by fourteen pixels."""
         image = self._drawn()
         rows = self._ink_rows(image)
         assert rows, "nothing was drawn at all"
@@ -4528,8 +4487,7 @@ class TestTheRackOfDials:
 
     def test_the_face_fits_what_is_reserved_for_it(self, qtbot):
         """The constants and the drawing must agree, or only a screenshot finds
-        the wrong one.
-        """
+        the wrong one."""
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -4602,8 +4560,7 @@ class TestTheRackOfDials:
 
     def test_no_meter_is_left_alone_on_the_bottom_row(self, qtbot):
         """Ten three across is 3, 3, 3 and 1, and the single meter reads as a
-        mistake.
-        """
+        mistake."""
         from PySide6.QtCore import QRectF
 
         import visualizers
@@ -4621,8 +4578,7 @@ class TestTheRackOfDials:
     def test_the_backlight_is_not_cut_off_at_a_cell_edge(self, qtbot):
         """A lamp reaches half a radius past its face; filled inside its own
         cell, it stopped dead in a straight line and the next face was drawn
-        over it.
-        """
+        over it."""
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -4736,8 +4692,7 @@ class TestTheRaveIsWiredToTheKit:
 
     def test_the_trusses_keep_their_own_time(self):
         """The trusses rode the grid's offset, which wraps every row: they
-        crept back a row and jumped forward five, sixty times a minute.
-        """
+        crept back a row and jumped forward five, sixty times a minute."""
         import inspect
 
         import visualizers
@@ -4749,8 +4704,7 @@ class TestTheRaveIsWiredToTheKit:
 
     def test_a_snare_moves_the_colour_on_and_leaves_it_there(self):
         """Each snare puts the colour somewhere new, rather than flashing and
-        returning.
-        """
+        returning."""
         scene = self._scene()
         state = self._state()
         scene._advance(state)
@@ -4766,8 +4720,7 @@ class TestTheRaveIsWiredToTheKit:
     def test_the_kick_shakes_the_thing_in_the_middle(self):
         """The bass moves the room; the kick shakes the shape. Shared, the two
         read as one effect, since a kick and a loud bassline mostly arrive
-        together.
-        """
+        together."""
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -4819,8 +4772,7 @@ class TestTheRaveIsWiredToTheKit:
 
     def test_the_kick_and_the_bass_do_different_things(self):
         """A kick shakes the shape in the middle while the bass drives the room
-        past, and the two can be told apart.
-        """
+        past, and the two can be told apart."""
         scene = self._scene()
         self._walk(scene, self._state(Kick=1.0), frames=20)
         kicked = scene._z
@@ -4845,8 +4797,7 @@ class TestTheRaveIsWiredToTheKit:
 
     def test_the_room_is_pushed_by_the_kick_rather_than_kicked(self):
         """A kick pushes the room; it no longer moves the horizon, the focal
-        length, the walls and every line width for a frame.
-        """
+        length, the walls and every line width for a frame."""
         scene = self._scene()
         state = self._state(Kick=1.0)
         reached = []
@@ -4929,8 +4880,7 @@ class TestTheRibbonsAreCurvesNotPolygons:
 
     def test_it_passes_through_the_music_rather_than_near_it(self):
         """The curve stays on the ribbon: smoothing that wanders is a different
-        shape.
-        """
+        shape."""
         import math
 
         import visualizers
@@ -5062,8 +5012,7 @@ class TestTheScenesSitOnTheBeat:
     def test_the_clock_leans_on_the_playhead_rather_than_running_free(
             self, qtbot, monkeypatch):
         """A clock that never checks the music would be smooth and wrong:
-        frames drop and machines run warm, and the two drift.
-        """
+        frames drop and machines run warm, and the two drift."""
         import time
         from array import array
 
@@ -5114,8 +5063,7 @@ class TestTheScenesSitOnTheBeat:
 
     def test_a_truss_arrives_on_every_beat(self):
         """The rave's corridor is locked to the grid: a beat's travel is
-        exactly one truss, whatever the bass.
-        """
+        exactly one truss, whatever the bass."""
         import visualizers
 
         for bass in (0.0, 0.5, 1.0):
@@ -5134,8 +5082,7 @@ class TestTheScenesSitOnTheBeat:
 
     def test_the_bass_changes_how_the_beat_is_spent(self):
         """Locked distance, not locked motion: under heavy bass most of a
-        beat's travel comes at its start, a lunge then a coast.
-        """
+        beat's travel comes at its start, a lunge then a coast."""
         import visualizers
 
         def through(bass, part):
@@ -5283,8 +5230,7 @@ class TestTheAnalysisTakesNothingFromThePicture:
 
     def test_the_arithmetic_is_not_done_in_this_process(self, qapp):
         """On the analysis's old thread a rider frame cost 2.9 times its own (8
-        times at the 90th percentile); in workers, 1.2 and 1.3.
-        """
+        times at the 90th percentile); in workers, 1.2 and 1.3."""
         here = self._off_the_gui_thread(qapp, workers=False)
         away = self._off_the_gui_thread(qapp, workers=True)
         assert away < here * 0.15, (
@@ -5294,8 +5240,7 @@ class TestTheAnalysisTakesNothingFromThePicture:
 
     def test_it_gives_the_same_answer_as_working_it_out_here(self, qapp):
         """A worker that returned something else would only be faster at being
-        wrong.
-        """
+        wrong."""
         import attachment_audio
         import beatmap
 
@@ -5321,8 +5266,7 @@ class TestTheAnalysisTakesNothingFromThePicture:
 
     def test_the_drums_are_never_handed_over_before_the_bands(self, qapp):
         """The drums can finish first, but the pane has nothing to hang them on
-        until it has the frames.
-        """
+        until it has the frames."""
         got = _analysed(qapp, _drum_track(6.0))
         order = [kind for kind, _ in got["said"]]
         assert "elements" in order, order
@@ -5330,8 +5274,7 @@ class TestTheAnalysisTakesNothingFromThePicture:
 
     def test_the_drums_are_kept_whichever_arrives_first(self, qapp):
         """The beat maps add to the kit's table rather than replacing it, which
-        was only safe while the kit came last.
-        """
+        was only safe while the kit came last."""
         from attachment_widgets import Spectrum
 
         pane = Spectrum()
@@ -5346,8 +5289,7 @@ class TestTheAnalysisTakesNothingFromThePicture:
     def test_the_beats_come_straight_after_the_bands(self, qapp, workers):
         """The drums go out early: the game lays its road on them, and sent
         after the scope's traces they left the ride with no tempo for
-        seconds.
-        """
+        seconds."""
         got = _analysed(qapp, _drum_track(6.0), workers=workers)
         order = [kind for kind, _ in got["said"]]
         assert order.index("bands") < order.index("beats") < order.index(
@@ -5388,8 +5330,7 @@ class TestTheAnalysisTakesNothingFromThePicture:
 
     def test_with_no_workers_it_still_arrives(self, qapp):
         """A machine that will not start a process (a sandbox, a broken
-        install) analyses on a thread instead.
-        """
+        install) analyses on a thread instead."""
         got = _analysed(qapp, _drum_track(4.0), workers=False)
         order = [kind for kind, _ in got["said"]]
         assert "bands" in order and "done" in order, order
@@ -5408,8 +5349,7 @@ class TestTheAnalysisTakesNothingFromThePicture:
 
 class TestTheRoadIsWholeWhenThePictureIs:
     """The lean is read off the samples with the bands, so the road's bends are
-    final from the start rather than arriving mid-song with the traces.
-    """
+    final from the start rather than arriving mid-song with the traces."""
 
     def test_a_mix_to_one_side_leans_that_way_from_the_start(self, qapp):
         got = _analysed(qapp, _drum_track(6.0, lean=-0.8))
@@ -5441,8 +5381,7 @@ class TestTheRoadIsWholeWhenThePictureIs:
 
     def test_the_same_frames_again_do_not_empty_the_picture(self, qapp):
         """The rest of the analysis hands the same frames over again; starting
-        over would zero every level mid-song.
-        """
+        over would zero every level mid-song."""
         from array import array
 
         from attachment_widgets import Spectrum
@@ -5466,8 +5405,7 @@ class TestThePictureArrivesBeforeTheAnalysisFinishes:
     def test_the_bands_go_out_as_soon_as_they_exist(self, qapp):
         """Before the waveform and the X-Y traces, and with the road's whole
         shape, so the road does not change when the rest arrives. Through
-        the real workers.
-        """
+        the real workers."""
         got = _analysed(qapp, _drum_track(6.0))
         order = [kind for kind, _ in got["said"]]
         assert order.index("bands") < order.index("done"), order
@@ -5476,8 +5414,7 @@ class TestThePictureArrivesBeforeTheAnalysisFinishes:
 
     def test_the_pane_draws_from_them(self, qtbot, qapp, monkeypatch):
         """And stops saying it is working, through the callback the pane hands
-        the analysis, with what the analysis really sends.
-        """
+        the analysis, with what the analysis really sends."""
         from pathlib import Path
 
         import attachment_audio
@@ -5508,8 +5445,7 @@ class TestThePictureArrivesBeforeTheAnalysisFinishes:
 
     def test_a_cancelled_analysis_hands_nothing_over(self, qapp):
         """Cancelled at once, nothing is handed over and no worker is left
-        running.
-        """
+        running."""
         got = _analysed(qapp, _drum_track(20.0), cancel_after=0.05)
         assert got["said"] == [], [kind for kind, _ in got["said"]]
         assert not any(p.is_alive() for p in got["workers"]), (
@@ -5665,8 +5601,7 @@ class TestTheRingSweepsPastYou:
     def test_no_single_drum_fires_one(self, monkeypatch):
         """A snare no longer fires a ring: in most tracks that is every other
         beat. Rings mark the room getting louder (see
-        TestTheRingsMarkBigMoments).
-        """
+        TestTheRingsMarkBigMoments)."""
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -5703,8 +5638,7 @@ class TestTheRingSweepsPastYou:
 
     def test_it_grows_evenly_rather_than_all_at_the_end(self, monkeypatch):
         """Closing by a share of its own distance, a ring grows by the same
-        amount every frame; at a steady speed it doubled in its last few.
-        """
+        amount every frame; at a steady speed it doubled in its last few."""
         radii = self._run(monkeypatch)
         steps = [b / a for a, b in zip(radii, radii[1:]) if a > 0]
         assert len(steps) > 40
@@ -5776,8 +5710,7 @@ class TestTheAirIsColouredByTheBass:
 
     def test_a_bass_hit_floods_it_with_colour(self):
         """The one thing a wash of light can do that reads as loud without
-        simply being brighter.
-        """
+        simply being brighter."""
         for width, height in ((640, 360), (1920, 1080)):
             quiet = self._air(width, height, bass=0.15)[0]
             loud = self._air(width, height, bass=0.95)[0]
@@ -5800,8 +5733,7 @@ class TestTheAirIsColouredByTheBass:
 
     def test_a_quiet_passage_still_has_colour_in_it(self):
         """The other end: too dark to see a colour is as grey as too bright for
-        one.
-        """
+        one."""
         for width, height in ((640, 360), (1920, 1080)):
             sat, mean, _top = self._air(width, height, bass=0.15)
             assert mean > 0.12, (
@@ -5813,8 +5745,7 @@ class TestTheAirIsColouredByTheBass:
 
 class TestTheLampIsRoundAtAnySize:
     """The lamp is round at every size: laid out in a strip and stretched to a
-    full screen, it was twice as tall as wide.
-    """
+    full screen, it was twice as tall as wide."""
 
     @pytest.mark.parametrize("size", [(906, 270), (1440, 900), (2880, 1800),
                                       (600, 900)])
@@ -5977,8 +5908,7 @@ class TestTheAirIsAsVividAtFullScreenAsInAWindow:
     def test_a_full_screen_has_the_strip_s_variety(self):
         """Compared with the strip the window really shows: laid out for 16:10,
         the lamp covered most of the frame in one gradient (0.104 of hue
-        spread against the strip's 0.176).
-        """
+        spread against the strip's 0.176)."""
         strip = self._hue_spread(self._frame(*self.STRIP))
         screen = self._hue_spread(self._frame(*self.SCREEN))
         assert screen > strip * 0.85, (
@@ -5988,8 +5918,7 @@ class TestTheAirIsAsVividAtFullScreenAsInAWindow:
     def test_a_full_screen_is_no_paler_than_the_strip(self):
         """Light added to a big frame's bare air pushed the colour towards
         white, a pastel: 0.746 of brightness against the window's 0.633 on a
-        real track.
-        """
+        real track."""
         strip = self._frame(*self.STRIP)
         screen = self._frame(*self.SCREEN)
         # The scene alone, before the polish: 0.411 against 0.365 with the
@@ -6003,8 +5932,7 @@ class TestTheAirIsAsVividAtFullScreenAsInAWindow:
 
     def test_the_strip_itself_is_left_alone(self):
         """The strip's air is laid out as it always was; only a taller frame is
-        stretched.
-        """
+        stretched."""
         from PySide6.QtCore import QPointF, QRectF
 
         import visualizers
@@ -6085,8 +6013,7 @@ class TestTheBufferGoesUpByWholePixels:
 
     def test_an_uneven_stretch_is_still_smoothed(self, qapp):
         """Not smoothing at 2.5x would double some pixels and not their
-        neighbours, and the unevenness crawls as the scene moves.
-        """
+        neighbours, and the unevenness crawls as the scene moves."""
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -6165,8 +6092,7 @@ class TestThePlayingKeysDoNotCollide:
 
     def test_the_key_the_labels_promise_is_the_key_that_flashes(self):
         """Named in three places: the label under the box, its tip, and the key
-        list.
-        """
+        list."""
         from PySide6.QtCore import Qt
 
         import attachment_widgets
@@ -6276,8 +6202,7 @@ class TestTheRaveRigFiresIntoTheRoom:
 
     def test_no_beam_starts_at_the_vanishing_point(self):
         """Where the shape in the middle is, and where every beam used to
-        start.
-        """
+        start."""
         seen, _scene = self._asked()
         from_middle = [p for p in seen if abs(p[0]) < 1e-9 and abs(p[1]) < 1e-9]
         assert not from_middle, (
@@ -6405,8 +6330,7 @@ class TestTheRingsMarkBigMoments:
 
     def test_nothing_fires_before_it_has_heard_anything(self):
         """A slow average starting at zero makes any track's first sound louder
-        than everything before it.
-        """
+        than everything before it."""
         fired, _snares = self._played()
         assert not [at for at in fired if at < 5.0], (
             f"a ring fired at {fired[0]}s, during the quiet intro")
@@ -6493,8 +6417,7 @@ class TestTheRoomTravelsSteadily:
 
     def test_the_lunge_is_as_hard_as_it_says_and_no_harder(self):
         """SURGE is a multiple of the average speed, so the fastest frame
-        should be about that multiple, not seven times.
-        """
+        should be about that multiple, not seven times."""
         import statistics
 
         import visualizers
@@ -6519,8 +6442,7 @@ class TestTheRoomTravelsSteadily:
 
     def test_a_bass_that_wobbles_does_not_shake_the_room(self):
         """The curve follows a smoothed bass, or the bass moves where the room
-        is rather than how fast it goes.
-        """
+        is rather than how fast it goes."""
         import statistics
 
         quiet = self._travel(noise=0.0)
@@ -6604,8 +6526,7 @@ class TestTheSceneGivesWayToTheControls:
     def test_the_cursor_is_shown_once_and_not_on_every_mouse_move(
             self, qapp, qtbot):
         """Changing a cursor walks the widget tree and tells the window system;
-        this ran on every mouse move.
-        """
+        this ran on every mouse move."""
         from attachment_widgets import FullScreenSpectrum
 
         spectrum, full = self._full(qapp, qtbot)
@@ -6778,8 +6699,7 @@ class TestTheLaserRigRunsThroughTheDrop:
 
     def test_it_stays_on_for_the_whole_drop(self):
         """The rig stays on through the drop; the rings' measure reads a change
-        and dies about two seconds in.
-        """
+        and dies about two seconds in."""
         rows = self._played()
         drop = [lit for at, lit, _n, _l in rows if 15 <= at <= 27]
         assert drop, "the arrangement has no drop in it"
@@ -6895,8 +6815,7 @@ class TestTheFullScreenControlsWork:
 
     def test_the_pane_says_where_the_picture_went(self, qapp, qtbot):
         """The window says where the picture went while it is full screen
-        elsewhere.
-        """
+        elsewhere."""
         pane = self._pane(qtbot)
         pane._go_full_screen()
         qapp.processEvents()
@@ -6926,8 +6845,7 @@ class TestTheFullScreenControlsWork:
 
     def test_a_click_brings_the_controls_back(self, qapp, qtbot):
         """On a trackpad the pointer can be where the bar faded from, and the
-        first thing anybody does is click.
-        """
+        first thing anybody does is click."""
         from PySide6.QtCore import QPoint, QPointF, Qt as _Qt
         from PySide6.QtGui import QMouseEvent
 
@@ -7113,8 +7031,7 @@ class TestTheScenesStartFresh:
 
     def test_every_scene_can_be_reset(self):
         """reset is on the base class, so this is about scenes that override
-        __init__.
-        """
+        __init__."""
         import visualizers
 
         for scene in visualizers.SCENES:
@@ -7208,8 +7125,8 @@ class TestTheMetersAreNotPixelated:
 
 
 class TestTheLasersAnswerTheStrobe:
-    """The rave's lasers flash with the strobe, on top of what they already do.
-    """
+    """The rave's lasers flash with the strobe, on top of what they already
+    do."""
 
     @staticmethod
     def _drawn(hit):
@@ -7392,8 +7309,8 @@ class TestTheMusicRiderIsAGame:
         assert len(set(lanes)) == len(lanes), "a wall closed a lane twice"
 
     def test_the_chart_is_laid_ahead_of_the_playhead(self):
-        """A wall leaves the horizon before its beat, or it arrives after it.
-        """
+        """A wall leaves the horizon before its beat, or it arrives after
+        it."""
         scene = self._rider()
         chart = {"Kick": tuple(2.0 + i * 0.5 for i in range(20))}
         scene._heard = 0.0
@@ -7486,8 +7403,7 @@ class TestTheMusicRiderIsAGame:
     def test_a_dodge_lands_inside_the_blueprints_window(self, qapp):
         """A dodge begun on the beat lands on it: 50 to 70 ms. At the old rate
         it was nine tenths done after 140 ms, two units of road spent
-        arriving.
-        """
+        arriving."""
         got = self._slid(60)
         assert 45.0 <= got <= 70.0, (
             f"a lane change at 60 fps took {got:.0f} ms")
@@ -7495,8 +7411,7 @@ class TestTheMusicRiderIsAGame:
     def test_a_dodge_is_the_same_length_at_any_frame_rate(self, qapp):
         """The same at every frame rate: a share per frame took 167 ms at 30
         frames and 25 at 120. Written in milliseconds, since SNAP is under
-        test.
-        """
+        test."""
         got = {fps: self._slid(fps) for fps in (30, 60, 120, 144)}
         for fps, took in got.items():
             assert 45.0 <= took <= 70.0, (
@@ -7549,8 +7464,7 @@ class TestTheMusicRiderIsAGame:
     def test_dodging_the_grey_keeps_you_clean(self, qapp):
         """A kick lays a grey obstacle (in Mono, grey is against colour, and
         dodging is what grey is for). It scores nothing; a clean run is
-        worth a third of the tally.
-        """
+        worth a third of the tally."""
         scene = self._rider()
         chart = {"Kick": (2.0,)}
         open_lane = int(2.0 * 977) % 3
@@ -7754,8 +7668,7 @@ class TestTheRiderIsPlayable:
 
     def test_there_are_not_dozens_of_them_a_second(self):
         """Figures, not blocks: a run is three blocks and one thing to react
-        to.
-        """
+        to."""
         times, scene = self._laid()
         figures = [t for i, t in enumerate(times)
                    if i == 0 or t - times[i - 1] > scene.RUN_GAP + 0.01]
@@ -7771,8 +7684,7 @@ class TestTheRiderIsPlayable:
 
     def test_a_block_that_has_gone_past_is_not_drawn(self):
         """Gone once passed: clamped to the near end, they piled up at the
-        bottom of the frame.
-        """
+        bottom of the frame."""
         import visualizers
 
         scene = visualizers.Rider()
@@ -7794,8 +7706,7 @@ class TestTheRiderIsPlayable:
     def test_the_road_does_not_jump_when_the_music_comes_in(self):
         """The first note after silence reads as the loudest yet, and with
         bends scaled by loudness directly the road jumped sideways a second
-        into a song.
-        """
+        into a song."""
         from attachment_widgets import SpectrumState
         import visualizers
 
@@ -7865,8 +7776,7 @@ class TestTheRiderIsPlayable:
 
     def test_an_empty_chart_does_not_throw_the_road_away(self):
         """A track with no chart yet handed over a new empty table every frame,
-        which cleared the road sixty times a second.
-        """
+        which cleared the road sixty times a second."""
         import visualizers
         from attachment_widgets import SpectrumState
 
@@ -8049,8 +7959,7 @@ class TestNothingShowsThroughFromTheLastFrame:
 
     def test_a_scene_fading_up_does_not_blend_with_the_last_frame(self, qapp):
         """The fade comes up out of the background, not out of what was there
-        before.
-        """
+        before."""
         def half(pane):
             pane._reveal = 1.0
             pane._fresh = 0.35
@@ -8154,8 +8063,7 @@ class TestTheRiderIsOnTheBeat:
 
     def test_a_block_is_level_with_the_rider_on_its_beat(self):
         """Exactly on the beat: the road's position and a block's place are the
-        same function of the beat.
-        """
+        same function of the beat."""
         import visualizers
 
         scene = visualizers.Rider()
@@ -8224,8 +8132,7 @@ class TestTheRiderIsOnTheBeat:
 
     def test_four_to_the_floor_is_not_the_same_wall_over_and_over(self):
         """The kick wins every slot on this music, so without a pool of shapes
-        every figure was a wall.
-        """
+        every figure was a wall."""
         import collections
 
         _figures, shapes, _scene = self._figures()
@@ -8273,8 +8180,7 @@ class TestTheRiderIsOnTheBeat:
 
     def test_the_speed_lunges_but_never_stops(self):
         """A big range of speed without stopping between beats: nearly twice
-        its pace into a beat, never below half coming out.
-        """
+        its pace into a beat, never below half coming out."""
         import statistics
 
         rows = self.ride(bass=1.0)[60:]
@@ -8330,8 +8236,7 @@ class TestTheRiderIsOnTheBeat:
 
     def test_the_camera_follows_the_road(self):
         """The camera follows the road rather than staying pointed ahead as it
-        swings away.
-        """
+        swings away."""
         import visualizers
 
         assert visualizers.Rider.AIM > 0.0
@@ -8417,8 +8322,7 @@ class TestThePolishPassCoversTheWholeFrame:
 
     def test_it_is_the_same_at_every_buffer_ratio(self, qapp):
         """Window and full screen differ only in the ratio, which the polish
-        must not notice.
-        """
+        must not notice."""
         plain = self._glow_at(1.0)
         retina = self._glow_at(2.0)
         for image, name in ((plain, "1x"), (retina, "2x")):
@@ -8513,8 +8417,7 @@ class TestTheRiderSnapsToTheGrid:
 
     def test_the_grid_is_the_next_beat_the_track_reports(self):
         """The grid comes from the playhead and the beat phase, as every
-        scene's does.
-        """
+        scene's does."""
         import visualizers
 
         scene = visualizers.Rider()
@@ -8530,8 +8433,7 @@ class TestTheRiderSnapsToTheGrid:
 
     def test_a_figure_lands_on_the_grid_when_the_drums_do_not(self):
         """Without snapping the figures inherit the detector's scatter; with it
-        they are on the beat.
-        """
+        they are on the beat."""
         import statistics
 
         chart = self._jittered()
@@ -8702,8 +8604,8 @@ class TestTheRoadIsAlwaysARoad:
             f"and the road is folded over")
 
     def test_the_near_edge_runs_off_the_bottom_of_every_frame(self, qapp):
-        """Otherwise the road stops in the picture with a hard edge across it.
-        """
+        """Otherwise the road stops in the picture with a hard edge across
+        it."""
         import math
 
         for width, height in self.SIZES:
@@ -8759,8 +8661,7 @@ class TestTheRoadIsAlwaysARoad:
 
     def test_the_camera_does_not_give_the_frame_away_to_a_hill(self, qapp):
         """The follow is clamped, so a wilder road cannot put the road in the
-        sky.
-        """
+        sky."""
         import visualizers
 
         width, height = 900, 500
@@ -9144,8 +9045,7 @@ class TestTheTrackHasAShapeAboveTheSeekBar:
     def test_the_shape_is_amplitude_not_the_stretched_display(self):
         """The frames are stretched to fill the bars, which suits the strip and
         not this: a limited dance track would be 0.88 of full height
-        everywhere, a solid block.
-        """
+        everywhere, a solid block."""
         import attachment_audio
 
         frames = ([self._at_db(0.0)] * 50 + [self._at_db(-20.0)] * 50)
@@ -9174,8 +9074,7 @@ class TestTheTrackHasAShapeAboveTheSeekBar:
 
     def test_a_quiet_recording_still_fills_the_bar(self):
         """Each track at the height it has, not the one it was mastered to, or
-        a quiet podcast is a flat line.
-        """
+        a quiet podcast is a flat line."""
         import attachment_audio
 
         frames = ([self._at_db(-20.0)] * 60 + [self._at_db(-40.0)] * 40)
@@ -9210,8 +9109,7 @@ class TestTheTrackHasAShapeAboveTheSeekBar:
 
     def test_a_real_track_is_not_one_flat_bar(self):
         """End to end on written audio with real dynamics: a swung jazz
-        pattern, the one style here with no limiter.
-        """
+        pattern, the one style here with no limiter."""
         import statistics
 
         import attachment_audio
@@ -9375,8 +9273,7 @@ class TestSeekingOnTheWaveform:
     def test_a_click_moves_the_track_with_the_visualiser_switched_on_late(
             self, qapp, tmp_path):
         """The real dialog and player, in the order a person goes: open the
-        track, then switch the visualiser on.
-        """
+        track, then switch the visualiser on."""
         import math
         import struct
         import time
@@ -9450,8 +9347,7 @@ class TestTheWaveformIsInTheWindowedPane:
     def test_it_takes_the_seek_bar_s_place_in_the_transport(self, qapp,
                                                             tmp_path):
         """The waveform replaces the seek bar, between the play button and the
-        clock.
-        """
+        clock."""
         from attachment_view import AudioPane
 
         pane = AudioPane()
@@ -9567,8 +9463,7 @@ class TestThePlayedStrobeHasARateAndAShape:
     # -- the rate ---------------------------------------------------------
     def test_manual_starts_at_the_rate_it_always_had(self, qapp):
         """The default is twelve a second, the rate the rapid-fire key always
-        used.
-        """
+        used."""
         spectrum = self._made()
         assert 1.0 / spectrum.hand_every() == pytest.approx(12.0, abs=0.1), (
             f"Manual starts at {1.0 / spectrum.hand_every():.1f} flashes a "
@@ -9585,8 +9480,7 @@ class TestThePlayedStrobeHasARateAndAShape:
 
     def test_the_rapid_fire_key_fires_at_the_rate_asked_for(self, qapp):
         """Measured by counting flashes over a second of ticks, not by reading
-        the setting back.
-        """
+        the setting back."""
         for rate, wanted in ((0.0, 4.8), (0.5, 12.0), (1.0, 30.0)):
             spectrum = self._made(rate=rate, shape=0.0)
             lit = self._run(spectrum, 120,      # two seconds at sixty
@@ -9678,8 +9572,7 @@ class TestThePlayedStrobeHasARateAndAShape:
 
 class TestTheStrobeSlidersSayWhatTheyDo:
     """The captions change in Manual: a slider named for sensitivity that sets
-    a flash's shape misleads.
-    """
+    a flash's shape misleads."""
 
     @staticmethod
     def _caption(holder):
@@ -9845,8 +9738,7 @@ class TestTheScopeIsATube:
 
     def test_a_beam_that_stops_still_draws(self, qapp):
         """A parked beam is the brightest thing on a scope, and Qt strokes
-        nothing for a zero-length stretch.
-        """
+        nothing for a zero-length stretch."""
         import visualizers
 
         scene = self._scene()
@@ -9863,8 +9755,7 @@ class TestTheScopeIsATube:
             self, qapp):
         """Silence, a held note and the gap between figures park the beam for
         over half the trace; a reference from the middle step is then zero
-        and everything moving falls to the faintest level.
-        """
+        and everything moving falls to the faintest level."""
         import visualizers
 
         import math
@@ -9891,8 +9782,7 @@ class TestTheScopeIsATube:
 
     def test_a_figure_is_shaded_whatever_size_it_is(self, qapp):
         """The reference is the trace's own speed, like turning the intensity
-        up until the figure looks right.
-        """
+        up until the figure looks right."""
         import math
 
         scene = self._scene()
@@ -9969,8 +9859,7 @@ class TestTheScopeIsATube:
 
     def test_the_trace_is_a_handful_of_stretches_not_hundreds(self, qapp):
         """A level per sample cut an ordinary stereo mix (noise, not a figure)
-        into eight hundred capped subpaths: 154 ms a frame.
-        """
+        into eight hundred capped subpaths: 154 ms a frame."""
         import random
 
         from PySide6.QtGui import QPainterPath
@@ -9997,8 +9886,7 @@ class TestTheScopeIsATube:
 
     def test_the_beam_never_goes_over_the_hairline_cliff(self, qapp):
         """The trace uses hairline stacks: a wide pen over the worst trace in a
-        real record took 880 ms at full screen, the stack 3.
-        """
+        real record took 880 ms at full screen, the stack 3."""
         import visualizers
 
         pens = self._struck(self._fast_then_slow())
@@ -10080,8 +9968,7 @@ class TestTheRaveRoomTravelsForwards:
 
     def test_the_next_one_takes_its_place_at_the_far_end(self, qapp):
         """Across the wrap: the truss that was on you is gone and the one
-        behind is where it was.
-        """
+        behind is where it was."""
         scene = self._scene()
         before = max(box.width() for box in self._trusses(scene, 24.96))
         after = max(box.width() for box in self._trusses(scene, 25.04))
@@ -10167,8 +10054,7 @@ class TestTheRaveRoomIsShapedLikeTheBar:
 
     def test_two_trusses_the_same_distance_apart_differ(self, qapp):
         """A kick truss and the next beat's are one slot apart, so perspective
-        cancels.
-        """
+        cancels."""
         scene = self._scene()
         scene._beats_now = 0.0
         scene._said = 0.0
@@ -10206,8 +10092,7 @@ class TestTheRiderRunsOnOneClock:
 
     def test_the_gates_keep_pace_with_the_blocks(self, qapp):
         """Both are placed against the road's position; this measures how far
-        each moves in a frame.
-        """
+        each moves in a frame."""
         import visualizers
 
         scene = visualizers.Rider()
@@ -10233,8 +10118,7 @@ class TestTheRiderRunsOnOneClock:
 
     def test_the_road_runs_faster_than_it_used_to(self, qapp):
         """The speed blocks cross the road at now; it was a flat 6.5 units a
-        second.
-        """
+        second."""
         import statistics
 
         rows = self._ride(bass=0.5)[60:]
@@ -10245,8 +10129,7 @@ class TestTheRiderRunsOnOneClock:
 
     def test_the_look_ahead_is_a_musical_length(self, qapp):
         """Three beats, not 2.6 seconds: a time is a different musical distance
-        at every tempo.
-        """
+        at every tempo."""
         import visualizers
 
         scene = visualizers.Rider()
@@ -10285,8 +10168,7 @@ class TestTheRiderRunsOnOneClock:
 
     def test_the_music_clock_does_not_creep_and_snap(self, qapp):
         """The loop: the playhead stands still while the clock walks away and
-        is pulled back.
-        """
+        is pulled back."""
         rows = self._ride(bass=1.0, seconds=6.0, stop_at=2.0)
         scene = rows[-1]["scene"]
         assert scene._heard == pytest.approx(2.0, abs=0.05), (
@@ -10400,8 +10282,7 @@ class TestThePaneClockStopsWithTheTrack:
 
     def test_a_playing_track_still_gets_a_smooth_clock(self, qapp):
         """The reason the clock exists: a picture driven off reports a few
-        times a second steps.
-        """
+        times a second steps."""
         # A position six times a second, about what a player manages.
         seen = self._clock(playing=True, reports_every=10)
         assert seen[-1] > seen[0] + 3.5, (
@@ -10481,8 +10362,7 @@ class TestThePictureSitsOnTheMusic:
 
     def test_it_does_not_get_ahead_of_the_music_either(self, qapp):
         """Running a report forward is a guess, and overshooting is worse than
-        lagging: the beat would land before the sound.
-        """
+        lagging: the beat would land before the sound."""
         seen = self._lag(50)
         ahead = max((heard - at) * 1000.0 for at, heard in seen if at > 3.0)
         assert ahead < 8.0, (
@@ -10513,8 +10393,7 @@ class TestThePictureSitsOnTheMusic:
 
     def test_a_stopped_track_is_not_a_stale_report(self, qapp):
         """A paused player repeats its position forever, like a stopped source;
-        the picture must not run on through a pause.
-        """
+        the picture must not run on through a pause."""
         seen = self._lag(50, playing=False, frames=300, stalls_after=0.0)
         heard = [h for _at, h in seen]
         assert max(heard) - min(heard) < 0.01, (
@@ -10592,8 +10471,7 @@ class TestTheRiderCameraIsOnABoom:
     # -- the road banks into its turn --------------------------------------
     def test_the_road_banks_into_its_own_turn(self, qapp):
         """It rolled on a phase of its own, tumbling the world independently of
-        the road, leaning one way while turning the other.
-        """
+        the road, leaning one way while turning the other."""
         import visualizers
 
         scene = self._posed()
@@ -10615,8 +10493,7 @@ class TestTheRiderCameraIsOnABoom:
     def test_the_road_runs_straight_behind_the_rider(self, qapp):
         """The road is drawn from behind the rider so its near edge stays off
         the bottom of the frame, where the projection multiplies everything
-        by two hundred.
-        """
+        by two hundred."""
         scene = self._posed()
         here = scene._road(scene.RIDER_AT)[0]
         for at in (scene.NEAR, -1.0, 0.0, scene.RIDER_AT - 0.01):
@@ -10627,8 +10504,7 @@ class TestTheRiderCameraIsOnABoom:
     # -- the eye rides the spline ------------------------------------------
     def test_the_eye_sits_on_the_road_not_beside_it(self, qapp):
         """Centred on the road: at world zero, a bend dragged the whole road
-        across the frame instead of curving away.
-        """
+        across the frame instead of curving away."""
         for phase in (0.0, 0.8, 1.9, 3.4, 5.0):
             scene = self._posed(phase=phase, loud=0.8)
             horizon, focal, _tilt = self._settled(scene)
@@ -10639,8 +10515,7 @@ class TestTheRiderCameraIsOnABoom:
 
     def test_the_near_edge_keeps_its_distance_from_the_eye(self, qapp):
         """The eye is on a spring; measured from the rider, the road's near
-        edge came into frame whenever it slid back.
-        """
+        edge came into frame whenever it slid back."""
         import visualizers
 
         for loud in (0.0, 0.5, 1.0):
@@ -10655,8 +10530,7 @@ class TestTheRiderCameraIsOnABoom:
     # -- the rig follows the music -----------------------------------------
     def test_the_view_opens_up_in_a_loud_passage(self, qapp):
         """The field of view follows the craft's speed, which is the song's
-        amplitude.
-        """
+        amplitude."""
         quiet = self._posed(loud=0.0)
         loud = self._posed(loud=1.0)
         _h, narrow, _t = self._settled(quiet)
@@ -10776,8 +10650,7 @@ class TestTheWholeScreenFeelsAHit:
 
     def test_it_reaches_the_corners_not_just_the_road(self, qapp):
         """The road is a slab up the middle; a reaction confined to it would be
-        the road's, not the screen's.
-        """
+        the road's, not the screen's."""
         calm = self._frame(hurt=0.0)
         struck = self._frame(hurt=1.0)
         for x, y in ((12, 12), (self.W - 12, 12), (12, self.H - 12),
@@ -10937,8 +10810,7 @@ class TestTheRoadIsBuiltFromTheSong:
 
     def test_the_bass_line_is_where_the_bass_is(self):
         """The low bands across the track, so the road runs fastest where the
-        bass is heaviest.
-        """
+        bass is heaviest."""
         import attachment_audio
 
         quiet = [0.05] * 3 + [0.5] * 24
@@ -11024,8 +10896,8 @@ class TestTheRoadIsBuiltFromTheSong:
             visualizers.Rider.GAP_MOST
 
     def test_a_loud_passage_really_gets_more_figures(self, qapp):
-        """The chart must use the shorter spacing, not just _apart return it.
-        """
+        """The chart must use the shorter spacing, not just _apart return
+        it."""
         import visualizers
 
         shape = self._contour()
@@ -11092,8 +10964,7 @@ class TestMonoScoring:
 
     def test_the_chain_steps_by_four(self, qapp):
         """1, 5, 9, 13, 17, 21, so the totals are 1, 6, 15, 28, 45, 66. Written
-        out: from the constants, this passes with the step at zero.
-        """
+        out: from the constants, this passes with the step at zero."""
         scene = self._scene()
         seen = []
         for _ in range(6):
@@ -11104,8 +10975,7 @@ class TestMonoScoring:
 
     def test_the_chain_is_capped_at_two_hundred(self, qapp):
         """The fiftieth block is worth 197 and the fifty-first 201, so the cap
-        holds from there.
-        """
+        holds from there."""
         scene = self._scene()
         self._take(scene, 60)
         before = scene._score
@@ -11132,8 +11002,7 @@ class TestMonoScoring:
 
     def test_a_clean_run_is_worth_a_third_again(self, qapp):
         """Thirty per cent, written out: from the constant, this passes with no
-        bonus.
-        """
+        bonus."""
         scene = self._scene()
         self._take(scene, 4)
         plain = scene._score
@@ -11167,8 +11036,7 @@ class TestMonoScoring:
 
     def test_the_obstacles_are_the_minority(self, qapp):
         """Not all obstacles: tied to the kick, four-to-the-floor music gave a
-        road with nothing to score.
-        """
+        road with nothing to score."""
         import visualizers
         from attachment_widgets import SpectrumState
 
@@ -11331,8 +11199,7 @@ class TestTheMonoBumper:
 
     def test_shattering_a_grey_still_ends_the_clean_run(self, qapp):
         """A bumper, not a dodge: the clean finish, a third of the tally, is
-        the price.
-        """
+        the price."""
         scene = self._scene()
         self._chain(scene, 3)
         assert scene.report()["clean"] is True
@@ -11361,8 +11228,7 @@ class TestTheMonoBumper:
 
     def test_the_bumper_only_covers_one_grey(self, qapp):
         """A second grey inside the eight seconds is an ordinary hit: chain and
-        streak gone, on the tally.
-        """
+        streak gone, on the tally."""
         scene = self._scene()
         self._chain(scene, 10)
         self._into(scene)
@@ -11376,8 +11242,7 @@ class TestTheMonoBumper:
 
     def test_the_bumper_comes_back_over_eight_seconds(self, qapp):
         """Written as times: from SHIELD_BACK this passes with an instant
-        bumper.
-        """
+        bumper."""
         marks = {}
         for seconds in (2.0, 4.0, 8.0):
             scene = self._scene()
@@ -11409,8 +11274,7 @@ class TestTheMonoBumper:
 
     def test_the_card_says_when_the_bumper_is_down(self, qapp):
         """Up is the quiet state and says nothing; anything less is a
-        countdown.
-        """
+        countdown."""
         scene = self._scene()
         said = {}
         for name, shield in (("up", 1.0), ("spent", 0.0), ("half", 0.5)):
@@ -11457,8 +11321,7 @@ class TestTheMonoBumper:
 
     def test_the_bumper_shows_on_the_craft(self, qapp):
         """The two states draw differently round the ship, read off the frame:
-        from the card, this passes with the bars deleted.
-        """
+        from the card, this passes with the bars deleted."""
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -11554,9 +11417,8 @@ class TestThePuzzleGrid:
         assert all(scene._cells), "it cleared before the fuse ran out"
 
     def test_growing_the_cluster_gives_the_window_back(self, qapp):
-        """A matching block added during the fuse joins the cluster and resets
-        the timer.
-        """
+        """A matching block added during the fuse joins it and starts the
+        timer again."""
         import visualizers
 
         scene = self._grid()
@@ -11590,8 +11452,7 @@ class TestThePuzzleGrid:
 
     def test_one_big_cluster_beats_two_small_ones(self, qapp):
         """One cluster of six pays more than two separate threes of the same
-        colour.
-        """
+        colour."""
         big = self._grid([[1, 1], [1, 1], [1, 1]])
         big._burn(0.0)
         big._fuse_up()
@@ -11636,8 +11497,7 @@ class TestThePuzzleGrid:
     # -- overfill ----------------------------------------------------------
     def test_an_eighth_block_locks_the_grid(self, qapp):
         """A column overfilled locks the grid; six deep here, so the seventh
-        does it.
-        """
+        does it."""
         import visualizers
 
         scene = self._grid()
@@ -11903,8 +11763,7 @@ class TestTheRiderUnderAPlaythrough:
     def test_the_beat_grid_stands_still_too(self, qapp):
         """The beat correction eases towards a phase error; stopped, the error
         stays, so the easing went on forever and the road crept ten units a
-        second.
-        """
+        second."""
         got = self._analysed()
         watched = self._play(got, stop_from=6.9, stop_to=11.0)
         # Through the stop, from after the ease to a halt to just before play
@@ -11920,8 +11779,7 @@ class TestTheRiderUnderAPlaythrough:
     @pytest.mark.parametrize("phase", [0.0, 0.17, 0.33, 0.5, 0.66, 0.83])
     def test_the_grid_holds_at_every_phase_of_a_beat(self, qapp, phase):
         """Near half a beat the phase error is pushed away rather than settled,
-        so stopping on a beat tests the one phase that always worked.
-        """
+        so stopping on a beat tests the one phase that always worked."""
         import visualizers
         from attachment_widgets import SpectrumState
 
@@ -12129,8 +11987,7 @@ class TestASceneIsNotShownUntilItIsUpToSpeed:
 
     def test_changing_scene_waits_again(self, qapp):
         """A scene switch is a first open: new one-off costs, and Sharpness
-        measures again.
-        """
+        measures again."""
         from attachment_widgets import Spectrum
 
         pane = self._pane(self.Counter())
@@ -12144,8 +12001,7 @@ class TestASceneIsNotShownUntilItIsUpToSpeed:
 
     def test_choosing_the_same_scene_again_does_not_hide_it(self, qapp):
         """Nothing changed, so nothing fades in; blinking at every touch of the
-        box would be worse.
-        """
+        box would be worse."""
         scene = self.Counter()
         pane = self._pane(scene)
         self._run(pane, 90)
@@ -12169,8 +12025,7 @@ class TestASceneIsNotShownUntilItIsUpToSpeed:
 
     def test_no_font_work_is_handed_to_another_thread(self, qapp):
         """Populating the font database off the GUI thread crashed the process
-        in QCoreTextFontDatabase.
-        """
+        in QCoreTextFontDatabase."""
         import inspect
 
         import attachment_widgets
@@ -12181,8 +12036,7 @@ class TestASceneIsNotShownUntilItIsUpToSpeed:
 
     def test_warming_the_glyphs_draws_text(self, qapp):
         """Not a mock: the body puts glyphs through Qt, read off the image it
-        draws.
-        """
+        draws."""
         from PySide6.QtGui import QColor, QImage, QPainter
         from PySide6.QtCore import QRectF
 
@@ -12255,8 +12109,7 @@ class TestTheCoinsBesideTheObstacles:
 
     def test_the_trail_spans_the_moment_the_obstacle_passes(self, qapp):
         """Before, on and after the obstacle, or the trail could be taken by
-        swerving in once safely past.
-        """
+        swerving in once safely past."""
         scene = self._laid("block", when=4.0)
         times = sorted(b[0] for b in self._coins(scene))
         assert times[0] < 4.0 < times[-1], (
@@ -12290,8 +12143,7 @@ class TestTheCoinsBesideTheObstacles:
 
     def test_there_is_time_to_get_out_of_the_doomed_lane(self, qapp):
         """The trail is fair only if the lane change fits the gap it leaves,
-        measured against the craft's own slide.
-        """
+        measured against the craft's own slide."""
         import visualizers
 
         lead = visualizers.Rider.COIN_LEAD
@@ -12343,8 +12195,7 @@ class TestTheCoinsBesideTheObstacles:
 
     def test_each_coin_is_worth_more_than_the_one_before(self, qapp):
         """25, 50, 75, 100, so the totals are 25, 75, 150, 250. Written out:
-        from the constants this passes with the step at zero.
-        """
+        from the constants this passes with the step at zero."""
         scene = self._scene()
         seen = []
         for _ in range(4):
@@ -12355,8 +12206,7 @@ class TestTheCoinsBesideTheObstacles:
 
     def test_the_row_is_capped(self, qapp):
         """The eighth coin is worth 200 and the ninth 225, so the cap holds
-        from there.
-        """
+        from there."""
         scene = self._scene()
         self._take(scene, 8)
         was = scene._score
@@ -12407,8 +12257,7 @@ class TestTheCoinsBesideTheObstacles:
 
     def test_a_coin_never_goes_into_the_puzzle_grid(self, qapp):
         """In the puzzle game coins pay straight into the score rather than
-        filling the grid.
-        """
+        filling the grid."""
         scene = self._scene(mode="Puzzle")
         self._take(scene, 3)
         got = scene.report()
@@ -12420,8 +12269,7 @@ class TestTheCoinsBesideTheObstacles:
     def test_a_coin_reads_against_the_road_it_is_on(self, qapp):
         """The road runs from purple to red and is gold at a chorus, so a coin
         is read off the frame against all of it: from the constants this
-        passes with a coin in the road's own colour.
-        """
+        passes with a coin in the road's own colour."""
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -12489,8 +12337,7 @@ class TestTheCoinsBesideTheObstacles:
 
     def test_a_coin_is_smaller_than_the_obstacle_it_sits_beside(self, qapp):
         """Small: a reward for a lane, not a target, and a block-sized coin
-        would hide the obstacle.
-        """
+        would hide the obstacle."""
         import visualizers
 
         assert visualizers.Rider.COIN_SIZE < visualizers.Rider.LANE_WIDE * 0.4
@@ -12583,8 +12430,7 @@ class TestTheCoinsBesideTheObstacles:
 
     def test_a_coin_is_ringed_in_dark_whatever_it_is_over(self, qapp):
         """A white coin on a gold road is read against its own dark silhouette,
-        a little larger, as every block has.
-        """
+        a little larger, as every block has."""
         from PySide6.QtGui import QColor
 
         # Where the face is, found on black where nothing else is lit.
@@ -12620,8 +12466,7 @@ class TestTheCoinsBesideTheObstacles:
 
     def test_a_coin_turns_and_never_turns_to_nothing(self, qapp):
         """Never so narrow it vanishes: exactly edge-on, a disc is one pixel
-        wide.
-        """
+        wide."""
         import math
 
         def across(lit):
@@ -12679,8 +12524,7 @@ class TestTheRoadTurnsOverAtTheBigMoments:
 
     def test_a_track_with_no_big_moments_never_turns_over(self, qapp):
         """A share of the peak alone is met everywhere on a track with no
-        dynamics, and a wall of noise has no big moments.
-        """
+        dynamics, and a wall of noise has no big moments."""
         scene = self._scene([0.7] * 400)
         assert scene._twists == (), (
             f"a flat track got {len(scene._twists)} corkscrews")
@@ -12733,8 +12577,7 @@ class TestTheRoadTurnsOverAtTheBigMoments:
     def _flat_frame(twisted, monkeypatch):
         """One flat frame 1.25 s into a corkscrew (half way round), or without
         one, from the same state on a stopped clock, so the two differ by
-        the corkscrew alone.
-        """
+        the corkscrew alone."""
         import time as real_time
 
         from PySide6.QtCore import QRectF
@@ -12765,8 +12608,7 @@ class TestTheRoadTurnsOverAtTheBigMoments:
     def test_the_world_turns_round_the_road_not_the_road(self, qapp,
                                                          monkeypatch):
         """The craft stays put while the world behind the road turns upside
-        down; it used to go round the frame with everything else.
-        """
+        down; it used to go round the frame with everything else."""
         plain, before = self._flat_frame(False, monkeypatch)
         _again, repeat = self._flat_frame(False, monkeypatch)
         turned, after = self._flat_frame(True, monkeypatch)
@@ -12804,8 +12646,7 @@ class TestTheRoadTurnsOverAtTheBigMoments:
 
     def test_the_road_is_not_moved_to_make_room_for_it(self, qapp):
         """The horizon stays put too: turning the road about a horizon above
-        the middle swung it out of the picture.
-        """
+        the middle swung it out of the picture."""
         from PySide6.QtCore import QRectF
 
         import visualizers
@@ -12868,8 +12709,7 @@ class TestTheRoadTurnsOverAtTheBigMoments:
     def test_taking_one_doubles_the_next_prize(self, qapp):
         """A power block doubles the next thing that pays and is spent there.
         The first prize is worth 1 and the second 5, so doubled the total is
-        11.
-        """
+        11."""
         import visualizers
 
         scene = visualizers.Rider()
@@ -12911,8 +12751,7 @@ class TestTheRoadTurnsOverAtTheBigMoments:
 
     def test_it_doubles_a_cluster_in_the_puzzle_game(self, qapp):
         """Best carried to a cluster: six are worth four times three, so a
-        doubled six is the biggest thing in the game.
-        """
+        doubled six is the biggest thing in the game."""
         import visualizers
 
         scene = visualizers.Rider()
@@ -12962,8 +12801,7 @@ class TestTheRoadActuallyTurns:
     @classmethod
     def _swing(cls, scene, over=11):
         """How far the road moves sideways over its visible length, in lane
-        widths, at every point of the track.
-        """
+        widths, at every point of the track."""
         curve = scene._curve
         if len(curve) <= over:
             return [0.0]
@@ -12994,8 +12832,7 @@ class TestTheRoadActuallyTurns:
 
     def test_a_mix_that_leans_one_way_for_ever_is_a_straight_road(self, qapp):
         """Every part leans the same way, so no part leans further than the
-        rest.
-        """
+        rest."""
         scene = self._road([-0.25] * 1200)
         swings = self._swing(scene)
         assert max(swings) < 0.01, (
@@ -13015,8 +12852,7 @@ class TestTheRoadActuallyTurns:
 
     def test_a_narrow_mix_turns_as_much_as_a_wide_one(self, qapp):
         """Otherwise a nearly mono record, which needs it most, gets no
-        corners.
-        """
+        corners."""
         import statistics
 
         wide = self._road(self._wobbly(spread=0.20))
@@ -13030,8 +12866,7 @@ class TestTheRoadActuallyTurns:
     def test_one_freak_reading_cannot_throw_the_road_across(self, qapp):
         """The lean has a long tail: one reading on a real record sits thirteen
         spreads out, and unclamped it swung the road three and a half lanes,
-        a hairpin.
-        """
+        a hairpin."""
         import visualizers
 
         lean = [0.0] * 1200
@@ -13089,8 +12924,7 @@ class TestNinjaIsTheSameRoadWithMoreToDodge:
 
     def test_choosing_it_sticks(self, qapp):
         """A reset rebuilds the scene, which puts the mode back, so it is set
-        again.
-        """
+        again."""
         import visualizers
 
         scene = visualizers.Rider()
@@ -13123,8 +12957,7 @@ class TestNinjaIsTheSameRoadWithMoreToDodge:
 
     def test_there_is_still_something_to_score_on(self, qapp):
         """Not all obstacles, or nothing scores: four slots in seven, measured
-        off what is laid.
-        """
+        off what is laid."""
         scene = self._laid("Ninja")
         figures = [b for b in scene._blocks
                    if b[2] in ("wall", "block", "run")]
@@ -13137,8 +12970,7 @@ class TestNinjaIsTheSameRoadWithMoreToDodge:
 
     def test_it_is_still_a_road_somebody_can_get_down(self, qapp):
         """Every moment leaves a lane open, in either game, whatever the chart
-        does.
-        """
+        does."""
         for mode in ("Mono", "Ninja"):
             scene = self._laid(mode)
             shut = {}
@@ -13150,8 +12982,8 @@ class TestNinjaIsTheSameRoadWithMoreToDodge:
                 f"{mode} closed all {scene.LANES} lanes at once")
 
     def test_dodging_all_of_it_is_worth_more_than_it_is_in_mono(self, qapp):
-        """Written out: a hundred points clean is 130 in Mono and 160 in Ninja.
-        """
+        """Written out: a hundred points clean is 130 in Mono and 160 in
+        Ninja."""
         import visualizers
 
         for mode, wanted in (("Mono", 130), ("Ninja", 160)):
@@ -13217,8 +13049,8 @@ class TestTheGameBoxPicksTheGame:
                 f"{rider.mode}")
 
     def test_it_is_only_shown_for_the_rider(self, qtbot):
-        """It is the rider's control; on any other scene it would do nothing.
-        """
+        """It is the rider's control; on any other scene it would do
+        nothing."""
         pane = self._pane(qtbot)
         pane.enable_box.setChecked(True)
         for scene, shown in (("Music rider", True), ("Rave", False),
@@ -13303,8 +13135,7 @@ class TestWakeboardLeavesTheRoad:
 
     def test_it_is_in_the_air_for_about_a_figure(self, qapp):
         """Long enough to be a decision, short enough not to sit out the hard
-        parts; written as a time.
-        """
+        parts; written as a time."""
         scene = self._board()
         scene.jump()
         seen = self._flight(scene)
@@ -13333,8 +13164,8 @@ class TestWakeboardLeavesTheRoad:
         assert got["score"] == 0 and got["airs"] == 0, got
 
     def test_a_jump_off_a_crest_pays(self, qapp):
-        """A crest is where the road ahead falls away from the road underneath.
-        """
+        """A crest is where the road ahead falls away from the road
+        underneath."""
         import visualizers
 
         scene = self._board(hill=lambda at: 0.0 if at < 4.0 else 1.0)
@@ -13413,8 +13244,7 @@ class TestWakeboardLeavesTheRoad:
 
     def test_it_is_drawn_off_the_road(self, qapp):
         """Off the frame: from the height, this passes with the craft drawn
-        flat on the road.
-        """
+        flat on the road."""
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -13544,8 +13374,7 @@ class TestTheBeatHitsHardEnoughToFeel:
 
     def test_a_beat_moves_a_good_share_of_the_frame(self, qapp):
         """The floor: 7 per cent was too little to feel; a fifth is the
-        minimum, and it measures about twice that.
-        """
+        minimum, and it measures about twice that."""
         import statistics
 
         import visualizers
@@ -13733,8 +13562,7 @@ class TestTheRoadIsNeverBare:
 
     def test_a_track_with_no_drums_found_at_all_still_has_a_road(self, qapp):
         """Ambient, orchestral, a lone voice: the fill used to wait for the
-        chart to place something first, which an empty chart never did.
-        """
+        chart to place something first, which an empty chart never did."""
         scene = self._laid({})
         laid = [b for b in scene._blocks
                 if b[2] in ("wall", "block", "run")]
@@ -13744,8 +13572,7 @@ class TestTheRoadIsNeverBare:
 
     def test_what_fills_a_quiet_passage_is_never_a_hazard(self, qapp):
         """The rule it must not break: an obstacle lands on a beat you can hear
-        coming, and there is nothing to hear here.
-        """
+        coming, and there is nothing to hear here."""
         scene = self._laid({"Kick": (1.0, 2.0, 3.0)})
         greys = [b for b in scene._blocks
                  if b[4] and b[0] > 6.0]
@@ -13772,8 +13599,7 @@ class TestTheRoadIsNeverBare:
 
     def test_a_busy_track_is_not_padded(self, qapp):
         """It fills gaps and adds nothing to a full road: four to the floor
-        with hats on the eighths leaves no gap a bar wide.
-        """
+        with hats on the eighths leaves no gap a bar wide."""
         busy = {"Kick": tuple(i * self.BEAT for i in range(100)),
                 "Hats": tuple(i * self.BEAT / 2 for i in range(200))}
         scene = self._laid(busy)
@@ -13790,8 +13616,7 @@ class TestTheRoadIsNeverBare:
 
     def test_a_track_with_no_tempo_is_left_alone(self, qapp):
         """Without a beat there is no grid, and a figure off the grid is worse
-        than none.
-        """
+        than none."""
         import visualizers
         from attachment_widgets import SpectrumState
 
@@ -13832,8 +13657,7 @@ class TestATempoIsCountedTheWayAPersonWouldCountIt:
 
     def test_every_real_reading_is_left_alone(self, qapp):
         """The bounds leave a correct reading alone; these are the eight
-        records measured.
-        """
+        records measured."""
         import visualizers
 
         for bpm in (78.0, 115.0, 128.0, 130.0, 137.0, 155.0, 164.0):
@@ -13946,8 +13770,7 @@ class TestARunIsSomethingYouCanSee:
 
     def test_a_long_run_draws_a_bigger_craft_than_a_short_one(self, qapp):
         """Off the frame: from the chain, this passes with a halo of fixed
-        size.
-        """
+        size."""
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -14008,8 +13831,7 @@ class TestTheCraftLeansIntoWhatItIsDoing:
     @classmethod
     def _flown(cls, start=1, moves=0, frames=50, at_frame=30, stop_at=None):
         """Fly the craft, steering part way, and keep the last frame and its
-        swerve.
-        """
+        swerve."""
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -14078,8 +13900,7 @@ class TestTheCraftLeansIntoWhatItIsDoing:
 
     def test_a_dash_across_the_road_banks_harder_than_a_nudge(self, qapp):
         """The bank follows the size of the move, measured as the angle drawn:
-        from the swerve, this passes with the bank pinned at its ceiling.
-        """
+        from the swerve, this passes with the bank pinned at its ceiling."""
         import visualizers
 
         def bank(start, moves):
@@ -14108,8 +13929,8 @@ class TestTheCraftLeansIntoWhatItIsDoing:
             "the craft is allowed to roll further than a craft should")
 
     def test_a_stopped_track_holds_the_bank_where_it_was(self, qapp):
-        """On the track's clock, so a craft caught mid-swerve stays mid-swerve.
-        """
+        """On the track's clock, so a craft caught mid-swerve stays
+        mid-swerve."""
         # Stopped while the craft is still crossing, on a dash across the road:
         # a craft that has arrived holds no bank.
         early, _s, _p = self._flown(start=0, moves=2, frames=60,
@@ -14202,8 +14023,7 @@ class TestTheCraftLeansIntoWhatItIsDoing:
 
     def test_it_rolls_the_way_it_is_going(self, qapp):
         """Nose up on the side it heads for, read off the drawn shape: from the
-        swerve, this passes with the sign reversed.
-        """
+        swerve, this passes with the sign reversed."""
         one = self._tilt(self._held(18.0))
         other = self._tilt(self._held(-18.0))
         level = self._tilt(self._held(0.0))
@@ -14306,8 +14126,7 @@ class TestTheScreenAnswersWhatYouDo:
 
     def test_losing_a_long_chain_says_what_it_cost(self, qapp):
         """A chain of forty going is the worst thing on this road, and it
-        looked like a chain of two going.
-        """
+        looked like a chain of two going."""
         scene = self._rider(chain=30)
         self._into(scene, "block", grey=True)
         words = [pop[5] for pop in scene._pops if pop[5]]
@@ -14367,8 +14186,7 @@ class TestTheScreenAnswersWhatYouDo:
     @classmethod
     def _share(cls, event):
         """How much of the frame one event moves at its peak, against the same
-        run with nothing happening.
-        """
+        run with nothing happening."""
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -14431,8 +14249,7 @@ class TestTheScreenAnswersWhatYouDo:
 
     def test_a_hit_is_the_biggest_thing_on_the_road(self, qapp):
         """A hit measured 13.6 per cent, less than a coin: the damage wash
-        multiplies, and black times red is black.
-        """
+        multiplies, and black times red is black."""
         share = self._share(self._event("block", grey=True))
         assert share > 0.35, f"a hit moves {share:.1%} of the frame"
 
@@ -14446,8 +14263,7 @@ class TestTheScreenAnswersWhatYouDo:
 
     def test_a_milestone_is_a_moment(self, qapp):
         """A chain reaching twenty-five moved 2.6 per cent, the same as any
-        prize.
-        """
+        prize."""
         share = self._share(self._event("block", chain=24))
         plain = self._share(self._event("block", chain=4))
         assert share > 0.40, f"a milestone moves {share:.1%} of the frame"
@@ -14459,8 +14275,7 @@ class TestTheScreenAnswersWhatYouDo:
     def test_a_callout_leaves_the_painter_as_it_found_it(self, qapp):
         """The first version raised inside a saved painter (QFont was never
         imported), and a painter ended with a saved state takes the pane
-        down.
-        """
+        down."""
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QFont, QImage, QPainter
 

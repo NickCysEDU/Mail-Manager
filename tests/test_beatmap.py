@@ -647,16 +647,11 @@ class TestEachSceneGetsAStrobeThatSuitsIt:
 
 
 class TestEveryKindOfSnare:
-    """"Xxxxxxx xxxxxxxxxx xxxxxxxxx xxx xxxxxx xxx. Xxxxx isn't too
-    accurate."
-
-    It was not. On a real track it found thirteen snares a minute against
-    ninety-one kicks, which is not a drummer anybody has ever heard.
-
-    The reason is in tests/drumkit.py, which writes drum tracks with every
-    hit at a known time so this can be measured rather than guessed at.
-    "Snare" is not one sound, and the profile that decided what one was
-    had been measured off a single kit playing a single pattern.
+    """On a real track the detector once found thirteen snares a minute
+    against ninety-one kicks. "Snare" is not one sound, and the profile
+    that decided what one was had been measured off a single kit playing a
+    single pattern. tests/drumkit.py writes drum tracks with every hit at
+    a known time, so this is measured rather than guessed.
     """
 
     KINDS = ("bright", "tight", "clap", "rim")
@@ -812,13 +807,12 @@ class TestEveryKindOfSnare:
 
 
 class TestTheKitIsReadInEveryStyle:
-    """"Xxxx xxxx xxxxxxxxxx xxxxxxxxx xx xxxx xxxxxxxxx xxxxx xx
-    xxxxxxxxx xxxxxx xx xxxx xx xx, xxxxxxxxxx XXX xxxxxxxxx."
+    """The drums read in eleven styles written to known times (STYLES in
+    tests/drumkit.py).
 
-    The bounds the detector used were measured off one kit playing one
-    pattern: kick on one and three, snare on two and four. Held against
-    eleven styles written to known times - see STYLES in tests/drumkit.py -
-    they were perfect on that pattern and nothing at all on four-to-floor:
+    The detector's bounds were measured off one kit playing one pattern:
+    kick on one and three, snare on two and four. They were perfect on that
+    pattern and nothing at all on four-to-floor:
 
         house 0    trance 0    techno 8    trap 8    hiphop 12
         rock 100   jazz 100    breaks 92   dnb 80

@@ -1,25 +1,15 @@
 """Music rider, drawn in three dimensions on the graphics card.
 
-"Xxxxx xx xxxxxx xx xxxxxxxxxxxxx xxx xxxxx xx xx xxxxxxx xxxxxxxx xx
-xxxxxxx obstacles xxxx xxx xxxx xxx xxxx." Xxx rider was drawn with a
-QPainter, a road of lines projected by hand onto a flat picture, and
-that is a ceiling: no depth, no light, nothing brighter than white, and
-a bloom made from a small copy of the frame read back off the card.
+The same game as a lit world: a glass track with neon rails, solid blocks
+that pulse on the beat, a craft with an engine, a city of equaliser towers,
+particles in the air, and a gate over the track on every beat that lights as
+you pass. Drawn in floating point, so neon can be far brighter than white
+and bloom while the unlit world stays deep and saturated.
 
-This draws the same game as a lit world. The track is a ribbon of glass
-with neon rails; the blocks are solid, and pulse on the beat; the craft
-is a ship with an engine; a city of equaliser towers lines the road; the
-air is full of particles; and every beat is a gate over the track that
-lights as you pass through it, on the beat. It is drawn in floating
-point, so a neon rail can be far brighter than white and bloom, while
-everything that is not lit stays deep and saturated rather than washed
-over by a glow.
-
-Nothing here decides anything. Every position comes from the scene's
-own road function, sampled once a frame into the shader that places
-every vertex - so a block drawn here is where the game says it is, on
-the frame it says so. The QPainter drawing stays, as the picture where
-there is no card to draw on and as what the game's tests look at.
+Nothing here decides anything: every position comes from the scene's own
+road function, sampled once a frame into the vertex shader, so a block is
+drawn where the game says it is. The QPainter drawing remains for machines
+without a card and for the game's tests.
 """
 
 from __future__ import annotations
@@ -71,9 +61,8 @@ GL_POINT_SPRITE = 0x8861
 GL_FUNC_ADD = 0x8006
 
 # -- the road, as the shader sees it ----------------------------------------
-#: How many times a frame the scene's road is read, and over what stretch.
-#: From behind the camera to well past the last block, so the track runs
-#: on into the fog rather than stopping where the game stops laying.
+#: How many times a frame the road is read, and over what stretch: from behind
+#: the camera to well past the last block, so the track runs on into the fog.
 ROAD_SAMPLES = 96
 ROAD_FROM = -6.0
 ROAD_TO = 76.0
@@ -82,21 +71,18 @@ ROAD_STEP = (ROAD_TO - ROAD_FROM) / (ROAD_SAMPLES - 1)
 #: The levels the towers are lit from.
 BANDS = 24
 
-#: How far down the road blocks are drawn. The game lays them five
-#: seconds ahead, which on most records is sixty units of road, and the
-#: flat drawing shows the first twenty. On a road that runs on to the
-#: horizon, a block appearing out of nowhere a few beats away is a block
-#: you get no warning of; drawn from here it comes out of the fog, and
-#: what is coming can be read the way Audiosurf's can.
+#: How far down the road blocks are drawn. The game lays them five seconds
+#: ahead, about sixty units on most records; drawn this far, a block comes out
+#: of the fog rather than appearing a few beats away.
 SEEN_AHEAD = 56.0
 
 HEADER = """
 #version 120
 """
 
-#: Every vertex of the world goes through here: across, up and along the
-#: road, to a point in the world. One function, so nothing can disagree
-#: about where the road is.
+#: Every vertex of the world goes through here, from across, up and along the
+#: road to a point in the world, so nothing can disagree about where the road
+#: is.
 ROAD_GLSL = """
 uniform vec4 uRoad[%(samples)d];
 uniform float uRoadFrom;
@@ -131,13 +117,12 @@ vec3 onRoadAs(float u, float h, float z, float anchor) {
 }
 """ % {"samples": ROAD_SAMPLES, "last": ROAD_SAMPLES - 1}
 
-#: How many beats' starts the shaders are given, from just behind the eye
-#: to past the end of the road: at the slowest the road runs, a few dozen.
+#: How many beat starts the shaders get, from behind the eye to past the road's
+#: end: a few dozen at the slowest.
 BEAT_MARKS = 64
 
-#: Where the beats are on the road: the beat number at a point of it,
-#: through the starts of the beats near it. A beat is not one length of
-#: road; see Rider._decide_lunges.
+#: The beat number at a point of the road, from the starts of the beats near
+#: it: a beat is not one fixed length of road (see Rider._decide_lunges).
 BEATS_GLSL = """
 uniform float uBeatAt[%(marks)d];
 uniform float uBeatFirst;
@@ -192,10 +177,8 @@ float hash(vec2 p) {
 
 
 class _Program:
-    """A linked program, and the uniforms it has been asked about.
-
-    Uniforms are set by location, found once: PySide resolves a name and
-    a float to none of its overloads, and a location is cheaper anyway.
+    """A linked program and its uniforms. Uniforms are set by location, found
+    once: PySide matches a name and a float to none of its overloads.
     """
 
     def __init__(self, program: QOpenGLShaderProgram) -> None:
@@ -927,7 +910,7 @@ void main() {
 """
 
 #: The tunnel a corkscrew is ridden through: a tube round the road, turning
-#: with it, in the passage's colours and every colour after them. See
+#: with it, in the passage's colours and the rest of the spectrum. See
 #: World._draw_tunnel.
 TUNNEL_VERTEX = ROAD_GLSL + """
 attribute vec2 aTube;       // angle round the road, and how far along it
@@ -1060,10 +1043,9 @@ def cube_triangles():
     return out
 
 
-#: The craft, in its own frame: across, up, and along, with the nose at
-#: -z - the way the road runs away from the camera. Built by lofting
-#: cross-sections, the way a hull is drawn: a sequence of outlines along
-#: its length, joined up.
+#: The craft in its own frame (across, up, along, nose at -z, as the road runs
+#: away from the camera), lofted from cross-sections along its length like a
+#: hull.
 
 def _loft(sections, close_front=True, close_back=True) -> list:
     """Triangles through ``sections``: [(z, [(x, y), ...]), ...], each
@@ -1135,15 +1117,10 @@ def _shifted(triangles, dx, dy, dz=0.0):
     return [(x + dx, y + dy, z + dz) for x, y, z in triangles]
 
 
-#: The craft each level is flown in, and what shapes it: how wide, tall and
-#: long its hull is against the first one, how far its wings reach and how
-#: far back they sweep, where its engines sit and how many there are, and
-#: how long a flame they throw. The faster the road runs - see
-#: rider_layout.DIFFICULTY, where the harder levels have fewer beats of
-#: road in sight and so cover them faster - the longer, thinner and more
-#: swept the craft, and the longer its flame: "xxx xxxxxxx xxxx xxxxx xx
-#: xxxxxxx xxxxxx xx xxxx, maybe different ships for different
-#: difficulty".
+#: The craft each level is flown in: hull width, height and length against the
+#: first, wing reach and sweep, engine placement and count, and flame length.
+#: The faster the road runs (see rider_layout.DIFFICULTY), the longer, thinner
+#: and more swept the craft and the longer its flame.
 CRAFTS = {
     "Cruiser": {"wide": 1.30, "tall": 1.10, "long": 0.86, "span": 1.08,
                 "sweep": -0.04, "pods": 0.44, "engines": 2, "fins": True,
@@ -1158,10 +1135,9 @@ CRAFTS = {
                "sweep": 0.24, "pods": 0.25, "engines": 3, "fins": False,
                "canopy": 0.78, "flame": 1.5, "size": 0.80},
 }
-#: How much of a longer craft's extra length is behind its middle rather
-#: than in front of it. Stretched both ways, a long craft's tail came at
-#: the camera and the fastest craft - flown at the level with the least
-#: warning - hid the most road.
+#: How much of a longer craft's extra length goes behind its middle. Stretched
+#: evenly, the fastest craft's tail came at the camera and hid the most road at
+#: the level with the least warning.
 TAIL_SHARE = 0.25
 #: Which craft each level flies. See Rider.difficulty.
 CRAFT_FOR = {"Easy": "Cruiser", "Normal": "Arrow", "Hard": "Interceptor",
@@ -1435,24 +1411,22 @@ def streak_floats(half: float, count=420, loop=70.0, seed=5) -> list:
 # The world
 # ==========================================================================
 class RiderWorld:
-    """Everything the rider draws on the card, for one GL context.
-
-    Made the first time a frame is drawn in a context and thrown away
-    with it - see Spectrum's canvas, which makes a new one when a move
-    into full screen brings a new context.
+    """Everything the rider draws on the card, for one GL context: made on the
+    first frame in a context and dropped with it (a move into full screen
+    can bring a new one; see Spectrum's canvas).
     """
 
-    #: Where the camera rides: behind the craft, above it, and looking
-    #: this far down the road.
+    #: Where the camera rides: behind and above the craft, looking this far
+    #: down the road.
     CAM_BACK = 2.45
     CAM_UP = 1.02
     CAM_AHEAD = 6.5
     CAM_LOOK_UP = 0.1
     #: How the camera follows, as a share of the way a second.
     CAM_FOLLOW = 9.0
-    #: How much of the road's bank the camera takes on. All of it is the
-    #: world tipping every time the road turns, which is disorienting;
-    #: none of it is a camera bolted level to a road that is not.
+    #: How much of the road's bank the camera takes on: all of it tips the
+    #: world at every turn, none of it bolts the camera level to a road that is
+    #: not.
     CAM_BANK = 0.45
     #: The field of view, calm and at full tilt, in degrees.
     FOV_CALM = 62.0
@@ -1478,8 +1452,8 @@ class RiderWorld:
         self.barrier = _program(BARRIER_VERTEX, BARRIER_FRAGMENT)
         self.tunnel = _program(TUNNEL_VERTEX, TUNNEL_FRAGMENT)
         self.tube = _Mesh(tube_floats(), [(b"aTube", 2)])
-        #: How much tunnel there is at each sample of the road, and at
-        #: the craft. See _tunnel_at.
+        #: How much tunnel there is at each road sample and at the craft. See
+        #: _tunnel_at.
         self.tunnel_line = [0.0] * ROAD_SAMPLES
         self.inside = 0.0
         self.bright = _program(QUAD_VERTEX, BRIGHT_FRAGMENT)
@@ -1510,9 +1484,8 @@ class RiderWorld:
         self._flash_colour = (1.0, 1.0, 1.0)
         self._shock = 9.0
         self._shock_hard = 0.0
-        #: A prize taken: its colour coming in from the edges of the
-        #: picture, and the camera punched forward. Each prize adds to
-        #: them, so a quick run of them builds.
+        #: A prize taken: its colour in from the picture's edges and the camera
+        #: punched forward; each adds, so a quick run builds.
         self._glow = 0.0
         self._glow_colour = (1.0, 1.0, 1.0)
         self._punch = 0.0
@@ -1548,11 +1521,9 @@ class RiderWorld:
         self.streaks = _Mesh(streak_floats(half), [(b"aStreak", 4)], GL_LINES)
 
     # -- framebuffers ------------------------------------------------------
-    #: The world's own light, in floating point but packed: eleven bits
-    #: for red and green and ten for blue, a third of the memory of four
-    #: half floats - and memory is what a multisampled full screen costs.
-    #: Falls back to half floats, and then to bytes, where a card will not
-    #: make one.
+    #: The world's light in packed floating point (eleven bits red and green,
+    #: ten blue): a third of the memory of half floats, which a multisampled
+    #: full screen needs. Falls back to half floats, then bytes.
     FORMATS = (GL_R11F_G11F_B10F, GL_RGBA16F, GL_RGBA8)
 
     def _framebuffers(self, width: int, height: int, samples: int = 4) -> None:
@@ -1598,9 +1569,8 @@ class RiderWorld:
         self.bloomed = [made(fbo.width(), fbo.height()) for fbo in self.chain]
 
     # -- the road, read once a frame ----------------------------------------
-    #: How much of the road's roll is drawn as the road's own bank, and
-    #: which way: the scene's roll is measured for a picture whose y runs
-    #: down the screen.
+    #: How much of the road's roll is drawn as its bank, and which way: the
+    #: scene measures roll for a picture whose y runs down.
     ROLL_SHARE = -0.5
 
     def _read_road(self, scene) -> list:
@@ -1625,26 +1595,18 @@ class RiderWorld:
 
     @staticmethod
     def _twist(scene, z: float) -> float:
-        """How far over a corkscrew has turned the road at ``z``, in
-        radians: the turn due at the moment of the track that point of
-        the road belongs to. Behind the craft, what it is at the craft,
-        as the rest of the road behind it is.
-
-        The road itself turns over, so the corkscrew is seen coming - a
-        ribbon wound round ahead - and the craft rides it round. It used
-        to be the picture that turned instead, craft and all: the craft
-        went round the frame and was at the top of it halfway through,
-        which is the one thing that must stay put.
+        """How far a corkscrew has turned the road at ``z``, in radians: the
+        turn due at that point's moment of the track; behind the craft, the
+        craft's. The road itself turns over, so the corkscrew is seen coming
+        and the craft rides it, staying put on the screen.
         """
         twist_at = getattr(scene, "_twist_at", None)
         if twist_at is None or not getattr(scene, "_twists", None):
             return 0.0
         when = scene._when(max(z, scene.RIDER_AT))
-        # Counted on through the ones already ridden rather than back to
-        # nothing at the end of each: a whole turn is level, and the
-        # samples either side of the end of one must not differ by a
-        # turn, or the road between them is wrung round backwards in a
-        # single step - a fold standing up across it.
+        # Counted on through the corkscrews already ridden rather than back to
+        # zero: a whole turn is level, and samples either side of an ending
+        # must not differ by a turn, or the road between them folds.
         done = sum(1 for start in scene._twists
                    if start + scene.TWIST_FOR <= when)
         through = twist_at(when)
@@ -1667,9 +1629,8 @@ class RiderWorld:
     @classmethod
     def _on_road(cls, road, u: float, h: float, z: float,
                  plain: bool = False) -> tuple:
-        """The shader's onRoad, in Python, for the camera and the HUD.
-        ``plain`` leaves out any corkscrew: the road as if it were not
-        turning over."""
+        """The shader's onRoad in Python, for the camera and the HUD. ``plain``
+        leaves out any corkscrew."""
         x, y = cls._sample(road, z, 0), cls._sample(road, z, 1)
         r = cls._sample(road, z, 2)
         if plain:
@@ -1757,8 +1718,8 @@ class RiderWorld:
         beat = float(getattr(scene, "_beat_lit", 0.0))
         if not kit:
             kick = beat
-        # A kick is a moment, not a level: on the way up through the
-        # middle, and then the wave goes out and the view punches wider.
+        # A kick is a moment, not a level: on the way up through the middle the
+        # wave goes out and the view punches wider.
         if kick > 0.55 >= self._kick_was:
             self._wave = scene.RIDER_AT
             self._wave_lit = 1.0
@@ -1786,9 +1747,8 @@ class RiderWorld:
         air = float(getattr(scene, "_air", 0.0))
         across = float(scene._lane_here)
 
-        # The camera, on a spring, following the craft down the road -
-        # placed as if the road were not turning over, and then turned
-        # with it below.
+        # The camera on a spring, following the craft, placed as if the road
+        # were not turning over and then turned with it below.
         ship_z = scene.RIDER_AT
         eye = self._on_road(road, across * 0.35,
                             self.CAM_UP + air * 0.4 + self._knock * 0.5,
@@ -1809,11 +1769,9 @@ class RiderWorld:
         jolt = (math.sin(t * 31.0) * wobble, math.sin(t * 27.0 + 1.3) * wobble,
                 0.0)
         eye_at = tuple(c + j for c, j in zip(self._cam_eye, jolt))
-        # Through a corkscrew the whole rig - eye, aim and up - turns
-        # about the road's line at the craft, by as much as the road has
-        # turned there. The craft and the road under it stay where they
-        # always are on the glass, and the world goes round them: that is
-        # what riding one looks like from inside it.
+        # Through a corkscrew the whole rig (eye, aim and up) turns about the
+        # road at the craft by the road's turn there, so the craft and the road
+        # under it stay put and the world goes round them.
         turn = self._turn_at(road, ship_z)
         centre = self._on_road(road, 0.0, 0.0, ship_z)
         eye_at = self._about(eye_at, centre, turn)
@@ -1838,16 +1796,15 @@ class RiderWorld:
         ship_at = self._on_road(road, across, self.HOVER + air, ship_z)
         self._screen_ship = screen(ship_at)
         horizon = screen(self._on_road(road, 0.0, 0.0, ROAD_TO - 2.0))
-        # Where the sky is, not the road: it stays put as the road turns
-        # over under it.
+        # Where the sky is, not the road: it stays put as the road turns over
+        # under it.
         sun = screen(self._on_road(road, 0.0, 6.0, ROAD_TO - 2.0, plain=True))
-        # The colour of the horizon, so the road runs into the sky rather
-        # than stopping short of it.
+        # The horizon's colour, so the road runs into the sky.
         fog = colorsys.hsv_to_rgb(hue % 1.0, 0.95, 0.20 + loud * 0.18)
 
-        #: What the camera did this frame, for anybody measuring it: the
-        #: roll in radians, the field of view in degrees, and where the
-        #: horizon and the craft landed on the glass, 0 to 1.
+        #: What the camera did this frame, for anybody measuring it: roll in
+        #: radians, field of view in degrees, and where the horizon and the
+        #: craft landed, 0 to 1.
         self.seen = {"roll": roll, "fov": fov, "horizon": horizon,
                      "ship": self._screen_ship, "eye": eye_at,
                      "road": screen(self._on_road(road, 0.0, 0.0, 12.0))}
@@ -1935,8 +1892,8 @@ class RiderWorld:
         p.release()
 
     def _draw_tunnel(self, frame) -> None:
-        """The tunnel round a corkscrew, where there is one. Solid where it
-        is all there, so the city outside is hidden; the mouth faded in."""
+        """The tunnel round a corkscrew, where there is one: solid where it is
+        all there, hiding the city; the mouth faded in."""
         if max(self.tunnel_line) < 0.01:
             return
         scene = frame["scene"]
@@ -2023,23 +1980,20 @@ class RiderWorld:
             when, lane, kind, done, grey = block
             z = scene._where(when)
             if done and id(block) in self._taken:
-                # Taken: it went into the ship. One that was not goes on
-                # past and out of the picture, as anything you missed
-                # would. See _notice.
+                # Taken: it went into the ship. One not taken goes on past and
+                # out of the picture. See _notice.
                 continue
             if z < scene.RIDER_AT - 4.0 or z > far + 0.5:
                 continue
-            # Grown in over the last stretch, out of the fog, rather than
+            # Grown in out of the fog over the last stretch, rather than
             # appearing.
             grow = max(0.0, min(1.0, (far + 0.5 - z) / 6.0))
             grow = grow * grow * (3.0 - 2.0 * grow)
             across = scene._lane_at(lane)
-            # The last stretch before the craft, in its lane: drawn in
-            # to it and shrinking, so a block being taken is seen going
-            # into the ship rather than the ship vanishing inside it.
-            # Not an obstacle, which is hit rather than taken (see
-            # _rammed), and not under a craft in the air, which takes
-            # nothing.
+            # The last stretch before the craft, in its lane: drawn in and
+            # shrinking, so a block taken is seen going into the ship. Not an
+            # obstacle, which is hit (see _rammed), and not under a craft in
+            # the air, which takes nothing.
             gap = z - scene.RIDER_AT
             beside = abs(across - frame["across"])
             flying = frame["air"] > 0.05
@@ -2067,8 +2021,8 @@ class RiderWorld:
                           0.9, 4.0, 0.0)
                 self.cube.draw(self.gl, p)
                 continue
-            # The block itself: a prize is lit from inside in the colour
-            # of its passage; an obstacle is dark metal with a warning.
+            # A prize is lit from inside in its passage's colour; an obstacle
+            # is dark metal with a warning.
             pulse = 1.0 + beat * (0.10 if grey else 0.16)
             wide = scene.LANE_WIDE * 0.50 * grow * pulse
             tall = 0.46 * grow * pulse
@@ -2084,13 +2038,12 @@ class RiderWorld:
                           0.0, 2.2 + beat * 3.0, 1.0)
             else:
                 colour = self._colour_of(scene, block)
-                # Colour in the faces and the light in the edges: lit
-                # too brightly all over, tone mapping takes a colour
-                # towards white and the blocks came out milky.
+                # Colour in the faces and light in the edges: lit brightly all
+                # over, tone mapping turned the blocks milky.
                 glow = 0.85 + beat * 0.55
                 if done:
-                    # Gone past: going dark as it leaves, so a miss
-                    # does not smear light across the edge of the frame.
+                    # Gone past: darkening as it leaves, so a miss does not
+                    # smear light across the frame's edge.
                     glow *= max(0.0, 1.0 + gap / 1.5)
                 self._put(p, (across, tall * 0.5 + 0.02, z),
                           (wide, tall, wide * 0.8), (0.0, 0.0, 0.0),
@@ -2098,26 +2051,20 @@ class RiderWorld:
             self.cube.draw(self.gl, p)
         p.release()
 
-    #: How far the craft's nose reaches ahead of the point it is judged
-    #: at: the front of the hull, at the size it is drawn.
+    #: How far the craft's nose reaches ahead of the point it is judged at.
     NOSE = 1.10 * SHIP
 
     def _rammed(self, place, size, yaw, gap, beside, scene):
-        """An obstacle the craft is about to hit, flattened on its nose.
-
-        A hit is judged at the middle of the craft, on the beat, and the
-        nose gets there first. Drawn whole, the block sat inside the hull
-        for the last few frames before the hit; drawn shrinking into the
-        ship, as a prize is, it looked taken, and the player never saw
-        what hit them. Here it stops at the nose and is squashed flat
-        against it - turned square on, spread wider and taller - so the
-        hit is seen landing, and the burst comes on the beat.
-
-        ``place`` is (across, up, along), ``size`` the cube's scale before
-        it is turned, ``yaw`` its turn; the three are returned changed.
+        """An obstacle about to be hit, flattened on the craft's nose. A hit is
+        judged at the craft's middle, on the beat, and the nose gets there
+        first: drawn whole the block sat inside the hull, and drawn
+        shrinking it looked taken. Here it stops at the nose, turned square
+        on and squashed wider and taller, so the hit is seen landing and the
+        burst comes on the beat. ``place`` is (across, up, along), ``size``
+        the cube's scale, ``yaw`` its turn; all three are returned changed.
         """
-        # How squarely it is in the way: all of it in the craft's path,
-        # none of it a lane over, and in between as the craft slides.
+        # How squarely it is in the way: all of it in the craft's path, none a
+        # lane over, in between as the craft slides.
         half_lane = scene.LANE_WIDE * 0.5
         square = max(0.0, min(1.0, (half_lane - beside) / (half_lane * 0.3)))
         if square <= 0.0:
@@ -2135,8 +2082,7 @@ class RiderWorld:
         scale = (size[0] * (1.0 + 0.30 * crush),
                  size[1] * (1.0 + 0.15 * crush),
                  size[2] * (1.0 - 0.80 * crush))
-        # Its near face held at the nose, however far the road has run
-        # on under it.
+        # Its near face held at the nose however far the road has run on.
         pinned = max(place[2], scene.RIDER_AT + self.NOSE + reach(turn, scale))
         along = place[2] + (pinned - place[2]) * square
         # Standing on the road still as it grows taller.
@@ -2145,8 +2091,8 @@ class RiderWorld:
 
     @staticmethod
     def _colour_of(scene, block) -> tuple:
-        """What a block is lit in: its passage's colour, gold for a
-        coin, white for a power block, red for an obstacle."""
+        """What a block is lit in: its passage's colour, gold for a coin, white
+        for a power block, red for an obstacle."""
         import colorsys
 
         when, _lane, kind, _done, grey = block
@@ -2170,8 +2116,8 @@ class RiderWorld:
                  math.radians(bank)))
 
     def _craft_meshes(self, name: str) -> tuple:
-        """A craft's body, canopy and trim, made the first time it is
-        flown on this card."""
+        """A craft's body, canopy and trim, made the first time it flies on
+        this card."""
         found = self._crafts.get(name)
         if found is None:
             found = self._crafts[name] = (
@@ -2201,9 +2147,9 @@ class RiderWorld:
         body = (0.16 + hurt * 0.8, 0.17, 0.21)
         self._put(p, place, (size, size, size), angles, body, 0.0, 0.0, 0.0)
         self.ship.draw(self.gl, p)
-        # The canopy: glass, reflecting the world it is going through - the
-        # sky, the sun on the road and the city's lights sliding back over
-        # it - with the cockpit dim behind. It was one flat tint.
+        # The canopy: glass reflecting the world it passes through, the sky,
+        # the sun on the road and the city's lights, with the cockpit dim
+        # behind.
         glass = colorsys.hsv_to_rgb((frame["hue"] + 0.5) % 1.0, 0.85, 0.75)
         low = colorsys.hsv_to_rgb(frame["hue"] % 1.0, 0.9, 1.4)
         high = colorsys.hsv_to_rgb((frame["hue"] + 0.55) % 1.0, 0.8, 0.10)
@@ -2237,8 +2183,8 @@ class RiderWorld:
         size = SHIP * craft(self.craft_of(scene))["size"]
         self._put(p, place, (size, size, size), angles, colour, 1.0, 0.0, 0.0)
         self.ship_trim.draw(self.gl, p)
-        # The engine: a hot core at the tail, and a flame that grows on
-        # the beat and with the pace of the passage.
+        # The engine: a hot core at the tail and a flame that grows on the beat
+        # and with the passage's pace.
         name = self.craft_of(scene)
         flame = (0.12 + frame["beat"] * 0.14 + frame["rush"] * 0.20) * (
             craft(name)["flame"])
@@ -2277,8 +2223,8 @@ class RiderWorld:
                 lit = 4.0 * math.exp(gap * 3.0)
             if abs(gap) < 0.6:
                 lit += 5.0 * (1.0 - abs(gap) / 0.6)
-            # The first beat of each bar taller and brighter, and all of
-            # them turned down where the music is calm.
+            # The first beat of each bar taller and brighter, all turned down
+            # where the music is calm.
             downbeat = scene.bar_place(n) == 0
             bar = 1.35 if downbeat else 1.0
             lit *= (1.6 if downbeat else 1.0) * scene.gate_light(n)
@@ -2396,15 +2342,12 @@ class RiderWorld:
 
     # -- what the game did this frame ------------------------------------------
     def _notice(self, scene) -> None:
-        """Which blocks finished this frame, and which the craft met.
-
-        The game marks a block done when its moment passes, taken or
-        not, and says what it did with it: see Rider.struck. A block the
-        craft took or hit is gone from the picture from then on; one it
-        did not - jumped over, a lane away, or come while it could not be
-        hurt - goes on past, as anything missed would. Working this out
-        here from where the craft was drew a prize jumped over going into
-        the ship, for nothing.
+        """Which blocks finished this frame, and which the craft met. The game
+        marks a block done when its moment passes and says what happened
+        (see Rider.struck): one taken or hit leaves the picture; one missed,
+        jumped, a lane away or met while the craft could not be hurt goes on
+        past. Working it out here from the craft's position drew jumped
+        prizes going into the ship.
         """
         self._taken_now = []
         alive = set()
@@ -2440,9 +2383,8 @@ class RiderWorld:
             hue = pop[3] if pop[3] is not None else scene._hue_now
             colour = colorsys.hsv_to_rgb(hue % 1.0, min(1.0, pop[4]), 1.0)
             strength = float(pop[2])
-            # Where the obstacle met the nose. What is left of it is
-            # thrown up and carried on down the road the way it was
-            # going, past the craft, rather than vanishing with the hit.
+            # Where the obstacle met the nose: what is left is thrown up and
+            # carried on down the road past the craft.
             nose = (at[0], 0.35, scene.RIDER_AT + self.NOSE + travel)
             if kind == "hit":
                 # Again from the start for each, and harder in a run.
@@ -2586,15 +2528,10 @@ class RiderWorld:
 # What is read rather than seen
 # ==========================================================================
 class Hud:
-    """The numbers, over the world, drawn with the painter.
-
-    The score was a line of small grey text in the corner - "422 chain 13
-    clean best 0" - which is a status bar, not a game. Here the score is
-    the biggest thing that is not the road, and it counts up rather than
-    jumping, so earning is something you watch happen; the chain has a
-    place of its own and warms with the run; and how far through the
-    track you are runs along the top edge, which is what makes a song
-    something you are getting through.
+    """The numbers over the world, drawn with the painter. The score is the
+    biggest thing that is not the road and counts up, so earning is seen
+    happening; the chain has its own place and warms with the run; progress
+    through the track runs along the top edge.
     """
 
     def __init__(self) -> None:
@@ -2604,8 +2541,8 @@ class Hud:
         self._chain_bump = 0.0
         self._chain_was = 0
         self._now = None
-        #: Where each number was last drawn, by name, for anybody checking
-        #: that nothing is drawn on top of anything else.
+        #: Where each number was last drawn, by name, for checking nothing
+        #: overlaps.
         self.placed = {}
 
     def draw(self, painter, rect, scene, state) -> None:
@@ -2617,16 +2554,15 @@ class Hud:
         now = _time.monotonic()
         dt = 1.0 / 60.0 if self._now is None else max(0.0, min(0.1, now - self._now))
         self._now = now
-        # What has been earned, not what it would be with the clean bonus:
-        # see Rider._worth.
+        # What has been earned, without the clean bonus: see Rider._worth.
         worth = int(scene._score)
         if worth > self._was:
             self._bump = 1.0
         elif worth < self._was:
             self._shown = float(worth)
         self._was = worth
-        # Counts up quickly, but visibly: the gap closes by most of itself
-        # in a quarter of a second.
+        # Counts up quickly but visibly: most of the gap closes in a quarter of
+        # a second.
         self._shown += (worth - self._shown) * (1.0 - math.exp(-dt * 12.0))
         if abs(worth - self._shown) < 0.5:
             self._shown = float(worth)

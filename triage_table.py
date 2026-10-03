@@ -1,12 +1,7 @@
-"""The middle of the window: the table of messages, and the preview beside it.
-
-Split out of gui.py. The model holds the triage items and answers Qt's
-questions about them; the proxy filters and sorts; the three delegates paint
-the confidence bar, the wrapped subject, and the category chip; the preview
-pane shows whichever row is selected.
-
-A pure move: every class is exactly as it was in gui.py, and gui re-exports
-them so nothing that imports from there has to change.
+"""The middle of the window: the table of messages and the preview beside it.
+The model holds the triage items, the proxy filters and sorts, three
+delegates paint the confidence bar, the wrapped subject and the category
+chip, and the preview shows the selected row. gui re-exports these.
 """
 
 from __future__ import annotations
@@ -37,14 +32,10 @@ from widgets import (ACCENT_BLUE, ACCENT_RED, _attr_url, _confidence_rgb,
 LEAVE_IN_PLACE = "- leave in place -"
 
 def category_color(classification, item=None) -> str:
-    """The accent colour for a row.
-
-    A job category always has one. An everyday topic gets one only when the
-    current settings actually file that topic somewhere; otherwise it stays
-    grey, which is the honest signal that the app is not going to act on it.
-
-    ``item`` carries the routing and the topic list. Without it - which is how
-    the older callers ask - every non-job topic is grey, as before.
+    """The accent colour for a row. A job category always has one; an everyday
+    topic only when the current settings file that topic somewhere,
+    otherwise grey, since the app will not act on it. Without ``item``
+    (older callers), every non-job topic is grey.
     """
     if classification.is_job_related:
         return CATEGORY_COLORS.get(classification.category, OTHER_COLOR)
@@ -98,9 +89,8 @@ class TriageTableModel(QAbstractTableModel):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._items: List[TriageItem] = []
-        #: Collapsed one-line summary/reasoning per row. These never change
-        #: once a scan lands, and recomputing them on every repaint of a
-        #: 400-row table is pure waste.
+        #: Collapsed one-line summary and reasoning per row: they never change
+        #: once a scan lands.
         self._one_line_cache: List[Tuple[str, str]] = []
 
     # -- data plumbing ---------------------------------------------------
@@ -221,8 +211,7 @@ class TriageTableModel(QAbstractTableModel):
             return None
 
         if role == Qt.ItemDataRole.BackgroundRole:
-            # A whisper of the category colour, so the eye can group rows
-            # without the table turning into a paint chart.
+            # A hint of the category colour, so the eye can group rows.
             if item.moved:
                 return None
             if item.disposition is Disposition.MOVE:
@@ -232,9 +221,8 @@ class TriageTableModel(QAbstractTableModel):
             return None
 
         if role == Qt.ItemDataRole.ForegroundRole:
-            # None means "use the palette's text colour", which is what
-            # maximum contrast is for: it is monochrome by design, and a
-            # grey written out here reads the same at every setting.
+            # None means the palette's text colour, as maximum contrast wants:
+            # it is monochrome by design.
             if theme.monochrome():
                 return None
             if item.moved:
@@ -284,17 +272,11 @@ class TriageTableModel(QAbstractTableModel):
 
     def set_approved(self, rows: Sequence[int], approved: bool,
                      only_high_confidence: bool = False) -> int:
-        """Tick or untick a set of rows. Returns how many actually changed.
-
-        Rows that cannot be actioned - nothing to move them to, or already
-        moved - are skipped rather than refused, so a selection that mixes
-        the two does the sensible thing with the half that can.
-
-        Every tick in the app comes through here, and every caller passes
-        the rows it means. Ticking used to have a second path that walked
-        the whole mailbox: pressing a button in front of forty job emails
-        silently ticked six hundred more that the filter was hiding, and
-        no amount of looking at the screen would tell you it had happened.
+        """Tick or untick a set of rows; returns how many changed. Rows that
+        cannot be actioned (nowhere to move them, or already moved) are
+        skipped, not refused. Every tick comes through here with the rows
+        the caller means: a second path that walked the whole mailbox once
+        ticked rows the filter was hiding.
         """
         changed = 0
         for row in rows:
@@ -327,19 +309,12 @@ class TriageTableModel(QAbstractTableModel):
         return changed
 
     def set_all_approved(self, approved: bool, only_high_confidence: bool = False) -> None:
-        """Tick or untick every row in the model, filter or no filter.
-
-        "Sure of" means the confidence bar, not ``default_approved``. Those
-        are two different questions and conflating them made the button lie:
-        non-job mail is deliberately never *pre*-ticked, because misfiling a
-        bank alert is worse than leaving it alone - but somebody pressing a
-        button labelled "tick every message the analysis was confident about"
-        has asked for it, and a 99%-confident receipt that is on its way to a
-        folder is exactly what they meant.
-
-        Nothing the user can press calls this any more - the window passes
-        the rows the table is showing instead. It stays for tests and for
-        code that genuinely means the whole model.
+        """Tick or untick every row in the model, filter or no filter. "Sure
+        of" means the confidence bar, not ``default_approved``: non-job mail
+        is never pre-ticked, but someone asking for every confident row
+        means a confident receipt too. Nothing the user presses calls this;
+        the window passes the rows the table shows. Kept for tests and code
+        that means the whole model.
         """
         self.set_approved(range(len(self._items)), approved,
                           only_high_confidence=only_high_confidence)
@@ -407,8 +382,7 @@ class TriageFilterProxy(QSortFilterProxyModel):
         self._hide_job = False
         self._only_selected = False
         #: Empty means every mailbox. Filtering the view is separate from
-        #: choosing what to scan: you can pull six mailboxes in and then read
-        #: them one at a time.
+        #: choosing what to scan.
         self._accounts: set = set()
 
     def set_text_filter(self, text: str) -> None:
@@ -437,11 +411,8 @@ class TriageFilterProxy(QSortFilterProxyModel):
         self.invalidate()
 
     def active_filters(self) -> List[str]:
-        """Which filters are hiding rows, phrased for a person.
-
-        An empty grid with a filter on looks exactly like an empty grid with
-        nothing in it, and the difference matters enormously: one means "no
-        such mail", the other means "you have a search box filled in".
+        """Which filters are hiding rows, in words: an empty grid with a search
+        filled in looks like an empty mailbox.
         """
         names = []
         if self._text:
@@ -562,11 +533,8 @@ class ConfidenceDelegate(QStyledItemDelegate):
 
 
 class WrapDelegate(QStyledItemDelegate):
-    """Draws wrapped, multi-line text clipped to a fixed number of lines.
-
-    A single elided line turns a 139-character summary into "XxxxxXxxx Mortgage
-    Corp. sen…", which tells the reader nothing. Wrapping to three lines shows
-    the whole thing for most messages and a genuinely useful prefix for the rest.
+    """Wrapped multi-line text clipped to a fixed number of lines: one elided
+    line cuts a long summary off after a few words; three show most whole.
     """
 
     def __init__(self, lines: int = 3, parent=None) -> None:
@@ -656,56 +624,32 @@ class CategoryDelegate(QStyledItemDelegate):
 class PreviewPane(QWidget):
     """Side-by-side message text and the backend's reasoning."""
 
-    #: Space either side of the splitter's handle, so that nothing in
-    #: either half touches the bar between them.
+    #: Space either side of the splitter's handle, so nothing in either half
+    #: touches it.
     GUTTER = 10
 
-    #: How wide the pane has to be before the message and the analysis
-    #: sit side by side, and how narrow before they stack again.
-    #:
-    #: Two columns need about forty-five characters each to read. Measured
-    #: at the widths this pane is really given, the analysis column was
-    #: 203 px - twenty-nine characters - with the preview beside the table
-    #: on a 1440 screen, and 90 px on a small window: "xxxxxx xxxxxxxx
-    #: xxxxxx xx xxxx xxxxx xxx xxxx xx xxxxxxxx xxxx xxxxxxx xxxx xx
-    #: xxxxxx xxx xxxxx". At 760 it gets about forty-six.
-    #:
-    #: Two numbers rather than one, so a pane dragged to the threshold
-    #: does not flip back and forth on every pixel.
+    #: How wide the pane must be before the message and the analysis sit side
+    #: by side, and how narrow before they stack again. Two columns need about
+    #: forty-five characters each, which 800 gives; two numbers so a pane
+    #: dragged to the threshold does not flip on every pixel.
     TWO_COLUMNS = 800
     ONE_COLUMN = 760
 
-    #: The least height a half of the pane works at: a row of controls
-    #: and a couple of lines of text under it.
-    #:
-    #: This and MIN_TALL below overlap - either one alone holds the audit
-    #: at every size it sweeps, on most runs. Only most: with one of them
-    #: gone the sweep fails on some orderings and not others, because the
-    #: theme in force decides how tall a row of controls is. Two floors
-    #: that agree are worth more than one that is right on average.
+    #: The least height a half of the pane works at: a row of controls and a
+    #: couple of lines under it. This and MIN_TALL overlap on purpose: the
+    #: theme decides a row's height, and with only one the layout audit failed
+    #: on some themes.
     HALF_TALL = 75
 
-    #: The least room the whole pane is any use in. See HALF_TALL.
-    #:
-    #: The header, the row that files the message, and a half with a row
-    #: of controls and a few lines of text under it. Below this a splitter
-    #: squeezes the halves until the controls in them draw outside
-    #: themselves - and a preview that short shows nothing worth reading
-    #: anyway. It can still be shut: a splitter collapses a child rather
-    #: than obeying its minimum when it is dragged to the end.
+    #: The least room the whole pane is any use in (see HALF_TALL): the header,
+    #: the filing row and a half. Below this the halves' controls draw outside
+    #: themselves. Dragging the splitter to the end still closes it.
     MIN_TALL = 215
 
-    #: The room the two halves need between them to be stacked rather
-    #: than put side by side.
-    #:
-    #: Stacking is the answer to a *narrow* pane, and it costs height:
-    #: two rows of controls and two pieces of text, one above the other.
-    #: Under the table on an 800x560 window the pane is wide and short -
-    #: 780 px across and about 190 tall - and stacking it there gave the
-    #: half holding the message 38 px, which is not enough for the row of
-    #: controls above the text let alone the text, so everything in it
-    #: drew outside it. Short and wide is the one case that wants two
-    #: columns however narrow the rule below thinks it is.
+    #: The room the two halves need to be stacked rather than side by side.
+    #: Stacking suits a narrow pane and costs height; under the table on an
+    #: 800x560 window the pane is wide and short, and stacking there left the
+    #: message 38 px. Short and wide always gets two columns.
     MIN_STACK = 180
 
     overrideChanged = Signal(int, object)  # source row, folder or None
@@ -742,14 +686,9 @@ class PreviewPane(QWidget):
         self._link_list = None
 
         self.body_mode = QComboBox()
-        # Short enough to sit beside the Attachments button in the half
-        # this lives in. Beside the table on an 800px window that half is
-        # 306 px wide and as little as 70 px tall, so the row cannot wrap
-        # its way out of trouble - it has to fit on one line. "Exactly
-        # what the model was sent" measured 229 px in the box and left it
-        # squeezed to 207; this measures 149. The caption in front of it
-        # said "Source:", which the two entries already say, and the long
-        # version of the second one is in the tooltip.
+        # Short enough to sit on one line beside the Attachments button, in a
+        # half as small as 306 by 70 px. The caption said what the entries
+        # already say, and the longer wording is in the tooltip.
         self.body_mode.addItems(["Message text", "What was sent"])
         self.body_mode.currentIndexChanged.connect(self._render_body)
         self.body_mode.setToolTip(
@@ -757,13 +696,8 @@ class PreviewPane(QWidget):
             "sent to the model.")
 
         self.body_view = QPlainTextEdit()
-        # Smaller than Qt's own idea of a text box, which is ninety
-        # pixels square. A preview beside the table on an 800px window
-        # gives this half about ninety pixels of height in total, and
-        # ninety of it spoken for by the text box meant the row of
-        # controls above it was squeezed and drew outside itself. A text
-        # view scrolls; it does not need ninety pixels to be usable, and
-        # nothing else in that half can give way.
+        # Smaller than Qt's default text box (ninety pixels square): this half
+        # can be about ninety pixels tall in all, and a text view scrolls.
         self.body_view.setMinimumHeight(24)
         self.body_view.setReadOnly(True)
         self.body_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
@@ -771,8 +705,8 @@ class PreviewPane(QWidget):
 
         self.reasoning_view = QTextBrowser()
         self.reasoning_view.setMinimumHeight(24)
-        # Not opened from here: a link in the analysis is one from the
-        # message, and goes the same way as the rest of them.
+        # Not opened here: a link in the analysis came from the message and
+        # goes the same way as the rest.
         self.reasoning_view.setOpenExternalLinks(False)
         self.reasoning_view.setOpenLinks(False)
         self.reasoning_view.anchorClicked.connect(
@@ -794,10 +728,9 @@ class PreviewPane(QWidget):
             "analysis wanted to put it.")
         self.reset_button.clicked.connect(self._reset_override)
 
-        # Why a row cannot be ticked, and the button that changes it. A row
-        # that sits there inert with no explanation is the single most
-        # confusing thing the window can show, and it is the default state
-        # for every message that is not job mail.
+        # Why a row cannot be ticked, and the button that changes it: the
+        # default state for every message that is not job mail, and confusing
+        # without a word.
         self.inert_note = QLabel("")
         self.inert_note.setWordWrap(True)
         self.inert_note.setTextFormat(Qt.TextFormat.RichText)
@@ -818,20 +751,11 @@ class PreviewPane(QWidget):
 
         left = QWidget()
         left_layout = QVBoxLayout(left)
-        # A gutter against the splitter's handle. With no margin the
-        # Attachments button and the text box under it sat hard against the
-        # bar between the two halves: "xxx xxxxxxxxxxx xxxxxx xxx xxx xxxxx
-        # xxxxx xx xxx xxx xxxxx xx xxx separating bar to their right".
+        # A gutter against the splitter's handle, so the controls do not sit
+        # hard against it.
         left_layout.setContentsMargins(0, 0, self.GUTTER, 0)
-        # One line, and short enough to stay one line.
-        #
-        # This half is as little as 306 px across and 70 tall, and a row
-        # that wraps needs height the half has not got: wrapped there, it
-        # was handed 38 px for two lines that needed 54 and everything on
-        # the second line drew outside it. Making the row fit instead -
-        # dropping the "Source:" caption, which the two entries in the box
-        # already say, and shortening the longer of them - brings it to
-        # 273 px, which is one line at every size the half is given.
+        # One line, short enough to stay one line: this half can be 306 px by
+        # 70, and a wrapped row needed height it has not got.
         mode_row = QHBoxLayout()
         mode_row.setContentsMargins(0, 0, 0, 0)
         mode_row.addWidget(self.body_mode, 1)
@@ -847,10 +771,9 @@ class PreviewPane(QWidget):
         right_layout.addWidget(self.analysis_label)
         right_layout.addWidget(self.reasoning_view, 1)
 
-        # Each half tall enough for its row of controls and a few lines
-        # of text under it. A splitter squeezes a child that has no
-        # minimum until the controls inside it draw outside themselves,
-        # which is what a 70 px half looks like from the inside.
+        # Each half tall enough for its controls and a few lines of text; a
+        # splitter otherwise squeezes it until the controls draw outside
+        # themselves.
         left.setMinimumHeight(self.HALF_TALL)
         right.setMinimumHeight(self.HALF_TALL)
         self._left, self._right = left, right
@@ -859,22 +782,16 @@ class PreviewPane(QWidget):
         self.splitter.addWidget(right)
         self.splitter.setSizes([560, 460])
 
-        # A row that wraps. "File into:", a folder path and a button do
-        # not fit across a preview that is beside the table on a small
-        # screen - they need 471 px and the pane can be given 420 - and a
-        # fixed row does not shrink, it clips.
+        # A row that wraps: "File into:", a folder and a button need 471 px,
+        # and a preview beside the table on a small screen can be 420.
         folder_row = FlowLayout(margin=0, spacing=6, vertical_spacing=6)
         folder_row.addWidget(QLabel("File into:"))
         folder_row.addWidget(self.folder_combo)
         folder_row.addWidget(self.reset_button)
         self.folder_row = FlowHolder(folder_row)
 
-        # Attachments sits up here with the message it belongs to, not
-        # down in the half that holds the text. That half is 306 px wide
-        # at its narrowest and the box beside it needs 229 of them under
-        # this theme, so the two together did not fit on a line and the
-        # half is too short to give them two. Up here there is the whole
-        # width of the pane.
+        # Attachments sits up here with the message, where the whole width is
+        # free: in the text half it did not fit beside the box.
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
         top.setSpacing(8)
@@ -890,16 +807,9 @@ class PreviewPane(QWidget):
         layout.addWidget(self.folder_row)
         layout.addWidget(self.splitter, 1)
 
-        # Tall enough to hold what is in it.
-        #
-        # A splitter will squeeze a child down to nothing if nothing stops
-        # it, and on an 800x560 window with the preview under the table it
-        # did: the half holding the message was given 38 px, which is not
-        # enough for the row of controls above the text let alone the
-        # text. Everything in here then drew outside it. A preview that
-        # short is no use anyway - and it can still be shut entirely,
-        # because a splitter collapses a child rather than obeying the
-        # minimum when it is dragged to the end.
+        # Tall enough to hold what is in it: a splitter squeezes a child to
+        # nothing otherwise, and the message half got 38 px. Dragging it to the
+        # end still closes it.
         self.setMinimumHeight(self.MIN_TALL)
 
         self.set_folder_choices([])
@@ -912,10 +822,8 @@ class PreviewPane(QWidget):
     def _arrange(self, width: int) -> None:
         """Side by side when there is room for both, stacked when not."""
         across = self.splitter.orientation() == Qt.Orientation.Horizontal
-        # The room the two halves would actually have, not the pane's
-        # height: the header and the row that files the message take
-        # their share first, and in a preview beside the table on a small
-        # window that is most of it.
+        # The room the two halves would have, after the header and the filing
+        # row take their share.
         room = self.splitter.height() or self.height()
         tall = room >= self.MIN_STACK
         if across and width < self.ONE_COLUMN and tall:
@@ -926,10 +834,8 @@ class PreviewPane(QWidget):
                         (self.GUTTER, 0, 0, 0))
 
     def _stack(self, orientation, left_edge, right_edge) -> None:
-        """Turn the inner splitter, and move the gutter with it.
-
-        The gutter is there to keep the two halves off the handle between
-        them, so it belongs on whichever side the handle is now on.
+        """Turn the inner splitter, and move the gutter to whichever side the
+        handle is now on.
         """
         self.splitter.setOrientation(orientation)
         self._left.layout().setContentsMargins(*left_edge)
@@ -999,11 +905,8 @@ class PreviewPane(QWidget):
             self.sort_these_button.setVisible(item.left_because_not_job)
 
         badge = _disposition_badge(item)
-        # A shorter date than "Monday 20 September 2026", because this
-        # label wraps and every line it gains comes off the two halves
-        # under it. In a preview beside the table on an 800px window it
-        # was four and five lines deep - 113 px of a pane that has 310 -
-        # and left them too short for the controls in them.
+        # A shorter date than "Monday 20 September 2026": this label wraps, and
+        # every line comes off the two halves under it.
         self.header.setText(
             f"<div style='line-height:150%'>"
             f"<b>{_html(message.subject_display)}</b><br>"
@@ -1011,9 +914,8 @@ class PreviewPane(QWidget):
             f"{_html(message.date_display('%a %d %b %Y, %H:%M'))}<br>"
             f"{badge}</div>"
         )
-        # Three lines is what it is written to be; past that it is a long
-        # subject wrapping, and the whole of it is in the table row above
-        # and in the tooltip.
+        # Three lines as written; a longer subject wraps further, and the whole
+        # of it is in the table row and the tooltip.
         self.header.setToolTip(
             f"{message.subject_display}\n{message.sender_display}\n"
             f"{message.date_display('%A %d %B %Y, %H:%M')}")
@@ -1080,11 +982,9 @@ class PreviewPane(QWidget):
 
     @Slot()
     def _open_attachments(self) -> None:
-        """Ask whoever owns this pane to fetch and show them.
-
-        The pane has no mailbox connection of its own, and it should not: the
-        bytes are not in the message this pane was handed, because a scan
-        only ever downloads the first part of each message.
+        """Ask whoever owns this pane to fetch and show them: a scan only
+        downloads the first part of each message, and the pane has no
+        connection of its own.
         """
         if self._item is not None:
             self.attachmentsRequested.emit(self._row or 0)
@@ -1143,16 +1043,9 @@ def _disposition_badge(item: TriageItem) -> str:
 
 
 def _runners_up(classification) -> str:
-    """The categories that did not win, and how close they came.
-
-    A verdict that beat its nearest rival by a tenth of a point is a
-    different thing from one that beat it by five, and the confidence number
-    alone does not distinguish them.
-
-    The winner is excluded by name rather than by being the top score,
-    because it is not always the top score: precedence can hand the decision
-    to a lower-scoring category, and listing the winner as its own runner-up
-    is how that bug read on screen.
+    """The categories that did not win, and how close they came: a verdict won
+    by a tenth of a point differs from one won by five. The winner is
+    excluded by name, since precedence can pick a lower-scoring category.
     """
     scores = {name: value for name, value in (classification.scores or {}).items()
               if value > 0}
@@ -1168,8 +1061,8 @@ def _runners_up(classification) -> str:
         share = value / top
         label = _html(name.replace("_", " ").title())
         if value > scores.get(won, 0.0):
-            # It outscored the winner and lost on precedence. Saying so is
-            # the difference between an explanation and a puzzle.
+            # It outscored the winner and lost on precedence; saying so
+            # explains it.
             parts.append(f"{label} <span style='opacity:0.7'>(scored higher; "
                          "outranked)</span>")
         else:
@@ -1191,9 +1084,8 @@ def _reasoning_html(item: TriageItem) -> str:
         ),
     ]
     if classification.signals:
-        # What actually fired, in the sorter's own words. A verdict with a
-        # reason you can read is one you can argue with; "confidence 0.91" is
-        # not something anybody can act on.
+        # What fired, in the sorter's own words: a reason you can read is one
+        # you can argue with.
         shown = [f"• {_html(signal)}" for signal in classification.signals[:8]]
         extra = len(classification.signals) - len(shown)
         if extra > 0:
@@ -1238,16 +1130,11 @@ def _reasoning_html(item: TriageItem) -> str:
     return f"<table style='font-size:13px'>{body}</table>"
 
 
-# ==========================================================================
-# Settings dialog
-# ==========================================================================
 
 def _attachment_line(name: str) -> str:
-    """Name, and what kind of file the name says it is.
-
-    The list is built from the server's description of the message, so it is
-    there before anything is downloaded. Saying "photo.heic - image" beats
-    saying "photo.heic" to somebody deciding whether to bother opening it.
+    """The name, and what kind of file the name says it is, from the server's
+    description before anything downloads: "photo.heic - image" helps
+    someone decide whether to open it.
     """
     import attachments
 

@@ -1,11 +1,8 @@
-"""Music rider's road, laid for a whole record. See rider_layout, trackstyle.
-
-"Xxxxxxx xxx xxx xxxxxx xx xxxxxxxxx xxxxx xx xxxxxx xxxx xxxxxxx xxxxxx
-xxx xxxx xxxx XXX xxxxxxxxx. Xxxxxx xxxx xxxx xxxxx xx xxx xxx xxxxx xx
-xxx xxxxxxxxxx." Written records of each kind (songkit), ridden end to end
-through the real game (ridekit), and what was laid looked at: which
-figures, where, how many of them are obstacles, whether a good player can
-get through all of it, and whether two records ride alike.
+"""Music rider's road, laid for a whole record (see rider_layout, trackstyle).
+Records of each genre written to known times (songkit) are ridden end to end
+through the real game (ridekit), and what was laid is checked: which figures
+and where, how many are obstacles, whether a good player gets through, and
+whether two records ride alike.
 """
 
 from __future__ import annotations
@@ -57,9 +54,9 @@ class TestThePartsOfARecord:
                                        "garage", "hiphop"])
     def test_every_drop_has_its_share_not_just_the_first(self, ridden,
                                                           style):
-        """Each on its own: the second drop of a garage record had its
-        figures settle on the snares, where no obstacle went, and nothing
-        in it to dodge - which the two drops counted together hid."""
+        """Each drop on its own: counted together, a garage record's second
+        drop hid that its figures had settled on the snares, with nothing to
+        dodge."""
         _scene, log, truth, _beat = ridden[style]
         for start, end in [(a, b) for k, a, b in truth if k == "drop"]:
             figures = [f for f in log.figures if start <= f[0] < end]
@@ -76,10 +73,8 @@ class TestThePartsOfARecord:
         assert len(late) > len(early), (len(early), len(late))
 
     def test_the_road_climbs_to_a_drop_and_falls_into_it(self, ridden):
-        """"Quiet, slow, or ambient sections generate steep uphill
-        climbs ... when a loud, high-energy section occurs, the track
-        plunges sharply downhill." Heights are depths here: larger is
-        lower."""
+        """Quiet passages climb and loud ones plunge downhill. Heights are
+        depths here: larger is lower."""
         scene, _log, truth, _beat = ridden["house"]
         build = [(a, b) for k, a, b in truth if k == "build"][0]
         drop = [(a, b) for k, a, b in truth if k == "drop"][0]
@@ -137,10 +132,10 @@ def _in_bar(log, truth, beat, kind="drop"):
 
 class TestTheHeaviestHitNearby:
     def test_a_half_time_drop_is_ridden_on_one_and_three(self, ridden):
-        """The kick on one and the snare it waits for on three are what a
-        head nods to in half time. Ranked below the kick, the snare lost
-        its slot to the kick half a beat after it, and a dubstep drop was
-        laid entirely on that pickup - every figure on the and of three."""
+        """In half time the kick on one and the snare on three are what a head
+        nods to. Ranked below the kick, the snare lost its slot to the kick
+        half a beat later, and a dubstep drop was laid entirely on the and
+        of three."""
         for style in ("dubstep", "trap"):
             _scene, log, truth, beat = ridden[style]
             places = _in_bar(log, truth, beat)
@@ -152,8 +147,7 @@ class TestTheHeaviestHitNearby:
 
     def test_a_heavier_hit_between_beats_does_not_take_the_slot(self, ridden):
         """Hip hop's snare on two is followed half a beat later by a heavier
-        kick. The figure stays on a beat; it used to go to that kick, on the
-        and of two."""
+        kick; the figure stays on the beat."""
         _scene, log, truth, beat = ridden["hiphop"]
         places = _in_bar(log, truth, beat)
         assert places
@@ -162,9 +156,8 @@ class TestTheHeaviestHitNearby:
 
     @pytest.mark.parametrize("style", sorted(songkit.PATTERNS))
     def test_every_figure_starts_on_a_beat(self, style):
-        """Swung, broken, half time, anything: a figure was put on the
-        eighth on some music, half of them between the beats, and the game
-        felt off the beat."""
+        """Swung, broken or half time, figures stay on the beat rather than the
+        eighth."""
         scene, log, _truth, _beat = ridekit.ride(style, seconds=90.0)
         clock = scene._clock
         # The log keeps a figure's time to the millisecond.
@@ -176,11 +169,9 @@ class TestTheHeaviestHitNearby:
 
 class TestEveryBlockArrivesOnItsMoment:
     def test_between_the_beats_as_well_as_on_them(self):
-        """The road lunges into each beat, and a block between two beats
-        was put where a road running evenly would reach it - so every one
-        of them arrived early, eighty milliseconds at the half beat. On the
-        same curve the road runs, each arrives within the frame it is due
-        in, wherever in the beat it is."""
+        """The road lunges into each beat, and a block between beats placed
+        where an even road would be arrived up to eighty milliseconds early.
+        On the road's own curve each arrives within its frame."""
         scene, log, _truth, beat = ridekit.ride("garage", fps=60,
                                                 seconds=50.0)
         assert len(log.crossings) > 60
@@ -192,14 +183,12 @@ class TestEveryBlockArrivesOnItsMoment:
             f"a block crossed {max(late) * 1000:.0f} ms from its moment")
 
     def test_what_is_on_the_road_stays_where_it_is(self):
-        """Its place on the road is fixed once it can be seen: each beat's
-        lunge is decided as the beat comes into view, not as it begins -
-        which would move every block between beats already in sight."""
+        """A block's place is fixed once it is in view: each beat's lunge is
+        decided as the beat comes into view, so blocks in sight never move."""
         import visualizers
 
-        # Well into a drop, where the lunge is strong, and on until there
-        # is something between the beats in sight: a coin, or the later
-        # steps of a run.
+        # Well into a drop, where the lunge is strong, until something between
+        # beats is in sight: a coin, or a run's later steps.
         _s, _l, truth, _b = ridekit.ride("garage", seconds=1.0)
         drop = [a for kind, a, _e in truth if kind == "drop"][0]
         scene, _log, _truth, _beat = ridekit.ride("garage",
@@ -242,9 +231,8 @@ class TestEveryBlockArrivesOnItsMoment:
             visualizers.time.monotonic = was
 
     def test_a_hit_eases_the_lunge_of_the_beats_after_it(self):
-        """What a hit does to the road: less push into each beat, for the
-        beats that come into view after it - the ones already in sight
-        keep theirs, or what is on them would move."""
+        """A hit eases the push into the beats that come into view after it;
+        those already in sight keep theirs."""
         import visualizers
 
         def lunges(slow):
@@ -260,10 +248,9 @@ class TestEveryBlockArrivesOnItsMoment:
         assert all(a < b - 0.3 for a, b in zip(eased, plain)), (eased, plain)
 
     def test_starting_on_the_beat_is_not_a_burst_of_speed(self):
-        """Until there is a beat to count from, the road runs on its own
-        clock; moving onto the beat's is a change of coordinates, and
-        counted as travel it was fifty-five units a second for a frame
-        as a ride began, against eleven and a half."""
+        """Until there is a beat to count from the road runs on its own clock,
+        and switching to the beat's is a change of coordinates, not travel
+        (counted as travel it was fifty-five units a second for a frame)."""
         import visualizers
         from attachment_widgets import SpectrumState
 
@@ -292,10 +279,9 @@ class TestEveryRecordIsItsOwnRoad:
         assert one.figures == two.figures
 
     def test_whatever_the_frame_rate(self):
-        """Laid a sixtieth of a second at a time, the choice of drum for
-        a figure used to depend on where the frames fell - the window each
-        frame read held one candidate, and the heaviest nearby could never
-        be seen. Committed short of what has been read, it cannot."""
+        """Laid a sixtieth of a second at a time, the drum chosen for a figure
+        depended on where frames fell; committed short of what has been
+        read, it does not."""
         _s, slow, _t, _b = ridekit.ride("dubstep", fps=24, seconds=60.0)
         _s, fast, _t, _b = ridekit.ride("dubstep", fps=60, seconds=60.0)
         assert slow.figures == fast.figures
@@ -311,9 +297,9 @@ class TestItCanBePlayed:
                                        "garage", "hardstyle"])
     @pytest.mark.parametrize("mode", ["Mono", "Ninja"])
     def test_a_good_player_is_never_hit(self, style, mode):
-        """Every obstacle is one somebody can get past: a player that
-        looks at what is coming and moves out of its way is never hit, in
-        any kind of record, in either game with obstacles in it."""
+        """Every obstacle can be passed: a player who looks ahead and moves out
+        of the way is never hit, in any record, in either game with
+        obstacles."""
         from playtest import steer_well
 
         scene, log, _truth, _beat = ridekit.ride(style, mode=mode,
@@ -333,8 +319,7 @@ class TestItCanBePlayed:
 
 class TestARowOfCoins:
     def test_a_row_is_one_trail(self, qapp):
-        """Two trails a bar apart are two rows: the second starts over,
-        rather than carrying the first on to a row of a hundred."""
+        """Two trails a bar apart are two rows: the second starts over."""
         import visualizers
 
         scene = visualizers.Rider()
@@ -357,8 +342,8 @@ class TestTheRoadItself:
         assert len(scene._twists) <= 2, scene._twists
 
     def test_broken_music_turns_more_often_than_steady(self, ridden):
-        """A turn every two bars on a broken beat, a long sweep a phrase
-        long on four to the floor."""
+        """A turn every two bars on a broken beat; a sweep a phrase long on
+        four to the floor."""
         def turns(style):
             scene, _log, _truth, _beat = ridden[style]
             bends = scene._bends(len(scene._energy))
@@ -383,11 +368,9 @@ class TestTheRoadItself:
         assert scene._relief == scene.FLAT_RELIEF < 1.0
 
     def test_a_late_plan_does_not_move_the_road_in_view(self, monkeypatch):
-        """The drums and the tempo land a few seconds after the picture; a
-        road planned again then moved under the rider. Planned again part
-        way through a ride - a different plan, every part of the record
-        taken for a break - the road in view is where it was, and the road
-        beyond it is the new plan's."""
+        """The drums and tempo land a few seconds after the picture, and the
+        road is planned again: the road in view stays where it was, and the
+        road beyond follows the new plan."""
         import trackstyle
 
         scene, _log, _truth, _beat = ridekit.ride("house", seconds=20.0)
@@ -413,12 +396,10 @@ class TestTheRoadItself:
         assert far_after != pytest.approx(far_before, abs=1e-3)
 
     def test_the_drums_arriving_late_do_not_lurch_the_road(self):
-        """Drum and bass heard at 87 until the drums' own reading lands
-        twenty seconds in and says 174. The road is measured in beats from
-        an origin, so the same moment is suddenly twice as many beats
-        along: counted again without starting over from here, the road
-        moved 4,953 units a second for a frame - a lurch of the whole road
-        - against sixteen and a half either side."""
+        """Drum and bass first heard at 87, until the drums' reading lands
+        twenty seconds in and says 174: counting the road again from its
+        origin moved it 4,953 units a second for a frame, against sixteen
+        and a half either side."""
         import statistics
 
         scene, log, _truth, _beat = ridekit.ride("dnb", seconds=40.0,
@@ -435,8 +416,8 @@ class TestTheRoadItself:
 
 class TestTheMelodyLeadsThePrizes:
     def test_a_prize_goes_where_the_note_is(self):
-        """Low notes left, high notes right: a tune going up takes the
-        prizes across the road with it."""
+        """Low notes left, high notes right: a rising tune takes the prizes
+        across the road."""
         lead = [60.0 + (i // 8) % 12 for i in range(4 * 200)]
         harmony = {"lead": lead, "rate": 4.0, "lead_from": 0.0,
                    "key": {"tonic": 0, "mode": "major", "confidence": 0.3},
@@ -454,8 +435,8 @@ class TestTheMelodyLeadsThePrizes:
         assert sum(high) / len(high) > sum(low) / len(low) + 0.8
 
     def test_runs_and_stairs_of_prizes_follow_it_too(self):
-        """Every coloured block, not only the single ones: each block of a
-        run or a stair in the lane of the note played at its moment."""
+        """Every coloured block, including each in a run or a stair, in the
+        lane of the note played at its moment."""
         import trackstyle
         import visualizers
 
@@ -507,10 +488,9 @@ class TestTheLevelsRideDifferently:
             counts[level] = (sum(1 for f in figures if f[2]), len(figures),
                              scene.PER_BEAT)
         assert counts["Easy"][0] < counts["Normal"][0] < counts["Expert"][0]
-        # As many figures or more: a drop with a kick on every beat is laid
-        # a figure every two beats at any level, because a beat after the
-        # end of one is the least there may be - it is the obstacles, the
-        # warning and the shield that make it harder.
+        # As many figures or more at harder levels: a kick on every beat is
+        # laid a figure every two beats at any level; obstacles, warning and
+        # the shield make it harder.
         assert counts["Easy"][1] <= counts["Normal"][1] <= counts["Expert"][1]
         # The road is fewer beats long, so it runs faster through them.
         assert counts["Expert"][2] > counts["Normal"][2] > counts["Easy"][2]
@@ -550,9 +530,9 @@ class TestTheLevelsRideDifferently:
 
 
 class TestTheRoadRunsWithTheMusic:
-    """Slow where the music is calm, fast where it drives: each beat's
-    length of road from how loud and how heavy the track is there and what
-    kind of part it is (see Rider._pace_target)."""
+    """Slow where the music is calm, fast where it drives: each beat's length
+    of road from the loudness, weight and kind of part there (see
+    Rider._pace_target)."""
 
     @staticmethod
     def _speed(log, spans):
@@ -582,8 +562,8 @@ class TestTheRoadRunsWithTheMusic:
 
     @pytest.mark.parametrize("level", ["Easy", "Normal", "Hard", "Expert"])
     def test_however_fast_there_is_the_level_s_warning(self, level):
-        """A beat's road is never so long that the road in sight is crossed
-        quicker than the level's least warning."""
+        """A beat's road is never long enough to cross the road in sight faster
+        than the level's least warning."""
         import rider_layout
 
         least = float(rider_layout.level(level)["warning"])
@@ -619,8 +599,8 @@ class TestTheRoadRunsWithTheMusic:
         assert min(lit["drop"]) > 0.85
 
     def test_the_tall_arch_is_on_the_first_beat_of_the_bar(self):
-        """Counted from the drums' own first beat of a bar, not from
-        wherever the road happened to start counting."""
+        """Counted from the drums' first beat of a bar, not wherever the road
+        started."""
         scene, _log, truth, _beat = ridekit.ride("house", seconds=40.0)
         clock = scene._clock
         assert clock.downbeat is not None
@@ -630,8 +610,8 @@ class TestTheRoadRunsWithTheMusic:
         assert [scene.bar_place(first + n) for n in range(1, 4)] == [1, 2, 3]
 
     def test_a_calm_part_winds_and_a_drop_runs_straighter(self):
-        """How much the road in sight bends, a unit of road at a time, in
-        the calm parts against the drops."""
+        """How much the road in sight bends per unit, in calm parts against
+        drops."""
         import statistics
 
         bends = {}

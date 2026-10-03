@@ -1,11 +1,6 @@
-"""Music rider's lit world, on the graphics card. See rider_gl.
-
-Two kinds of test. The world's own bookkeeping - which block was taken,
-what a hit or a pickup turns into - is plain Python and runs with the
-rest of the suite on the offscreen platform. What it draws can only be
-seen on a card, so those run through the card harness in
-test_gpu_canvas: a script on the real platform in a subprocess, which
-skips on a machine that cannot make a context.
+"""Music rider's lit world on the graphics card (see rider_gl). The world's
+bookkeeping runs offscreen with the rest of the suite; what it draws runs
+through the card harness in test_gpu_canvas, which skips without a context.
 """
 
 from __future__ import annotations
@@ -17,9 +12,8 @@ import pytest
 
 from test_gpu_canvas import on_the_card
 
-#: A pane playing the rider to a steady 120 bpm kick, which the game lays
-#: its road from. Everything after it runs on a stepped clock, so the
-#: game is the same game on every machine.
+#: A pane playing the rider to a steady 120 bpm kick, on a stepped clock, so
+#: the game is the same on every machine.
 RIDER = textwrap.dedent("""
     import time
     import beatmap
@@ -142,10 +136,8 @@ class TestTheCraft:
 
 
 class TestEachLevelHasItsCraft:
-    """"Xxx xxxxxxx xxxx xxxxx xx xxxxxxx xxxxxx xx xxxx, maybe different
-    ships for different difficulty." The harder levels have fewer beats of
-    road in sight, so the road runs faster through them - and each is
-    flown in a craft that looks it."""
+    """Each level has its craft: harder levels show fewer beats of road and run
+    faster, and their craft look it."""
 
     LEVELS = ("Easy", "Normal", "Hard", "Expert")
 
@@ -196,9 +188,8 @@ class TestEachLevelHasItsCraft:
         assert long == sorted(long)
 
     def test_the_world_flies_the_level_s_craft_and_it_hides_no_more(self):
-        """The fastest craft is flown at the level with the least warning,
-        so it must not hide more of the road than the first one does:
-        stretched both ways, its tail came at the camera and it did."""
+        """The fastest craft, flown with the least warning, hides no more road
+        than the first; stretched both ways, its tail came at the camera."""
         got = on_the_card(RIDER + textwrap.dedent("""
             visualizers.Rider._find_twists = lambda self, *a, **k: []
             def frame(level, craft=True):
@@ -233,11 +224,9 @@ class TestEachLevelHasItsCraft:
 
 
 class TestWhatWasTaken:
-    """The game marks a block done when its moment passes, taken or not,
-    and says what it did with it. The world draws one taken or hit as
-    gone and one missed going on past - from what the game said, never
-    worked out again from where the craft was: that drew a prize jumped
-    over going into the ship, for nothing."""
+    """The world draws a block as the game says it ended (taken or hit: gone;
+    missed: going on past), never worked out again from the craft's
+    position, which once drew a jumped prize going into the ship."""
 
     @staticmethod
     def _met(scene, blocks, lane=1, **state):
@@ -280,8 +269,8 @@ class TestWhatWasTaken:
         world._notice(scene)
         assert id(hit) in world._taken
         assert world._taken_now == [], "a hit lit the lane like a pickup"
-        # One straight after it is a hit as well, and lands again: every
-        # obstacle met is felt, however close together.
+        # One straight after is a hit as well and lands again: every obstacle
+        # met is felt.
         (again,) = self._met(scene, [(4.0, 1, "block", False, True)])
         assert scene._hits == 2
         world._notice(scene)
@@ -314,8 +303,8 @@ class TestWhatWasTaken:
         scene._blocks = []
         scene._collide()
         assert scene._struck == {}, "blocks off the road are still recorded"
-        # An id is only unique while its thing is alive: a new block
-        # given an old one's id is not told the old one's outcome.
+        # An id is unique only while its thing lives: a new block with an old
+        # id is not told the old outcome.
         stranger = [4.0, 1, "block", True, False]
         scene._struck[id(stranger)] = ([4.0, 1, "block", True, True], "hit")
         assert scene.struck(stranger) is None
@@ -341,10 +330,9 @@ class TestWhatWasTaken:
 
 
 class TestAnObstacleIsSeenHit:
-    """Judged at the middle of the craft, reached first by its nose. It
-    used to be drawn shrinking into the ship like a prize, so the one
-    thing a player most needs to see - what hit them - was the one thing
-    they could not."""
+    """A hit is judged at the craft's middle, reached first by its nose, and
+    the obstacle is drawn stopped there: drawn shrinking like a prize, what
+    hit the player could not be seen."""
 
     @staticmethod
     def _approach(beside=0.0):
@@ -381,8 +369,8 @@ class TestAnObstacleIsSeenHit:
 
     @staticmethod
     def _drawn(scene, gap, air=0.0):
-        """What _draw_blocks sends to the card for the one block on the
-        road, ``gap`` ahead of the craft: its place, scale and turn."""
+        """What _draw_blocks sends to the card for the one block, ``gap`` ahead
+        of the craft: its place, scale and turn."""
         world = _bare_world()
         sent = []
 
@@ -458,9 +446,8 @@ class TestAnObstacleIsSeenHit:
 
 
 class TestTheRoadTurnsOver:
-    """A corkscrew winds the road itself round, and the camera rides it:
-    the craft stays put on the glass and the world goes round. It used to
-    turn the whole picture, and the craft went round the frame."""
+    """A corkscrew winds the road round and the camera rides it: the craft
+    stays put on the glass while the world goes round."""
 
     @staticmethod
     def _twisting(heard):
@@ -471,9 +458,8 @@ class TestTheRoadTurnsOver:
         return scene
 
     def test_the_road_never_folds(self, qapp):
-        """Neighbouring samples never differ by more than the corkscrew's
-        own turn between them - in particular not at its end, where going
-        back to nothing wrung the road round backwards in one step."""
+        """Neighbouring samples never differ by more than the corkscrew's own
+        turn between them, including at its end."""
         import rider_gl
 
         world = _bare_world()
@@ -487,8 +473,8 @@ class TestTheRoadTurnsOver:
         assert rider_gl.ROAD_SAMPLES == len(road) // 4
 
     def test_the_turn_is_recorded_apart_from_the_bend(self, qapp):
-        """The camera leans into a bend by a share of it and rides a
-        corkscrew all the way, so the two are kept apart in the road."""
+        """The camera leans into a bend by a share of it and rides a corkscrew
+        fully, so the two are kept apart in the road."""
         world = _bare_world()
         scene = self._twisting(11.25)
         road = world._read_road(scene)
@@ -499,8 +485,8 @@ class TestTheRoadTurnsOver:
                        - roll * world.ROLL_SHARE) < 1e-9
         turn = world._turn_at(road, scene.RIDER_AT)
         assert 1.0 < turn < 5.0, f"half way through, the road is at {turn:.2f}"
-        # The camera's turn about the road's line at the craft is the
-        # one that keeps a point on the road where it was.
+        # The camera's turn about the road at the craft is the one that keeps a
+        # road point where it was.
         centre = world._on_road(road, 0.0, 0.0, scene.RIDER_AT)
         plain = world._on_road(road, 0.6, 0.4, scene.RIDER_AT, plain=True)
         turned = world._about(plain, centre, turn)
@@ -535,8 +521,8 @@ class TestWhatTheGameDidBecomesWhatTheWorldDoes:
 
     @pytest.mark.parametrize("kind", ["hit", "shatter"])
     def test_what_was_hit_breaks_up_where_it_met_the_nose(self, qapp, kind):
-        """The obstacle is drawn flat on the nose up to the hit, and is
-        gone after it: what is left of it flies from there, red."""
+        """The obstacle is drawn flat on the nose until the hit and gone after,
+        its pieces flying from there, red."""
         world = self._happened(kind)
         scene = _rider()
         nose = scene.RIDER_AT + world.NOSE + float(scene._at)
@@ -566,8 +552,8 @@ class TestWhatTheGameDidBecomesWhatTheWorldDoes:
 
 
 class TestTheSameGameEitherWay:
-    """Drawn flat or drawn as a world, the game underneath is one game:
-    ``paint`` and the card both move it on with ``_step``."""
+    """Drawn flat or as a world, the game is one game: both move it on with
+    ``_step``."""
 
     def test_stepping_is_what_painting_does_to_the_game(self, qapp):
         from PySide6.QtCore import QRectF
@@ -627,13 +613,9 @@ class TestTheSameGameEitherWay:
 # ==========================================================================
 class TestTheWorldOnTheCard:
     def test_it_draws_at_every_rung(self):
-        """At full resolution as well as at half. The world is put into
-        the frame at a viewport counted from the bottom, and a GL paint
-        device reports its height in pixels already: multiplied by the
-        pixel ratio again, the world was drawn off the top of the frame
-        and only the words over it showed - and only at full resolution,
-        which is exactly where the governor was not at when it was
-        looked at."""
+        """At full resolution as well as half: a GL paint device already
+        reports its height in pixels, and multiplying by the ratio again
+        drew the world off the top of the frame at full resolution."""
         got = on_the_card(RIDER + textwrap.dedent("""
             out = {}
             for rung in ((4, 1.0), (4, 0.5)):
@@ -652,8 +634,8 @@ class TestTheWorldOnTheCard:
                 f"not in it")
 
     def test_a_block_is_drawn_where_the_game_says(self):
-        """Left lane and right lane, the same block, the same moment:
-        the picture differs on the side the game put it."""
+        """Left lane and right lane, same block, same moment: the picture
+        differs on the side the game put it."""
         got = on_the_card(RIDER + textwrap.dedent("""
             from array import array
             shots = {}
@@ -691,11 +673,9 @@ class TestTheWorldOnTheCard:
             f"the block in the right lane did not light the right: {got}")
 
     def test_what_is_coming_is_seen_from_far_off(self):
-        """The game lays blocks five seconds ahead - sixty units of road
-        on most records - and the flat drawing shows the first twenty.
-        On a road that runs to the horizon a block appearing a few beats
-        away is one you get no warning of, so the world draws them from
-        much further out."""
+        """The game lays blocks five seconds ahead, about sixty units of road,
+        and the world draws them from far out so none appears a few beats
+        away."""
         got = on_the_card(RIDER + textwrap.dedent("""
             shots = {}
             for far in (False, True):
@@ -720,9 +700,7 @@ class TestTheWorldOnTheCard:
             f"is not drawn")
 
     def test_a_hit_is_something_you_see(self):
-        """"Xxxxx xx xx xxxxxxx xxxxxxxx xx xxxxxxx obstacles that the
-        user can feel." Run into an obstacle for real: the picture goes
-        red, and hard."""
+        """Running into an obstacle turns the picture red, hard."""
         got = on_the_card(RIDER + textwrap.dedent("""
             made, scene = rider_pane(size=(800, 500))
             reds = []
@@ -757,8 +735,8 @@ class TestTheWorldOnTheCard:
 
     def test_what_hits_you_is_seen_hitting_you(self):
         """Just before the hit, the obstacle fills at least as much of the
-        picture as it did three units out: squashed on the nose, not
-        shrunk into the hull as it was."""
+        picture as three units out: squashed on the nose, not shrunk into
+        the hull."""
         got = on_the_card(RIDER + textwrap.dedent("""
             runs = {}
             for there in (True, False):
@@ -806,10 +784,9 @@ class TestTheWorldOnTheCard:
             f"against {got['far']} three units out: it is not seen hitting")
 
     def test_a_corkscrew_turns_the_world_round_the_craft(self):
-        """Through a whole corkscrew, the craft is where it is on a road
-        that is not turning over - where the card is told to draw it -
-        and half way round, the foot of the frame is the same road while
-        the top of it has gone round."""
+        """Through a whole corkscrew the craft stays where the card is told to
+        draw it, and half way round the foot of the frame is the same road
+        while the top has gone round."""
         got = on_the_card(RIDER + textwrap.dedent("""
             runs = {}
             for twisted in (False, True):
@@ -859,13 +836,9 @@ class TestTheWorldOnTheCard:
             f"{got['top']:.0%} of the top changed")
 
     def test_the_craft_turns_over_in_one_piece(self):
-        """The craft alone, from the same camera, on a road turned over
-        by the same amount where it is: once turned that much all along,
-        once turning steeply on ahead of it. One piece, it is the same
-        picture either way. Placed point by point, each point was turned
-        by the road's roll where that point was - and through a corkscrew
-        that changes by a turn in a few dozen units, so the craft was
-        wrung along its length like a cloth."""
+        """The craft alone on a road turned evenly and on one turning steeply
+        ahead: as one piece it is the same picture. Placed point by point
+        with the road's roll at each point, it was wrung along its length."""
         got = on_the_card(RIDER + textwrap.dedent("""
             ALONE = ("_draw_sky", "_draw_city", "_draw_road", "_draw_blocks",
                      "_draw_barriers", "_draw_beacons", "_draw_gates",
@@ -907,19 +880,11 @@ class TestTheWorldOnTheCard:
             f"ahead of it turned: it is not turned in one piece")
 
     def test_the_canopy_is_glass_not_paint(self):
-        """"Xxx xxxx xxxxxxx xxxx xxxxxx xxxx xxxx xxxx xxxxxxxxxx xx xx
-        xxxx xxxx x xxxx xxxxx." The craft alone, with its canopy and
-        without, so the canopy is exactly the points that differ; across
-        them, glass runs from the dim cockpit it is facing you over to the
-        bright world it reflects at its edges, and a flat tint only as far
-        as the light on each face takes it.
-
-        And it is the world's colours on it and moving over it, which is
-        what tells glass from a tint: lit the same way, a flat canopy has
-        one hue across it (a spread of 0.02, measured) and changes as the
-        craft travels no more than the hull does, where the glass carries
-        the sky's hues (0.36) and the city sliding back over it (five times
-        the hull's change)."""
+        """The craft's canopy is glass: across its points it runs from the dim
+        cockpit to the bright world it reflects at its edges, and carries
+        the world's hues and movement. A flat tint measured a hue spread of
+        0.02 and changed no more than the hull as the craft travelled; the
+        glass spreads 0.36 and changes five times the hull's amount."""
         got = on_the_card(RIDER + textwrap.dedent("""
             import math
             ALONE = ("_draw_sky", "_draw_city", "_draw_road", "_draw_blocks",
@@ -991,10 +956,9 @@ class TestTheWorldOnTheCard:
             f"over it")
 
     def test_it_survives_being_moved_into_full_screen(self):
-        """Full screen takes the pane out of the window and puts it in
-        another, which can bring a new context: the world built on the
-        old one has to be let go of and built again on the new, and the
-        rider has to go on being drawn as a world rather than flat."""
+        """Full screen can bring a new context: the world built on the old one
+        is let go and rebuilt, and the rider stays a world rather than going
+        flat."""
         got = on_the_card(RIDER + textwrap.dedent("""
             from PySide6.QtWidgets import QWidget
             home, away = QWidget(), QWidget()
@@ -1020,10 +984,9 @@ class TestTheWorldOnTheCard:
             f"{got['after']:.3f} after the move")
 
     def test_a_new_context_gets_a_new_world(self):
-        """Whether a move brings a new context depends on whether Qt
-        shares resources between them, which it does here and need not
-        elsewhere - so the reset is checked where it happens: a context
-        made afresh drops the world, and the next frame builds another."""
+        """Whether a move brings a new context depends on Qt sharing resources,
+        so the reset is checked where it happens: a fresh context drops the
+        world and the next frame builds another."""
         got = on_the_card(RIDER + textwrap.dedent("""
             made, scene = rider_pane()
             play(made, 0.2)
@@ -1056,8 +1019,8 @@ class TestTheWorldOnTheCard:
         assert got["bright"] > 0.02, "and then drew nothing at all"
 
     def test_the_switch_draws_the_rider_flat(self):
-        """``MAIL_MANAGER_WORLD=0``, for telling a problem in the world
-        from a problem in the game."""
+        """``MAIL_MANAGER_WORLD=0``, to tell a problem in the world from one in
+        the game."""
         got = on_the_card(RIDER + textwrap.dedent("""
             os.environ["MAIL_MANAGER_WORLD"] = "0"
             made, scene = rider_pane()
@@ -1069,8 +1032,8 @@ class TestTheWorldOnTheCard:
         assert got["bright"] > 0.02
 
     def test_it_fits_a_frame_at_full_resolution(self):
-        """Loosely, because it is a statement about this machine's card:
-        at 2x and every pixel the world must not be a slideshow."""
+        """Loose, being about this machine's card: at 2x and every pixel the
+        world must not be a slideshow."""
         got = on_the_card(RIDER + textwrap.dedent("""
             import statistics
             made, scene = rider_pane(size=(1280, 800), rung=(4, 1.0))
@@ -1100,11 +1063,9 @@ class TestTheWorldOnTheCard:
 
 
 class TestTheCorkscrewIsATunnel:
-    """"Xxxxxxxxx xxxxx xxxx xxxx xxx xxxxx xxxx xxxxxxxxxx xxxxx. Xx xxx
-    can't xxxx xxx xxxxxxxxx xxxx, xxxx xxx xxxxxx xxxxx x psychedelic
-    tunnel during corkscrews." The city stands along the road and turns
-    with it, so through a corkscrew the towers went round with the track;
-    a corkscrew is ridden through a tunnel now, with the city outside."""
+    """A corkscrew is ridden through a tunnel, with the city outside: the city
+    stands along the road and turns with it, so towers went round with the
+    track."""
 
     def test_it_opens_before_the_turn_and_closes_after(self):
         import visualizers
@@ -1123,9 +1084,9 @@ class TestTheCorkscrewIsATunnel:
         assert scene._tunnel_at(20.0) == 0.0
 
     def test_inside_it_the_walls_are_all_there_is(self):
-        """The same moment of a corkscrew with the tunnel and without:
-        with it, the view above the road is the tunnel's, and the city
-        that would be turning round there is behind its walls."""
+        """The same corkscrew moment with and without the tunnel: with it, the
+        view above the road is the tunnel's, and the turning city is behind
+        its walls."""
         got = on_the_card(RIDER + textwrap.dedent("""
             visualizers.Rider._find_twists = lambda self, *a, **k: [12.0]
             def at(when, tunnel=True):
@@ -1177,8 +1138,8 @@ class TestTheCorkscrewIsATunnel:
         assert got == {"most": 0.0, "inside": 0.0}
 
     def test_the_flat_picture_has_it_too(self, qapp):
-        """Where there is no card: the colours of the tunnel wheeling
-        round the end of the road, instead of nothing at all."""
+        """Without a card: the tunnel's colours wheeling round the road's
+        end."""
         import ridekit
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
@@ -1205,9 +1166,8 @@ class TestTheCorkscrewIsATunnel:
 
 class TestTheCityThroughACorkscrew:
     """Seen from outside, the towers ahead stand upright whatever the road
-    does: turned with it, they were buildings twisting in the distance as a
-    corkscrew came. From inside its tunnel the view turns with the road and
-    they turn with it, as they always have."""
+    does; turned with it, they twisted in the distance as a corkscrew came.
+    Inside the tunnel the view turns with the road, and they with it."""
 
     def test_the_towers_ahead_stay_upright_until_the_tunnel(self):
         got = on_the_card(RIDER + textwrap.dedent("""
@@ -1258,9 +1218,9 @@ class TestTheCityThroughACorkscrew:
 
 
 class TestEveryHitLandsAndRunsOfThemBuild:
-    """Each obstacle met is a hit that lands again, however close to the
-    last, and one hard on the last lands harder; a prize answers with its
-    own colour and a punch forward, building through a quick run."""
+    """Each obstacle met lands again however close to the last, and one hard on
+    the last lands harder; a prize answers with its colour and a punch
+    forward, building through a quick run."""
 
     @staticmethod
     def _hits(scene, times):

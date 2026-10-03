@@ -26,8 +26,7 @@ log = logging.getLogger(__name__)
 
 def _on_card(painter) -> bool:
     """Whether ``painter`` draws on the graphics card rather than into an
-    image.
-    """
+    image."""
     from PySide6.QtGui import QPaintEngine
 
     engine = painter.paintEngine()
@@ -2735,8 +2734,7 @@ class Rider(Scene):
     def _apart(self, when: float) -> float:
         """How many beats apart the figures are here: by the section where the
         track has been heard (see rider_layout.spacing), otherwise by how
-        loud it is.
-        """
+        loud it is."""
         section = self._section_at(when)
         if section is not None:
             import rider_layout
@@ -3108,8 +3106,7 @@ class Rider(Scene):
 
     def reset(self) -> None:
         """A new run in the chosen game and level, with the level applied
-        again.
-        """
+        again."""
         super().reset()
         self._set_level(self._difficulty)
 
@@ -3372,8 +3369,7 @@ class Rider(Scene):
 
     def _figure(self, when: float, grey: bool, shape: str) -> tuple:
         """What figure goes here, and whether it is mirrored: from the
-        section's palette (see rider_layout), or the pool of shapes.
-        """
+        section's palette (see rider_layout), or the pool of shapes."""
         section = self._section_at(when)
         if section is None or self._plan is None:
             return self._varied(shape, when), False
@@ -3403,8 +3399,7 @@ class Rider(Scene):
 
     def _off_beat(self, when: float) -> float:
         """How far a moment is from the nearest beat, in seconds; 0 with no
-        tempo.
-        """
+        tempo."""
         if not self._clock:
             return 0.0
         beats = self._clock.number(when)
@@ -3617,8 +3612,7 @@ class Rider(Scene):
 
     def _melody_lane(self, when: float, fallback: int) -> int:
         """The lane of the melody's note here, low notes left and high right
-        across this part's range, or ``fallback`` with no melody.
-        """
+        across this part's range, or ``fallback`` with no melody."""
         import rider_layout
 
         section = self._section_at(when)
@@ -3647,8 +3641,7 @@ class Rider(Scene):
 
     def _restyle(self, state) -> None:
         """Read the track's style again when the chart, shape, harmony or tempo
-        changes. See trackstyle.
-        """
+        changes. See trackstyle."""
         import trackstyle
 
         chart = getattr(state, "chart", None) or _NO_CHART
@@ -3681,8 +3674,7 @@ class Rider(Scene):
 
     def _section_at(self, when: float):
         """The part of the track ``when`` is in, once heard with a tempo;
-        otherwise None.
-        """
+        otherwise None."""
         if self._style is None or self._beat <= 0.0:
             return None
         return self._style.section_at(when)
@@ -3752,8 +3744,7 @@ class Rider(Scene):
 
     def _kept_ahead(self) -> float:
         """How far ahead the road is in view, in seconds, and so kept when
-        re-planned.
-        """
+        re-planned."""
         ahead = self.PLAN_KEEP
         if self._clock:
             ahead = max(ahead, self._when(self.RIDER_AT + self.SEEN)
@@ -3762,8 +3753,7 @@ class Rider(Scene):
 
     def _splice(self, old, new, when: float) -> tuple:
         """``new``, but ``old`` for as long as it is in view past ``when``,
-        faded over PLAN_FADE and continuous where they meet.
-        """
+        faded over PLAN_FADE and continuous where they meet."""
         if not old or not new:
             return tuple(new)
         keep = min(len(new) - 1,
@@ -3796,8 +3786,7 @@ class Rider(Scene):
 
     def _terrain(self) -> list:
         """The road's height as depth below its start, a reading at a time. See
-        SLOPE.
-        """
+        SLOPE."""
         energy = self._eased(self._energy)
         middle = sorted(energy)[len(energy) // 2]
         slope = [self.SLOPE * (middle - value) for value in energy]
@@ -3934,8 +3923,7 @@ class Rider(Scene):
         """How much of a corkscrew's tunnel there is at a moment, 0 to 1. The
         tunnel opens before the road turns and closes after it is level,
         with the city outside it. Drawn by rider_gl on the card and
-        _flat_tunnel here.
-        """
+        _flat_tunnel here."""
         best = 0.0
         for start in self._twists or ():
             enter = start - self.TUNNEL_LEAD
@@ -4005,8 +3993,7 @@ class Rider(Scene):
     def _when(self, at: float, exact: bool = False) -> float:
         """The moment of the track a point on the road belongs to: exact,
         through each beat's lunge, for putting a block back; otherwise
-        evenly through the beat, which the road's shape is read with.
-        """
+        evenly through the beat, which the road's shape is read with."""
         reach = self._at + at - self.RIDER_AT
         if not self._clock:
             return (reach - self._road_shift) / self.FREE_RUN
@@ -4020,8 +4007,7 @@ class Rider(Scene):
 
     def _uncovered(self, covered: float, lunge: float) -> float:
         """How far through a beat its road is ``covered`` along, 0 to 1: the
-        inverse of _covered.
-        """
+        inverse of _covered."""
         through = covered
         mix = self.LUNGE_MIX
         for _round in range(6):
@@ -4718,15 +4704,13 @@ class Rider(Scene):
 
     def _lunge_of(self, number: int) -> float:
         """The lunge of beat ``number``, as decided, or the undecided one
-        beyond.
-        """
+        beyond."""
         found = self._lunges.get(number)
         return self._lunge if found is None else found
 
     def _pace_of(self, number: int) -> float:
         """How long beat ``number``'s road is against PER_BEAT, as decided or
-        the nearest decided beyond.
-        """
+        the nearest decided beyond."""
         found = self._paces.get(number)
         if found is not None:
             return found
@@ -4752,14 +4736,12 @@ class Rider(Scene):
 
     def beat_on_road(self, number: int) -> float:
         """Where beat ``number`` is on the road, in road units, for anything
-        that marks the beats.
-        """
+        that marks the beats."""
         return self._start_of(number) * self.PER_BEAT + self._road_shift
 
     def gate_light(self, number: int) -> float:
         """How brightly the arch on beat ``number`` is lit: fully where the
-        music drives, turned down where it is calm.
-        """
+        music drives, turned down where it is calm."""
         drive = self._drives.get(number)
         if drive is None:
             drive = 0.5
@@ -4794,8 +4776,7 @@ class Rider(Scene):
 
     def _pace_target(self, number: int) -> tuple:
         """How fast the road wants to run over beat ``number``, and how driven
-        the music is there, 0 to 1.
-        """
+        the music is there, 0 to 1."""
         if not self._energy:
             # Nothing known about the track's shape yet.
             return 1.0, 0.5
@@ -4907,8 +4888,7 @@ class Rider(Scene):
 
     def _note(self, when: float, how: str) -> None:
         """A block's outcome, for the ride drawn at the end; nothing after the
-        finish.
-        """
+        finish."""
         if not self._finished:
             self._log.append((when, how, self._hue_now))
 
@@ -5145,8 +5125,7 @@ class Rider(Scene):
 
     def matrix_box(self, rect) -> QRectF:
         """Where the grid is in ``rect``, for the grid and for anything that
-        must keep out of its way.
-        """
+        must keep out of its way."""
         side = min(rect.width(), rect.height()) * self.CELL_SIDE
         step = side * (1.0 + self.CELL_GAP)
         left = rect.left() + rect.width() * self.CELL_AT[0]
@@ -5721,8 +5700,7 @@ class Rider(Scene):
                      flash) -> None:
         """A corkscrew's tunnel drawn flat: every colour wheeling round the end
         of the road and a ring round the road at every beat, as the world on
-        the card draws it. See _tunnel_at.
-        """
+        the card draws it. See _tunnel_at."""
         if not self._twists:
             return
         inside = self._tunnel_at(self._heard)

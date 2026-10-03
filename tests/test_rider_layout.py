@@ -158,7 +158,7 @@ class TestTheMelody:
 
 
 class TestTheLevels:
-    """"Xxxx xxxxxxxxx xxxxxxxxxx xxxxxxxx xx xxxx xxx xxxxx xxxxx." """
+    """Music rider's four levels."""
 
     LEVELS = ("Easy", "Normal", "Hard", "Expert")
 

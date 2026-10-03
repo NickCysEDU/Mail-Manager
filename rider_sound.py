@@ -1,42 +1,23 @@
-"""What Music rider sounds like, under the music - and in its key.
+"""What Music rider sounds like, under the music and in its key.
 
-"Xxx xxxxx xxxx xx xxxxx xxxxx xx xxxxxxx: xxxxxxx xxx xxxxx, xxxxxxx xxx
-xxxxxxxx, xxxxxxx xxxx xxxxxx xx xxxxx xx xxxxxxx xxx xxxxxxxxx." A game
-you only watch is half a game. Audiosurf answers every block you take with
-a note, and the note climbs as the run goes on - so a run is something you
-hear building, and a pickup lands on the beat because the block did.
+Every block taken answers with a note that climbs as the run goes on, so a
+run is heard building and a pickup lands on the beat because the block did.
 
-The notes used to be a pentatonic scale on E, whatever was playing, and
-over a record in another key they were wrong notes on top of somebody's
-melody: "the sounds clash with the melodic elements". So they are played
-in the record now. The analysis hears its key, its tuning and the chord
-under every moment (see harmony), and a pickup is the next note up *that
-chord* - a run is an arpeggio through the song's own changes, tuned to the
-record even when it is not at A = 440. Where the key cannot be told - a
-noise, a record the analysis is not sure of - the pickups stop being notes
-at all and become ticks and shakers, which cannot be out of key because
-they have none. (A drum track gets notes in whatever key its drums lean
-to, which is harmless: there is no melody for them to clash with.)
+The notes are played in the record: the analysis hears its key, tuning and
+chords (see harmony), and a pickup is the next note up the current chord,
+tuned to the record even off A = 440. Where the key cannot be told, pickups
+become unpitched ticks and shakers, which cannot clash.
 
-Everything here is made rather than recorded: a few hundred milliseconds
-of arithmetic per sound, written once as a short WAV in the app's cache
-and played through Qt's sound effects. The notes are made for each tuning
-the first time a record in it is played, in a process of their own, and
-never on the thread drawing the picture; until they exist the unpitched
-sounds stand in. No file ships with the app, and nothing leaves the
-machine.
+Everything is synthesised: a few hundred milliseconds of arithmetic per
+sound, written once as a short WAV in the app's cache and played through
+Qt's sound effects. Notes for a tuning are made in a process of their own
+the first time a record in it plays; the unpitched sounds stand in until
+then. Nothing ships with the app and nothing leaves the machine.
 
-"Xxxxxxxxxx xxx xxxx xxxxx xxxxxxxx xxxx xxxxxxxx xxxxx xx xxxxxxx": the
-notes are synth voices of the kind the records themselves are made of (see
-Synthesis), in stereo, and each note taken echoes twice on the record's own
-beat - so the sounds sit in the music's key, its tuning and its time. How
-loud they are against the music is somebody's choice (``level``).
-
-A hit is not a note. It is an impact - a sub-bass drop under the music, a
-crunch and a zap over it - and the music itself ducks for a moment, which
-is the part that is felt rather than heard. It used to carry a stab "in no
-key at all", and in a game that now plays in the record's key that was the
-one sound left that clashed on purpose.
+The voices are synths of the kind the records use (see Synthesis), in
+stereo, and each note echoes twice on the record's beat. How loud they are
+against the music is ``level``. A hit is an impact rather than a note: a
+sub-bass drop, a crunch and a zap, with the music ducking for a moment.
 """
 
 from __future__ import annotations
@@ -52,38 +33,30 @@ from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 log = logging.getLogger(__name__)
 
 RATE = 44100
-#: Bumped whenever a sound is changed, so a cache from an older build is
-#: not played instead of it.
+#: Bumped whenever a sound changes, so an older build's cache is not played.
 VERSION = 6
 
-#: Where the pickups ring and where the coins do, as MIDI notes: C4 to C6,
-#: and C5 to G6 - in among the music's own notes rather than above them.
+#: Where the pickups and the coins ring, as MIDI notes: C4 to C6 and C5 to G6,
+#: among the music's notes rather than above them.
 PRIZE_LOW, PRIZE_HIGH = 60, 84
 COIN_LOW, COIN_HIGH = 72, 91
 
-#: The scales a pickup climbs when the chord is not known but the key is:
-#: the pentatonic of the key, which has no note in it that clashes with
-#: another.
+#: The scale a pickup climbs when the key is known but not the chord: the key's
+#: pentatonic, in which no note clashes with another.
 MAJOR_PENTATONIC = (0, 2, 4, 7, 9)
 MINOR_PENTATONIC = (0, 3, 5, 7, 10)
 
 #: A chord's notes above its root.
 CHORD_TONES = {"maj": (0, 4, 7), "min": (0, 3, 7)}
 
-#: How finely a record's tuning is followed, in cents. Five is at the
-#: edge of what anybody can hear, and it keeps the number of tunings
-#: whose notes are ever made small.
+#: How finely a record's tuning is followed, in cents: five is at the edge of
+#: hearing and keeps the number of note sets small.
 TUNING_STEP = 5
 
-#: A key is believed, and the sounds are notes, when the analysis is at
-#: least this sure of it. Measured against a DJ program's keys: at 0.1 and
-#: over, 58 records in 61 came out the key or its relative - the same seven
-#: notes; between 0.03 and 0.06, no key that was not the one or a fifth
-#: away from it, which a note chosen from the chord barely notices.
-#:
-#: Not how much of the record has a pitch (harmony.tonality): on a real
-#: mix the drums outweigh everything else in that, and records whose key
-#: came out right scored nothing on it.
+#: A key is believed, and the sounds are notes, at this confidence or more.
+#: Against a DJ program's keys: at 0.1 and over, 58 records in 61 came out the
+#: key or its relative; between 0.03 and 0.06, nothing further than a fifth
+#: away. Not harmony.tonality, which the drums dominate on a real mix.
 SURE = 0.05
 
 #: How many tunings' notes are kept in the cache before the oldest go.
@@ -93,17 +66,11 @@ TUNINGS_KEPT = 4
 # ==========================================================================
 # Synthesis
 # ==========================================================================
-#
-# "Xxxxxxxxxx xxx xxxx xxxxx xxxxxxxx xxxx xxxxxxxx xxxxx xx xxxxxxx." The
-# sounds are built the way the records they play over are: detuned saw
-# waves through a resonant filter that closes as the note rings - the
-# pluck every trance and house lead is - frequency-modulated glass for the
-# coins, pitch sweeps and filtered noise for the hits and the power, all in
-# stereo with the two sides a few cents apart, which is what makes a synth
-# sound wide rather than like one speaker. The pitched ones stay on their
-# note's own harmonic series, so a pickup is its note and no other; the
-# unpitched ones are noise, sweeps and metal with no steady pitch for a
-# melody to clash with.
+# Built the way the records are: detuned saws through a resonant filter that
+# closes as the note rings (a trance or house pluck), frequency-modulated glass
+# for the coins, sweeps and filtered noise for the hits and the power, in
+# stereo with the sides a few cents apart. Pitched sounds stay on their note's
+# harmonic series; unpitched ones have no steady pitch to clash.
 
 #: The two voices notes are made in: a pickup's and a coin's.
 VOICES = ("pluck", "soft")
@@ -164,10 +131,9 @@ def _play(table: List[float], pitch, count: int,
 
 def _filter(signal: List[float], cutoff, resonance: float = 0.7,
             kind: str = "low") -> List[float]:
-    """A state-variable filter - the resonant filter of an analogue synth,
-    in the form that stays stable at any cutoff (Zavalishin's, with the
-    delay taken out of the loop). ``cutoff`` in hertz, or a function of
-    the time for a sweep; ``kind`` is "low", "band" or "high"."""
+    """A state-variable filter, the resonant filter of an analogue synth, in
+    Zavalishin's form that stays stable at any cutoff. ``cutoff`` in hertz
+    or a function of time; ``kind`` is "low", "band" or "high"."""
     damping = 1.0 / max(0.05, resonance)
     first = second = 0.0
     out = [0.0] * len(signal)
@@ -196,9 +162,8 @@ def _filter(signal: List[float], cutoff, resonance: float = 0.7,
 
 
 def _noise(count: int, rng: random.Random, hold: int = 1) -> List[float]:
-    """White noise, each value held for ``hold`` samples - held longer, it
-    is the grit of a sound played back at too few bits and samples, which
-    is most of what "digital" sounds like."""
+    """White noise, each value held for ``hold`` samples: held longer, it is
+    the grit of too few bits and samples."""
     out = [0.0] * count
     value = 0.0
     for index in range(count):
@@ -233,10 +198,8 @@ def _sweep(start: float, end: float, over: float):
 
 def _finish(left: List[float], right: List[float],
             peak: float = 0.7) -> array:
-    """To 16-bit stereo, left and right interleaved, the loudest point of
-    either at ``peak`` of full scale, with a few milliseconds of fade at
-    the end so nothing clicks and nothing left over from a filter's
-    settling as an offset."""
+    """To interleaved 16-bit stereo, the loudest point at ``peak`` of full
+    scale, with a few milliseconds of fade at the end so nothing clicks."""
     count = min(len(left), len(right))
     mean_left = sum(left[:count]) / max(1, count)
     mean_right = sum(right[:count]) / max(1, count)
@@ -270,13 +233,10 @@ def _cents(freq: float, cents: float) -> float:
 
 
 def pluck(midi: float) -> array:
-    """A pickup: the pluck a trance lead is made of.
-
-    Two sawtooths seven cents either side of the note, one in each ear,
-    through a resonant low-pass that opens wide on the strike and closes
-    to just above the note as it rings - the "zing" is the filter's
-    resonance sweeping down through the harmonics. A sine an octave under
-    it for weight, and a glint of glass two octaves up on the attack."""
+    """A pickup: a trance lead's pluck. Two saws seven cents either side of the
+    note, one per ear, through a resonant low-pass that opens on the strike
+    and closes as it rings, with a sine an octave under for weight and a
+    glint of glass two octaves up on the attack."""
     freq = hertz(midi)
     length = 0.5
     left, right = _silence(length)
@@ -304,10 +264,9 @@ def pluck(midi: float) -> array:
 
 
 def soft(midi: float) -> array:
-    """A coin: a soft synth hit. Two saws a few cents apart, one in each
-    ear, through a low-pass that hardly opens, a sine at the note for its
-    body, and an attack slow enough to have no edge - a pad struck once,
-    which sits inside the music rather than on top of it."""
+    """A coin: a soft synth hit. Two saws a few cents apart through a barely
+    open low-pass, a sine at the note, and a slow attack, so it sits inside
+    the music."""
     freq = hertz(midi)
     length = 0.5
     left, right = _silence(length)
@@ -332,10 +291,8 @@ def soft(midi: float) -> array:
 
 
 def tick(step: int) -> array:
-    """A pickup with no note in it, for a record with no key to be in: a
-    burst of digital chatter, three grains of held noise flicking from
-    one ear to the other, brighter as the run climbs where a note would
-    have gone up."""
+    """A pickup without a note, for a record with no key: three grains of held
+    noise flicking between the ears, brighter as the run climbs."""
     rng = random.Random(100 + step)
     left, right = _silence(0.1)
     bright = 1600.0 + 650.0 * min(7, step)
@@ -351,9 +308,8 @@ def tick(step: int) -> array:
 
 
 def shake(step: int) -> array:
-    """A coin with no note in it: a metallic shimmer, brighter along a row
-    - high noise ringing in a comb a few tenths of a millisecond long,
-    whose resonances are all far above any melody."""
+    """A coin without a note: high noise ringing in a very short comb, its
+    resonances far above any melody."""
     rng = random.Random(200 + step)
     left, right = _silence(0.09)
     bright = 5200.0 + 500.0 * min(7, step)
@@ -369,10 +325,9 @@ def shake(step: int) -> array:
 
 
 def hit() -> array:
-    """A hit: an impact rather than a note. A sub-bass drop under the
-    music, felt more than heard; a crunch of bit-crushed noise, different
-    in each ear; and a zap tearing down through the whole range and out
-    of it, so there is no pitch anywhere in it for long enough to clash."""
+    """A hit: an impact rather than a note. A sub-bass drop, a crunch of
+    crushed noise different in each ear, and a zap tearing down through the
+    range, with no pitch held long enough to clash."""
     rng = random.Random(7)
     left, right = _silence(0.55)
     count = len(left)
@@ -392,10 +347,9 @@ def hit() -> array:
 
 
 def glass() -> array:
-    """The shield going: a power-down - a square wave falling away through
-    the floor, its filter closing behind it - under a scatter of glass,
-    grains of high noise thrown about the stereo field. The chimes in it
-    are the chord's own notes, played on top - see SoundBoard."""
+    """The shield going: a square wave falling away through a closing filter,
+    under a scatter of high noise grains. Its chimes are the chord's notes,
+    played on top (see SoundBoard)."""
     rng = random.Random(11)
     left, right = _silence(0.5)
     count = len(left)
@@ -417,10 +371,8 @@ def glass() -> array:
 
 
 def sweep() -> array:
-    """A power block: a riser. Noise through a resonant band climbing from
-    the low mids to the top of the range, and a saw climbing under it,
-    both swelling in - the build before a drop in a third of a second.
-    The notes that land at the top of it are the chord's."""
+    """A power block: a riser of noise through a climbing resonant band and a
+    climbing saw, swelling in; the notes landing at the top are the chord's."""
     left, right = _silence(0.45)
     count = int(0.42 * RATE)
     rise = _sweep(350.0, 8000.0, 0.42)
@@ -578,12 +530,9 @@ def prune(folder, keep_cents: Iterable[int] = ()) -> None:
 
 
 def make_elsewhere(folder, names: Optional[Sequence[str]] = None) -> None:
-    """Make sounds in a process of their own, if they are not made.
-
-    A few hundred milliseconds of arithmetic a sound - on the thread
-    drawing the picture it would be the moment the scene appeared, which
-    is the worst moment for it. Nothing is made on that thread: a sound
-    not made yet is simply not played until it is.
+    """Make sounds in a process of their own, if they are not made: a few
+    hundred milliseconds each would land on the drawing thread just as a
+    scene appears. A sound not made yet is simply not played.
     """
     folder = Path(folder)
     wanted = list(names if names is not None else FIXED)
@@ -603,12 +552,9 @@ def make_elsewhere(folder, names: Optional[Sequence[str]] = None) -> None:
 # Which notes
 # ==========================================================================
 def climb(step: int, ladder: int) -> int:
-    """Which rung of a ladder of ``ladder`` notes the ``step``th pickup
-    of a run is.
-
-    Up one a pickup, and then round the top of it rather than back to the
-    bottom: a run of forty should go on sounding like a run, not start
-    again as if it had been broken.
+    """Which rung of a ladder of ``ladder`` notes the ``step``th pickup of a
+    run is: up one each pickup, then round the top rather than back to the
+    bottom, so a long run still sounds like one.
     """
     if ladder <= 0:
         return 0
@@ -644,9 +590,9 @@ def pitched(harmony: Optional[dict]) -> bool:
 
 
 def classes_at(harmony: dict, when: float) -> Tuple[int, ...]:
-    """The pitch classes a pickup may be at ``when``: the chord sounding
-    then if it is one of the key's own, and otherwise the key's
-    pentatonic - the key there, which a song that changes key has moved."""
+    """The pitch classes a pickup may use at ``when``: the chord sounding then
+    if it belongs to the key, otherwise the key's pentatonic (the key at
+    that point, for songs that modulate)."""
     import harmony as _harmony
 
     tonic, mode = _harmony.key_at(harmony, when)
@@ -664,31 +610,26 @@ def classes_at(harmony: dict, when: float) -> Tuple[int, ...]:
 class SoundBoard:
     """The game's sounds, answering what the game did, in the record's key.
 
-    Reads the scene's own record of what happened - the same pops the
-    picture answers - so a sound and a flash can never disagree about
-    whether something was taken. ``volume`` says how loud the player is
-    set, and ``level`` how loud the effects are against the music - a
-    share of the player's volume, so turning the music down turns them
-    down with it and the balance somebody chose stays chosen; ``duck`` is
-    told to pull the music down for a moment on a hit; ``later`` puts off
-    playing a note by some seconds, for the notes of an arpeggio and the
-    echoes.
+    Reads the scene's own record of events, the same one the picture
+    answers, so a sound and a flash cannot disagree. ``volume`` is the
+    player's volume and ``level`` the effects' share of it, so the chosen
+    balance holds as the music is turned up or down; ``duck`` pulls the
+    music down on a hit; ``later`` puts a note off by some seconds, for
+    arpeggios and echoes.
     """
 
     #: How loud the effects are against the music, unless somebody says.
     LEVEL = 0.5
-    #: How many of each sound can be going at once. A row of coins is
-    #: three in a third of a second, each echoing twice, and restarting
-    #: one sound cuts the last one off.
+    #: How many of each sound can play at once: a row of coins is three in a
+    #: third of a second, each echoing twice, and restarting a sound cuts the
+    #: last off.
     VOICES = 4
-    #: Every note a pickup or a coin plays comes back, quieter, on the
-    #: record's own grid: a dotted eighth later and again a dotted quarter
-    #: later - the delay a trance lead is run through - as (beats, how
-    #: loud). Timed from the drums' own beat, so a run of pickups rings on
-    #: in time with the music rather than over it.
+    #: Every pickup or coin note comes back quieter on the record's grid, a
+    #: dotted eighth and then a dotted quarter later, as a trance lead's delay
+    #: does, as (beats, how loud), timed from the drums' beat.
     ECHOES = ((0.75, 0.3), (1.5, 0.1))
-    #: A beat outside this, in seconds, is not a tempo to echo in: under
-    #: 50 beats a minute or over 240.
+    #: A beat outside this, in seconds, is no tempo to echo in: under 50 or
+    #: over 240 a minute.
     ECHO_BEATS = (0.25, 1.2)
     #: The notes of an arpeggio, and of the finish, this far apart.
     SPREAD = 0.055
@@ -712,10 +653,8 @@ class SoundBoard:
 
     # -- the record ---------------------------------------------------------
     def set_harmony(self, harmony: Optional[dict]) -> None:
-        """The key and chords to play in; None for a new, unheard track.
-
-        The notes for its tuning are made now, elsewhere, if they have not
-        been - by the time anybody is riding, they usually are."""
+        """The key and chords to play in; None for a track not heard yet. Its
+        tuning's notes are made now, elsewhere, if they have not been."""
         self._harmony = harmony
         self._cents = cents_of(harmony)
         if pitched(harmony):
@@ -777,9 +716,8 @@ class SoundBoard:
         try:
             self._later(delay, lambda: self.play(name, loud))
         except Exception as exc:      # noqa: BLE001 - late rather than never
-            # Played now rather than not at all, and the rest of the game's
-            # sounds kept: a failure here used to take the whole listener
-            # with it, and the game was silent from then on.
+            # Played now rather than not at all, keeping the rest of the
+            # sounds: a failure here once silenced the game for good.
             if not getattr(self, "_late_failed", False):
                 self._late_failed = True
                 log.warning("The rider's timed sounds are played at once "
@@ -787,9 +725,8 @@ class SoundBoard:
             self.play(name, loud)
 
     def prepare(self) -> None:
-        """Load every sound already made, before any is wanted: Qt loads a
-        sound effect in the background, and the first pickup should not be
-        the one that goes unheard while it does."""
+        """Load every sound already made before any is wanted: Qt loads in the
+        background, and the first pickup should not go unheard."""
         if self._broken:
             return
         names = list(FIXED)
@@ -894,16 +831,14 @@ class SoundBoard:
             return out
         return []
 
-    #: How many notes are loaded a frame once they have been made, and how
-    #: many frames apart. A handful at a time, so loading the lot is never
-    #: a frame nobody drew.
+    #: How many made notes load a frame, and how many frames apart: a few at a
+    #: time, so loading never costs a frame.
     LOAD_EACH = 3
     LOAD_EVERY = 10
 
     def tend(self) -> int:
-        """Load a few of the notes that have been made since last time.
-        Qt loads a sound in the background, so a note first loaded when it
-        is wanted is a pickup that goes unheard. Returns how many."""
+        """Load a few notes made since last time, since a note first loaded
+        when wanted goes unheard. Returns how many."""
         if self._broken or not self.in_key:
             return 0
         loaded = 0
@@ -925,8 +860,8 @@ class SoundBoard:
 
     def _echoes(self, scene) -> List[Tuple[float, float]]:
         """When a note taken now comes back, and how loud: (seconds after,
-        share). Nothing without a way to play later, or a tempo to be in
-        time with."""
+        share). Nothing without a way to play later or a tempo to keep time
+        with."""
         beat = float(getattr(scene, "_beat", 0.0) or 0.0)
         low, high = self.ECHO_BEATS
         if self._later is None or not low <= beat <= high:
@@ -934,9 +869,8 @@ class SoundBoard:
         return [(beats * beat, share) for beats, share in self.ECHOES]
 
     def preview(self, scene=None) -> Optional[str]:
-        """A pickup, at the level the effects are set to now - for somebody
-        moving the effects' slider to hear where it is. In the record's
-        key if there is one. Returns what was played."""
+        """A pickup at the current effects level, so moving the slider is
+        heard; in the record's key if there is one. Returns what was played."""
         name = "tick3"
         if self.in_key:
             notes = ladder(classes_at(self._harmony, float(

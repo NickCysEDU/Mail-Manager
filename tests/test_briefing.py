@@ -261,12 +261,9 @@ class TestTheDialog:
 
 
 class TestTheBriefingLinesShareTheirEdges:
-    """"Xxx xxxxxxxx xxxxxx xxxx xxxxx xxxxx xxxxx, xxxxxx xx xxx x
-    xxxxxxxxxxxx xxxxx xxxxxx."
-
-    Each card is three columns: a count, the line, and where it is bound
-    for. They were laid out well enough one line at a time and read as a
-    mess down the page.
+    """Each card is three columns: a count, the line, and where it is bound
+    for. Laid out one line at a time, each line was fine and the page read
+    as a mess.
     """
 
     @pytest.fixture(params=["comfortable", "compact", "dense"])

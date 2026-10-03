@@ -1,6 +1,6 @@
 """iCloud Mail IMAP client.
 
-Connects xx ``xxxx.xxxx.xx.xxx:000`` xxxx TLS with ``imaplib``, fetches
+Connects to ``imap.mail.me.com`` (port 993) over TLS with ``imaplib``; fetches
 messages in a time window without marking them read (``BODY.PEEK``), creates
 the ``Job Search`` folder tree when missing, and moves approved messages with
 ``UID COPY`` / ``UID STORE +FLAGS \\Deleted`` / ``UID EXPUNGE``.

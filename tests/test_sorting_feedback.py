@@ -256,11 +256,8 @@ class TestTheVersionIsStatedOnce:
 
 
 class TestShowingEverythingButJobMail:
-    """"Xxxxxx x xxxx xxxxxx xxx xxx xxx xxxx xxxx xx xxxx."
-
-    The view could show everything, job mail only, or ticked rows only.
-    The one missing was the other half of the job filter, which is the
-    half somebody checking what the sorter is about to file away wants.
+    """Show: everything but job mail, the other half of the job filter, for
+    checking what the sorter is about to file away.
     """
 
     @staticmethod

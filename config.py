@@ -1,6 +1,6 @@
 """Settings persistence and Keychain-backed credential storage.
 
-Secrets (xxx xXxxxx xxx-xxxxxxxx xxxxxxxx xxx the Anthropic API key) never
+Secrets (the app-specific password for iCloud and the Anthropic API key) never
 touch disk in plaintext - they live in the macOS Keychain via ``keyring``.
 Everything else lives in a JSON file under ``Application Support``.
 """

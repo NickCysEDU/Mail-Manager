@@ -359,9 +359,9 @@ class FakeIMAP:
             self.copies.append((uid, name))
         if "UIDPLUS" not in self.post_auth_capabilities:
             return ("OK", [b"COPY completed"])
-        # A UIDPLUS server says xxxxx XXXx xx xxxx xxx xxxxxx, and the caller
-        # needs them: a COPY does not preserve a message's UID, so without
-        # this there is no way to name the copy afterwards.
+        # A UIDPLUS server reports the copies' UIDs, and the caller needs
+        # them: a COPY does not keep a message's UID, so without this there
+        # is no way to name the copy afterwards.
         assigned = []
         for _ in copied:
             self._next_copy_uid += 1

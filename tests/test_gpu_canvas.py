@@ -1,18 +1,15 @@
 """The visualiser pane, drawn on the graphics card.
 
-"Xxxxxxxx xxxxxxxxxx xx xxxx xxxxxx xx xxx xxxxx xx xxxxx." It was not
-sharp because it could not afford to be: at a Retina full screen - 2880x1800
-real pixels - Music rider cost 42 ms a frame on the CPU with its bloom
-and vignette, so the pane drew it at half the resolution and stretched it.
-On the card the same QPainter calls cost 10 ms at the full resolution.
+At a Retina full screen (2880x1800 real pixels) Music rider cost 42 ms a
+frame on the CPU with its bloom and vignette, so the pane drew it at half
+resolution and stretched it. On the card the same QPainter calls cost 10 ms
+at full resolution.
 
-The rest of the suite runs on the offscreen platform, where no OpenGL
-context can be made - so the canvas is never created there, and every
-test of what the scenes draw goes through the CPU path, which is also
-what any machine without a working card falls back to. This file is the
-one that runs the card. Each test launches a short script on the real
-platform in a subprocess, reports back as JSON, and skips on a machine
-that cannot make a context at all.
+The rest of the suite runs offscreen, where no OpenGL context can be made,
+so scenes are tested through the CPU path, which is also the fallback on a
+machine without a working card. Each test here runs a short script on the
+real platform in a subprocess, reports back as JSON, and skips where no
+context can be made.
 """
 
 from __future__ import annotations
@@ -87,8 +84,8 @@ HEAD = textwrap.dedent("""
 """).format(root=str(ROOT))
 
 
-#: A line one real pixel wide down the middle of the pane, drawn in
-#: whatever pixels the painter has - which is how sharpness is measured.
+#: A line one real pixel wide down the middle of the pane, drawn at whatever
+#: resolution the painter has: how sharpness is measured.
 HAIRLINE = textwrap.dedent("""
     class Hairline:
         name = "Hairline"
@@ -109,10 +106,9 @@ HAIRLINE = textwrap.dedent("""
 """)
 
 
-#: The end of every script: out without the interpreter's teardown, which
-#: takes Qt's objects apart in whatever order it likes - a painter after
-#: the buffer it was painting on - and a process that has said what it
-#: had to say has nothing left to do.
+#: Every script ends without the interpreter's teardown, which takes Qt's
+#: objects apart in any order (a painter after its buffer); the script has
+#: nothing left to do.
 TAIL = textwrap.dedent("""
     sys.stdout.flush()
     sys.stderr.flush()
@@ -121,11 +117,11 @@ TAIL = textwrap.dedent("""
 
 
 def on_the_card(body: str) -> dict:
-    """Run ``body`` on the real platform and give back what it printed.
+    """Run ``body`` on the real platform and return what it printed.
 
-    And fail if it did not finish cleanly: an exception that escaped into
-    Qt, or a crash on the way out, is a fault in what was being drawn
-    even where the numbers it printed first look right."""
+    Fails if it did not finish cleanly: an exception that escaped into Qt,
+    or a crash on the way out, is a fault even where the numbers printed
+    look right."""
     env = dict(os.environ)
     env.pop("QT_QPA_PLATFORM", None)
     env["MAIL_MANAGER_GPU"] = "1"
@@ -150,13 +146,12 @@ def on_the_card(body: str) -> dict:
 
 class TestThePaneIsOnTheCard:
     def test_it_draws_at_the_screens_own_resolution(self):
-        """Every real pixel, rather than one buffer pixel per point
-        stretched - which is what made a Retina full screen soft.
+        """Every real pixel, rather than one buffer pixel per point stretched,
+        which made a Retina full screen soft.
 
-        Measured on a line one real pixel wide, which stays one pixel
-        wide only if nothing was drawn small and stretched. Measuring
-        the size of the frame instead passes either way: a stretched
-        frame is exactly as big as a sharp one.
+        Measured on a line one real pixel wide, which stays one pixel wide
+        only if nothing was drawn small and stretched. The frame's size
+        would pass either way.
         """
         got = on_the_card(HAIRLINE + textwrap.dedent("""
             made = pane(scene=Hairline(), size=(640, 400))
@@ -243,16 +238,14 @@ class TestThePaneIsOnTheCard:
             f"{got['diff']:.4f} apart in brightness on average")
 
     def test_the_bloom_is_made_from_an_even_average(self):
-        """The bloom is a small copy of the frame, made big again. An
-        eightfold shrink done in one linear blit reads one pixel in
-        sixteen, so a thin line reached the small copy only where it
-        crossed the pixels that were read - and the bloom strung a row
-        of soft blobs along every chevron on the road. In halves, each
+        """The bloom is a small copy of the frame, made big again. An eightfold
+        shrink in one linear blit reads one pixel in sixteen, so a thin line
+        reached the small copy only where it crossed the pixels read, and
+        the bloom strung soft blobs along every chevron. In halves, each
         step is an exact average.
 
-        Read off the small copy the pane itself made, through its own
-        path. The first version of this ran its own copy of the halving
-        loop, and passed with the pane's loop deleted.
+        Read off the pane's own small copy: a first version ran its own copy
+        of the halving loop, and passed with the pane's loop deleted.
         """
         got = on_the_card("""
             class Fan:
@@ -303,13 +296,12 @@ class TestThePaneIsOnTheCard:
 
     @pytest.mark.parametrize("rung", [(4, 1.0), (2, 0.5)])
     def test_the_polish_comes_from_where_the_scene_is(self, rung):
-        """A framebuffer counts its rows from the bottom and a painter
-        from the top. With the scene centred the two agree, so the scene
-        here sits high - the strip under it reserved for the controls,
-        which is how it sits in the app - and is lit only in its top
-        quarter. The small copy the bloom is made from has to be lit at
-        its top as well. Read the wrong way up, it is made from a band
-        of the frame the scene is not even in.
+        """A framebuffer counts rows from the bottom and a painter from the
+        top. With the scene centred the two agree, so here the scene sits
+        high (the strip under it is for the controls, as in the app) and is
+        lit only in its top quarter. The bloom's small copy must be lit at
+        its top too; read upside down, it comes from a band the scene is not
+        in.
         """
         got = on_the_card("""
             class TopQuarter:
@@ -340,10 +332,9 @@ class TestThePaneIsOnTheCard:
             print(json.dumps({"top": band(0, h * 0.2),
                               "bottom": band(h * 0.5, h)}))
         """.replace("RUNG", repr(rung)))
-        # Lit across the whole of its top, not half of it: a frame
-        # drawn smaller has fewer pixels per point, and reading it as
-        # if it had as many takes the copy from a patch of the frame
-        # twice the size, with the scene in one corner of it.
+        # Lit across its whole top, not half: a frame drawn smaller has fewer
+        # pixels per point, and reading it as if it had as many takes the copy
+        # from a patch twice the size, with the scene in one corner.
         assert got["top"] > 0.8, (
             f"the small copy of a scene lit at its top is only "
             f"{got['top']:.2f} bright at its top: it was taken from the "
@@ -383,9 +374,9 @@ class TestThePaneIsOnTheCard:
             "after giving up on the card the pane drew nothing on the CPU")
 
     def test_it_survives_being_moved_into_full_screen(self):
-        """Full screen takes the pane out of the window and puts it in
-        another - which can mean a new context, and a canvas that kept
-        buffers built on the old one would draw nothing."""
+        """Full screen moves the pane into another window, which can mean a new
+        context; a canvas keeping buffers from the old one would draw
+        nothing."""
         got = on_the_card("""
             home, away = QWidget(), QWidget()
             made = pane(size=(640, 400))
@@ -410,11 +401,10 @@ class TestThePaneIsOnTheCard:
             f"against {got['before']} before")
 
 
-#: The scope painted both ways, frame after frame: into a buffer on the
-#: card through Qt's OpenGL engine, and into an image on the CPU. Each
-#: frame is a new trace fifteen times a second, as the pane hands them
-#: over, so what is compared is a phosphor with several traces fading on
-#: it - the fade and the laying over as well as the beam.
+#: The scope painted both ways, frame after frame: into a buffer on the card
+#: through Qt's OpenGL engine, and into an image on the CPU. A new trace comes
+#: fifteen times a second, so what is compared is a phosphor with several
+#: fading traces: the fade and the layering as well as the beam.
 SCOPE_BOTH_WAYS = textwrap.dedent("""
     from PySide6.QtGui import QOpenGLContext, QOffscreenSurface
     from PySide6.QtOpenGL import (QOpenGLFramebufferObject,
@@ -509,10 +499,9 @@ SCOPE_BOTH_WAYS = textwrap.dedent("""
 
 
 class TestTheScopeOnTheCard:
-    """At a Retina full screen the scope's phosphor cost 16 ms a trace to
-    strike on the CPU and more to hand to the card, and with every pixel
-    drawn it ran at 33 frames a second. Its screen now stays on the card
-    (see scope_gl) - and has to look exactly as it did."""
+    """At a Retina full screen the scope's phosphor cost 16 ms a trace on the
+    CPU, plus the upload, and ran at 33 frames a second. Its screen now
+    stays on the card (see scope_gl) and must look exactly as it did."""
 
     @pytest.mark.parametrize("mode,opacity", [("Sweep", 1.0), ("X-Y", 1.0),
                                               ("Sweep", 0.55)])
@@ -537,9 +526,9 @@ class TestTheScopeOnTheCard:
             got["lit_gpu"], got["lit_cpu"])
 
     def test_a_window_resized_while_paused_keeps_its_picture(self):
-        """Scaled to the new size, as the CPU's screen is, rather than
-        started dark: a paused track strikes nothing new, and dragging the
-        window's edge would otherwise wipe the scope."""
+        """Scaled to the new size, as the CPU's screen is, rather than started
+        dark: a paused track strikes nothing new, so dragging the window's
+        edge would otherwise wipe the scope."""
         got = on_the_card(SCOPE_BOTH_WAYS + textwrap.dedent("""
             def resized(paint_on, target):
                 scene = type(visualizers.by_name("Oscilloscope"))()
@@ -588,8 +577,8 @@ class TestTheScopeOnTheCard:
         assert got["diff"] < 0.01, got["diff"]
 
     def test_its_screen_is_only_as_big_as_the_beam_reaches(self):
-        """On a wide screen, a quarter of the pixels are where no beam can
-        go - and fading and laying them cost as much as any others."""
+        """On a wide screen a quarter of the pixels are where no beam can go,
+        and fading them costs as much as any others."""
         import scope_gl
 
         assert scope_gl.reach(2880, 1800) == (2160, 1800)
@@ -614,10 +603,10 @@ class TestTheScopeOnTheCard:
 class TestABigScreenOnASmallCard:
     """Fewer samples, then fewer pixels, when the card cannot keep up.
 
-    Measured on an M1 for Music rider at every real pixel with four
-    samples a pixel: 8.9 ms on a MacBook Air's screen, 13.8 on a 16-inch
-    MacBook Pro's, and 22.7 and 32.3 on 5K and 6K displays - 44 and 31
-    frames a second. See CardSharpness.
+    Measured on an M1 for Music rider at every real pixel with four samples
+    a pixel: 8.9 ms on a MacBook Air's screen, 13.8 on a 16-inch MacBook
+    Pro's, and 22.7 and 32.3 on 5K and 6K displays (44 and 31 frames a
+    second). See CardSharpness.
     """
 
     @staticmethod
@@ -643,11 +632,10 @@ class TestABigScreenOnASmallCard:
         assert self._card().choice(5120 * 2880, 2.0, "rider") == (4, 1.0)
 
     def test_it_gives_up_samples_and_never_pixels(self):
-        """Two samples a pixel at a Retina density is most of the
-        smoothness of four, and none is still every pixel; half the pixels
-        is a picture gone soft, and it used to go there in the first
-        seconds of a track, when the analysis was busy on the same
-        machine. "Xxxx xxx xxxx xxxx xxxxxxxx xxxx xx xxxxxxxxxxx"."""
+        """Two samples a pixel at Retina density keep most of the smoothness of
+        four, and none still draws every pixel. Half the pixels is a soft
+        picture, which it used to drop to in a track's first seconds while
+        the analysis was busy."""
         card = self._card()
         self._past_the_warmup(card)
         seen = [card.choice(5120 * 2880, 2.0, "rider")]
@@ -660,9 +648,9 @@ class TestABigScreenOnASmallCard:
         assert all(share == 1.0 for _, share in seen)
 
     def test_a_screen_at_one_pixel_a_point_keeps_its_pixels(self):
-        """Half the pixels of a screen that has one per point is a
-        picture below the window it sits in. It gives up its samples
-        instead, all of them if it has to."""
+        """On a screen with one pixel per point, half the pixels would be
+        coarser than the window around it; it gives up samples instead, all
+        of them if need be."""
         from attachment_widgets import CardSharpness
 
         for ratio in (1.0, 1.5, 2.0, 3.0):
@@ -676,10 +664,9 @@ class TestABigScreenOnASmallCard:
         assert card.choice(5120 * 2880, 2.0, "rider") == (4, 1.0)
 
     def test_one_slow_frame_in_thirty_is_not_a_slow_rung(self):
-        """The system takes a frame for something else now and then. A
-        running average moved a MacBook Pro's own screen to half its
-        resolution over that, for a frame that fitted nine times in
-        ten; a median does not."""
+        """The system takes a frame for something else now and then. A running
+        average halved a MacBook Pro screen's resolution over that, for a
+        frame that fitted nine times in ten; a median does not."""
         card = self._card()
         self._past_the_warmup(card)
         self._judge(card, *([9.0] * 26 + [60.0] * 4))
@@ -711,9 +698,9 @@ class TestABigScreenOnASmallCard:
         assert card.choice(5120 * 2880, 2.0, "rider") == (2, 1.0)
 
     def test_it_climbs_back_when_the_frames_say_there_is_room(self):
-        """Whatever drove it down may have been something else on the
-        machine - an analysis, a sync, another app. Without this, one busy
-        moment kept a full screen soft for the rest of the session."""
+        """What drove it down may have been something else on the machine (an
+        analysis, a sync, another app); without this, one busy moment kept a
+        full screen soft for the rest of the session."""
         card = self._card()
         self._down_once(card)
         for _ in range(card.RETRY // card.WINDOW + 2):
@@ -788,11 +775,10 @@ class TestABigScreenOnASmallCard:
         assert card.interval_ms(16) <= 33
 
     def test_a_frame_drawn_smaller_fills_the_screen_and_stays_crisp(self):
-        """Stretched to the whole screen, and without smoothing: at half
-        the pixels of a 2x screen every buffer pixel is exactly two, and
-        a line one buffer pixel wide comes out exactly two real pixels
-        wide at full brightness, rather than three or four of fading
-        grey. See blit_scene for why that matters more than it sounds.
+        """Stretched to the whole screen without smoothing: at half the pixels
+        of a 2x screen a line one buffer pixel wide comes out exactly two
+        real pixels wide at full brightness, not three or four of fading
+        grey (see blit_scene).
         """
         got = on_the_card(HAIRLINE + textwrap.dedent("""
             made = pane(scene=Hairline(), size=(640, 400))
@@ -822,10 +808,9 @@ class TestABigScreenOnASmallCard:
             f"and at full brightness, not smoothed into grey: {lit}")
 
     def test_each_tick_is_drawn_once(self):
-        """Asking the pane to repaint as well as the canvas drew every
-        frame twice - the pane's own paint asks the canvas again a frame
-        later - which is 120 frames a second off a timer asking for 60,
-        and twice the card's work for nothing."""
+        """Repainting the pane as well as the canvas drew every frame twice
+        (the pane's paint asks the canvas again a frame later): 120 frames a
+        second from a timer asking for 60, and twice the card's work."""
         got = on_the_card("""
             import time
             made = pane(size=(640, 400))
@@ -857,9 +842,9 @@ class TestABigScreenOnASmallCard:
             f"thirty ticks drew only {got['drawn']} frames")
 
     def test_a_card_too_slow_for_its_screen_draws_less(self):
-        """A frame the card cannot finish in its budget is measured as
-        one, on the card, and the pane gives up samples for it and slows
-        its timer to what the card can actually do."""
+        """A frame the card cannot finish in its budget is measured on the
+        card, and the pane gives up samples and slows its timer to what the
+        card can do."""
         got = on_the_card("""
             import time
             class Heavy:
@@ -889,14 +874,11 @@ class TestABigScreenOnASmallCard:
 
 
 class TestNothingIsTakenApartMidFrame:
-    """A pane's canvas held the pane back, which made the two a cycle;
-    a cycle is freed by Python's collector whenever it next runs, and it
-    runs when enough has been allocated - at no particular moment. Taking
-    a GL widget apart makes its context current and then none at all, so
-    when that happened in the middle of another pane's frame the painter
-    dereferenced a context that was no longer there and the process
-    crashed: a second pane drawing while the first was dropped, which is
-    a viewer reopened, crashed three runs in three."""
+    """A pane's canvas referred back to the pane, a cycle that Python's
+    collector frees at no particular moment. Taking a GL widget apart makes
+    its context current and then none, so when that happened during another
+    pane's frame the painter used a context that was gone and the process
+    crashed: a reopened viewer crashed three runs in three."""
 
     def test_a_pane_let_go_of_is_gone_at_once(self):
         got = on_the_card("""

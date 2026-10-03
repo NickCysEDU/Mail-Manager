@@ -65,7 +65,8 @@ class TestFlowLayout:
     @pytest.mark.parametrize("width", [1600, 1200, 900, 700, 560, 420])
     def test_no_widget_ever_extends_past_the_edge(self, qapp, width):
         holder, layout = self.build(qapp, [
-            "Xxxx 00 Xxxxx", "Xxxx 0 Xxxx", "Xxxx 0 Xxxx", "Xxxxxx Xxxxx",
+            "Previous 24 Hours", "Previous 3 Days", "Previous 7 Days",
+            "Custom Date Range",
             "⚙︎ Gemini Flash-Lite (latest)", "Stop All", "Scan & Analyze",
             "Apply 12 Approved Folder Moves",
         ], width=width)
@@ -115,13 +116,10 @@ class TestFlowLayout:
 
 @contextlib.contextmanager
 def painted_as(qapp, **kwargs):
-    """Apply a theme for the body of a test, then put back what was there.
-
-    ``theme.apply`` sets the application's palette, font and stylesheet.
-    Restoring it by applying "light"/"normal" afterwards assumes that is
-    what the session was using, and a test that guesses wrong leaves every
-    later test measuring a different font. Whatever was there is saved and
-    put back.
+    """Apply a theme for the body of a test, then restore what was there:
+    ``theme.apply`` sets the application's palette, font and stylesheet, and
+    a test that guessed what to restore left later tests measuring another
+    font.
     """
     import theme
 
@@ -306,8 +304,8 @@ class TestLiveSwitching:
             window.close()
 
     def test_switching_before_the_engine_exists_still_takes_effect(self, qapp):
-        """It used to return False and change nothing; now it updates the
-        settings the scan is about to build its engine from."""
+        """It updates the settings the scan is about to build its engine
+        from."""
         from workers import ScanWorker
 
         worker = ScanWorker(settings=Settings(), mailbox_password="", api_key="",
@@ -387,8 +385,8 @@ class TestRuleSets:
 
 
 class TestSwitchingBeforeTheEngineExists:
-    """A scan spends its first seconds in IMAP, before the classifier is built.
-    Switching then used to claim success and change nothing."""
+    """A scan spends its first seconds in IMAP, before the classifier is built,
+    and a switch then must take effect."""
 
     def worker(self, qapp):
         from workers import ScanWorker
@@ -436,13 +434,9 @@ class TestSwitchingBeforeTheEngineExists:
 
 
 class TestTheStatusLineStaysInsideItsLabel:
-    """"The 'analyzed' status bar in the main screen's text goes out of
-    bounds."
-
-    It was cut to fit once, when it was set. The width it was cut to is
-    decided by the layout, and the usage figure to its right grows while a
-    run is going - so a message that fitted when it was set had some of its
-    room taken away afterwards and ran off the end.
+    """The status message stays inside its space. It was cut to fit once, when
+    set, and the usage figure beside it grows during a run, taking room
+    afterwards.
     """
 
     @pytest.fixture
@@ -469,11 +463,9 @@ class TestTheStatusLineStaysInsideItsLabel:
 
     def test_the_progress_bars_own_text_fits_the_bar(self, qapp, window,
                                                      monkeypatch):
-        """Where it actually ran out of bounds.
-
-        Qt centres the text it draws inside a progress bar and lets it run
-        out past the widget. The bar is never wider than 320 pixels and the
-        message is twice that.
+        """Qt centres the text it draws inside a progress bar and lets it run
+        past the widget; the bar is at most 320 pixels and the message twice
+        that.
         """
         from PySide6.QtGui import QFontMetrics
 
@@ -505,13 +497,9 @@ class TestTheStatusLineStaysInsideItsLabel:
 
 
 class TestTheDropdownsShowTheirOptions:
-    """"Xxxxxxx xx xxxxxxxxx xx xxxxx xxxxxxxx xxx xxx xxx xx xxxx. Xxxx
-    xxxxxx entries xxx xxxxxxxx xxxx xx xxx xxxxx xxxxxxx xx xxxxx xxxxx."
-
-    Qt sizes a combo's menu to the combo, and these are deliberately narrow:
-    three or four of them divide one row. So an option too long for the box
-    was cut short in the menu as well, where there is nothing beside it and
-    no reason to cut it.
+    """An option too long for its combo box shows in full in the open menu: Qt
+    sizes the menu to the combo, and these combos are narrow because several
+    share a row.
     """
 
     @staticmethod
@@ -529,8 +517,8 @@ class TestTheDropdownsShowTheirOptions:
 
     @staticmethod
     def _done(combo):
-        """Closed and handed to Qt to delete, so the session's widget
-        reaper does not find it later."""
+        """Closed and handed to Qt to delete, so the session's widget reaper
+        does not find it later."""
         combo.hidePopup()
         combo.close()
         combo.deleteLater()
@@ -607,14 +595,9 @@ class TestTheDropdownsShowTheirOptions:
 
 
 class TestMaximumContrastReachesTheRows:
-    """"Xxx xxxxxxxx xxxxxxxxx xxx xxxx xxxxx xx xxxxxxxx xxx xxxx xx
-    xxxxxxxxxx xxxx xx xxx xxxxxx."
-
-    It did. Maximum contrast is monochrome on purpose, and the palette says
-    so, but the table's row colours were written out as fixed values: a grey
-    for a row already filed, another for a folder being left alone, a hue
-    for the category. None of them consult the palette, so every unselected
-    row read exactly as it did at normal contrast.
+    """At maximum contrast unselected rows change too: the row colours (a grey
+    for a filed row, another for one left alone, a category hue) were fixed
+    values that ignored the palette.
     """
 
     @staticmethod
@@ -672,17 +655,12 @@ class TestMaximumContrastReachesTheRows:
 
 
 class TestNothingTouchesTheSplitterBar:
-    """"Xxx xxxxxxxxxxx xxxxxx xxx xxx xxxxx xxxxx xx xxx xxx xxxxx xx xxx
-    separating xxx xx xxxxx xxxxx. Xxxxxx xxxxxx xxxxxxx xxxxxx xxx xxx."
-
-    Both halves of the preview had zero margins, so everything down the
-    right edge of the left half sat hard against the handle between them.
+    """The preview's halves keep clear of the handle between them: with zero
+    margins, the right edge of the left half sat against it.
     """
 
-    #: Written out rather than read from PreviewPane.GUTTER. Taken from the
-    #: constant, every assertion below slides with it: setting it to zero
-    #: made the whole class pass against the layout it was written to
-    #: reject.
+    #: Written out rather than read from PreviewPane.GUTTER: taken from the
+    #: constant, setting it to zero made every assertion pass.
     LEAST = 6
 
     @pytest.fixture
@@ -698,10 +676,9 @@ class TestNothingTouchesTheSplitterBar:
         pane.deleteLater()
 
     def test_the_attachments_button_clears_the_edge(self, qapp, pane):
-        """It sits at the top now, beside the message it belongs to,
-        rather than in the half that holds the text: that half is 306px
-        wide at its narrowest and the button and the box beside it needed
-        328. What it has to clear up there is the edge of the pane."""
+        """It sits at the top beside the message, where it must clear the
+        pane's edge: the text half can be 306 px wide and the button and box
+        needed 328."""
         button = pane.attachments_button
         right = button.mapTo(pane, button.rect().topRight()).x()
         assert pane.width() - right >= self.LEAST, (
@@ -738,14 +715,10 @@ class TestNothingTouchesTheSplitterBar:
 
 
 class TestTheAnalysisHasRoomToBeRead:
-    """"Xxxxxx xxxxxxxx xxxxxx xx xxxx xxxxx xxx xxxx xx xxxxxxxx xxxx
-    xxxxxxx xxxx xx xxxxxx xxx xxxxx."
-
-    The preview is a splitter of its own: the message on one side and the
-    analysis on the other. Beside the table the whole pane is about two
-    fifths of the window, and splitting that again left the analysis at
-    203 px - twenty-nine characters a line - on a 1440 screen, and 90 px
-    on a small window.
+    """The analysis gets room to read: beside the table the preview is about
+    two fifths of the window, and splitting it again left the analysis 203
+    px wide (twenty-nine characters) on a 1440 screen and 90 px on a small
+    one.
     """
 
     #: The narrowest line anybody should be asked to read a paragraph
@@ -864,10 +837,9 @@ class TestTheAnalysisHasRoomToBeRead:
     @pytest.mark.parametrize("width", [1600, 1000, 700, 480, 420])
     def test_the_source_row_wraps_rather_than_squeezing_the_box(self, qapp,
                                                                 width):
-        """"Source:", a box holding "Exactly what the model was sent" and
-        an Attachments button do not fit across the left half of a narrow
-        preview. A fixed row does not shrink - it squeezes the box until
-        the words in it are elided."""
+        """The caption, the source box and the Attachments button did not fit
+        across the left half of a narrow preview, and a fixed row squeezed
+        the box until its words were elided."""
         from PySide6.QtGui import QFontMetrics
 
         pane = self._pane(qapp, width, height=520)
@@ -889,8 +861,8 @@ class TestTheAnalysisHasRoomToBeRead:
 
     @pytest.mark.parametrize("width", [1600, 1000, 700, 560, 480])
     def test_nothing_in_the_folder_row_runs_off_the_edge(self, qapp, width):
-        """"File into:", a folder path and a button need 471px, and the
-        pane can be given less than that."""
+        """"File into:", a folder path and a button need 471 px, and the pane
+        can be given less."""
         pane = self._pane(qapp, width, height=520)
         try:
             row = pane.folder_row
