@@ -66,6 +66,9 @@ BANDS = len(CENTRES)
 
 #: Refuse to analyse more than this; a long podcast is not worth the wait.
 MAX_SECONDS = 900
+#: How much of the progress bar is the decoding, which on a long track is
+#: most of the wait; the analysis is the rest.
+DECODE_SHARE = 0.5
 
 
 def _twiddles(n: int) -> List[complex]:
@@ -1137,6 +1140,9 @@ class _Analysis(QObject_base):
         decoder, self._decoder = self._decoder, None
         if decoder is not None:
             try:
+                # Quiet first: stopping a decoder says "finished" again, and
+                # that started the whole analysis a second time.
+                decoder.blockSignals(True)
                 decoder.stop()
                 decoder.deleteLater()
             except Exception:      # noqa: BLE001 - already gone
@@ -1197,8 +1203,14 @@ class _Analysis(QObject_base):
             self._on_harmony(found)
 
     def _report(self, fraction: float) -> None:
+        """The analysis's progress, after the decoding's share of the bar."""
         if not self._stop and self._on_progress is not None:
-            self._on_progress(fraction)
+            self._on_progress(DECODE_SHARE + (1.0 - DECODE_SHARE) * fraction)
+
+    def decoding(self, fraction: float) -> None:
+        """How far the decoding has got: the first share of the bar."""
+        if not self._stop and self._on_progress is not None:
+            self._on_progress(DECODE_SHARE * max(0.0, min(1.0, fraction)))
 
     def _finished(self, frames) -> None:
         # Deliberately still in _LIVE. The frames are ready but the thread
@@ -1210,16 +1222,21 @@ class _Analysis(QObject_base):
 
     def _thread_done(self) -> None:
         """The thread's own signal: run() has returned. The decoder goes,
-        and the track the thread was handed with it; the thread itself is
-        kept, because Qt may still count it as running."""
+        and the track the thread was handed with it.
+
+        Qt sends this just before the thread has actually ended, and the
+        decoder's callbacks can hold the last reference to this object and
+        so to the thread: freed while it was still running, Qt aborted the
+        process. So it is waited for first - a moment at most."""
+        if self._thread is not None:
+            self._thread.wait()
+            self._thread._samples = None
         _LIVE.discard(self)
         self._release_decoder()
-        if self._thread is not None:
-            self._thread._samples = None
 
     def _failed(self, detail: str) -> None:
-        _LIVE.discard(self)
-        self._release_decoder()
+        # Sent from the thread while it runs; what it holds is let go when
+        # it has finished, in _thread_done.
         if not self._stop:
             self._on_fail(detail)
 
@@ -1258,7 +1275,8 @@ def decode(path, on_done, on_fail, on_progress=None,
     decoder.setAudioFormat(wanted)
 
     collected = array("h")
-    state = {"rate": DECODE_RATE, "channels": 2, "too_long": False}
+    state = {"rate": DECODE_RATE, "channels": 2, "too_long": False,
+             "said": -1.0}
 
     def buffer_ready() -> None:
         buffer = decoder.read()
@@ -1277,6 +1295,13 @@ def decode(path, on_done, on_fail, on_progress=None,
         # Nothing past MAX_SECONDS is analysed, so nothing past it is kept:
         # an hour-long mix decoded whole, and then copied to every worker,
         # was gigabytes.
+        # How far through the file, said every few per cent.
+        whole = decoder.duration()
+        if whole and whole > 0:
+            through = buffer.startTime() / 1000.0 / whole
+            if through - state["said"] >= 0.02:
+                state["said"] = through
+                handle.decoding(through)
         most = (MAX_SECONDS + 1) * state["rate"] * state["channels"]
         if len(collected) > most:
             state["too_long"] = True
@@ -1285,8 +1310,10 @@ def decode(path, on_done, on_fail, on_progress=None,
             on_fail(f"longer than {MAX_SECONDS // 60} minutes")
 
     def finished() -> None:
-        if state["too_long"]:
+        # Once: a decoder can say it has finished more than once.
+        if state["too_long"] or state.get("analysed"):
             return
+        state["analysed"] = True
         # Off the UI thread: analysed here, a three minute track stopped
         # the event loop for five seconds.
         handle.start_analysis(collected, state["rate"], state["channels"])

@@ -48,6 +48,10 @@ class HelpButton(QToolButton):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setObjectName("helpButton")   # excluded from the shared control height
         self.setFixedSize(26, 26)
+        # Laid out at the size it is drawn. The Mac style takes its own
+        # margins off a tool button's box, which left this one four pixels
+        # tall to a layout short of room: it was squeezed to a sliver.
+        self.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect, True)
         self.setText("")
         self._sync_text()
         self.toggled.connect(lambda _on: self._sync_text())

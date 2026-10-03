@@ -25,7 +25,8 @@ import time as _time
 import visualizers
 from flowlayout import FlowHolder as _FlowHolder
 
-from PySide6.QtCore import (QEasingCurve, QPoint, QPointF, QRect, QRectF, QSize, Qt,
+from PySide6.QtCore import (QAbstractAnimation, QEasingCurve, QPoint, QPointF,
+                            QRect, QRectF, QSize, Qt,
                             QTimer, QVariantAnimation, Signal)
 from PySide6.QtGui import (QColor, QFont, QFontMetricsF, QImage, QLinearGradient,
                            QPainter, QPainterPath, QPixmap,
@@ -405,6 +406,9 @@ class _GpuCanvas(QOpenGLWidget):
         self._buffers = None
         self._halves = {}
         self._blitter = None
+        #: The last frame of the scene before, while the next one fades
+        #: up over it. See hold.
+        self._held = None
         #: The small copy of the last frame the bloom was made from.
         self.last_halo = None
         #: The rider's lit world, for this context. See Spectrum._world.
@@ -421,6 +425,7 @@ class _GpuCanvas(QOpenGLWidget):
         # whatever was built on the old one is gone with it.
         self._buffers = None
         self._halves = {}
+        self._held = None
         self.world = None
         self._blitter = QOpenGLTextureBlitter()
         self._blitter.create()
@@ -467,6 +472,68 @@ class _GpuCanvas(QOpenGLWidget):
                 QSize(width, height), shape)
         return found
 
+    def hold(self, fold=None) -> bool:
+        """Keep the frame last drawn, for the next scene to fade up over.
+
+        ``fold`` is how far a scene already fading up had come: the frame
+        held before and the last one are then mixed in that proportion,
+        which is the picture that was on screen, so a change made during
+        a change carries on from what is showing. False if nothing has
+        been drawn to keep.
+        """
+        if self._buffers is None:
+            return False
+        last = self._buffers[2]
+        size = last.size()
+        held = self._held
+        if fold is not None and held is not None and held.size() == size:
+            held.bind()
+            self.context().functions().glViewport(
+                0, 0, size.width(), size.height())
+            self.cover(last.texture(), QRect(0, 0, size.width(),
+                                             size.height()), fold)
+            held.release()
+            return True
+        if held is None or held.size() != size:
+            shape = QOpenGLFramebufferObjectFormat()
+            shape.setSamples(0)
+            held = self._held = QOpenGLFramebufferObject(size, shape)
+            functions = self.context().functions()
+            functions.glBindTexture(0x0DE1, held.texture())
+            for which in (0x2800, 0x2801):      # magnify, minify
+                functions.glTexParameteri(0x0DE1, which, 0x2601)
+        whole = QRect(0, 0, size.width(), size.height())
+        QOpenGLFramebufferObject.blitFramebuffer(held, whole, last, whole)
+        return True
+
+    def held(self):
+        """The frame being faded away from, if there is one."""
+        return self._held
+
+    def let_go(self) -> None:
+        """The fade is over: the held frame is not wanted until the next."""
+        self._held = None
+
+    def cover(self, texture, screen: QRect, alpha: float = 1.0) -> None:
+        """Draw ``texture`` over the whole of the bound framebuffer, at
+        ``alpha`` of its strength over what is there."""
+        functions = self.context().functions()
+        if alpha < 0.999:
+            functions.glEnable(0x0BE2)      # blending
+            functions.glBlendColor(0.0, 0.0, 0.0, float(alpha))
+            # By a constant rather than the texture's own alpha, which the
+            # rider's world does not always leave at one.
+            functions.glBlendFunc(0x8003, 0x8004)
+        else:
+            functions.glDisable(0x0BE2)
+        self._blitter.bind()
+        self._blitter.blit(
+            texture,
+            QOpenGLTextureBlitter.targetTransform(QRectF(screen), screen),
+            QOpenGLTextureBlitter.Origin.OriginBottomLeft)
+        self._blitter.release()
+        functions.glDisable(0x0BE2)
+
     def paintGL(self) -> None:      # noqa: N802 - Qt's name
         """One frame, with Python's collector held off until it is done.
 
@@ -507,10 +574,10 @@ class Spectrum(QWidget):
     #: squashed into a letterbox.
     HEIGHT = 320
 
-    #: Shapes the strip can take, as width-to-height. None keeps the fixed
-    #: strip. Portrait is genuinely taller than it is wide, which several
-    #: of the scenes suit better than a letterbox.
-    SHAPES = (("Strip", None),
+    #: Shapes the picture can take, as width-to-height. None fills the
+    #: height the window can spare. Portrait is genuinely taller than it is
+    #: wide, which several of the scenes suit better than a letterbox.
+    SHAPES = (("Fill", None),
                ("Cinema 21:9", 21 / 9), ("Wide 16:9", 16 / 9),
                ("Photo 3:2", 3 / 2), ("Classic 4:3", 4 / 3),
                ("Square", 1.0),
@@ -535,10 +602,13 @@ class Spectrum(QWidget):
     #: Sixty a second, which is what the scenes are budgeted against.
     FRAME_MS = 16
 
-    #: How much of the way a newly chosen scene fades up each frame.
-    #: A fifth of a second at sixty, which is long enough to read as a
-    #: change and short enough not to be in the way.
-    FRESH_STEP = 0.085
+    #: How long one scene takes to give way to the next, as offered in
+    #: the window. The first is the default.
+    CHANGES = (("Quick", 0.2), ("Smooth", 0.6), ("Slow", 1.5), ("Cut", 0.0))
+
+    #: How much of the way a newly chosen scene fades up each frame, at
+    #: sixty a second and the default length.
+    FRESH_STEP = FRAME_MS / 1000.0 / CHANGES[0][1]
 
     #: How many frames a scene draws before the fade even starts.
     #:
@@ -647,6 +717,14 @@ class Spectrum(QWidget):
         self._settle = 0.0
         #: 0 to 1 while a newly chosen scene fades up. See FRESH_STEP.
         self._fresh = 1.0
+        #: How long that takes, in seconds. See set_change.
+        self._change = self.CHANGES[0][1]
+        #: On the card, the scene before is kept and the new one fades up
+        #: over it: asked for, under way, and how far it had got when last
+        #: shown. See _keep_the_last_frame.
+        self._swap_pending = False
+        self._crossing = False
+        self._shown_fresh = 0.0
         #: How many frames the current scene has drawn. The fade waits
         #: for these: see WARM_FRAMES.
         self._drawn = 0
@@ -783,6 +861,7 @@ class Spectrum(QWidget):
         not asked again.
         """
         canvas, self._canvas = self._canvas, None
+        self._crossing = self._swap_pending = False
         if canvas is not None:
             canvas.hide()
             canvas.deleteLater()
@@ -883,6 +962,12 @@ class Spectrum(QWidget):
             world = (self._world()
                      if hasattr(self._scene, "paint_on_card") else None)
             canvas.world_samples = samples
+            if self._swap_pending:
+                # What is on screen, kept before anything is drawn over
+                # it, for the scene just chosen to fade up over.
+                self._swap_pending = False
+                self._crossing = canvas.hold(
+                    self._shown_fresh if self._crossing else None)
             multi, flat, small, device = canvas.buffers(
                 width, height, halo, 0 if world is not None else samples)
             device.setDevicePixelRatio(ratio * share)
@@ -923,13 +1008,18 @@ class Spectrum(QWidget):
             functions.glBindTexture(0x0DE1, flat.texture())
             functions.glTexParameteri(0x0DE1, 0x2800,
                                       0x2601 if smooth else 0x2600)
-            canvas._blitter.bind()
-            canvas._blitter.blit(
-                flat.texture(),
-                QOpenGLTextureBlitter.targetTransform(
-                    QRectF(screen), screen),
-                QOpenGLTextureBlitter.Origin.OriginBottomLeft)
-            canvas._blitter.release()
+            held = canvas.held() if self._crossing else None
+            shown = max(0.0, min(1.0, self._fresh))
+            if held is not None and shown < 0.999:
+                # The scene before, and this one coming up over it.
+                canvas.cover(held.texture(), screen)
+                canvas.cover(flat.texture(), screen, shown)
+                self._shown_fresh = shown
+            else:
+                if self._crossing:
+                    self._crossing = False
+                    canvas.let_go()
+                canvas.cover(flat.texture(), screen)
             # Waited for, so that what is measured is what the card
             # took rather than how long it took to be asked.
             functions.glFinish()
@@ -1026,11 +1116,20 @@ class Spectrum(QWidget):
         start = getattr(scene, "reset", None)
         if scene is not was and callable(start):
             start()
-            # Faded in rather than cut to. A scene starts with nothing in
-            # it - see Scene.reset - so the first frames of it are half
-            # built, and a hard cut shows that.
-            self._fresh = 0.0
             self._drawn = 0
+            if self._change <= 0.0:
+                self._fresh = 1.0
+                self._crossing = self._swap_pending = False
+            else:
+                # Faded in rather than cut to. A scene starts with nothing
+                # in it - see Scene.reset - so its first frames are half
+                # built, and a hard cut shows that. On the card it fades
+                # up over the last frame of the scene before, so changing
+                # scene quickly never passes through black.
+                self._fresh = 0.0
+                self._swap_pending = (
+                    self._canvas is not None and self._reveal >= 0.999
+                    and bool(self._level) and self._working is None)
         self._suit_the_scene(scene)
         self.update()
 
@@ -1055,6 +1154,14 @@ class Spectrum(QWidget):
         # What the sliders should show, which is not this pair when the
         # scene asked for Manual.
         self.strobe_settings_changed.emit(*self.strobe_shown())
+
+    def set_change(self, seconds: float) -> None:
+        """How long a newly chosen scene takes to replace the one before,
+        in seconds. 0 cuts straight to it."""
+        self._change = max(0.0, float(seconds))
+        if self._change <= 0.0:
+            self._fresh = 1.0
+            self._crossing = self._swap_pending = False
 
     def set_strobe(self, on: bool) -> None:
         self._state.strobe = bool(on)
@@ -1107,7 +1214,8 @@ class Spectrum(QWidget):
         on space the window does not have.
         """
         if self._aspect is None:
-            wanted = self.HEIGHT
+            # All the height there is to spare, where that is known.
+            wanted = self.HEIGHT if self._budget is None else self._budget
         else:
             width = self.width() or self.sizeHint().width() or 420
             wanted = max(120, min(self.MAX_HEIGHT, int(width / self._aspect)))
@@ -1529,15 +1637,21 @@ class Spectrum(QWidget):
         self._timer.stop()
         self.update()
 
-    def clear(self) -> None:
-        self._flow.stop()
-        self._away.stop()
-        self._reveal = 0.0
-        self._target = 0.0
+    def clear(self, keep_open: bool = False) -> None:
+        """Put the track down, and the strip away with it - unless
+        ``keep_open``: a new track in a pane that is showing keeps its
+        room, rather than the controls jumping up and back down while it
+        is read."""
+        if not keep_open:
+            self._flow.stop()
+            self._away.stop()
+            self._reveal = 0.0
+            self._target = 0.0
+            self.setMinimumHeight(0)
+            self.setMaximumHeight(0)
         self._idling = False
         self._wanted = False
-        self.setMinimumHeight(0)
-        self.setMaximumHeight(0)
+        self._crossing = self._swap_pending = False
         self._timer.stop()
         self._frames = []
         self._level = []
@@ -1555,10 +1669,13 @@ class Spectrum(QWidget):
         for spark in self._sparks:
             spark[4] = 0.0
         # A new track gets the scene as it was built rather than as the
-        # last one left it. See Scene.reset.
+        # last one left it. See Scene.reset. Faded up once the track is
+        # read, as a newly chosen scene is.
         start = getattr(self._scene, "reset", None)
         if callable(start):
             start()
+        self._fresh = 0.0 if self._change > 0.0 else 1.0
+        self._drawn = 0
         self.updateGeometry()
         self.update()
 
@@ -1569,6 +1686,12 @@ class Spectrum(QWidget):
     # -- arriving and leaving ---------------------------------------------
     def reveal(self) -> None:
         if self._reveal >= 1.0 and self.maximumHeight() >= self._full_height():
+            return
+        # Already on its way. Started again on every word of progress, the
+        # strip never finished opening while a track was read, and the
+        # window was laid out again a dozen times a second for it.
+        if (self._target >= 1.0 and self._flow.state()
+                == QAbstractAnimation.State.Running):
             return
         self._animate_to(1.0)
 
@@ -1650,7 +1773,7 @@ class Spectrum(QWidget):
 
     def _reveal_changed(self, value) -> None:
         self._reveal = max(0.0, min(1.0, float(value)))
-        height = int(self._full_height() * self._reveal)
+        height = int(round(self._full_height() * self._reveal))
         if self._unbounded:
             if self._reveal <= 0.001 and self._target <= 0.0:
                 self._timer.stop()
@@ -1831,8 +1954,13 @@ class Spectrum(QWidget):
             # being analysed the pane shows a progress ring instead, and
             # the fade used to run out behind it - so the scene arrived at
             # full strength and the fade was spent on a screen it was not
-            # for.
-            self._fresh = min(1.0, self._fresh + self.FRESH_STEP)
+            # for. By the frame's own length, so a scene paced slower than
+            # sixty still takes the time that was chosen.
+            if self._change <= 0.0:
+                self._fresh = 1.0
+            else:
+                step = max(self.FRAME_MS, self._timer.interval()) / 1000.0
+                self._fresh = min(1.0, self._fresh + step / self._change)
         self._drift += 0.035
         # Ease between the track and the idle drift rather than swapping
         # one for the other. Switching outright made the scene lurch the
@@ -2501,9 +2629,8 @@ class Spectrum(QWidget):
         if self._reveal < 0.999:
             painter.setOpacity(self._reveal)
             painter.translate(0.0, (1.0 - self._reveal) * rect.height() * 0.45)
-        if self._fresh < 0.999:
-            # The new scene coming up over the background, which stays.
-            painter.setOpacity(painter.opacity() * self._fresh)
+        # Before the new scene's fade, which waits for the analysis and so
+        # hid the progress bar for the whole of it.
         if not self._level:
             painter.fillRect(rect, QColor(8, 6, 18))
             if self._working is not None:
@@ -2513,6 +2640,11 @@ class Spectrum(QWidget):
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter,
                              "the spectrum appears when something is playing")
             return
+        if self._fresh < 0.999 and not (self._on_gpu and self._crossing):
+            # The new scene coming up over the background, which stays.
+            # On the card it is drawn whole and faded up over the last
+            # frame instead: see _keep_the_last_frame.
+            painter.setOpacity(painter.opacity() * self._fresh)
         self._paint_scene(painter, rect)
         self._tell_listener()
 
@@ -4162,56 +4294,6 @@ class Waveform(QWidget):
         if 0.0 < played < width:
             painter.setBrush(tint)
             painter.drawRect(QRectF(played - 1.0, 0.0, 1.0, tall))
-
-
-class Spinner(QWidget):
-    """A small turning arc, shown while something is being worked out.
-
-    Ticking a box and having nothing happen for several seconds reads as
-    the application ignoring you, even when it is busy. This costs one
-    repaint of twenty pixels every eighty milliseconds and only exists
-    while there is something to wait for.
-    """
-
-    SIDE = 16
-
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self.setFixedSize(self.SIDE, self.SIDE)
-        self._angle = 0
-        self._timer = QTimer(self)
-        self._timer.setInterval(80)
-        self._timer.timeout.connect(self._turn)
-        self.hide()
-
-    def start(self) -> None:
-        if not self._timer.isActive():
-            self._timer.start()
-        self.show()
-
-    def stop(self) -> None:
-        self._timer.stop()
-        self.hide()
-
-    def _turn(self) -> None:
-        self._angle = (self._angle + 30) % 360
-        self.update()
-
-    def paintEvent(self, event) -> None:      # noqa: N802 - Qt's name
-        painter = QPainter(self)
-        try:
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-            tint = self.palette().windowText().color()
-            pen = QPen(tint, 2.0)
-            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-            painter.setPen(pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            box = QRectF(2.0, 2.0, self.SIDE - 4.0, self.SIDE - 4.0)
-            # Three quarters of a circle, turning: the gap is what makes
-            # the movement readable at this size.
-            painter.drawArc(box, int(-self._angle * 16), int(270 * 16))
-        finally:
-            painter.end()
 
 
 #: Kept here under its old name: this module is where every other pane

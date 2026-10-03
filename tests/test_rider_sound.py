@@ -773,13 +773,20 @@ class TestTheEffectsSlider:
             assert slider.isVisibleTo(window) and label.isVisibleTo(window)
             # Called what it is called in the window, not "fx".
             from PySide6.QtWidgets import QLabel
-            assert label.text() == pane.effects_box.findChild(QLabel).text()
+            assert label.text() == pane.sound_box.text()
             captions = {found.text() for found in window.findChildren(QLabel)}
             assert "Volume" in captions and "Vol" not in captions
             slider.setValue(71)
             assert pane.effects.value() == 71
             pane.effects.setValue(12)
             assert slider.value() == 12
+            # Off is off on both, and on again on both.
+            box = pane.effects_box
+            pane.sound_box.setChecked(False)
+            assert not slider.isEnabled()
+            assert not pane.effects.isEnabledTo(box)
+            pane.sound_box.setChecked(True)
+            assert slider.isEnabled() and pane.effects.isEnabledTo(box)
             pane.scene_box.setCurrentText("Rave")
             assert not slider.isVisibleTo(window)
         finally:

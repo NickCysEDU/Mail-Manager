@@ -17,6 +17,7 @@ import sys
 import pytest
 
 import ridekit
+import songkit
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 
@@ -149,18 +150,28 @@ class TestTheHeaviestHitNearby:
             assert any(abs(p - 2.0) < 0.05 for p in places), style
             assert any(min(p, 4.0 - p) < 0.05 for p in places), style
 
-    def test_the_heavier_drum_a_moment_later_takes_the_slot(self, ridden):
-        """Hip hop's snare on two is followed half a beat later by a kick,
-        and the kick is the figure. Laid right up to the edge of what has
-        been read, the snare was chosen before the kick after it had been
-        seen - at every frame rate alike, which is why a test comparing
-        two frame rates could not tell."""
+    def test_a_heavier_hit_between_beats_does_not_take_the_slot(self, ridden):
+        """Hip hop's snare on two is followed half a beat later by a heavier
+        kick. The figure stays on a beat; it used to go to that kick, on the
+        and of two."""
         _scene, log, truth, beat = ridden["hiphop"]
         places = _in_bar(log, truth, beat)
-        on_snare = [p for p in places if abs(p - 1.0) < 0.05]
-        on_kick = [p for p in places if abs(p - 1.5) < 0.15]
-        assert not on_snare, sorted(places)
-        assert on_kick, sorted(places)
+        assert places
+        assert all(min(abs(p - round(p)), abs(p - 4.0)) < 0.02
+                   for p in places), sorted(places)
+
+    @pytest.mark.parametrize("style", sorted(songkit.PATTERNS))
+    def test_every_figure_starts_on_a_beat(self, style):
+        """Swung, broken, half time, anything: a figure was put on the
+        eighth on some music, half of them between the beats, and the game
+        felt off the beat."""
+        scene, log, _truth, _beat = ridekit.ride(style, seconds=90.0)
+        clock = scene._clock
+        # The log keeps a figure's time to the millisecond.
+        off = [round(when, 3) for when, _shape, _grey, _mirror in log.figures
+               if abs(clock.number(when) - round(clock.number(when)))
+               > 0.01]
+        assert not off, off[:10]
 
 
 class TestEveryBlockArrivesOnItsMoment:
@@ -186,33 +197,44 @@ class TestEveryBlockArrivesOnItsMoment:
         which would move every block between beats already in sight."""
         import visualizers
 
-        # Well into a drop, where the lunge is strong and the road has
-        # figures between the beats in sight.
+        # Well into a drop, where the lunge is strong, and on until there
+        # is something between the beats in sight: a coin, or the later
+        # steps of a run.
         _s, _l, truth, _b = ridekit.ride("garage", seconds=1.0)
         drop = [a for kind, a, _e in truth if kind == "drop"][0]
         scene, _log, _truth, _beat = ridekit.ride("garage",
                                                   seconds=drop + 6.0)
         state = scene._ridden_state
-        seen = [block for block in scene._blocks
-                if scene.RIDER_AT < scene._where(block[0]) < scene.FAR]
-        between = [block for block in seen
-                   if 0.15 < scene._clock.number(block[0]) % 1.0 < 0.85]
-        assert between, "nothing between the beats in sight"
-        now = scene._beat_number(scene._heard)
-        assert max(scene._lunge_of(n) for n in range(now, now + 4)) > 1.5
-        before = [scene._where(block[0]) + scene._at for block in seen]
-        # Through two whole beats, with the bass as hard as it goes, frame
-        # by frame on the scene's own clock.
         clock = [2000.0]
         was = visualizers.time.monotonic
         visualizers.time.monotonic = lambda: clock[0]
+
+        def on():
+            clock[0] += 1 / 60.0
+            state.at += 1 / 60.0
+            state.kit = {"Bass": 1.0, "Kick": 1.0}
+            state.bass = 1.0
+            scene._step(state)
+
         try:
+            for _frame in range(8 * 60):
+                seen = [block for block in scene._blocks
+                        if scene.RIDER_AT + 2.0 < scene._where(block[0])
+                        < scene.FAR]
+                between = [block for block in seen
+                           if 0.15 < scene._clock.number(block[0]) % 1.0
+                           < 0.85]
+                if between:
+                    break
+                on()
+            assert between, "nothing between the beats in sight"
+            now = scene._beat_number(scene._heard)
+            assert max(scene._lunge_of(n) for n in range(now, now + 4)) > 1.5
+            before = [scene._where(block[0]) + scene._at for block in seen]
+            # Through two whole beats, with the bass as hard as it goes,
+            # frame by frame on the scene's own clock.
             for _frame in range(int(2 * scene._beat * 60) + 2):
-                clock[0] += 1 / 60.0
-                state.at += 1 / 60.0
-                state.kit = {"Bass": 1.0, "Kick": 1.0}
-                state.bass = 1.0
-                scene._step(state)
+                on()
                 where = [scene._where(block[0]) + scene._at
                          for block in seen]
                 assert where == pytest.approx(before, abs=1e-9)

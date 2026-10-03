@@ -18,6 +18,8 @@ needs one often does not need the other.
 
 from __future__ import annotations
 
+import sys
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Tuple
@@ -282,6 +284,39 @@ def stylesheet(colours: Palette, readable: bool = False,
     right_arrow = arrow_image(colours.text, "right", arrow_px)
     dim_arrow = arrow_image(colours.text_dim, "down", arrow_px)
 
+    # Scroll bars: on a Mac, the system's own, which lie over what they
+    # scroll and show only while it moves. Drawn by the stylesheet they are
+    # always there, a track down the side of every list and pane.
+    if sys.platform == "darwin":
+        scroll_bars = ""
+    else:
+        scroll_bars = f"""
+    /* Scroll bars without stepper buttons, the way macOS draws them. Styling
+       the handle but leaving the buttons to the default style put the handle
+       on top of them, and left their arrows pointing whichever way the base
+       style happened to choose. */
+    QScrollBar:vertical {{
+        background: transparent; width: {scroll}px; margin: 0;
+        border: none;
+    }}
+    QScrollBar:horizontal {{
+        background: transparent; height: {scroll}px; margin: 0;
+        border: none;
+    }}
+    QScrollBar::handle:vertical {{
+        background: {colours.border}; border-radius: {scroll // 2 - 2}px;
+        min-height: 32px; margin: 2px;
+    }}
+    QScrollBar::handle:horizontal {{
+        background: {colours.border}; border-radius: {scroll // 2 - 2}px;
+        min-width: 32px; margin: 2px;
+    }}
+    QScrollBar::handle:hover {{ background: {colours.text_dim}; }}
+    QScrollBar::add-line, QScrollBar::sub-line {{
+        height: 0; width: 0; border: none; background: none;
+    }}
+    QScrollBar::add-page, QScrollBar::sub-page {{ background: none; }}
+    """
     return f"""
     QWidget {{ color: {colours.text}; }}
     QMainWindow, QDialog, QWidget#page {{ background: {colours.window}; }}
@@ -398,8 +433,12 @@ def stylesheet(colours: Palette, readable: bool = False,
     QDateEdit, QTimeEdit {{
         min-height: {control_height}px;
     }}
-    /* The help button is a round icon and is deliberately not this size. */
-    QToolButton#helpButton {{ min-height: 0; max-height: none; padding: 0; }}
+    /* The help button is a round icon and is deliberately not this size:
+       it is its own, and stays it however short of room a window is. */
+    QToolButton#helpButton {{
+        min-height: 26px; max-height: 26px; min-width: 26px; max-width: 26px;
+        padding: 0; border: none;
+    }}
     /* Nor are the small square buttons that add and remove a line: the
        standard padding would push the one character they hold outside them. */
     /* Four buttons read as one segmented control. The standard padding is
@@ -521,31 +560,7 @@ def stylesheet(colours: Palette, readable: bool = False,
     }}
     QSplitter::handle {{ background: {colours.border}; }}
 
-    /* Scroll bars without stepper buttons, the way macOS draws them. Styling
-       the handle but leaving the buttons to the default style put the handle
-       on top of them, and left their arrows pointing whichever way the base
-       style happened to choose. */
-    QScrollBar:vertical {{
-        background: transparent; width: {scroll}px; margin: 0;
-        border: none;
-    }}
-    QScrollBar:horizontal {{
-        background: transparent; height: {scroll}px; margin: 0;
-        border: none;
-    }}
-    QScrollBar::handle:vertical {{
-        background: {colours.border}; border-radius: {scroll // 2 - 2}px;
-        min-height: 32px; margin: 2px;
-    }}
-    QScrollBar::handle:horizontal {{
-        background: {colours.border}; border-radius: {scroll // 2 - 2}px;
-        min-width: 32px; margin: 2px;
-    }}
-    QScrollBar::handle:hover {{ background: {colours.text_dim}; }}
-    QScrollBar::add-line, QScrollBar::sub-line {{
-        height: 0; width: 0; border: none; background: none;
-    }}
-    QScrollBar::add-page, QScrollBar::sub-page {{ background: none; }}
+    {scroll_bars}
     """
 
 

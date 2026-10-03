@@ -1423,8 +1423,8 @@ class TestTheVisualiserControlsAreReachable:
         viewer = self._pane(qtbot)
         assert viewer.audio.visual_holder.isVisible()
         assert viewer.audio.enable_box.isVisible()
-        for widget in (viewer.audio.scene_box, viewer.audio.shape_box,
-                       viewer.audio.strobe_group, viewer.audio.full_button):
+        for widget in (viewer.audio.scene_box, viewer.audio.picture_button,
+                       viewer.audio.full_button):
             assert not widget.isVisible(), (
                 "a control for something switched off is on screen")
         viewer._sweep()
@@ -1433,13 +1433,13 @@ class TestTheVisualiserControlsAreReachable:
         viewer = self._pane(qtbot)
         viewer.audio.enable_box.setChecked(True)
         qtbot.wait(0)
-        for widget in (viewer.audio.scene_box, viewer.audio.shape_box,
-                       viewer.audio.strobe_group, viewer.audio.full_button):
+        for widget in (viewer.audio.scene_box, viewer.audio.picture_button,
+                       viewer.audio.full_button):
             assert widget.isVisible()
         viewer.audio.enable_box.setChecked(False)
         qtbot.wait(0)
-        for widget in (viewer.audio.scene_box, viewer.audio.shape_box,
-                       viewer.audio.strobe_group, viewer.audio.full_button):
+        for widget in (viewer.audio.scene_box, viewer.audio.picture_button,
+                       viewer.audio.full_button):
             assert not widget.isVisible()
         viewer._sweep()
 
@@ -2533,7 +2533,7 @@ class TestTheControlsAreNeverInsideThePicture:
                                  ("volume", pane.volume),
                                  ("visualiser", pane.enable_box),
                                  ("scene", pane.scene_box),
-                                 ("shape", pane.shape_box),
+                                 ("picture", pane.picture_button),
                                  ("full screen", pane.full_button)):
                 if not widget.isVisible():
                     continue
@@ -2565,7 +2565,7 @@ class TestTheControlsAreNeverInsideThePicture:
             for name, widget in (("play", pane.play), ("seek", pane.position),
                                  ("volume", pane.volume),
                                  ("visualiser", pane.enable_box),
-                                 ("shape", pane.shape_box),
+                                 ("picture", pane.picture_button),
                                  ("full screen", pane.full_button)):
                 if not widget.isVisible():
                     continue
@@ -3043,8 +3043,8 @@ class TestNothingRunsOffTheEdge:
             dialog.resize(width, height)
             qapp.processEvents()
             dialog.layout().activate()
-            for name in ("scene_box", "shape_box", "strobe_group",
-                         "full_button", "position", "volume"):
+            for name in ("scene_box", "picture_button", "full_button",
+                         "effects_box", "position", "volume"):
                 widget = getattr(pane, name)
                 if not widget.isVisible():
                     continue
@@ -5996,13 +5996,16 @@ class TestTheHandStrobeSaysWhichKey:
         from attachment_widgets import Spectrum
 
         pane = self._pane(qtbot)
+        # In the panel the setting is made in, beside the setting.
+        panel = pane.picture_panel
+        assert panel.isAncestorOf(pane.strobe_source)
         pane.strobe_source.setCurrentText("Bass")
-        assert not pane.by_hand.isVisibleTo(pane)
+        assert not pane.by_hand.isVisibleTo(panel)
         pane.strobe_source.setCurrentText(Spectrum.BY_HAND)
-        assert pane.by_hand.isVisibleTo(pane), (
+        assert pane.by_hand.isVisibleTo(panel), (
             "nothing on screen says what flashes it")
         pane.strobe_source.setCurrentText("Hats")
-        assert not pane.by_hand.isVisibleTo(pane)
+        assert not pane.by_hand.isVisibleTo(panel)
 
     def test_it_names_the_key_the_pane_actually_acts_on(self, qtbot):
         """A hint that has fallen behind the keys is worse than none."""

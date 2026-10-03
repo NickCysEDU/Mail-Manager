@@ -4688,7 +4688,10 @@ class Rider(Scene):
             reach = (self._beat * self.PREFER_BEATS if self._beat > 0.0
                      else self.PREFER)
             def rank(at):
-                return (self._weight(due[at][1]), self._off_beat(due[at][0]))
+                # A hit on the beat before a heavier one between beats:
+                # every figure lands on a beat.
+                return (self._off_beat(due[at][0]) > self.ON_BEAT * self._beat,
+                        self._weight(due[at][1]), self._off_beat(due[at][0]))
 
             best = index
             for other in range(index + 1, len(due)):
@@ -4697,7 +4700,7 @@ class Rider(Scene):
                 if rank(other) < rank(best):
                     best = other
             when, order, shape = due[best]
-            when = self._snap(when, self._division(when, order))
+            when = self._snap(when)
             self._placed = when
             grey = self._greyed(when, order)
             figure, mirrored = self._figure(when, grey, shape)
@@ -4902,23 +4905,6 @@ class Rider(Scene):
             figure = "melody"
         return figure, mirrored
 
-    def _division(self, when: float, order: int = 0) -> int:
-        """How finely a figure may be placed: on the beat, or on the
-        eighth - on broken and swung music, whose figures live between the
-        beats, and for a kick or a snare that is itself on the off-beat
-        (half time's kick on the and of three), which snapped to a beat
-        went to whichever side a hair of rounding favoured."""
-        style = self._style
-        if style is None or not self._clock:
-            return 1
-        if style.broken + style.swung > 0.8:
-            return 2
-        if order in (0, 1):
-            steps = self._clock.number(when)
-            if abs(steps - math.floor(steps) - 0.5) < 0.12:
-                return 2
-        return 1
-
     def _varied(self, shape: str, when: float) -> str:
         """What shape this slot takes: the drum decides when a figure
         lands, the pool what it looks like, indexed by the slot so four to
@@ -4929,26 +4915,18 @@ class Rider(Scene):
                          / max(1e-6, self.GAP_BEATS)))
         return self.POOL[slot % len(self.POOL)]
 
-    def _snap(self, when: float, division: int = 1) -> float:
+    def _snap(self, when: float) -> float:
         """The nearest beat to ``when``, or ``when`` if there is no grid:
         the drums are a few tens of milliseconds either side of the beat
         and not the same amount each time, and the figures go on the beat
-        itself. Only as far as half a beat, so a figure never moves to a
-        beat that is not the one it came from."""
+        itself."""
         if not self._clock:
             return when
-        steps = self._clock.number(when)
-        if division <= 1:
-            return self._clock.time(round(steps))
-        # On the eighth, and the off-beat eighth where the record swings
-        # it: a figure on the straight eighth of a swung record lands
-        # between the hat and the beat, which is on neither.
-        late = 0.0
-        if self._style is not None:
-            late = max(0.0, float(self._style.measured.get("swing", 0.0)))
-        whole = math.floor(steps)
-        options = (whole, whole + 0.5 + late, whole + 1.0)
-        return self._clock.time(min(options, key=lambda place: abs(place - steps)))
+        return self._clock.time(round(self._clock.number(when)))
+
+    #: How near a beat a hit has to be, as a share of one, to count as on
+    #: it when choosing what a figure lands on.
+    ON_BEAT = 0.12
 
     def _off_beat(self, when: float) -> float:
         """How far a moment is from the nearest beat, in seconds, or

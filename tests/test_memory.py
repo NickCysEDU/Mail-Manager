@@ -122,3 +122,78 @@ def _no_workers_left():
 
     for handle in list(attachment_audio._LIVE):
         handle.cancel()
+
+
+class TestLettingGoIsSafe:
+    """Letting go of a finished decoder stopped it, stopping it said
+    "finished" again, and that started a second analysis of the track - whose
+    thread was then freed with the decoder while it ran, and Qt aborted the
+    process. Run in a process of its own, since what this guards against
+    ends one."""
+
+    SCRIPT = r'''
+import math, os, struct, sys, time, wave
+sys.path.insert(0, {root!r})
+from PySide6.QtCore import QEventLoop, QTimer
+from PySide6.QtWidgets import QApplication
+app = QApplication.instance() or QApplication([])
+import attachment_audio, attachments
+from attachment_view import AudioPane
+
+made = [0]
+real_init = attachment_audio._AnalysisThread.__init__
+def counted(self, *args, **options):
+    real_init(self, *args, **options)
+    made[0] += 1
+attachment_audio._AnalysisThread.__init__ = counted
+
+def track(path, seconds, pitch):
+    with wave.open(path, "wb") as out:
+        out.setnchannels(2); out.setsampwidth(2); out.setframerate(48000)
+        frames = bytearray()
+        for i in range(int(seconds * 48000)):
+            beat = (i % 24000) < 900
+            v = int(9000 * math.sin(2 * math.pi * pitch * i / 48000) * (1.0 if beat else 0.3))
+            frames += struct.pack("<hh", v, v)
+        out.writeframes(bytes(frames))
+    return path
+
+def wait(seconds):
+    loop = QEventLoop()
+    QTimer.singleShot(int(seconds * 1000), loop.quit)
+    loop.exec()
+
+pane = AudioPane()
+pane.volume.setValue(0)
+pane.enable_box.setChecked(True)
+for index in range(4):
+    path = track(os.path.join({folder!r}, f"t{{index}}.wav"), 6.0, 110 + 40 * index)
+    data = open(path, "rb").read()
+    item = attachments.Attachment(part="1", name=f"t{{index}}.wav",
+                                  content_type="audio/wav", size=len(data),
+                                  data=data)
+    pane.load(__import__("pathlib").Path(path), item)
+    started = time.monotonic()
+    while attachment_audio._LIVE and time.monotonic() - started < 60:
+        wait(0.05)
+    wait(0.5)
+print("done", made[0], flush=True)
+os._exit(0)
+'''
+
+    def test_tracks_one_after_another_do_not_end_the_process(self, tmp_path):
+        import os
+        import subprocess
+        import sys
+
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        script = self.SCRIPT.format(root=root, folder=str(tmp_path))
+        done = subprocess.run(
+            [sys.executable, "-c", script], capture_output=True, text=True,
+            timeout=300, env=dict(os.environ, QT_QPA_PLATFORM="offscreen"))
+        assert "Destroyed while thread" not in done.stderr, done.stderr[-2000:]
+        assert done.returncode == 0 and "done" in done.stdout, (
+            done.returncode, done.stderr[-2000:])
+        # And each track analysed once: stopping a finished decoder said
+        # "finished" again and started a second analysis of it.
+        assert done.stdout.split()[-1] == "4", done.stdout

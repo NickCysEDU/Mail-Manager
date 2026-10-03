@@ -40,7 +40,7 @@ from __future__ import annotations
 import hashlib
 import math
 import statistics
-from bisect import bisect_left, bisect_right
+from bisect import bisect_left
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -445,17 +445,30 @@ def _roll_share(values: Sequence[float], rate: float,
 
 def rhythm(kick: Sequence[float], snare: Sequence[float],
            hats: Sequence[float], rate: float, beat: float,
-           spans: Sequence[Tuple[float, float]]) -> Dict[str, float]:
-    """What the drums do, read off their onset strength folded on the bar.
+           spans: Sequence[Tuple[float, float]],
+           phase: Optional[float] = None) -> Dict[str, float]:
+    """What the drums do, read off their onset strength folded on the bar,
+    on a beat at ``phase`` or, where that is not given, where it is found.
 
     Nothing here depends on which beat of the bar is the first, which the
     analysis does not know: every measure compares the four beats with one
     another, or a beat with what is between beats.
     """
-    # Where the beat falls: the place in a beat the kick and the snare
-    # together are strongest. Not the kick alone - on a broken beat half
-    # of its hits are between beats, and the phase it gave put the snares
-    # there too - and not the hats, which live between beats.
+    if phase is None:
+        phase = _beat_place(kick, snare, rate, beat, spans)
+    k = fold(kick, rate, beat, phase, spans)
+    sn = fold(snare, rate, beat, phase, spans)
+    h = fold(hats, rate, beat, phase, spans)
+    out: Dict[str, float] = {"phase": phase}
+    return _measured(out, k, sn, h, kick, hats, rate, beat, phase, spans)
+
+
+def _beat_place(kick: Sequence[float], snare: Sequence[float], rate: float,
+                beat: float, spans: Sequence[Tuple[float, float]]) -> float:
+    """Where the beat falls: the place in a beat the kick and the snare
+    together are strongest. Not the kick alone - on a broken beat half of
+    its hits are between beats - and not the hats, which live between
+    beats."""
     one = fold(kick, rate, beat, 0.0, spans, beats=1)
     two = fold(snare, rate, beat, 0.0, spans, beats=1)
     top_one = max(one) or 1.0
@@ -474,11 +487,13 @@ def rhythm(kick: Sequence[float], snare: Sequence[float],
            + two[off_place - 1])
     if off > on * 1.3:
         place = off_place
-    phase = place / PER_BEAT * beat
-    k = fold(kick, rate, beat, phase, spans)
-    sn = fold(snare, rate, beat, phase, spans)
-    h = fold(hats, rate, beat, phase, spans)
-    out: Dict[str, float] = {"phase": phase}
+    return place / PER_BEAT * beat
+
+
+def _measured(out: Dict[str, float], k, sn, h, kick, hats, rate: float,
+              beat: float, phase: float,
+              spans: Sequence[Tuple[float, float]]) -> Dict[str, float]:
+    """The measures of what the drums do, from their folds on the bar."""
 
     def quarters(pattern):
         base = _floor(pattern)

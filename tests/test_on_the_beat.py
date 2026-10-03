@@ -292,6 +292,19 @@ class TestTheEarAndTheEye:
         assert pane._now < 5.0, "the picture did not wait for the ear"
         pane.deleteLater()
 
+    def test_a_trim_kept_under_the_old_name_is_not_used(self, qapp):
+        import config
+        from attachment_view import VIEWER_PREFS, AudioPane
+
+        path = config.app_support_dir() / VIEWER_PREFS
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"sync": 237}')
+        pane = AudioPane()
+        try:
+            assert pane.sync_trim() == 0
+        finally:
+            pane.deleteLater()
+
     def test_the_player_brings_one_and_the_trim_is_kept(self, qapp):
         from attachment_view import AudioPane
 

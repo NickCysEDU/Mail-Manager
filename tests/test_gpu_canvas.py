@@ -936,6 +936,99 @@ class TestNothingIsTakenApartMidFrame:
         assert got["after"] is True, "and was left off afterwards"
 
 
+#: Three scenes that each fill the frame with one colour.
+SOLIDS = textwrap.dedent("""
+    class Solid:
+        blurb = "test"
+        sharp_pixels = 0
+        def __init__(self, name, colour):
+            self.name = name
+            self.colour = colour
+        def reset(self):
+            pass
+        def paint(self, painter, rect, state):
+            painter.fillRect(rect, self.colour)
+    red = Solid("Red", QColor(255, 0, 0))
+    blue = Solid("Blue", QColor(0, 0, 255))
+    green = Solid("Green", QColor(0, 255, 0))
+    def middle(made):
+        image = made._canvas.grabFramebuffer()
+        found = image.pixelColor(image.width() // 2, image.height() // 2)
+        return [found.red(), found.green(), found.blue()]
+""")
+
+
+class TestChangingSceneOnTheCard:
+    """A new scene fades up over the last frame of the one before, so
+    changing scene - however often - never passes through black."""
+
+    def test_the_last_frame_stays_until_the_next_is_up_over_it(self):
+        got = on_the_card(SOLIDS + textwrap.dedent("""
+            made = pane(scene=red, size=(320, 200))
+            made.set_change(0.6)
+            for _ in range(3):
+                made._tick()
+                before = middle(made)
+            made.set_scene(blue)
+            seen = []
+            for _ in range(150):
+                made._tick()
+                seen.append(middle(made))
+            print(json.dumps({"before": before, "seen": seen}))
+        """))
+        assert got["before"] == [255, 0, 0]
+        seen = got["seen"]
+        assert seen[0][0] > 240 and seen[0][2] < 15, (
+            f"the scene before was not held: {seen[0]}")
+        # The channels add up to one full one throughout a fade between
+        # these colours, and to nothing at black.
+        assert all(sum(colour) > 200 for colour in seen), (
+            f"the change passed through black: {min(seen, key=sum)}")
+        mixed = [c for c in seen if c[0] > 60 and c[2] > 60]
+        assert mixed, "the two scenes were never mixed"
+        assert seen[-1][2] > 240 and seen[-1][0] < 15, seen[-1]
+
+    def test_a_change_during_a_change_carries_on_from_what_shows(self):
+        got = on_the_card(SOLIDS + textwrap.dedent("""
+            made = pane(scene=red, size=(320, 200))
+            made.set_change(0.6)
+            made._tick()
+            middle(made)
+            made.set_scene(blue)
+            while made._fresh < 0.45:
+                made._tick()
+                shown = middle(made)
+            made.set_scene(green)
+            after = []
+            for _ in range(150):
+                made._tick()
+                after.append(middle(made))
+            print(json.dumps({"shown": shown, "after": after}))
+        """))
+        shown, after = got["shown"], got["after"]
+        assert shown[0] > 60 and shown[2] > 60, shown
+        # The next frame is the one that was showing, not black and not
+        # the new scene cut in.
+        first = after[0]
+        assert all(abs(a - b) <= 12 for a, b in zip(first, shown)), (
+            shown, first)
+        assert all(sum(colour) > 200 for colour in after), (
+            min(after, key=sum))
+        assert after[-1][1] > 240 and max(after[-1][0], after[-1][2]) < 15
+
+    def test_cut_changes_on_the_next_frame(self):
+        got = on_the_card(SOLIDS + textwrap.dedent("""
+            made = pane(scene=red, size=(320, 200))
+            made.set_change(0.0)
+            made._tick()
+            middle(made)
+            made.set_scene(blue)
+            made._tick()
+            print(json.dumps({"next": middle(made)}))
+        """))
+        assert got["next"] == [0, 0, 255]
+
+
 class TestTheSuiteStaysOnTheCpu:
     """The offscreen platform the suite runs on has no card."""
 
