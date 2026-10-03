@@ -352,6 +352,7 @@ class MainWindow(QMainWindow):
         self.preview = PreviewPane()
         self.preview.overrideChanged.connect(self._override_changed)
         self.preview.attachmentsRequested.connect(self._open_attachments)
+        self.preview.linkRequested.connect(self._open_link)
         self.preview.sortNonJobRequested.connect(
             lambda: self._switch_routing(NonJobRouting.FILE))
 
@@ -3557,6 +3558,17 @@ class MainWindow(QMainWindow):
             lambda removed: self._set_status(
                 f"Removed {removed} message(s) from “{folder}”."))
         worker.start()
+
+    def _open_link(self, url: str) -> None:
+        """A link from a message: where it goes is said first, unless the
+        person has asked not to be told. See link_open."""
+        import link_open
+
+        _opened, never = link_open.open_link(
+            url, self, warn=self.settings.warn_on_links)
+        if never:
+            self.settings.warn_on_links = False
+            self.settings.save()
 
     def _open_attachments(self, row: int) -> None:
         """Fetch what was attached to one message, then show it.

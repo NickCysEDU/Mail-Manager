@@ -240,6 +240,8 @@ class Settings:
     #: Hovering anything explains it. Off by default; a tooltip nobody asked
     #: for is noise, and this makes asking explicit.
     help_mode: bool = False
+    #: Say where a link from a message goes before opening it.
+    warn_on_links: bool = True
 
     # Auto reply. Nothing is ever sent; drafts are saved for review.
     auto_reply: bool = False

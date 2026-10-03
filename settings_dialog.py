@@ -2321,6 +2321,13 @@ class SettingsDialog(QDialog):
         form.addRow("", help_note)
         form.addRow(_separator())
 
+        self.links_check = QCheckBox("Say where a link goes before opening it")
+        self.links_check.setToolTip(
+            "Links in mail open in your browser. With this on, the address "
+            "is shown first and nothing opens until you say.")
+        form.addRow("", self.links_check)
+        form.addRow(_separator())
+
         self.readable_check = QCheckBox("Tune the layout for reading")
         form.addRow("", self.readable_check)
         readable_note = QLabel(
@@ -2728,6 +2735,7 @@ class SettingsDialog(QDialog):
             max(0, self.contrast_combo.findData(settings.contrast)))
         self.readable_check.setChecked(settings.readable)
         self.help_check.setChecked(settings.help_mode)
+        self.links_check.setChecked(settings.warn_on_links)
         self.help_check.toggled.connect(
             lambda on: self.help_button.setChecked(on))
         self.density_combo.setCurrentIndex(
@@ -2813,6 +2821,7 @@ class SettingsDialog(QDialog):
             readable=self.readable_check.isChecked(),
             density=self.density_combo.currentData() or "comfortable",
             help_mode=self.help_check.isChecked(),
+            warn_on_links=self.links_check.isChecked(),
             row_lines=self.rows_spin.value(),
             row_lines_auto=self._settings.row_lines_auto and not self._row_lines_touched,
             auto_reply=self.auto_reply_check.isChecked(),

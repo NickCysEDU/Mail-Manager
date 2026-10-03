@@ -712,6 +712,9 @@ class PreviewPane(QWidget):
     #: "Sort this mail too" - the window turns non-job routing on.
     sortNonJobRequested = Signal()
     attachmentsRequested = Signal(int)   # source row
+    #: A link from the message to open, as its address. Whoever owns the
+    #: pane says where it goes first: see link_open.
+    linkRequested = Signal(str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -730,6 +733,13 @@ class PreviewPane(QWidget):
         self.attachments_button.setToolTip(
             "Open what was attached. Nothing is ever run.")
         self.attachments_button.clicked.connect(self._open_attachments)
+
+        self.links_button = QPushButton("Links")
+        self.links_button.setEnabled(False)
+        self.links_button.setToolTip(
+            "Every link in the message, by where it really goes.")
+        self.links_button.clicked.connect(self._show_links)
+        self._link_list = None
 
         self.body_mode = QComboBox()
         # Short enough to sit beside the Attachments button in the half
@@ -761,7 +771,12 @@ class PreviewPane(QWidget):
 
         self.reasoning_view = QTextBrowser()
         self.reasoning_view.setMinimumHeight(24)
-        self.reasoning_view.setOpenExternalLinks(True)
+        # Not opened from here: a link in the analysis is one from the
+        # message, and goes the same way as the rest of them.
+        self.reasoning_view.setOpenExternalLinks(False)
+        self.reasoning_view.setOpenLinks(False)
+        self.reasoning_view.anchorClicked.connect(
+            lambda url: self.linkRequested.emit(url.toString()))
 
         self.folder_combo = QComboBox()
         self.folder_combo.setToolTip(
@@ -864,6 +879,7 @@ class PreviewPane(QWidget):
         top.setContentsMargins(0, 0, 0, 0)
         top.setSpacing(8)
         top.addWidget(self.header, 1)
+        top.addWidget(self.links_button, 0, Qt.AlignmentFlag.AlignTop)
         top.addWidget(self.attachments_button, 0,
                       Qt.AlignmentFlag.AlignTop)
 
@@ -964,11 +980,14 @@ class PreviewPane(QWidget):
         self.reasoning_view.setHtml("")
         self.folder_combo.setEnabled(False)
         self.reset_button.setEnabled(False)
+        self.links_button.setEnabled(False)
+        self.links_button.setText("Links")
 
     def show_item(self, row: int, item: TriageItem, prompt_text: str = "") -> None:
         self._row = row
         self._item = item
         self._sync_attachments(item)
+        self._sync_links(item)
         self._prompt_text = prompt_text
         message = item.email
 
@@ -1036,6 +1055,28 @@ class PreviewPane(QWidget):
         self.attachments_button.setEnabled(bool(names))
         self.attachments_button.setText(
             f"Attachments ({len(names)})" if names else "Attachments")
+
+    def _sync_links(self, item) -> None:
+        import link_open
+
+        links = [link for link in (getattr(item.email, "links", ()) or ())
+                 if link_open.opens(link)]
+        self.links_button.setEnabled(bool(links))
+        self.links_button.setText(f"Links ({len(links)})" if links
+                                  else "Links")
+
+    @Slot()
+    def _show_links(self) -> None:
+        """The message's links, by where each goes, to open or copy."""
+        import link_open
+
+        if self._item is None:
+            return
+        dialog = link_open.LinkList(self._item.email.links,
+                                    self._item.email.subject_display, self)
+        dialog.chosen.connect(self.linkRequested)
+        self._link_list = dialog
+        dialog.open()
 
     @Slot()
     def _open_attachments(self) -> None:
