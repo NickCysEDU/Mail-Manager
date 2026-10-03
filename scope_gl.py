@@ -1,25 +1,20 @@
-"""The oscilloscope's phosphor, kept on the graphics card.
+"""The oscilloscope's phosphor, kept on the graphics card (see
+visualizers.Oscilloscope).
 
-See visualizers.Oscilloscope. Its tube is a screen that outlives the
-frame: each new trace dims what is on it and strikes one more over the
-top. On the CPU that screen is an image, and at a Retina full screen -
-2880x1800 real pixels - striking the beam into it was 16 ms and handing
-the whole image to the card to be drawn a few more, against a sixtieth of
-a second for everything. The pane used to draw a smaller frame and
-stretch it to pay for that; asked for every pixel, the scope ran at 33
+Its tube is a screen that outlives the frame: each trace dims what is there
+and strikes one more. On the CPU at a Retina full screen, striking the beam
+cost 16 ms and handing the image to the card more, and the scope ran at 33
 frames a second.
 
-Here the screen is a framebuffer on the card, and the beam is the same
-painter calls through Qt's own OpenGL engine, so the tube looks as it
-always did. What goes to the card each frame is the trace, and nothing
-comes back.
+Here the screen is a framebuffer on the card and the beam is the same
+painter calls through Qt's OpenGL engine, so the tube looks as it always
+did; only the trace goes to the card each frame, and nothing comes back.
 
-Composed the way the CPU composes it, which is also what is cheap on a
-card. The screen is kept in plain pixels and dimmed there; only the new
-trace is struck with the four samples a pixel that smooth its edges, into
-a scratch buffer cleared for it, and laid over the dimmed screen. Keeping
-the whole screen at four samples a pixel and dimming all of them cost
-three milliseconds a trace at full screen, and resolving them two more.
+Composed as the CPU composes it: the screen is kept in plain pixels and
+dimmed there, and only the new trace is struck with four samples a pixel,
+into a scratch buffer, and laid over it. Keeping the whole screen
+multisampled cost three milliseconds a trace at full screen, and resolving
+it two more.
 """
 
 from __future__ import annotations

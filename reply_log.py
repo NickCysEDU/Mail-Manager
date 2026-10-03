@@ -1,36 +1,21 @@
 """Who has already been written to, so nobody is written to twice.
 
-This is the small piece of state that separates an auto-reply feature from
-the thing that gives auto-reply a bad name.
+A drafting rule has no memory: somebody who writes four times in a morning
+gets four drafts, a mailing list one per post, and scanning the same window
+twice writes them all again. So every draft is written down here (to whom,
+by which rule, when), and a rule with a once-per-sender window asks first.
 
-A rule that drafts a reply has no memory on its own. Somebody who writes four
-times in a morning matches it four times and gets four identical drafts. A
-mailing list you are on matches it once per post. Scan the same window twice -
-which the app makes easy, and which the verdict cache makes nearly free - and
-every draft is written again. None of that is a bug in any one rule; it is the
-absence of the one fact a responder needs, which is *did I already answer this
-person*.
+**The address is the key, folded to lower case**: display names change and
+addresses do not.
 
-So every draft is written down here: who it went to, which rule wrote it, and
-when. A rule with a "once per sender" window asks this file before drafting
-and says nothing if it already has.
+**Nothing is remembered forever.** Entries older than the longest window a
+rule can have are dropped, so this is a cooldown timer, not an address book.
 
-The rules that govern it come from what it is for:
+**A missing or damaged file is an empty log, never an error**: that costs a
+duplicate draft, where refusing to run would cost the feature.
 
-**The address is the key, folded to lower case**, because Jane@ and jane@ are
-one person, and because the display name changes and the address does not.
-
-**Nothing is remembered forever.** Entries older than the longest window
-anybody could set are dropped when the file is written, so this cannot grow
-into a list of every person who has ever been in touch. It is a cooldown
-timer, not an address book.
-
-**A missing or damaged file is an empty log, never an error.** Being unable to
-read it means the app has forgotten who it wrote to, which costs a duplicate
-draft; refusing to run because of it would cost the whole feature.
-
-**It is written where everything else is**, in the user's Application Support
-directory, through the same vault, 0600, and never leaves the machine.
+**It is written where everything else is**: Application Support, through the
+same vault, 0600, and never leaves the machine.
 """
 
 from __future__ import annotations
@@ -47,14 +32,12 @@ log = logging.getLogger(__name__)
 
 FILENAME = "replies.json"
 
-#: The longest cooldown a rule can be set to, and so how long an entry is
-#: worth keeping. A year: past that, "have I answered this person before"
-#: is not a question anybody is asking of an autoresponder.
+#: The longest cooldown a rule can have, and so how long an entry is kept: a
+#: year.
 MAX_DAYS = 366
 
-#: Never keep more than this many. A mailbox that matches a drafting rule
-#: thousands of times has a rule problem, and the log should not become a
-#: second one.
+#: At most this many: a mailbox that matches a drafting rule thousands of times
+#: has a rule problem, and the log should not become a second one.
 MAX_ENTRIES = 5000
 
 
@@ -109,10 +92,8 @@ class ReplyLog:
 
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "ReplyLog":
-        """Read the file. A damaged or missing one is an empty log.
-
-        Never raises. Not being able to read this costs a duplicate draft;
-        refusing to run over it would cost the feature.
+        """Read the file. A damaged or missing one is an empty log; never
+        raises.
         """
         path = path or cls.default_path()
         try:
@@ -145,10 +126,9 @@ class ReplyLog:
     def last_to(self, address: str, rule: str = "") -> Optional[datetime]:
         """When this address was last written to, by this rule or any.
 
-        Per rule rather than per address overall, because two rules that
-        say different things are two different conversations - a rule
-        acknowledging an interview and a rule declining a recruiter should
-        not silence each other.
+        Per rule, because two rules saying different things are two
+        conversations: acknowledging an interview should not silence
+        declining a recruiter.
         """
         wanted = key_for(address)
         if not wanted:

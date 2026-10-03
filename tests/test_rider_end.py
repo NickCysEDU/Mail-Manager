@@ -1,9 +1,4 @@
-"""The end of a ride: the finish, the results, and the best kept.
-
-A song that finished used to leave the road running on with nothing to
-say it was over. Audiosurf ends a ride with how it went, and a score
-means more against the last one.
-"""
+"""The end of a ride: the finish, the results, and the best kept."""
 
 from __future__ import annotations
 
@@ -539,10 +534,9 @@ class TestTheLiveNumbersMakeWay:
 
 
 class TestTheCleanBonusIsPaidAtTheEnd:
-    """The running score showed the clean bonus in, so it fell by a
-    quarter the moment a grey was touched - including when the shield
-    saved you, the one time the game says you did well. It is what has
-    been earned; the bonus is said beside it and paid on the card."""
+    """The running score showed the clean bonus in, so it fell by a quarter
+    when a grey was touched, even when the shield saved you. It shows what
+    has been earned; the bonus is said beside it and paid on the card."""
 
     @staticmethod
     def _saved(scene):
@@ -659,20 +653,20 @@ class TestTheCleanBonusIsPaidAtTheEnd:
 
 
 class TestASeekIsNotARide:
-    """A jump of the playhead is not riding. Forward, the game met every
-    block in the stretch it skipped in one frame and took the ones in the
-    craft's lane - five thousand points and a new best for skipping to the
-    last three seconds. Back, the stretch it went back over was empty."""
+    """A jump of the playhead is not riding.
+
+    Forward, the game met every block in the skipped stretch in one frame:
+    five thousand points and a new best for skipping to the last three
+    seconds. Back, the stretch gone over was empty."""
 
     LENGTH = 120.0
 
     @classmethod
     def _track(cls):
-        # One chart and one shape for the whole ride, as the pane gives
-        # them: a new chart is a new road by itself, and would hide
-        # whether a seek is one.
-        # On the beat every half second - and one hit just off it, at
-        # 90.33, which the road puts on the beat at 90.25.
+        # One chart and one shape for the whole ride, as the pane gives them: a
+        # new chart is a new road, and would hide whether a seek is one. On the
+        # beat every half second, with one hit just off it at 90.33, which the
+        # road puts on the beat at 90.25.
         made = _state(0.0, length=cls.LENGTH,
                       chart=tuple(sorted([0.25 + i * 0.5 for i in range(240)]
                                          + [90.33])))
@@ -878,10 +872,9 @@ class TestEachLevelKeepsItsOwnBest:
 
 
 class TestAChoiceOutlivesARun:
-    """The pane starts a scene afresh when it is picked and when a track
-    loads, and afresh was the first game at the first level: every ride was
-    Normal Mono whatever the boxes said. What the viewer chose is kept
-    (Scene.KEPT); what a run has done is not."""
+    """The pane starts a scene afresh when it is picked and when a track loads,
+    which made every ride Normal Mono whatever the boxes said. What the
+    viewer chose is kept (Scene.KEPT); what a run has done is not."""
 
     @staticmethod
     def _back_to_how_it_was():
@@ -990,9 +983,8 @@ class TestEachGameSaysWhatItIs:
 
 
 class TestAPauseIsAPause:
-    """The pane's clock settles onto a paused position over half a second.
-    Read as playing, that ran the road on a quarter of a second past the
-    music, which then had to be met again when it started."""
+    """The pane's clock settles onto a paused position over half a second; read
+    as playing, the road ran a quarter of a second past the music."""
 
     def test_the_rider_stops_where_the_music_did(self, qapp):
         import time

@@ -1749,8 +1749,10 @@ class TestItHoldsSixtyFramesASecond:
     #: not survive a change of machine (the stacked hairlines win by different
     #: amounts):
     #:
-    #: here a build runner Waterfall 0.70x 2.71x Rave 2.27x 1.70x Ambience
-    #: 1.26x 2.16x
+    #:                     here      a build runner
+    #:      Waterfall      0.70x           2.71x
+    #:      Rave           2.27x           1.70x
+    #:      Ambience       1.26x           2.16x
     #:
     #: This catches an absurd scene. The frame rate on a slow machine is held
     #: by the pane's resolution choice, which

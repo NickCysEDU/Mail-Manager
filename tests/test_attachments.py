@@ -398,11 +398,8 @@ class TestTheWindowOffersThem:
         import attachment_view
 
         class Fake:
-            """Stands in for the viewer, which is a window now, not a modal.
-
-            It has to answer the handful of things _present_attachments does
-            to it: the viewer is shown rather than exec'd so that Quit is not
-            swallowed while it is up.
+            """Stands in for the viewer, which is a window, shown rather than
+            exec'd so that Quit is not swallowed while it is up.
             """
 
             finished = _Signal()
@@ -451,10 +448,9 @@ class TestTheWindowOffersThem:
 class TestTheWorkerUsesTheRealAccountFields:
     """It asked for account.imap_host, which Account has never had.
 
-    Nothing caught it: the GUI test covers the path where no password is
-    stored, which returns before the worker is built, and no test had ever
-    started one. On a configured mailbox the button raised AttributeError
-    inside the thread and the window showed nothing at all.
+    The GUI test covers the path with no stored password, which returns
+    before the worker is built, so on a configured mailbox the button raised
+    AttributeError inside the thread and the window showed nothing.
     """
 
     def test_account_has_the_fields_the_worker_reads(self):
@@ -512,10 +508,9 @@ class TestTheWorkerUsesTheRealAccountFields:
         assert asked.get("mailbox") == "INBOX"
         assert asked.get("uid") == "1"
         assert failures, "a failure should be reported, not swallowed"
-        # The first version of this test only asked that *a* failure arrived,
-        # and passed while the worker was raising AttributeError on a field
-        # Account does not have. A failure is only acceptable if it is the one
-        # the fake engine raised on purpose.
+        # Only the failure the fake engine raised on purpose is acceptable: a
+        # version that accepted any failure passed while the worker raised
+        # AttributeError on a field Account does not have.
         assert "stop here" in failures[0], (
             f"the worker failed for its own reasons, not the test's: {failures[0]}")
         assert "AttributeError" not in failures[0]
@@ -523,12 +518,11 @@ class TestTheWorkerUsesTheRealAccountFields:
 
 
 class TestTheServerSPartListIsBelievedOverTheTruncatedFetch:
-    """A scan downloads 64 KB. A message can be six megabytes.
+    """A scan downloads 64 KB; a message can be six megabytes.
 
-    Counting attachments from the bytes that arrived means counting the ones
-    that happened to begin inside the first 64 KB - which for a real message
-    reported one of three. BODYSTRUCTURE describes every part without
-    sending any of them, and costs nothing extra in the same FETCH.
+    Counting attachments from the bytes that arrived counts only those that
+    begin in the first 64 KB: one of three, on a real message. BODYSTRUCTURE
+    describes every part without sending any, at no cost in the same FETCH.
     """
 
     # A real-shaped reply: multipart/mixed holding text, an image, and a PDF.
@@ -621,10 +615,9 @@ class TestTheServerSPartListIsBelievedOverTheTruncatedFetch:
 class TestTwoSpectraFromOneTransform:
     """The transform is three quarters of what analysing a track costs.
 
-    A real signal's spectrum is conjugate-symmetric, so a complex
-    transform of a real input throws half its own work away. Two frames
-    ride in one - one in the real part, one in the imaginary - and come
-    apart afterwards. It is exact arithmetic, so the test is equality
+    A real signal's spectrum is conjugate-symmetric, so two frames ride in
+    one complex transform, one in the real part and one in the imaginary,
+    and come apart afterwards. Exact arithmetic, so the test is equality
     rather than closeness.
     """
 
@@ -705,19 +698,15 @@ class TestTwoSpectraFromOneTransform:
 
 
 class TestNothingOutlivesTheWindow:
-    """A thread that is still running when Qt destroys it aborts the
-    process. The analysis now goes on working after it has handed the
-    frames over - it picks the drums out next - so the window between
-    "the viewer has what it asked for" and "the thread has finished" is
-    seconds rather than nothing, and everything that tears the viewer
-    down has to close it.
+    """A thread still running when Qt destroys it aborts the process. The
+    analysis goes on after handing the frames over (it picks out the drums
+    next), so everything that tears the viewer down has to close it.
     """
 
     def test_sweeping_stops_the_analysis_before_deleting_its_file(
             self, qtbot, tmp_path):
-        """Sweeping only unlinked the files. That left a decode running
-        against a path that no longer existed, and a thread reporting to
-        a window that had gone."""
+        """Sweeping only unlinked the files, leaving a decode running against a
+        missing path and a thread reporting to a window that had gone."""
         from attachment_view import AttachmentViewer
         from attachments import Attachment
 
@@ -733,9 +722,9 @@ class TestNothingOutlivesTheWindow:
         assert stopped, "the files went before the thing reading them did"
 
     def test_the_finer_pass_is_skipped_when_nobody_wants_it(self, qapp):
-        """It costs about twice what the frames cost. Running it for a
-        caller that never asked meant a thread going for seconds after
-        the only listener had been told the work was done."""
+        """It costs about twice what the frames cost. Run for a caller that
+        never asked, it kept a thread going for seconds after the only
+        listener had been told the work was done."""
         import attachment_audio
 
         thread = attachment_audio._AnalysisThread(
@@ -745,9 +734,8 @@ class TestNothingOutlivesTheWindow:
         assert wanted._wants_elements is True
 
     def test_the_handle_stays_alive_until_its_thread_has_finished(self, qapp):
-        """It used to be dropped as soon as the frames were handed over,
-        which was safe only while that was the last thing the thread
-        did."""
+        """Dropping it as soon as the frames were handed over was safe only
+        while that was the last thing the thread did."""
         import inspect
 
         import attachment_audio

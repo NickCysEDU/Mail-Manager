@@ -1,28 +1,21 @@
 """Which messages are the same conversation.
 
-Job mail arrives in threads. An interview invitation, your reply, the
-reschedule, the confirmation - four messages, one thing happening, and a
-sorter that treats them as four unrelated events will file them four
-different ways. Worse, it will ask you about each one separately.
+An interview invitation, your reply, the reschedule and the confirmation are
+one thing happening; treated as four, they are filed four ways and asked
+about four times.
 
-Threading is done the way mail clients have always done it, in two passes.
+Two passes, as mail clients have always done it:
 
 **By identity.** ``Message-ID``, ``In-Reply-To`` and ``References`` form a
-graph: every message names the ones it is answering. Following those links
-gives the true thread, and it is exact - two messages either reference each
-other or they do not.
+graph of who answers whom, and following it gives the true thread, exactly.
 
-**By subject and correspondent.** Plenty of mail arrives with the references
-stripped, by a mailing list, a rewriting gateway, or somebody who replied by
-composing a new message with the same subject. So messages that share a
-normalised subject *and* a correspondent are joined too. Both halves are
-required: subject alone would merge every "Thank you for applying" ever sent,
-and correspondent alone would merge a recruiter's entire correspondence into
-one thread.
+**By subject and correspondent**, for mail whose references were stripped by
+a mailing list, a gateway, or a reply composed as a new message. Both are
+required: subject alone would merge every "Thank you for applying", and
+correspondent alone a recruiter's whole correspondence.
 
-Nothing here decides anything on its own. It groups, and the grouping is used
-to offer - file the whole conversation, select the whole conversation - never
-to move mail nobody asked about.
+Nothing here decides anything. The grouping is used to offer (file or select
+the whole conversation), never to move mail nobody asked about.
 """
 
 from __future__ import annotations
@@ -66,9 +59,8 @@ def normalise_subject(subject: str) -> str:
 def message_ids(raw: str) -> List[str]:
     """Every Message-ID in a header value, in order.
 
-    Angle brackets are required. A References header full of bare words is
-    somebody's broken client, and taking those as ids would join unrelated
-    threads on a shared word.
+    Angle brackets are required: bare words in a broken client's References
+    would join unrelated threads on a shared word.
     """
     return [found.lower() for found in _MESSAGE_ID.findall(raw or "")]
 
@@ -121,11 +113,10 @@ class _Groups:
 
 
 def thread_keys(messages: Sequence) -> List[str]:
-    """One key per message, shared by everything in the same conversation.
+    """One key per message, shared by everything in its conversation.
 
-    Returned positionally rather than as a dict, because two messages can be
-    identical in every field this looks at - a duplicate delivered twice - and
-    they should still be one entry each.
+    Positional rather than a dict: a duplicate delivered twice is identical
+    in every field this looks at, and is still one entry each.
     """
     groups = _Groups()
     keys: List[str] = []
@@ -171,11 +162,8 @@ def describe(size: int) -> str:
 
 
 def apply_to(items: Iterable) -> int:
-    """Stamp each item with its thread key. Returns how many are in threads.
-
-    The count is of messages that have company, not of conversations: a
-    hundred messages that are all on their own is nothing to tell anybody
-    about.
+    """Stamp each item with its thread key. Returns how many are in threads:
+    messages with company, not conversations.
     """
     items = list(items)
     if not items:

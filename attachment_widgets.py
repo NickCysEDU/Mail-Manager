@@ -2279,7 +2279,7 @@ class Spectrum(QWidget):
         if self._fresh < 0.999 and not (self._on_gpu and self._crossing):
             # The new scene coming up over the background. On the card it is
             # drawn whole and faded up over the last frame instead: see
-            # _keep_the_last_frame.
+            # _GpuCanvas.hold.
             painter.setOpacity(painter.opacity() * self._fresh)
         self._paint_scene(painter, rect)
         self._tell_listener()
@@ -2985,8 +2985,9 @@ def blit_scene(painter, rect, buffer, smooth: bool = False) -> None:
     Measured at 1512x982 on a 2x display, as the mean step in brightness
     between neighbouring pixels:
 
-    full resolution 0.0040 half resolution, smoothed 0.0029 half resolution,
-    not smoothed 0.0040
+        full resolution                 0.0040
+        half resolution, smoothed       0.0029
+        half resolution, not smoothed   0.0040
 
     Smoothing lost 42 per cent of the edge, which reads as a greyer picture,
     and was slower (2.35 ms against 1.92). Only for a whole-number stretch:
@@ -3015,9 +3016,9 @@ class Sharpness:
     than the window and a thirtieth once it is not, since below one buffer
     pixel per point the picture goes soft.
 
-    ``LOGICAL`` is that line: 0.5 of the pixels on a 2x display. The rungs
-    are coarse and decisions settle, so the buffer is not reallocated every
-    frame and a scene between two rungs does not flicker.
+    That line is 0.5 of the pixels on a 2x display. The rungs are coarse and
+    decisions settle, so the buffer is not reallocated every frame and a scene
+    between two rungs does not flicker.
     """
 
     #: Fractions of the screen's real pixels; a display's own ratio always has
@@ -3025,8 +3026,9 @@ class Sharpness:
     #: whole number and blit_scene need not smooth it, which matters more than
     #: the resolution. Mean step in brightness at 1512x982 on a 2x display:
     #:
-    #: 1.00 a whole 1x 0.0020 0.80 1.25x 0.0015 0.50 a whole 2x 0.0020 0.67
-    #: 1.49x 0.0015 0.25 a whole 4x 0.0019 0.40 2.50x 0.0016
+    #:     1.00  a whole 1x   0.0020        0.80  1.25x   0.0015
+    #:     0.50  a whole 2x   0.0020        0.67  1.49x   0.0015
+    #:     0.25  a whole 4x   0.0019        0.40  2.50x   0.0016
     #:
     #: A quarter of the resolution stretched evenly holds more edge than four
     #: fifths stretched unevenly, so the uneven rungs are gone.

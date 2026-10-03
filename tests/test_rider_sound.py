@@ -87,13 +87,11 @@ class TestTheSoundsThemselves:
 
     @staticmethod
     def _line(samples, start=0.0, end=0.08):
-        """How far the strongest semitone from A4 up two octaves stands
-        over the semitones around it: a note is a line in the spectrum and
-        stands thousands of times over its neighbours; noise, a sweep or
-        metal is a spread and stands a few times over at the most. Against
-        its neighbours rather than against the average of the range, which
-        a sound filtered bright - most of its energy above that range, a
-        slope across it - fails for its slope."""
+        """How far the strongest semitone from A4 up two octaves stands over
+        its neighbours: a note is a line in the spectrum, thousands of times
+        over them, while noise, a sweep or metal is a spread, a few times at
+        most. Against its neighbours rather than the range's average, which
+        a brightly filtered sound fails for its slope."""
         import statistics
 
         power = {k: _power(samples, 110.0 * 2 ** (k / 12), start, end)
@@ -458,10 +456,9 @@ class TestWhatIsPlayed:
         assert board._broken is True
 
     def test_a_note_not_made_yet_is_not_made_here(self, tmp_path):
-        """The thread that plays them is the thread drawing the picture:
-        a note that is not there is not played, rather than made on the
-        spot - that was a forty millisecond frame the first time any
-        pickup was taken."""
+        """The thread that plays them is the thread drawing the picture, so a
+        note that is not ready is skipped rather than made on the spot: that
+        was a forty millisecond frame the first time any pickup was taken."""
         board = rider_sound.SoundBoard(tmp_path)
         name = rider_sound.note_name("pluck", 72, 0)
         assert board.play(name) is False
@@ -793,11 +790,10 @@ class TestTheEffectsSlider:
 
 
 class TestTheyAreReallyPlayedLater:
-    """The notes of an arpeggio and the echoes of a note are put off with
-    the pane's own timer. Every other test here hands the board a stand-in
-    for it - and the real one raised the first time a note echoed, the pane
-    let go of the game's listener, and the game was silent for the rest of
-    the session. These run the real one."""
+    """The notes of an arpeggio and a note's echoes are put off with the pane's
+    own timer, and every other test hands the board a stand-in for it. The
+    real one raised the first time a note echoed, and the game went silent
+    for the rest of the session; these run the real one."""
 
     @staticmethod
     def _wait(seconds):

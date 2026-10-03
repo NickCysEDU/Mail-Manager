@@ -393,8 +393,8 @@ class TestEmptyState:
 # Stop actually stops
 # ==========================================================================
 class TestStopHalts:
-    """Closing the backend used to look like a transport error, which sent the
-    scan down the local-fallback path and quietly finished it instead."""
+    """Closing the backend looked like a transport error, which sent the scan
+    down the local-fallback path and quietly finished it."""
 
     def messages(self, count):
         return [EmailMessage(uid=str(i), subject=f"Subject {i}") for i in range(count)]
@@ -631,11 +631,10 @@ class TestQuittingWithSettingsOpen:
         assert window._close_settings_first() is True
 
     def test_the_quit_action_goes_through_the_checks(self, window, monkeypatch):
-        """It used to be wired straight to QApplication.quit, which skipped
-        the unapplied-scan warning as well as the Settings question.
+        """Wired straight to QApplication.quit, it skipped the unapplied-scan
+        warning as well as the Settings question.
 
-        Proved by triggering the real action with Settings open: if it still
-        went straight to the application, nothing would be asked.
+        Proved by triggering the real action with Settings open.
         """
         asked = []
         monkeypatch.setattr(
@@ -662,15 +661,10 @@ class TestADeletedSettingsDialogDoesNotTakeTheAppWithIt:
     """Qt calls qFatal when a running QThread is destroyed.
 
     A dialog destroys its children, and Settings parents its workers to
-    itself, so a probe still in flight when the dialog went away aborted
-    the process - no exception, no traceback, just SIGABRT. done() and
-    closeEvent() stopped the two workers somebody might want to be asked
-    about; the quiet ones - reading the Keychain, listing models, probing
-    an endpoint - were stopped nowhere, and neither hook runs at all when
-    a dialog is deleted rather than closed.
-
-    It reached CI as a worker crashing mid-file, which reads like anything
-    at all.
+    itself, so a probe in flight when the dialog went aborted the process:
+    SIGABRT, no traceback. done() and closeEvent() stopped only the workers
+    worth asking about, and neither runs when a dialog is deleted rather
+    than closed.
     """
 
     class _Slow(_BaseWorker):

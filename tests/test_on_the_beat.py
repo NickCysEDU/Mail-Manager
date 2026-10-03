@@ -149,9 +149,9 @@ class TestEveryFrameIsOnTheBeat:
 
 
 class TestNothingBeforeItIsDue:
-    """In the frame nearest a hit is half a frame early at most. Half of
-    the time since the last frame, it was half a second on a track's first
-    frame and a tenth of one after a pause - a kick and a strobe lit for a
+    """In the frame nearest a hit means half a frame early at most. Taken as
+    half the time since the last frame, it was half a second on a track's
+    first frame and a tenth after a pause: a kick and a strobe lit for a
     beat that had not come."""
 
     @staticmethod

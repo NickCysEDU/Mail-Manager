@@ -760,7 +760,7 @@ class Oscilloscope(Scene):
 
     # -- dwell -------------------------------------------------------------
     #: A beam glows brighter where it moves slowly, which is most of what
-    #: oscilloscope music looks like. DWELL_STEP is the step between samples,
+    #: oscilloscope music looks like. DWELL_AIM is the step between samples,
     #: in the figure's unit box, at full brightness, measured against the
     #: trace's own moving steps; faster stretches fade towards DWELL_LEAST.
     DWELL_AIM = 0.62

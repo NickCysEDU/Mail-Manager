@@ -28,10 +28,9 @@ def window(qapp, tmp_path, monkeypatch):
     subject = MainWindow(settings, InMemoryCredentialStore())
     yield subject
     subject.close()
-    # close() only hides it. Without deleteLater the window and every
-    # widget under it stay alive for the rest of the session, and
-    # setStyleSheet restyles all of them on every theme change - which
-    # is what made this file take minutes instead of seconds.
+    # close() only hides it. Without deleteLater every widget under it lives
+    # for the session, and setStyleSheet restyles all of them on every theme
+    # change.
     subject.deleteLater()
 
 
@@ -47,10 +46,9 @@ def two_mailbox_window(qapp, tmp_path, monkeypatch):
     subject.show()
     yield subject
     subject.close()
-    # close() only hides it. Without deleteLater the window and every
-    # widget under it stay alive for the rest of the session, and
-    # setStyleSheet restyles all of them on every theme change - which
-    # is what made this file take minutes instead of seconds.
+    # close() only hides it. Without deleteLater every widget under it lives
+    # for the session, and setStyleSheet restyles all of them on every theme
+    # change.
     subject.deleteLater()
 
 
@@ -465,10 +463,8 @@ class TestTheMailboxColumnIsActuallyVisible:
 
 class TestMenusDoNotLoop:
     def test_ticking_a_mailbox_does_not_rebuild_forever(self, two_mailbox_window):
-        """setChecked emits toggled, and toggled rebuilds the menu.
-
-        Connecting before ticking made opening the menu an infinite loop, which
-        looked from outside like the app freezing.
+        """setChecked emits toggled, and toggled rebuilds the menu: connecting
+        before ticking made opening the menu an infinite loop.
         """
         subject = two_mailbox_window
         subject._load_demo_data()
@@ -597,11 +593,9 @@ class TestTheAccountEditorCannotCorruptAMailbox:
                         f"{account.address} pointed at {account.host}"
 
     def test_a_password_cannot_be_saved_against_another_mailbox(self, dialog):
-        """This is what destroyed a real iCloud app-specific password.
-
-        The address on screen was iCloud's while the provider said Gmail, so a
-        Gmail password was written to the iCloud Keychain entry and the
-        original was gone.
+        """The address on screen was iCloud's while the provider said Gmail, so
+        a Gmail password would be written to the iCloud Keychain entry and
+        the original lost.
         """
         subject, store = dialog
         subject.preset_combo.setCurrentIndex(subject.preset_combo.findData("gmail"))
@@ -893,13 +887,12 @@ class TestTheOnDevicePanelNeverFreezes:
     """Installing Ollama used to block the UI thread for the whole install."""
 
     def _drain(self, dialog, limit=12.0):
-        """Pump the event loop until the worker finishes; report the worst stall.
+        """Pump the event loop until the worker finishes; report the worst
+        stall.
 
-        The queue is flushed first. Every test before this one leaves deferred
-        deletions behind, and the first processEvents pays for all of them,
-        measured at 0.7s under the full suite and 0ms on every iteration
-        after. Timing that backlog says nothing about whether this worker
-        blocks the window.
+        The queue is flushed first: deferred deletions left by earlier tests
+        cost the first processEvents 0.7s under the full suite, which says
+        nothing about this worker.
         """
         for _ in range(3):
             QApplication.processEvents()
@@ -919,8 +912,8 @@ class TestTheOnDevicePanelNeverFreezes:
             dialog._begin_ollama_step(
                 "pull", ["/bin/sh", "-c", "echo start; sleep 1.2; echo done"])
             worst = self._drain(dialog)
-            # A frame is 16ms. A tenth of a second is already a visible stutter
-            # and this used to be the whole length of a Homebrew install.
+            # A frame is 16ms; a tenth of a second is already a visible
+            # stutter.
             assert worst < 0.1, f"the UI thread stalled for {worst * 1000:.0f} ms"
         finally:
             dialog.deleteLater()
@@ -1129,9 +1122,8 @@ class TestTheModelsDialog:
         import ondevice
         monkeypatch.setattr(QMessageBox, "question",
                             lambda *a, **k: QMessageBox.StandardButton.Yes)
-        # Ollama is not installed on a CI runner, and without this the real
-        # remove_command returns None, nothing runs, and the test fails for a
-        # reason that has nothing to do with the dialog.
+        # Ollama is not installed on a CI runner, so the real remove_command
+        # returns None and nothing runs.
         monkeypatch.setattr(ondevice, "remove_command",
                             lambda name: ["ollama", "rm", name])
         started = []
@@ -1168,10 +1160,10 @@ class TestTheModelsDialog:
 class TestTheModelFieldIsADropdownForLocalModels:
     """Typing a name is right for a hosted backend and wrong for a local one.
 
-    A hosted backend releases models faster than a bundled list can follow,
-    Gemini's pinned ids went stale and started answering 404. A local backend's
-    valid names are exactly the models on this Mac, so a typo there is a scan
-    that fails on every single message.
+    Hosted models change faster than a bundled list can follow (Gemini's
+    pinned ids went stale and answered 404), while a local backend's valid
+    names are exactly the models on this Mac, and a typo fails every
+    message.
     """
 
     def test_a_local_backend_offers_a_plain_dropdown(self, window):
@@ -1241,11 +1233,8 @@ class TestErrorTextCanBeCopied:
 class TestADialogDoesNotOutliveItsVisit:
     """Settings is parented to the window, so nothing collected it.
 
-    Every visit left the whole dialog behind - about three hundred and
-    seventy widgets. That is not only memory. apply_appearance sets a
-    stylesheet on the QApplication, and Qt restyles every live widget when it
-    does, so each abandoned copy made every later repaint slower: open
-    Settings twenty times and the app is visibly slower than when it started.
+    Every visit left about 370 widgets behind, and apply_appearance restyles
+    every live widget, so each copy made every later repaint slower.
     """
 
     @staticmethod
@@ -1255,10 +1244,9 @@ class TestADialogDoesNotOutliveItsVisit:
             qapp.sendPostedEvents(None, QEvent.Type.DeferredDelete)
             qapp.processEvents()
 
-    # Three visits prove it as well as five: one leak is 370 widgets and the
-    # threshold is 50. The budget is explicit because opening a modal from a
-    # test costs far more than opening one from a window - the dialog itself
-    # builds in a fifth of a second.
+    # Three visits prove it as well as five: one leak is 370 widgets against a
+    # threshold of 50. The budget is explicit because a modal opened from a
+    # test costs far more than one opened from a window.
     @pytest.mark.timeout(300)
     def test_opening_settings_repeatedly_does_not_accumulate_widgets(
             self, qtbot, qapp):
@@ -1292,17 +1280,14 @@ class TestADialogDoesNotOutliveItsVisit:
 
 
 class TestTheWindowFixtureDestroysItsWindow:
-    """A fixture that only closes its window leaks the whole thing.
+    """A fixture that only closes its window leaks all of it.
 
-    close() hides; it does not delete. Seven fixtures across the suite
-    closed a MainWindow and left all hundred and sixty of its widgets alive
-    for the rest of the session. Because setStyleSheet restyles every live
-    widget, the cost of each theme change grew with every test that had run
-    before it, and test_window_tools.py went from seconds to never
-    finishing - the whole file timed out behind one slow worker.
+    close() hides without deleting, and with setStyleSheet restyling every
+    live widget, each theme change cost more with every test before it,
+    until this file timed out.
 
-    This checks the shape a fixture has to have, rather than the fixture
-    itself, so the same mistake in a new file is caught here.
+    This checks the shape a fixture has to have, so the same mistake in a
+    new file is caught here.
     """
 
     @staticmethod
@@ -1345,9 +1330,9 @@ class TestTheWindowFixtureDestroysItsWindow:
         for path in sorted(root.glob("test_*.py")):
             for match in pattern.finditer(path.read_text()):
                 name, body = match.group(1), match.group(2)
-                # Comments do not delete anything, and the comment above
-                # each of these fixes says the word - so strip them before
-                # looking, or the guard passes on the bug it describes.
+                # Comments are stripped before looking: the comment above each
+                # fix names the word, so the guard would pass on the bug it
+                # describes.
                 code = "\n".join(line.split("#", 1)[0]
                                   for line in body.splitlines())
                 builds_window = "MainWindow(" in code or "Dialog(" in code

@@ -37,11 +37,9 @@ DOCS_ASSETS = ROOT / "docs" / "assets"
 
 SIZE = 1024
 
-# macOS draws app icons on a 1024 grid with the artwork inset to 824 and a
-# shadow in the margin. Matching that is what makes an icon sit correctly
-# next to the system ones in the Dock and in Finder.
-# 814 inset by 105 is what /System/Applications/Mail.app measures at, and
-# matching it is what makes the icon sit level with the system ones.
+# macOS draws app icons on a 1024 grid with the artwork inset and a shadow in
+# the margin. 814 inset by 105 is what Mail.app measures at, so the icon sits
+# level with the system ones in the Dock and in Finder.
 BODY = QRectF(105, 105, 814, 814)
 
 # The macOS shape is a rectangle with straight edges and a smoothed corner, not
@@ -52,8 +50,8 @@ CORNER_SPAN = 0.40
 CORNER_N = 1.8
 
 # The same blue as the Scan & Analyze button, so the app, its icon and its
-# primary action are visibly one thing. Two shades of it and white; anything
-# more starts to look busy at the sizes this actually gets seen at.
+# primary action read as one thing. Two shades and white: more looks busy at
+# the sizes it is seen at.
 SKY = QColor("#4A86EE")
 DEEP = QColor("#2F6FE0")
 PAPER = QColor("#FFFFFF")
@@ -103,9 +101,8 @@ def _draw_shadow(painter: QPainter) -> None:
 def _draw_cycle(painter: QPainter, tiny: bool) -> None:
     """An arrow coming back round on itself: this happens without you.
 
-    A full circle around the envelope rather than an arc behind it, so the two
-    shapes stay legible as two shapes. Dropped below 96 points, where the ring
-    closes up into a smudge and the envelope alone says more.
+    A full circle around the envelope, so the two shapes stay legible;
+    dropped below 96 points, where the ring closes up into a smudge.
     """
     if tiny:
         return
@@ -117,29 +114,22 @@ def _draw_cycle(painter: QPainter, tiny: bool) -> None:
     pen.setCapStyle(Qt.PenCapStyle.RoundCap)
     painter.setPen(pen)
     painter.setBrush(Qt.BrushStyle.NoBrush)
-    # Open at the top, centred. The gap used to run from 38 to 98 degrees,
-    # which put its middle at 68 - up and to the right - and the whole mark
-    # read as lopsided. Centring the opening on twelve o'clock puts the
-    # arrowhead and the tail the same distance either side of the middle.
-    #
-    # Qt measures from three o'clock anticlockwise, so half the gap either
-    # side of 90 is where the arc starts and ends.
+    # Open at the top, centred on twelve o'clock, so the arrowhead and the tail
+    # sit the same distance either side. Qt measures from three o'clock
+    # anticlockwise, so half the gap either side of 90 is where the arc starts
+    # and ends.
     gap_deg = 60.0
-    # The arrowhead is a triangle sticking out past the end of the arc, into
-    # the opening, so centring the *arc's* gap on twelve o'clock still left
-    # the visible opening off to the right by half the head's length. Both
-    # ends rotate by half that, which puts the tail and the tip of the head
-    # the same distance either side of vertical.
+    # The arrowhead sticks out past the arc's end into the opening, so both
+    # ends rotate by half its length, putting the tail and the tip the same
+    # distance either side of vertical.
     radius = ring.width() / 2.0
     head_deg = math.degrees((stroke * 2.3) / radius)
     start_deg = 90.0 - gap_deg / 2.0 + head_deg / 2.0
     span_deg = -(360.0 - gap_deg)
     painter.drawArc(ring, int(start_deg * 16), int(span_deg * 16))
 
-    # The head goes where the travel arrives, not where it sets off. It was
-    # on the near end pointing back into the arc, which is why it read as a
-    # lump rather than as direction. A plain triangle, longer than it is
-    # wide: anything cleverer turns into a bird at small sizes.
+    # The head goes where the travel arrives: a plain triangle, longer than it
+    # is wide, since anything cleverer turns into a bird at small sizes.
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(QBrush(PAPER))
     angle = math.radians(start_deg + span_deg)
@@ -274,9 +264,8 @@ def draw_social_preview(width: int = 1280, height: int = 640) -> QImage:
 
 
 def build() -> int:
-    # Named and then used, because QPainter and QPixmap need a live
-    # application object and letting this one be collected takes the process
-    # down with it. Setting the name is the cheapest way to say so out loud.
+    # Named and then used: QPainter and QPixmap need a live application, and
+    # letting this one be collected takes the process down.
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setApplicationName("Mail Manager icon builder")
     ASSETS.mkdir(parents=True, exist_ok=True)

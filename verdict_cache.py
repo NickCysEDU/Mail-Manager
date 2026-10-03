@@ -1,28 +1,22 @@
 """Verdicts kept from one scan to the next.
 
-Scanning the last seven days on Monday and again on Tuesday re-reads six days
-of mail that has not changed and cannot change - a message is immutable once
-it is sent - and pays a model to reach the same conclusion about all of it a
-second time. On a paid provider that is money; on a local model it is minutes.
+Scanning the last seven days on Monday and again on Tuesday re-reads six
+days of mail that cannot change, and paying a model to reach the same
+conclusions costs money or minutes. A message is identified by its mailbox
+and UID, which IMAP keeps stable and never reuses, and a verdict is handed
+back only when the *recipe* matches: provider, model, effort, ruleset,
+profile and body limit, hashed together.
 
-So verdicts are written down. A message is identified by its mailbox and UID,
-which IMAP guarantees is stable and never reused, and a cached verdict is only
-handed back when the *recipe* matches: the provider, the model, the effort
-level, the ruleset, the profile and the body limit, hashed together. Change
-any of those and every cached verdict for the old recipe stops being offered,
-because it was an answer to a different question.
+Never cached:
 
-Three things are deliberately never cached:
+**Failures**, which should be retried: the network is usually why.
 
-**Failures.** A verdict that came back as an error should be retried, not
-remembered - the network is usually why, and the network gets better.
+**Fallbacks**: the rules engine's stand-in answer while the provider was
+unreachable.
 
-**Fallbacks.** When the provider is unreachable the app answers with its own
-rules engine and says so. Caching that would pin a stand-in answer in place
-long after the provider came back.
-
-**Anything from a mailbox whose UIDVALIDITY moved.** The server is telling you
-its UIDs mean something else now, and every key for that mailbox is void.
+A mailbox whose UIDVALIDITY moves voids every key for it, and
+:meth:`VerdictCache.forget_mailbox` drops them; nothing reads UIDVALIDITY
+yet, so nothing calls it.
 """
 
 from __future__ import annotations
@@ -45,9 +39,8 @@ FILENAME = "verdicts.json"
 #: year of ordinary mail and still a file measured in megabytes.
 MAX_ENTRIES = 20000
 
-#: A verdict older than this is dropped on load. Not because it went wrong,
-#: but because the mail it describes has long since left the window anybody
-#: scans, and carrying it costs a read every launch.
+#: A verdict older than this is dropped on load: its mail has long left any
+#: window anybody scans, and carrying it costs a read every launch.
 MAX_AGE_DAYS = 120
 
 #: Marks a verdict the rules engine produced when the provider could not be
@@ -62,9 +55,8 @@ def _now() -> datetime:
 def recipe_for(settings) -> str:
     """A short hash of everything that changes what a verdict would be.
 
-    Anything absent from this list is something that can change without
-    invalidating a cached answer: the confidence threshold and the folder
-    names decide what happens *to* a verdict, not what the verdict is.
+    The threshold and the folder names are not in it: they decide what
+    happens *to* a verdict, not what it is.
     """
     parts = [
         str(getattr(settings, "provider", "")),
@@ -80,11 +72,9 @@ def recipe_for(settings) -> str:
 
 
 def key_for(message) -> str:
-    """How a message is identified across scans.
-
-    Mailbox plus UID, because that is the pair IMAP promises is stable. The
-    account is in there too: two mailboxes will happily hand out the same UID
-    for entirely different mail.
+    """How a message is identified across scans: mailbox and UID, the pair IMAP
+    keeps stable, plus the account, since two mailboxes can hand out the
+    same UID.
     """
     account = getattr(message, "account_id", "") or ""
     folder = getattr(message, "source_folder", "") or ""
@@ -105,12 +95,11 @@ class Entry:
     def to_dict(self, with_text: bool = True) -> Dict[str, object]:
         """The row as stored.
 
-        ``with_text`` false drops the summary and the reasoning, which are the
-        only fields that describe the message rather than categorise it. That
-        is what happens when the file cannot be encrypted: the cache still
-        saves the expensive part and stops being a readable index of somebody's
-        mail. The row is still a hit, and the preview says the summary came
-        from an earlier scan.
+        ``with_text`` false drops the summary and the reasoning, the only
+        fields that describe the message: when the file cannot be encrypted
+        the cache keeps the expensive part without becoming a readable index
+        of somebody's mail. The row is still a hit, and the preview says the
+        summary came from an earlier scan.
         """
         payload = dict(self.payload)
         if not with_text:
@@ -152,9 +141,7 @@ def _classification_payload(classification: Classification) -> Dict[str, object]
         "confidence_score": classification.confidence_score,
         "reasoning": classification.reasoning,
         "adjustments": list(classification.adjustments),
-        # Kept so a reused verdict can still explain itself. A row that says
-        # nothing about why is worse than one the model was asked about
-        # again.
+        # Kept so a reused verdict can still explain itself.
         "signals": list(classification.signals),
         "scores": dict(classification.scores),
     }
@@ -179,11 +166,8 @@ class VerdictCache:
     # -- disk ------------------------------------------------------------
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "VerdictCache":
-        """Read the file. Anything unreadable is an empty cache, never a raise.
-
-        A cache is by definition something the app can do without, so there is
-        no failure here worth telling anybody about: the cost of a damaged
-        file is one slow scan.
+        """Read the file. Anything unreadable is an empty cache, never a raise:
+        the cost of a damaged file is one slow scan.
         """
         path = path or cls.default_path()
         raw = vault.shared().read(path)
@@ -246,12 +230,10 @@ class VerdictCache:
         return True
 
     def split(self, messages: Sequence, recipe: str) -> Tuple[List, Dict[int, Classification]]:
-        """Sort messages into "needs the model" and "already answered".
-
-        Returns the messages still to classify and, separately, a map from
-        each *original* index to the verdict already held - so the caller can
-        put the two halves back in order without losing track of which is
-        which.
+        """Sort messages into "needs the model" and "already answered": the
+        messages still to classify, and a map from each original index to
+        the verdict held, so the caller can put the two halves back in
+        order.
         """
         pending: List = []
         known: Dict[int, Classification] = {}

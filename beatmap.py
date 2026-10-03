@@ -116,8 +116,10 @@ def fits(profile: Optional[dict], bottom: float, middle: float,
 #: a second every ripple is a peak. Raising it finds no more real kicks, only
 #: false ones (eight written tracks against a real one):
 #:
-#: 0.22 kick 95.5% recall at 88.0 precision 74.8 kicks/min 0.35 95.5 68.9 85.0
-#: 0.45 95.5 58.1 86.7 0.60 93.2 48.8 91.2
+#:      0.22   kick 95.5% recall at 88.0 precision   74.8 kicks/min
+#:      0.35        95.5             68.9            85.0
+#:      0.45        95.5             58.1            86.7
+#:      0.60        93.2             48.8            91.2
 ELEMENT_SENSE = 0.22
 
 #: Pulses looked for, in beats a minute. The top is above any counted tempo on

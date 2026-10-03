@@ -1,9 +1,7 @@
 """A layout that wraps its children onto new rows instead of overflowing.
 
-Qt's QHBoxLayout squeezes widgets past their sizeHint and then clips them, so a
-toolbar that fits at 1400 px pushes its buttons off the edge at 900 px. This
-lays items left to right and starts a new row whenever the next one would not
-fit, which means the action bar stays fully usable at any window width.
+QHBoxLayout squeezes widgets past their size hints and then clips them, so a
+toolbar that fits at 1400 px pushes its buttons off the edge at 900 px.
 """
 
 from __future__ import annotations
@@ -89,11 +87,9 @@ class FlowLayout(QLayout):
     def _layout(self, rect: QRect, apply: bool) -> int:
         """Pack items into rows, then centre each row on its own middle.
 
-        Two passes rather than one. A row's height is not known until the last
-        item has joined it, and placing items as they arrive pins every one of
-        them to the top of the row - which leaves a short label like "to", or
-        the window's date range, floating above the buttons beside it instead
-        of sitting on the same line.
+        Two passes: a row's height is known only once its last item has
+        joined, and placing items as they arrived pinned a short label above
+        the buttons beside it.
         """
         margins = self.contentsMargins()
         area = rect.adjusted(margins.left(), margins.top(),
@@ -112,11 +108,9 @@ class FlowLayout(QLayout):
         placed_x: dict = {}
 
         def close_row(items, top: int, height: int, used: int) -> None:
-            """Hand a row's leftover width to whatever asked to grow.
-
-            Without this a field is always exactly its size hint, which for a
-            line edit is about seventeen characters whatever the window is
-            doing - so its placeholder is clipped on a 2000 pixel display.
+            """Hand a row's leftover width to whatever asked to grow; otherwise
+            a line edit stays about seventeen characters wide on any
+            display.
             """
             if not items:
                 return
@@ -171,11 +165,9 @@ class Spacer(QWidget):
 class FlowHolder(QWidget):
     """A widget whose height follows the wrapping row inside it.
 
-    A layout asks a widget how tall it wants to be, and a plain QWidget
-    answers with a single number. A row that wraps has no single number -
-    it is taller when it is narrower - so the container has to say so, or
-    the layout hands it one line's worth and everything that wrapped onto
-    a second line is simply cut off. Which is what was happening.
+    A row that wraps is taller when it is narrower, and a plain QWidget
+    answering with a single number got one line's height, cutting off
+    whatever wrapped.
     """
 
     def __init__(self, row, parent=None) -> None:
@@ -201,12 +193,9 @@ class FlowHolder(QWidget):
         return QSize(width, self.heightForWidth(width))
 
     def minimumSizeHint(self) -> QSize:      # noqa: N802 - Qt's name
-        """As narrow as its widest single control, and as tall as it needs.
-
-        Returning the size hint here made the pane six hundred pixels wide
-        at minimum, so a narrower window could not shrink it - the layout
-        kept the width and everything past the edge was simply cut off.
-        A row that wraps has no minimum width beyond one control.
+        """As narrow as its widest single control, and as tall as it needs: the
+        size hint as a minimum kept the pane six hundred pixels wide,
+        cutting off everything past the edge of a narrower window.
         """
         width = self.width() or 600
         return QSize(self._row.minimumSize().width(),

@@ -4,21 +4,17 @@
     python tools/build_lexicon.py            # rebuild data/lexicon.json.gz
     python tools/build_lexicon.py --report   # say what is in the current one
 
-A phrase list can tell you a message says "your flight". It cannot tell you
-that ryanair.com is an airline, that STN is an airport, or that argos.co.uk
-sells things - and those are what a person uses to read a message that never
-says what it is.
-
-Two public sources, both fetched at build time and committed as one file so
-the app never needs the network:
+A phrase list sees "your flight", but not that ryanair.com is an airline,
+STN an airport or argos.co.uk a shop. Two public sources, fetched at build
+time and committed as one file so the app never needs the network:
 
   OurAirports   IATA codes for every large and medium airport. Public domain.
   Wikidata      Companies with an industry and an official website, which is
                 what turns a sending domain into "this is a bank". CC0.
 
-The result is deliberately small. Only domains are kept, only for sectors
-that map to something the sorter can act on, and only the registrable part -
-"delta.com", not "es.delta.com" - so one row covers every country's site.
+Deliberately small: only domains, only for sectors the sorter can act on,
+and only the registrable part ("delta.com", not "es.delta.com"), so one row
+covers every country's site.
 """
 
 from __future__ import annotations
@@ -62,12 +58,9 @@ SECTORS: Tuple[Tuple[str, str, str], ...] = (
     # than from a class that sounded right and returned nothing.
     ("courier",    "Q1529128", "postal services"),
     ("courier",    "Q1447463", "package delivery"),
-    # Hotels and restaurants were dropped after measuring what they held: the
-    # chains anybody actually gets mail from - Marriott, Hilton, Hyatt,
-    # Novotel, Premier Inn - were already claimed as retail, so the class
-    # contributed 11,044 individual small hotels ("101starsmotel",
-    # "11thavenuehostel") that will never be a sender, and a third of the
-    # file's size along with them.
+    # Hotels and restaurants were dropped: the chains anybody gets mail from
+    # were already claimed as retail, so the class added 11,044 small hotels
+    # that will never be senders, and a third of the file's size.
 )
 
 #: Nothing is taken from the "business" class: it has millions of members
@@ -163,9 +156,8 @@ MIN_BRAND = 4
 def brand_index(domains: Dict[str, str]) -> Dict[str, str]:
     """Second-level name -> sector, resolved where a name is claimed twice.
 
-    Matching the brand rather than the whole domain is what makes this work
-    on real mail: a shop writes from argos.co.uk, email.argos.co.uk and
-    argos-mail.com, and all three are Argos.
+    Matching the brand rather than the whole domain is what works on real
+    mail: argos.co.uk, email.argos.co.uk and argos-mail.com are all Argos.
     """
     claims: Dict[str, Dict[str, str]] = {}
     for domain, sector in domains.items():
@@ -260,9 +252,9 @@ def main(argv=None) -> int:
 def write_blob(data: dict) -> None:
     """Also write the memory-mapped form, which is what the app reads.
 
-    The JSON stays as the readable one - it is what a person diffs when a
-    brand looks wrong - and as the fallback for a build that has not run
-    this. The blob is the same content, sorted, so the app never parses it.
+    The JSON stays as the readable one, for diffing when a brand looks wrong
+    and as the fallback; the blob is the same content, sorted, so the app
+    never parses it.
     """
     import sys
     sys.path.insert(0, str(ROOT))

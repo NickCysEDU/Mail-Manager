@@ -348,9 +348,9 @@ class TestOllama:
         assert session.requests[0]["url"] == "http://127.0.0.1:11434/api/chat"
 
     def test_reaching_it_has_a_shorter_leash_than_answering(self):
-        """They used to share one timeout, and whichever number was chosen
-        was wrong for one of them: an on-device scan gave the model four
-        seconds to answer and then reported Ollama was not installed."""
+        """One timeout for both was wrong for one of them: an on-device scan
+        gave the model four seconds to answer and then reported Ollama was
+        not installed."""
         session = FakeSession([{"message": {"content": "{}"}, "done": True}])
         provider = OllamaProvider(session=session)
         provider.complete(SYSTEM_PROMPT, "p", CLASSIFICATION_SCHEMA)
@@ -358,8 +358,8 @@ class TestOllama:
         assert provider.timeout > provider.CONNECT_TIMEOUT * 10
 
     def test_a_slow_answer_does_not_read_as_a_missing_install(self):
-        """"Install it from ollama.com" sent people to reinstall software
-        that was working perfectly and merely thinking."""
+        """Telling somebody to install Ollama while it was merely thinking sent
+        people to reinstall software that was working."""
         def slow(_url, _payload, _headers):
             raise ProviderError("127.0.0.1 timed out after 600s while answering.")
 
@@ -472,8 +472,8 @@ class TestEngineWithProviders:
 # The HTTP transport, against a real local server
 # ==========================================================================
 class TestHttpSession:
-    """Exercised against a throwaway localhost server rather than mocks,
-    this is the transport for three of the four backends."""
+    """Exercised against a throwaway localhost server rather than mocks: this
+    is the transport for three of the four model backends."""
 
     @pytest.fixture
     def server(self):
@@ -671,8 +671,8 @@ class TestModelDiscovery:
 # A backend that is not there must fail fast, once
 # ==========================================================================
 class TestUnreachableBackend:
-    """Ollama absent used to cost 6.7 s per message: a connect timeout plus the
-    full retry ladder, repeated for every email in the scan."""
+    """An absent Ollama cost 6.7 s per message: a connect timeout plus the full
+    retry ladder, for every email in the scan."""
 
     def refusing_session(self):
         def handler(url, payload, headers):

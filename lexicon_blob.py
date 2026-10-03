@@ -1,18 +1,12 @@
 """The lexicon as a file the app can read without reading it.
 
-The world-knowledge tables ship as JSON, which has to be decompressed,
-parsed, and built into dictionaries before the first lookup - seventy
-milliseconds and ten megabytes, every launch, for tables that are read-only
-and never change between releases. That is fine at today's size. It is
-linear in it, and the tables only ever grow: ten times the brands would be
-seven hundred milliseconds and a hundred megabytes, which is not fine.
-
-So there is a second form. Each table is written once, at build time, as a
-sorted array of ``key\\0value`` records with an index of offsets in front of
-it. At run time the file is memory-mapped and looked up by binary search, so
-a lookup touches one page of a file the operating system was going to cache
-anyway. Nothing is parsed, nothing is allocated per entry, and the cost of
-opening it does not depend on how much is in it.
+As JSON the tables are decompressed, parsed and built into dictionaries
+before the first lookup: seventy milliseconds and ten megabytes every
+launch, growing with the tables. So each table is also written at build
+time as a sorted array of ``key\\0value`` records behind an index of
+offsets. At run time the file is memory-mapped and searched by binary
+search, which touches one page, parses nothing, and costs the same to open
+whatever it holds.
 
 The format, little-endian throughout::
 
@@ -30,10 +24,8 @@ The format, little-endian throughout::
 Keys are compared as bytes, and written in that order, so the search never
 has to decode anything it is not returning.
 
-This module is deliberately able to fail. :func:`open_blob` returns None for
-a file that is missing, truncated, or from a future version, and the caller
-falls back to the JSON. A world-knowledge table is an enhancement; nothing
-here is ever worth taking a scan down for.
+:func:`open_blob` returns None for a file that is missing, truncated or from
+a future version, and the caller falls back to the JSON.
 """
 
 from __future__ import annotations

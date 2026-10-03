@@ -1,17 +1,14 @@
 """Deletion, against a mailbox big enough and awkward enough to break it.
 
-The unit tests for clearing out mail check the shape of what is sent. These
-check what happens to the mail, against a stand-in server that actually
-evaluates the search it is given: it parses the IMAP expression, works out
-which messages match, and only lets those be flagged and expunged. So
-"deleted exactly the right four hundred and nothing else" is a real
-assertion rather than a restatement of what the code did.
+The stand-in server evaluates the search it is given: it parses the IMAP
+expression, works out which messages match, and lets only those be flagged
+and expunged, so "deleted exactly the right four hundred and nothing else"
+is a real assertion.
 
-The mailbox is deliberately hostile. Twenty thousand messages, addresses and
-subjects with quotes, backslashes, accents, right-to-left marks and newlines
-in them, senders whose names contain other senders' names, messages with no
-date and messages dated in the future. Anything that survives this is not
-going to be surprised by somebody's inbox.
+The mailbox is hostile on purpose: twenty thousand messages, addresses and
+subjects with quotes, backslashes, accents, right-to-left marks and
+newlines, senders whose names contain other senders' names, and messages
+with no date or a future one.
 """
 
 from __future__ import annotations
@@ -48,19 +45,14 @@ class Message:
 
 
 class SearchingIMAP:
-    """A stand-in that really answers the search it is asked.
-
-    Only the handful of commands the clear-out uses, and each of them
-    strictly: an unquoted mailbox, an unknown key or a malformed OR is an
-    error rather than something quietly ignored, because a search that is
-    quietly misread is exactly the failure worth catching - it deletes
-    the wrong messages and reports success.
+    """A stand-in that really answers the search it is asked: only the commands
+    the clear-out uses, each strictly, since a quietly misread search
+    deletes the wrong messages and reports success.
     """
 
-    #: imaplib's own exception types. The engine catches those and turns
-    #: them into IMAPError; anything else goes straight through it, so a
-    #: stand-in with its own exception classes tests a path the real
-    #: server never takes.
+    #: imaplib's own exception types. The engine turns those into IMAPError and
+    #: lets anything else through, so a stand-in with classes of its own would
+    #: test a path the real server never takes.
     abort = imaplib.IMAP4.abort
     error = imaplib.IMAP4.error
 
@@ -328,11 +320,10 @@ class TestItDeletesExactlyWhatWasAsked:
         assert removed == len(expected)
 
     def test_a_domain_is_a_substring_and_catches_what_that_catches(self, big):
-        """FROM is a substring match on the server, which is what makes a
-        domain usable as a filter - and it means "@shop.example" also
-        takes "@shop.example.org" and anyone at all whose address ends
-        that way. Worth pinning because somebody reading the dialog will
-        assume it means the domain exactly, and it does not."""
+        """FROM is a substring match on the server, so "@shop.example" also
+        takes "@shop.example.org" and anyone whose address ends that way.
+        Pinned, because a reader of the dialog will assume it means the
+        domain exactly."""
         criteria = Criteria(senders=("@shop.example",), only_seen=False)
         server = SearchingIMAP(list(big))
         engine_on(server).delete_matching(criteria)
@@ -362,16 +353,11 @@ def _fixed_now(criteria):
 def _one_clock(monkeypatch):
     """Both sides of every date comparison read the same moment.
 
-    The criteria build their IMAP BEFORE date from ``datetime.now()`` and
-    the expectations here are worked out against a fixed NOW. Those agree
-    for as long as the two fall on the same day, which is to say they
-    agree until a run crosses midnight - and then a whole day of messages
-    sits between the two cutoffs. A build runner found it at 00:07: 19
-    deleted that should not have been.
-
-    Freezing the clock the criteria read is the fix. Nothing about the
-    product changes; it is this file that was reading two clocks and
-    calling them one.
+    The criteria build their BEFORE date from ``datetime.now()`` and the
+    expectations here use a fixed NOW, which agree only while both fall on
+    the same day: a run crossing midnight found 19 deleted that should not
+    have been. Freezing the clock the criteria read is the fix; the product
+    is unchanged.
     """
     import cleanup
 
@@ -397,9 +383,8 @@ class TestTheSuiteReadsOneClock:
             "whenever a run crosses midnight")
 
     def test_a_day_rolling_over_does_not_move_the_cutoff(self):
-        """What actually went wrong, held still: with the two clocks a day
-        apart, a year-old filter took a whole extra day of messages - 19
-        of them, on a build runner at seven minutes past midnight."""
+        """What went wrong, held still: with the two clocks a day apart, a
+        year-old filter took a whole extra day of messages."""
         from cleanup import Criteria
 
         criteria = Criteria(older_than_days=365, only_seen=False)

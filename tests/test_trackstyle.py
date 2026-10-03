@@ -1,9 +1,7 @@
-"""How a track moves and how it is put together. See trackstyle.
+"""How a track moves and how it is put together (see trackstyle).
 
-Charts written by songkit, where every hit is where it says - and then
-the same charts buried in the kind of false hits a detector really finds
-on a mix, two and three to the beat, because a reading that only works on
-clean hits does not work.
+Charts written by songkit, and the same charts buried in the false hits a
+detector really finds on a mix, two and three to the beat.
 """
 
 from __future__ import annotations
@@ -63,11 +61,10 @@ class TestTheStyle:
     @pytest.mark.parametrize("style", ["house", "techno", "dubstep", "trap",
                                        "dnb", "garage"])
     def test_and_still_does_under_a_detector_s_mistakes(self, style):
-        """Two false hits a beat in every part of the kit, anywhere: what a
-        kick detector finds on a real mix is mostly not the kick, and a
-        reading from the hits themselves called every record there was
-        broken. Folded on the bar, the drums stand out of their own
-        noise."""
+        """Two false hits a beat in every part of the kit: most of what a kick
+        detector finds on a real mix is not the kick, and a reading from the
+        hits themselves called every record broken. Folded on the bar, the
+        drums stand out of their own noise."""
         found, _truth, _beat = _read(style, noise=2.0)
         assert found.family() == FAMILY[style], (style, found.measured)
 
@@ -85,11 +82,11 @@ class TestTheStyle:
 
 class TestHalfTime:
     def test_a_kick_heard_in_the_snare_is_not_a_second_snare(self):
-        """On a real mix the kick is loud in the snare's bands too, and a
-        dubstep record's snare then had a second strong beat - the kick's
-        own. Counting strong snare beats, thirteen dubstep and trap records
-        came out with 0.83 of a second snare, and not one of them was half
-        time. Where the snare is against the kick says it."""
+        """On a real mix the kick is loud in the snare's bands too, giving a
+        dubstep snare a second strong beat, the kick's own: counting strong
+        snare beats, thirteen dubstep and trap records came out with 0.83 of
+        a second snare, and none was half time. Where the snare sits against
+        the kick says it."""
         kit = _kit(140.0, kick=(0, 2.5), snare=(2,), bleed=0.85)
         found = trackstyle.rhythm_of(kit, tempo=140.0)
         assert found["measured"]["second_snare"] > 0.6
@@ -168,10 +165,9 @@ class TestTheSections:
 
 
 class TestTheDrumsOwnGrid:
-    """The beat maps are phased from the first thing they heard, and on
-    real records that was a third of a beat out: every figure laid between
-    two beats. The drums folded over the whole track say where the beat
-    is."""
+    """The beat maps are phased from the first thing heard, a third of a beat
+    out on real records, which laid every figure between two beats. The
+    drums folded over the whole track say where the beat is."""
 
     @pytest.mark.parametrize("style", ["house", "dubstep", "garage", "hiphop"])
     def test_the_tempo_is_refined_and_the_beat_found(self, style):

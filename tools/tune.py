@@ -1,26 +1,24 @@
 #!/usr/bin/env python3
 """Tune the sorter against your own inbox, without your inbox leaving it.
 
-The eval fixtures in this repository are hand-written stand-ins. Real mail is
-better evidence than any of them, and the only real mail available is yours -
-so this reads it, runs the sorter over it, and tells you where the sorter is
-weakest, in terms general enough to act on.
+The repository's fixtures are hand-written stand-ins; real mail is better
+evidence. This reads yours, runs the sorter over it, and says where the
+sorter is weakest, in terms general enough to act on.
 
     ./dev tune                       # what the sorter is unsure about
     ./dev tune --days 30             # a wider window
     ./dev tune --corrections         # where it disagrees with what you taught it
     ./dev tune --write my-set.json   # a labelled set, for evaluate.py
 
-Nothing it writes goes near the repository. The output path must be outside
-it, and a check refuses to write anywhere tracked by git. The summary printed
-to the terminal carries no addresses, no subjects and no message text - only
-counts, categories and confidence bands, which is everything you need to know
-where the gaps are and nothing you would mind reading aloud.
+Nothing it writes goes near the repository: the output path must be outside
+it, and anywhere tracked by git is refused. The summary in the terminal
+carries no addresses, subjects or message text, only counts, categories and
+confidence bands.
 
-The one exception is ``--write``, which writes real messages to a real file
-because that is what a labelled set is. That file is yours. Keep it out of the
-repository, and note that ``tests/test_privacy.py`` will fail the moment
-anything shaped like a personal address is committed - which is the point.
+The exception is ``--write``, which writes real messages to a real file,
+because that is what a labelled set is. Keep that file out of the
+repository; ``tests/test_privacy.py`` fails the moment anything shaped like
+a personal address is committed.
 """
 
 from __future__ import annotations
@@ -142,11 +140,9 @@ def report(pairs) -> None:
 
 
 def against_corrections(pairs) -> None:
-    """Where the sorter still disagrees with what you have taught it.
-
-    Every one of these is a message you filed somewhere by hand and the
-    sorter would still put elsewhere - which is the most direct evidence
-    there is of a gap in the rules.
+    """Where the sorter still disagrees with what you have taught it: messages
+    filed by hand that the sorter would still put elsewhere, the most direct
+    evidence of a gap in the rules.
     """
     memory = corrections.Memory.load()
     if not len(memory):
@@ -178,9 +174,9 @@ def against_corrections(pairs) -> None:
 def write_set(pairs, path: Path) -> int:
     """Write a labelled set in the shape evaluate.py reads.
 
-    The labels are the sorter's own, so this is a starting point to correct
-    rather than an answer key - which is the honest way round: a set labelled
-    by the thing being measured measures nothing.
+    The labels are the sorter's own, a starting point to correct rather than
+    an answer key: a set labelled by the thing being measured measures
+    nothing.
     """
     if inside_the_repository(path):
         print(f"Refusing to write {path}: it is inside the repository. "

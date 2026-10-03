@@ -100,7 +100,8 @@ def _two_real_ffts(first: List[float], second: List[float] = None,
     conjugate-antisymmetric, so two frames ride in one transform, one in
     each part, and are separated afterwards:
 
-    A[k] = (Z[k] + conj(Z[N-k])) / 2 B[k] = (Z[k] - conj(Z[N-k])) / 2j
+        A[k] = (Z[k] + conj(Z[N-k])) / 2
+        B[k] = (Z[k] - conj(Z[N-k])) / 2j
 
     The transform is three quarters of an analysis's cost, and this halves
     how many are needed, exactly. Only the first half of each spectrum is

@@ -1,35 +1,25 @@
 """What a scan found, in the order somebody would want to be told it.
 
-The table is the right way to check a decision and the wrong way to find out
-what happened. Forty rows across four mailboxes is four hundred glances, and
-the three that matter are somewhere in the middle of it. Every scan already
-knows which three - it has read every message and decided what each one is -
-and then throws that away in favour of a grid sorted by date.
-
-So this is the same scan, read back as a briefing:
+The table is right for checking a decision and wrong for finding out what
+happened, so this reads the same scan back as a briefing:
 
 **Needs you.** Interviews to book, offers with a date on them, assessments
-with a clock running, and anything the sorter could not place. Ranked by what
-it costs to miss, not by when it arrived: an interview invitation from
-Tuesday outranks a rejection from an hour ago.
+with a clock running, and anything the sorter could not place, ranked by
+what it costs to miss rather than by when it arrived.
 
-**What came in.** Counts by kind, each one naming the folder it is bound for,
-so "eleven application receipts, all going to Job Search/Received" is one
-line instead of eleven rows.
+**What came in.** Counts by kind, each naming the folder it is bound for.
 
-**Where it is going.** The same messages counted by destination folder, which
-is the question "what will Apply actually do" asked directly.
+**Where it is going.** The same messages by destination folder: what Apply
+will do.
 
-**Who wrote.** The senders with the most in this batch, because that is how
-somebody notices that a third of their morning is one job board.
+**Who wrote.** The senders with the most in this batch.
 
 **Still waiting.** Actionable messages nobody has ticked, and the mailboxes
-that had nothing at all, since "no news from that account" is a finding.
+that had nothing, since no news from an account is a finding.
 
-Everything here is derived from rows the app already has. Nothing in this file
-opens a mailbox, calls a model, or writes anything down; hand it the same list
-twice and it says the same thing twice. That matters because a briefing is
-read once and trusted, so it cannot be the part that goes and does something.
+Derived only from rows the app already has: nothing here opens a mailbox,
+calls a model or writes anything down, and the same list always gives the
+same briefing.
 """
 
 from __future__ import annotations
@@ -217,11 +207,8 @@ def _urgency(item) -> Tuple[int, str]:
 
 
 def _rank(item, row: int, urgency: int, why: str) -> Tuple:
-    """Sort key: urgency first, then confidence, then newest.
-
-    Confidence before date on purpose. Two interview invitations are not
-    equally interesting if the sorter is sure about one and guessing at
-    the other, and the one it is sure about is the one somebody should
+    """Sort key: urgency, then confidence, then newest. Confidence before date:
+    of two interview invitations, the one the sorter is sure of should be
     read first.
     """
     when = item.email.date
@@ -234,10 +221,8 @@ def build(items: Sequence, *, window_start: Optional[datetime] = None,
           mailboxes: Iterable[str] = ()) -> Briefing:
     """Read a list of scanned rows and say what happened.
 
-    ``mailboxes`` is every account that was scanned, including ones that
-    turned out to be empty - a briefing that silently omits an account
-    cannot be used to answer "is there anything I have missed", which is
-    the only question it is for.
+    ``mailboxes`` is every account that was scanned, empty ones included: a
+    briefing that silently omits one cannot say whether anything was missed.
     """
     items = list(items or ())
     named = [name for name in mailboxes if (name or "").strip()]
@@ -323,8 +308,8 @@ def build(items: Sequence, *, window_start: Optional[datetime] = None,
                if count > 1]
 
     # -- loose ends --------------------------------------------------------
-    # These lines count themselves in their own words, so the count field
-    # stays at one - otherwise the list reads "5 x 5 ready to file".
+    # These lines count themselves in words, so the count field stays at one
+    # (otherwise the list reads "5 x 5 ready to file").
     waiting: List[Line] = []
     unticked = len(filed) - ticked
     if unticked:
@@ -338,11 +323,9 @@ def build(items: Sequence, *, window_start: Optional[datetime] = None,
         waiting.append(Line(label=f"{failed} the sorter could not read",
                             urgency=Urgency.UNSURE))
 
-    # Only when the rows say which mailbox they came from. On a single
-    # account nothing carries a label, so every name passed in would look
-    # like a mailbox that produced nothing - which is the one line in a
-    # briefing that must never be wrong, because it is read as "checked,
-    # and there was nothing there".
+    # Only when the rows say which mailbox they came from: on a single account
+    # nothing carries a label, and every name passed in would look like a
+    # mailbox that produced nothing, the one line that must never be wrong.
     quiet = [name for name in named if name not in seen] if seen else []
 
     return Briefing(headline=headline, attention=attention, arrivals=arrivals,

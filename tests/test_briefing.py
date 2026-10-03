@@ -1,8 +1,7 @@
 """The briefing: what it puts first, and what it must never claim.
 
-Most of these are about ranking and about honesty. A briefing is read once
-and believed, so the two ways it can fail are burying the message that
-mattered and saying a mailbox was quiet when nobody looked at it.
+A briefing is read once and believed, so it can fail two ways: burying the
+message that mattered, and calling a mailbox quiet when nobody looked at it.
 """
 
 from __future__ import annotations
@@ -160,8 +159,8 @@ class TestTheCounts:
         assert "2 ready to file, not ticked" in waiting
 
     def test_a_loose_end_counts_itself_once(self):
-        """The label says the number, so the count column must not say it
-        again - the line used to read "5 x 5 ready to file"."""
+        """The label says the number, so the count column must not say it again
+        ("5 x 5 ready to file")."""
         rows = [item(subject=str(n)) for n in range(5)]
         for row in rows[:3]:
             row.approved = False
@@ -270,20 +269,18 @@ class TestTheBriefingLinesShareTheirEdges:
     def card(self, qapp, request):
         """Under every density.
 
-        The theme gives every button one height so a row of mixed controls
-        lines up, and that height changes with the density - so a clickable
-        line matched its neighbours under one setting and not another. This
-        passed on its own and failed in the suite, depending on which theme
-        the test before it had left behind.
+        The theme gives every button one height so mixed controls line up,
+        and the height changes with the density, so a clickable line matched
+        its neighbours under one setting and not another: passing alone and
+        failing in the suite.
         """
         import theme
 
         from briefing_dialog import _Card
 
-        # Saved and put back, rather than restored by applying what this
-        # guesses the session was using. Every one of these changes the
-        # application's font, and a test that guesses wrong leaves the ones
-        # after it measuring a different one.
+        # Saved and put back rather than guessed: each of these changes the
+        # application's font, and a wrong guess leaves later tests measuring a
+        # different one.
         was = (qapp.font(), qapp.palette(), qapp.styleSheet())
         theme.apply(qapp, "light", "normal", spacing=request.param)
         card = _Card("Needs a reply", "the ones with a deadline")
@@ -327,12 +324,11 @@ class TestTheBriefingLinesShareTheirEdges:
             f"into them")
 
     def test_two_cards_end_their_lines_in_the_same_place(self, qapp):
-        """Where the raggedness actually was.
+        """Where the raggedness was.
 
-        Within one card the column was always uniform: the widest folder
-        name in it set the width for every line in it. Down the page it was
-        not, because the next card had different names in it - so the eye
-        followed a column that stepped in and out from section to section.
+        Within one card the column was uniform, set by its widest folder
+        name, but the next card had different names, so the column stepped
+        in and out down the page.
         """
         from briefing_dialog import _Card
 
@@ -364,14 +360,13 @@ class TestTheBriefingLinesShareTheirEdges:
             f"does not match its neighbours")
 
     def test_a_count_sits_on_the_first_line_of_what_it_counts(self, card):
-        """Row two wraps onto two lines. Its count used to be centred
-        against the whole of it.
+        """Row two wraps onto two lines, and its count was centred against all
+        of it.
 
-        Measured from the pixels. The count's *box* is the whole of the
-        grid cell either way, and the label centres its text inside that
-        box, so reading the geometry cannot tell the two apart - a version
-        of this test that did passed against the layout it was written to
-        reject.
+        Measured from the pixels: the count's box is the whole grid cell
+        either way and the label centres its text inside it, so reading the
+        geometry cannot tell the two apart. A version that did passed
+        against the layout it was written to reject.
         """
         from PySide6.QtCore import QPoint
         from PySide6.QtGui import QColor, QImage, QPainter
@@ -421,12 +416,9 @@ class TestTheBriefingLinesShareTheirEdges:
 
 
 class TestTheBriefingCardsClearTheScrollBar:
-    """"Xxx xxxxxx xxx xxxxxxxxxx xxxxx xxxxx xx xxxxxxxx."
-
-    The cards ran into it. Measured at 700x520 with the bar showing, a card
-    ended one pixel from the scroll bar while the same card had eleven to
-    the dialog's edge on the other side, so a column of bordered panels
-    butted straight up against it.
+    """The cards ran into the scroll bar: at 700x520 with the bar showing, a
+    card ended a pixel from it and had eleven to the dialog's edge on the
+    other side.
     """
 
     #: Written out rather than read from BriefingDialog.BAR_GAP, so that

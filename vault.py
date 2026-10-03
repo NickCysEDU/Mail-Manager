@@ -1,31 +1,21 @@
 """Encryption at rest for the two files that describe your mail.
 
-Most of what this app writes down is dull: which folders exist, how wide a
-column is. Two files are not.
-
 ``verdicts.json`` holds a summary and a line of reasoning for every message
-it has classified, which together are a readable index of somebody's
-correspondence: who turned them down, what they applied for, when. And
-``corrections.json`` holds every sender they have filed by hand, which is a
-list of who writes to them.
+classified, a readable index of somebody's correspondence;
+``corrections.json`` holds every sender filed by hand, a list of who writes
+to them.
 
-Both used to sit in the clear. File permissions of ``0600`` and FileVault
-already protect them from someone holding the disk, so the threat this closes
-is the other one: **any other program running as the same user can read a file
-in your home directory.** It cannot read a Keychain item belonging to this app
-without the system asking you first, because Keychain access is granted per
-application. Putting the key there and the ciphertext on disk moves those two
-files behind that boundary, and takes them out of a Time Machine snapshot or a
-synced folder in readable form.
+File permissions and FileVault protect them from somebody holding the disk.
+The threat this closes is **any other program running as the same user**,
+which can read a file in your home directory but not this app's Keychain
+item without the system asking. With the key in the Keychain and only
+ciphertext on disk, the files are also unreadable in a Time Machine snapshot
+or a synced folder. It is no protection from somebody with your Mac unlocked
+who can run this app.
 
-What this is not: it is not protection from somebody who already has your
-Mac unlocked and can run this app. Nothing stored on a machine can be.
-
-**When it cannot encrypt, it does not write the sensitive parts at all.**
-A missing cipher library or an unreachable Keychain degrades the feature -
-verdicts are still cached, they just lose their summaries - rather than
-degrading the promise. A cache is never worth writing somebody's mail to disk
-in the clear.
+**When it cannot encrypt, it does not write the sensitive parts at all.** A
+missing cipher library or an unreachable Keychain drops the summaries from
+the cache rather than writing mail to disk in the clear.
 """
 
 from __future__ import annotations
@@ -45,8 +35,8 @@ log = logging.getLogger(__name__)
 #: read rather than rejected.
 MAGIC = b"MMSEAL1\n"
 
-#: 96 bits, which is what AES-GCM expects and what it is safe to generate at
-#: random for every single write.
+#: 96 bits: what AES-GCM expects, and safe to generate at random for every
+#: write.
 NONCE_BYTES = 12
 KEY_BYTES = 32
 
@@ -66,10 +56,8 @@ def cipher_available() -> bool:
 
 
 class Vault:
-    """Reads and writes a JSON document, sealed when it can be.
-
-    Deliberately not a general-purpose crypto layer. It does one thing: put a
-    dict on disk in a form another program running as this user cannot read.
+    """Reads and writes a JSON document, sealed when it can be: a dict on disk
+    in a form another program running as this user cannot read.
     """
 
     def __init__(self, store=None) -> None:
@@ -78,10 +66,9 @@ class Vault:
         self._looked = False
 
     # -- the key ---------------------------------------------------------
-    #: Long enough for somebody to click Allow, short enough that a run with
-    #: nobody watching ends. macOS identifies an app by its code signature, so
-    #: a rebuilt or re-signed copy is asked about again - and a prompt no one
-    #: can answer is a process that never returns.
+    #: Long enough for somebody to click Allow, short enough that an unattended
+    #: run ends: macOS knows an app by its signature, so a re-signed copy is
+    #: asked again.
     KEYCHAIN_TIMEOUT = 20.0
 
     def _credential_store(self):
@@ -94,9 +81,8 @@ class Vault:
     def key(self) -> Optional[bytes]:
         """The data key, made on first use. None if the Keychain will not talk.
 
-        Cached for the life of the object: a scan seals the cache once at the
-        end, and asking the Keychain repeatedly is how you end up with a
-        password prompt in the middle of somebody's work.
+        Cached for the life of the object: asking the Keychain repeatedly is
+        how a password prompt lands in the middle of somebody's work.
         """
         if self._looked:
             return self._key
@@ -138,8 +124,8 @@ class Vault:
     def read(self, path: Path) -> Optional[Any]:
         """The document at ``path``, sealed or not. None if unreadable.
 
-        Never raises. A file that cannot be read is a cache that has to be
-        rebuilt, which is slow rather than broken.
+        Never raises: an unreadable cache is rebuilt, which is slow rather
+        than broken.
         """
         try:
             raw = path.read_bytes()

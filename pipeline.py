@@ -1,30 +1,21 @@
 """Fetching and classifying at the same time.
 
-A scan used to be two phases end to end: download everything from every
-mailbox, then hand the lot to the classifier. That is one machine waiting for
-another twice over. The network is idle for the whole of the second half, and
-the classifier - a model on a server, a model on this Mac, or the rules engine
-- is idle for the whole of the first.
+The fetch runs on its own thread and hands messages over as they land, and
+the classifier (a hosted model, a local one, or the rules engine) works on
+whatever has arrived, so neither waits for the other.
 
-So the fetch runs on its own thread and hands finished messages over as they
-land. The classifier takes whatever has arrived and gets on with it, which
-means the last message is being classified moments after it is downloaded
-rather than after everything else has been.
+Three things it does not change:
 
-Three things this deliberately does not change:
-
-**The order.** Messages come off the wire in whatever order the connections
-finish, and the caller still gets them sorted the way it always was. Order is
-restored at the end rather than enforced during, because enforcing it during
-would mean waiting - which is the thing being removed.
+**The order.** Messages arrive in whatever order the connections finish; the
+caller still gets them in its own order, restored at the end, since
+enforcing it during would mean waiting.
 
 **Failures.** An exception on the fetch thread is re-raised on the consuming
-thread, at the point where the next batch would have been read. From the
-caller's point of view a fetch failure looks exactly as it did when the fetch
-was a plain function call.
+thread where the next batch would have been read, as if the fetch were a
+plain call.
 
-**Cancellation.** Both halves watch the same event. Setting it stops the
-producer at its next batch boundary and the consumer at its next group.
+**Cancellation.** Both halves watch the same event: the producer stops at
+its next batch boundary and the consumer at its next group.
 """
 
 from __future__ import annotations
@@ -39,19 +30,15 @@ log = logging.getLogger(__name__)
 #: Sent down the queue when the producer has nothing more to give.
 _DONE = object()
 
-#: How many batches may sit unclaimed before the producer waits. Small, on
-#: purpose: a deep queue would let the fetch race ahead and rebuild exactly
-#: the memory spike this exists to avoid.
+#: How many batches may sit unclaimed before the producer waits: few, so the
+#: fetch cannot race ahead and rebuild the memory spike this exists to avoid.
 QUEUE_DEPTH = 4
 
 
 class Pipeline:
-    """Runs a producer on its own thread and yields what it produces.
-
-    Deliberately not a general-purpose worker pool. It is one producer, one
-    consumer, and a queue between them, because that is the whole shape of the
-    problem and anything more would be harder to reason about at the point
-    where a scan goes wrong.
+    """Runs a producer on its own thread and yields what it produces: one
+    producer, one consumer and a queue between them, the whole shape of the
+    problem.
     """
 
     def __init__(self, name: str = "fetch") -> None:
@@ -98,12 +85,10 @@ class Pipeline:
             self._thread.join(timeout)
 
     def drain(self) -> None:
-        """Stop caring about the rest, without leaving the producer blocked.
-
-        Used when the consumer gives up - a cancellation, or an error of its
-        own. The producer is watching the same cancel event and will stop on
-        its own; this just makes sure it is never stuck waiting for room in a
-        queue nobody is reading.
+        """Stop caring about the rest without leaving the producer blocked,
+        when the consumer gives up. The producer watches the same cancel
+        event; this keeps it from waiting for room in a queue nobody is
+        reading.
         """
         while self._thread is not None and self._thread.is_alive():
             try:
@@ -127,14 +112,13 @@ def in_original_order(originals: Sequence, produced: dict) -> List:
 class ClassifyPump:
     """Classifies messages as they arrive, on a thread of its own.
 
-    The fetch threads call :meth:`offer` with each group of messages they
-    finish. This thread takes them, waits until it has a worthwhile number,
-    and classifies them - so the model is working on the first fifty messages
-    while the mailbox is still handing over the next fifty.
+    The fetch threads :meth:`offer` each group they finish; this waits for a
+    worthwhile number and classifies them, so the model works on the first
+    fifty while the mailbox hands over the next fifty.
 
-    It holds results by ``id`` of the message object rather than by position,
-    because position stops meaning anything once several connections are
-    finishing at once. :func:`in_original_order` puts them back.
+    Results are held by ``id`` of the message, since positions mean nothing
+    with several connections finishing at once; :func:`in_original_order`
+    puts them back.
     """
 
     def __init__(self, classify: Callable[[List], List], *,
@@ -143,8 +127,7 @@ class ClassifyPump:
                  on_done: Optional[Callable[[int], None]] = None) -> None:
         self._classify = classify
         #: Wait for at least this many before starting, so the first call is
-        #: not a batch of one. The remainder is always flushed at the end, so
-        #: nothing is left behind by the threshold.
+        #: not a batch of one; the remainder is flushed at the end.
         self._batch_size = max(1, int(batch_size))
         self._cancel = cancel
         self._on_done = on_done

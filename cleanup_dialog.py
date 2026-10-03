@@ -1,25 +1,15 @@
 """The window for clearing out a mailbox.
 
-The engine underneath this (:mod:`cleanup`) is fast enough that the
-interesting problem moved: it is no longer "how long does it take to delete
-four thousand messages", it is "how do you show somebody what they are about
-to delete so they agree to the right thing". Deleting mail is not undoable,
-and the server does not ask twice.
+Deleting mail cannot be undone and the server does not ask twice, so one
+rule: **the number comes from the server, before the delete.** Count sends a
+read-only SEARCH with exactly the criteria Delete will use, and the
+confirmation quotes its answer. Delete stays disabled until then, and again
+the moment any control changes.
 
-So the dialog is built around one rule: **the number comes from the server,
-and it comes before the delete.** Pressing Count sends a read-only SEARCH
-with exactly the criteria that the Delete button will use, and the count that
-comes back is what the confirmation quotes. The Delete button is disabled
-until that has happened, and it is disabled again the moment any control
-changes, because a number that was true about different criteria is worse
-than no number at all.
-
-Everything else is in service of that. The suggestions down the left are
-piles the last scan noticed - they fill the boxes in, they never act on their
-own. The sentence under the filters is :meth:`cleanup.Criteria.describe`, so
-what the dialog says and what the server is asked cannot drift apart. The
-confirmation names the folder, the count and the criteria in one sentence,
-and the button in it says the number too.
+The suggestions only fill the boxes in. The sentence under the filters is
+:meth:`cleanup.Criteria.describe`, so what the dialog says and what the
+server is asked cannot drift apart, and the confirmation names the folder,
+the count and the criteria in one sentence, with the number on its button.
 """
 
 from __future__ import annotations
@@ -43,18 +33,15 @@ from cleanup import Criteria
 log = logging.getLogger(__name__)
 
 #: Above this many messages the confirmation asks for a second, deliberate
-#: click rather than just a Yes. Not a limit, a speed bump: four figures of
-#: mail is more than anybody re-reads, so it is worth one more beat.
+#: click: a speed bump, not a limit.
 LOTS = 200
 
 
 class ClearOutDialog(QDialog):
     """Pick what to clear out of one folder, see how many, then delete.
 
-    The dialog owns no connection. Every server round trip goes through a
-    worker on its own thread - listing folders, counting, deleting - because
-    all three are slow against a real mailbox and none of them belong on the
-    thread that draws.
+    Listing folders, counting and deleting each run on a worker thread: all
+    three are slow against a real mailbox.
     """
 
     #: Emitted after a successful delete, with how many went, so the window
@@ -111,9 +98,7 @@ class ClearOutDialog(QDialog):
         self.suggestion_list.setSelectionMode(
             QListWidget.SelectionMode.NoSelection)
         self.suggestion_list.setAlternatingRowColors(True)
-        # A long address is elided, not scrolled sideways. A horizontal
-        # scrollbar under a checkbox list is something nobody ever uses and
-        # everybody has to look at.
+        # A long address is elided, not scrolled sideways.
         self.suggestion_list.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.suggestion_list.setTextElideMode(Qt.TextElideMode.ElideRight)
@@ -273,12 +258,9 @@ class ClearOutDialog(QDialog):
         )
 
     def _changed(self, *_args) -> None:
-        """Any control moving invalidates the count.
-
-        A count is an answer about particular criteria. Leaving Delete lit
-        after the criteria changed is how somebody agrees to forty and
-        deletes four thousand, so the number goes away with the question it
-        answered.
+        """Any control moving invalidates the count: a count answers particular
+        criteria, and leaving Delete lit after they change is how somebody
+        agrees to forty and deletes four thousand.
         """
         self._counted = None
         self._counted_for = None
@@ -299,10 +281,8 @@ class ClearOutDialog(QDialog):
         self.sentence.setText("This deletes " + criteria.describe() + ".")
 
     def _suggestions_changed(self, _item) -> None:
-        """Fill the filters in from whatever is ticked.
-
-        The boxes stay editable afterwards: a suggestion is a starting point,
-        and the user typing over it is the normal case, not an error.
+        """Fill the filters in from whatever is ticked. They stay editable: a
+        suggestion is a starting point.
         """
         senders: List[str] = []
         bulk = False
@@ -383,9 +363,8 @@ class ClearOutDialog(QDialog):
 
         criteria = self.criteria()
         if self._counted is None or self._counted_for != criteria:
-            # Belt and braces: the button is disabled whenever this is true.
-            # It is checked again here because the cost of being wrong is
-            # deleted mail, and the check is one comparison.
+            # The button is disabled whenever this is true; checked again here
+            # because being wrong costs deleted mail.
             self._changed()
             return
         if not self._confirm(self._counted, criteria):
@@ -402,11 +381,9 @@ class ClearOutDialog(QDialog):
         worker.start()
 
     def _confirm(self, count: int, criteria: Criteria) -> bool:
-        """The last thing between the user and a delete.
-
-        It names the number and the criteria in one sentence, and the button
-        says the number too, so that agreeing to it cannot be done without
-        having read it.
+        """The last thing between the user and a delete: the number and the
+        criteria in one sentence, and the number on the button too, so
+        agreeing means having read it.
         """
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Warning)
@@ -483,11 +460,9 @@ class ClearOutDialog(QDialog):
             self.progress.setFormat("Stopping…")
 
     def reject(self) -> None:
-        """Close, but never while a thread of ours is still running.
-
-        Qt aborts the process when a running QThread is destroyed, and these
-        threads are children of the dialog, so closing on top of one is a
-        crash rather than a cancel.
+        """Close, but never while one of these threads is running: they are
+        children of the dialog, and Qt aborts the process when a running
+        QThread is destroyed.
         """
         if not self._stop_everything():
             return

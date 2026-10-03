@@ -15,7 +15,7 @@ Four snares, because "snare" is not one sound:
 
 **A sample that stops while it is still moving is a step, and a step is a
 broadband click**, which a detector is right to call a hit. Everything is
-faded to nothing, and ``test_the_written_track_is_clean`` checks it stays
+faded to nothing, and ``test_the_written_tracks_do_not_click`` checks it stays
 that way.
 """
 
