@@ -2001,6 +2001,18 @@ class MainWindow(QMainWindow):
             if worker.isRunning() and not worker.stop(3000):
                 _abandon(worker)
         self._workers.clear()
+        # The update check and an update's download are threads too, parented
+        # to this window: destroyed while running, Qt aborts the process.
+        dialog = getattr(self, "_update_dialog", None)
+        fetch = getattr(dialog, "_fetch", None) if dialog is not None else None
+        if fetch is not None and shiboken6.isValid(fetch) and fetch.isRunning():
+            fetch.installer.cancelled = True
+            if not fetch.wait(3000):
+                _abandon(fetch)
+        look = getattr(self, "_update_look", None)
+        if look is not None and shiboken6.isValid(look) and look.isRunning():
+            if not look.wait(3000):
+                _abandon(look)
 
     def _apply_mode(self) -> None:
         """Show the banner and adjust the window title for demo / dry-run."""

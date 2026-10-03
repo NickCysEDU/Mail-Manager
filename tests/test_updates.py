@@ -310,6 +310,83 @@ class TestTheMainWindow:
             setattr(window.settings, name, value)
         return window
 
+    def test_the_suite_never_asks_github(self, qapp):
+        """conftest answers the update check at once, so no test that leaves
+        a window open reaches the network."""
+        import update_dialog
+
+        look = update_dialog.Look()
+        said = []
+        look.failed.connect(said.append)
+        look.run()
+        assert said == ["no network in tests"]
+
+    def test_shutting_down_leaves_no_check_running(self, qapp, monkeypatch):
+        """Destroying a running QThread aborts the process, so quitting
+        during a slow check waits for it or lets it go."""
+        import threading
+
+        import gui
+        import update_dialog
+        from config import InMemoryCredentialStore, Settings
+
+        release = threading.Event()
+        monkeypatch.setattr(update_dialog.Look, "run",
+                            lambda self: release.wait(10))
+        window = gui.MainWindow(Settings(icloud_email="you@icloud.example"),
+                                InMemoryCredentialStore())
+        try:
+            window._look_for_updates(by_hand=True)
+            look = window._update_look
+            assert look.isRunning()
+            monkeypatch.setattr(update_dialog.Look, "wait",
+                                lambda self, *_args: False)
+            window.shutdown()
+            assert look.parent() is None, "a running check is still the window's"
+            assert look in gui._ABANDONED
+        finally:
+            release.set()
+            update_dialog.QThread.wait(look, 5000)
+            window.close()
+
+    def test_shutting_down_stops_a_download(self, qapp, tmp_path):
+        """An update being downloaded is told to stop, and waited for."""
+        import time
+
+        import gui
+        import updates
+        from config import InMemoryCredentialStore, Settings
+        from update_dialog import Fetch, UpdateDialog
+
+        class Slow:
+            cancelled = False
+
+            def run(self):
+                while not self.cancelled:
+                    time.sleep(0.01)
+                raise updates.UpdateError("cancelled")
+
+        window = gui.MainWindow(Settings(icloud_email="you@icloud.example"),
+                                InMemoryCredentialStore())
+        try:
+            dialog = UpdateDialog(updates.Release(version="99.0.0",
+                                                  url="https://example.com/x"),
+                                  app=tmp_path / "Mail Manager.app",
+                                  parent=window)
+            fetch = Fetch(Slow(), dialog)
+            dialog._fetch = fetch
+            window._update_dialog = dialog
+            fetch.start()
+            assert fetch.isRunning()
+            window.shutdown()
+            assert fetch.installer.cancelled
+            assert not fetch.isRunning(), "the download was left running"
+            assert fetch not in gui._ABANDONED
+        finally:
+            fetch.installer.cancelled = True
+            fetch.wait(5000)
+            window.close()
+
     def test_it_looks_only_when_due(self, qapp, monkeypatch):
         import gui
         import update_dialog

@@ -24,6 +24,21 @@ from models import Category, Classification, EmailMessage, FolderPlan, OtherCate
 
 
 # --------------------------------------------------------------------------
+# No network
+# --------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def no_update_checks(monkeypatch):
+    """A window shown for five seconds starts an update check, which would
+    ask GitHub; here it answers at once, without the network."""
+    try:
+        import update_dialog
+    except ImportError:     # no Qt, so no window to start one
+        return
+    monkeypatch.setattr(update_dialog.Look, "run",
+                        lambda self: self.failed.emit("no network in tests"))
+
+
+# --------------------------------------------------------------------------
 # Isolated application directories
 # --------------------------------------------------------------------------
 @pytest.fixture(autouse=True)
