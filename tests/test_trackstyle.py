@@ -203,6 +203,107 @@ class TestTheDrumsOwnGrid:
         assert found.faster == 1.0
 
 
+class TestTheTempoItIsCountedIn:
+    @staticmethod
+    def _curves(bpm, kick, snare, hats, bars=48):
+        beat = 60.0 / bpm
+        length = bars * 4 * beat + 1.0
+
+        def curve(places):
+            return trackstyle.envelope_from(
+                [(bar * 4 + place) * beat for bar in range(bars)
+                 for place in places], 60.0, length)
+
+        return curve(kick), curve(snare), curve(hats)
+
+    @pytest.mark.parametrize("bpm", [120.0, 128.0])
+    def test_a_kick_in_threes_over_a_backbeat_is_counted_in_fours(self, bpm):
+        """The kick alone folds perfectly at three quarters of the tempo or
+        half as fast again; the snare on two and four, the straight hats
+        and the bar say otherwise."""
+        kick, snare, hats = self._curves(bpm, (0, 4 / 3, 8 / 3), (1, 3),
+                                         tuple(i / 2 for i in range(8)))
+        both = [a + b for a, b in zip(kick, snare)]
+        got = trackstyle.choose_tempo(both, 60.0, [bpm * 0.75],
+                                      snare=snare, hats=hats)
+        assert abs(got - bpm) < 0.1, got
+
+    @pytest.mark.parametrize("bpm, places, strengths, reading", [
+        (136.0, (0.0, 1.5), (0.5, 1.0), 204.0),
+        (124.0, (2.25, 2.5), (0.5, 0.5), 93.0),
+        (136.0, (1.5, 2.0), (1.0, 0.5), 102.0),
+    ])
+    def test_a_pattern_once_a_bar_is_counted_in_its_bar(self, bpm, places,
+                                                        strengths, reading):
+        """Sparse enough that it folds about as sharply on a beat three
+        quarters as long: only the bar it repeats in says which is which."""
+        beat = 60.0 / bpm
+        bars = 40
+        length = bars * 4 * beat + 1.0
+        values = [0.0] * int(length * 60.0 + 1)
+        for place, strength in zip(places, strengths):
+            curve = trackstyle.envelope_from(
+                [(bar * 4 + place) * beat for bar in range(bars)], 60.0,
+                length)
+            values = [a + strength * b for a, b in zip(values, curve)]
+        got = trackstyle.choose_tempo(values, 60.0, [reading])
+        assert abs(got - bpm) < 0.1, got
+
+    def test_too_fast_to_count_without_a_kick_on_every_beat_is_halved(self):
+        """A record at 96 read at 192, with nothing on two and four for
+        the half-time rule to go on."""
+        kit = _kit(96.0, (0, 0.75, 2.5), (), (0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5))
+        found = trackstyle.rhythm_of(kit, tempo=192.0)
+        assert abs(found["tempo"] - 96.0) < 0.1, found["tempo"]
+
+    def test_with_a_kick_on_every_beat_it_is_as_fast_as_it_sounds(self):
+        kit = _kit(190.0, (0, 1, 2, 3), (1, 3), (0.5, 1.5, 2.5, 3.5))
+        found = trackstyle.rhythm_of(kit, tempo=190.0)
+        assert abs(found["tempo"] - 190.0) < 0.1, found["tempo"]
+
+    def test_drum_and_bass_keeps_its_speed(self):
+        kit = _kit(174.0, (0, 1.75, 2.5), (1, 3),
+                   tuple(i / 2 for i in range(8)))
+        found = trackstyle.rhythm_of(kit, tempo=174.0)
+        assert abs(found["tempo"] - 174.0) < 0.1, found["tempo"]
+
+
+class TestTheFirstBeatOfTheBar:
+    @pytest.mark.parametrize("style", sorted(songkit.PATTERNS))
+    def test_it_is_where_the_parts_begin(self, style):
+        chart, contour, beat, truth = songkit.chart(style, offset=0.3)
+        if len(truth) < 2:
+            pytest.skip("one part only")
+        found = trackstyle.read(chart, beat, 0.3, contour)
+        if found.downbeat is None:
+            pytest.skip("no beat to count")
+        off = ((found.downbeat - truth[1][1]) / (beat * 4)) % 1.0
+        assert min(off, 1.0 - off) * 4 < 0.25, (style, off * 4)
+
+    def test_a_kick_on_every_beat_does_not_decide_it(self):
+        """Four to the floor's kick is the same on every beat give or take
+        a hair, and a hair is not a reason: where the track changes is."""
+        chart, contour, beat, truth = songkit.chart("house", offset=0.3)
+        length = len(contour["loud"]) / contour["rate"]
+        curves = {name: (trackstyle.envelope_from(chart[name], 60.0, length),
+                         60.0) for name in ("Kick", "Snare", "Hats")}
+        # A little more kick on the third beat of every bar than the first.
+        loud = list(curves["Kick"][0])
+        for bar_start in range(0, int(length / (beat * 4))):
+            at = int((0.3 + (bar_start * 4 + 2) * beat) * 60.0)
+            for index in range(max(0, at - 2), min(len(loud), at + 3)):
+                loud[index] *= 1.04
+        curves["Kick"] = (loud, 60.0)
+        found = trackstyle.rhythm(curves["Kick"][0], curves["Snare"][0],
+                                  curves["Hats"][0], 60.0, beat,
+                                  [(0.0, length)])
+        first = trackstyle._first_beat(curves, contour["loud"],
+                                       contour["rate"], beat, found["phase"],
+                                       length)
+        want = round((truth[1][1] - found["phase"]) / beat) % 4
+        assert first == want
+
+
 class TestItsOwnNumber:
     def test_the_same_record_is_the_same_seed_and_another_is_not(self):
         one, _t, _b = _read("house")

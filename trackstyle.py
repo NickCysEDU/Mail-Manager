@@ -195,6 +195,51 @@ def _downbeat(kicks: Sequence[float], snares: Sequence[float], grid: float,
     return first
 
 
+#: What each thing a beat of the bar has going for it counts towards its
+#: being the first, each as a share of how far it varies over the four -
+#: or of FIRST_BEAT_FLOOR of its average, where it hardly varies, so that
+#: four to the floor's kick, the same on every beat, says nothing. Fitted
+#: against a DJ program's grid on 193 records, on one half and checked on
+#: the other: 147 right, where the kick and snare alone, with the
+#: loudness only to settle a tie, got 128. Where the chords change would
+#: help too, but they are found alongside the drums and often after them,
+#: and the bar would move under a ride already going.
+FIRST_BEAT = {"kick": 2.0, "snare": -0.5, "bar": 1.0, "two": 0.5}
+FIRST_BEAT_FLOOR = 0.2
+
+
+def _first_beat(curves: Dict[str, Tuple[Sequence[float], float]],
+                loud: Sequence[float], rate: float, beat: float,
+                phase: float, length: float) -> int:
+    """Which of four beats from ``phase`` begins the bar: the one with the
+    most kick and the least snare over the whole track, and the one the
+    loudness changes across, a bar and two bars at a time, since a part
+    begins on a bar."""
+    whole = [(0.0, length)]
+
+    def ranged(values: List[float]) -> List[float]:
+        low, high = min(values), max(values)
+        scale = max(high - low, FIRST_BEAT_FLOOR * sum(values) / len(values))
+        if scale <= 1e-12:
+            return [0.0] * len(values)
+        return [(value - low) / scale for value in values]
+
+    found: Dict[str, List[float]] = {}
+    for name in ("Kick", "Snare"):
+        values, at = curves[name]
+        folded = fold(values, at, beat, phase, whole)
+        found[name.lower()] = ranged([_peak(folded, q * PER_BEAT)
+                                      for q in range(BAR)])
+    found["bar"] = ranged([_changes_on(loud, rate, phase + q * beat,
+                                       beat * BAR, length)
+                           for q in range(BAR)])
+    found["two"] = ranged([_changes_on(loud, rate, phase + q * beat,
+                                       beat * BAR * 2, length)
+                           for q in range(BAR)])
+    return max(range(BAR), key=lambda q: sum(
+        weight * found[name][q] for name, weight in FIRST_BEAT.items()))
+
+
 def _changes_on(loud: Sequence[float], rate: float, first: float,
                span: float, length: float) -> float:
     """How much the loudness changes across the start of bars that begin
@@ -602,6 +647,9 @@ HALVED_FROM = 155.0
 #: How far the snare two beats from the kick has to stand over the snare
 #: one beat from it for the record to be half time (see rhythm's "half").
 HALF_FROM, HALF_SURE = 1.1, 1.8
+#: Counted faster than this, a record is counted at half unless its kick
+#: is on every beat (rhythm's "four" at least FOUR_SURE).
+TOO_FAST, FOUR_SURE = 185.0, 0.6
 
 
 def _sharpness(values: Sequence[float], rate: float, beat: float,
@@ -709,13 +757,18 @@ PREFER_WIDTH = 1.5
 
 
 def choose_tempo(values: Sequence[float], rate: float,
-                 readings: Sequence[float]) -> float:
+                 readings: Sequence[float],
+                 snare: Optional[Sequence[float]] = None,
+                 hats: Optional[Sequence[float]] = None) -> float:
     """The tempo, to a hundredth, among the readings and their usual
-    mistakes (RELATIVES): the one the whole track folds onto most sharply,
-    near a tempo a person would count. Measured against a DJ program's
-    tempos on sixty records: 55 right (40 exactly, 15 an octave apart,
-    which is how it files drum and bass), against 24 of 40 exactly for the
-    beat maps' own readings - the rest were wrong by a third or a quarter.
+    mistakes (RELATIVES), near a tempo a person would count.
+
+    ``values`` is the kick and snare together. Chosen by how sharply they
+    fold onto the beat and onto the bar, and, where given, the snare onto
+    the beat and the hats onto the eighth: a pattern that repeats every
+    dotted beat folds as sharply on the beat as the real one, but not on
+    the bar, and the hats keep the real eighth. Against a DJ program on
+    300 records, 290 right (or an octave out) where the beat alone got 268.
     """
     candidates = sorted({round(within(reading * ratio), 3)
                          for reading in readings if reading and reading > 0.0
@@ -723,10 +776,21 @@ def choose_tempo(values: Sequence[float], rate: float,
     if not candidates:
         return 0.0
     step = 2 if len(values) > rate * 120 else 1
-    best = max(candidates, key=lambda bpm: _sharpness(
-        values, rate, 60.0 / bpm, step) * math.exp(
-        -0.5 * (math.log2(bpm / COUNTED) / PREFER_WIDTH) ** 2))
-    return _refined(values, rate, best)
+
+    def sharp(curve, beat):
+        return math.log(max(1e-6, _sharpness(curve, rate, beat, step)))
+
+    def score(bpm):
+        beat = 60.0 / bpm
+        total = (sharp(values, beat) + sharp(values, beat * BAR)
+                 - 0.5 * (math.log2(bpm / COUNTED) / PREFER_WIDTH) ** 2)
+        if snare:
+            total += 0.5 * sharp(snare, beat)
+        if hats:
+            total += 0.5 * sharp(hats, beat / 2.0)
+        return total
+
+    return _refined(values, rate, max(candidates, key=score))
 
 
 def _refined(values: Sequence[float], rate: float, bpm: float) -> float:
@@ -815,7 +879,8 @@ def rhythm_of(kit: Optional[dict], tempo: float = 0.0,
             hint, _counted_from(curves["Kick"][0], rate),
             _counted_from(curves["Snare"][0], rate),
             _counted_from(both, rate),
-            _counted_from(curves["Hats"][0], rate)])
+            _counted_from(curves["Hats"][0], rate)],
+            snare=curves["Snare"][0], hats=curves["Hats"][0])
     if tempo <= 0.0:
         tempo = tempo_from(both, rate)
     if tempo <= 0.0:
@@ -847,6 +912,16 @@ def rhythm_of(kit: Optional[dict], tempo: float = 0.0,
             and measured["kick_contrast"] > 1.6):
         faster = 2.0
         beat /= 2.0
+        measured = rhythm(curves["Kick"][0], curves["Snare"][0],
+                          curves["Hats"][0], rate, beat, spans)
+    # Faster than anybody counts, with no kick on every beat to say it
+    # really is that fast: a backbeat counted twice over, which the two
+    # rules above can hand back and forth. Counted at half, as a DJ program
+    # counts it. Drum and bass at 170 to 180 is under the line; hardcore's
+    # kick is on every beat.
+    if 60.0 / beat > TOO_FAST and measured["four"] < FOUR_SURE:
+        beat *= 2.0
+        faster = 1.0
         measured = rhythm(curves["Kick"][0], curves["Snare"][0],
                           curves["Hats"][0], rate, beat, spans)
     phase, beat = on_the_hits(measured["phase"], beat, kit)
@@ -1111,27 +1186,8 @@ def read(chart: Optional[dict], beat: float, grid: Optional[float],
     style.faster = float(found.get("faster", 1.0))
     style.beat_phase = float(found["phase"])
     style.beats = list(found.get("beats") or ())
-    # The first downbeat: the beat of four the kick is strongest on and the
-    # snare weakest, from the drums folded over the whole track.
-    whole = [(0.0, length)]
-    k4 = fold(curves["Kick"][0], curves["Kick"][1], beat, style.beat_phase,
-              whole)
-    s4 = fold(curves["Snare"][0], curves["Snare"][1], beat, style.beat_phase,
-              whole)
-    scores = [_peak(k4, q * PER_BEAT) - 0.8 * _peak(s4, q * PER_BEAT)
-              for q in range(BAR)]
-    top = max(scores)
-    # Near the best by a share of how far apart the best and the worst
-    # are: a build's snare roll on every beat leaves the first and the
-    # third a hair apart, and a tolerance off the best alone split them.
-    near = [q for q in range(BAR)
-            if scores[q] >= top - 0.25 * (top - min(scores))]
-    # Where four to the floor leaves the first beat and the third alike,
-    # the one the track changes on: a part begins on a bar, so the
-    # loudness jumps at the start of bars and not in the middle of them.
-    downbeat = max(near, key=lambda q: _changes_on(
-        loud, rate, style.beat_phase + q * beat, beat * BAR, length))
-    first = style.beat_phase + downbeat * beat
+    first = style.beat_phase + _first_beat(
+        curves, loud, rate, beat, style.beat_phase, length) * beat
     while first - beat * BAR >= -beat * 0.5:
         first -= beat * BAR
     style.downbeat = first
