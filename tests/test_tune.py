@@ -84,11 +84,11 @@ class TestTheSummaryGivesNothingAway:
 
     def test_no_subject_sender_or_body_reaches_the_terminal(self, capsys):
         pairs = [pair(subject="Interview with Northwind about the staff role",
-                      sender="xxxxxx.xxxxx@northwind-tech.example"),
+                      sender="dana.price@northwind-tech.example"),
                  pair(confidence=0.4, subject="Your parcel is late")]
         tune.report(pairs)
         printed = capsys.readouterr().out
-        for secret in ("Northwind", "imogen", "xxxxx", "parcel",
+        for secret in ("Northwind", "dana", "price", "parcel",
                        "Some words", "northwind-tech"):
             assert secret.lower() not in printed.lower(), secret
 
