@@ -515,7 +515,6 @@ class TestNothingTheAnalysisSaysCanCloseTheWindow:
             visualizers.time.monotonic = was
         return image
 
-    # -- the guard itself --------------------------------------------------
     def test_a_number_is_forced_back_into_the_range_it_claims(self):
         """Written out rather than worked out: every answer is a
         literal, so this cannot pass by agreeing with the code."""
@@ -537,7 +536,6 @@ class TestNothingTheAnalysisSaysCanCloseTheWindow:
         assert visualizers.bounded(174.0, most=1000.0) == 174.0
         assert visualizers.bounded(4000.0, most=1000.0) == 1000.0
 
-    # -- the two it was written for ---------------------------------------
     def test_a_nan_tempo_does_not_close_the_window(self, qapp):
         """A nan tempo reached ``int(round(when / self._beat / ...))`` on the
         first frame and raised out of paint. A nan is truthy, and the tempo
@@ -578,7 +576,6 @@ class TestNothingTheAnalysisSaysCanCloseTheWindow:
         assert len(seen) > 8, (
             f"the field draws {len(seen)} colours after a bad passage")
 
-    # -- and everything else the analysis could say ------------------------
     def test_every_scene_survives_a_bad_passage_and_comes_back(self, qapp):
         """Every scene there is, not only the one the fault was found
         in: they share the field, the flash and the levels.
@@ -626,7 +623,6 @@ class TestNothingTheAnalysisSaysCanCloseTheWindow:
             "these scenes stopped drawing after a bad passage: "
             + "; ".join(blank))
 
-    # -- and the boundary it all goes through ------------------------------
     def test_the_state_forces_every_number_back_into_its_range(self, qapp):
         """Written out rather than worked out."""
         from attachment_widgets import SpectrumState

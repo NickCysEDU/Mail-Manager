@@ -68,7 +68,6 @@ class _RuleRow(QWidget):
         self.row.setSpacing(6)
         self.stack.addLayout(self.row)
 
-    # -- the value editor, which changes shape with the field --------------
     #: Value editors too tall to sit in the line with the combo boxes.
     TALL = ("template", "guidance")
 
@@ -354,7 +353,6 @@ class ModelsDialog(QDialog):
 
         self.refresh()
 
-    # -- what is here ----------------------------------------------------
     def refresh(self) -> None:
         """Re-read the list, off the thread that draws the window."""
         if self._probe is not None:
@@ -403,7 +401,6 @@ class ModelsDialog(QDialog):
         item = self.listing.currentItem()
         return item.data(Qt.ItemDataRole.UserRole) if item else ""
 
-    # -- adding and removing ---------------------------------------------
     def _download(self) -> None:
         wanted = (self.catalogue.currentData()
                   if self.catalogue.currentIndex() >= 0
@@ -500,7 +497,6 @@ class ModelsDialog(QDialog):
         self.status.setText("Stopping…")
         worker.cancel()
 
-    # -- leaving ---------------------------------------------------------
     def done(self, result: int) -> None:  # noqa: N802
         for name in ("_worker", "_probe"):
             spare = getattr(self, name, None)
@@ -616,7 +612,6 @@ class SettingsDialog(QDialog):
             *touchbar.button_items(self),
         ], "settings")
 
-    # -- tabs ------------------------------------------------------------
     def _build_account_tab(self) -> QWidget:
         """Every mailbox in one visible list, marked when ready to scan.
 
@@ -775,7 +770,6 @@ class SettingsDialog(QDialog):
         outer.addStretch(1)
         return page
 
-    # -- the mailbox list -------------------------------------------------
     def _load_accounts(self, settings: Settings) -> None:
         """Take a working copy of the mailbox list, editable until OK."""
         self._accounts: List[Account] = [replace(a) for a in settings.accounts]
@@ -1216,7 +1210,6 @@ class SettingsDialog(QDialog):
         form.addRow(note)
         return page
 
-    # -- the on-device backend needs software, not a key -------------------
     def _refresh_ollama_panel(self, spec) -> None:
         """Say what is missing for the on-device backend, and offer to fix it."""
         if not hasattr(self, "ollama_note"):
@@ -1679,7 +1672,7 @@ class SettingsDialog(QDialog):
         body.setSpacing(10)
         outer.addLayout(body, 1)
 
-        # -- left: the rules, in the order they run ------------------------
+        # Left: the rules, in the order they run
         left = QVBoxLayout()
         left.setSpacing(4)
         order_note = QLabel(
@@ -1734,7 +1727,7 @@ class SettingsDialog(QDialog):
         left.addWidget(self.rules_summary)
         body.addLayout(left)
 
-        # -- right: the rule itself ----------------------------------------
+        # Right: the rule itself
         right = QVBoxLayout()
         right.setSpacing(6)
 
@@ -1817,7 +1810,6 @@ class SettingsDialog(QDialog):
         switches.addStretch(1)
         right.addLayout(switches)
 
-        # -- the limits that only apply to writing -------------------------
         # In a box of their own, shown only for rules that draft: a rule that
         # only moves a message has spoken to nobody, so holding it until nine
         # in the morning would be a bug.
@@ -1893,7 +1885,6 @@ class SettingsDialog(QDialog):
         body.addLayout(right, 1)
         return page
 
-    # -- reply rules ------------------------------------------------------
     def _load_rules(self, settings: Settings) -> None:
         self._rules = list(settings.rules)
         self._rule_index = 0
@@ -2716,7 +2707,6 @@ class SettingsDialog(QDialog):
                 self, "Could not save",
                 f"The corrections file could not be written:\n\n{exc}")
 
-    # -- values ----------------------------------------------------------
     def _load_values(self) -> None:
         settings = self._settings
         self._load_accounts(settings)
@@ -2907,7 +2897,6 @@ class SettingsDialog(QDialog):
         if problems:
             raise CredentialError("; ".join(problems))
 
-    # -- tests -----------------------------------------------------------
     def _run_test(self, mode: str) -> None:
         if self._worker is not None and self._worker.isRunning():
             return
@@ -3057,8 +3046,3 @@ class SettingsDialog(QDialog):
         if incoming.type() == QEvent.Type.DeferredDelete:
             self._stop_stray_workers()
         return super().event(incoming)
-
-
-# ==========================================================================
-# Main window
-# ==========================================================================

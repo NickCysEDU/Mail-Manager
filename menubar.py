@@ -104,7 +104,6 @@ class MenuBarController(QObject):
         self._ruleset = ""
         self._schedule_minutes = 0
 
-    # -- lifecycle -------------------------------------------------------
     def available(self) -> bool:
         return QSystemTrayIcon.isSystemTrayAvailable()
 
@@ -131,7 +130,6 @@ class MenuBarController(QObject):
     def visible(self) -> bool:
         return self.tray is not None and self.tray.isVisible()
 
-    # -- menu ------------------------------------------------------------
     def rebuild(self, schedule_minutes: int = 0) -> None:
         if self._menu is None:
             return

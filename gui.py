@@ -233,7 +233,6 @@ class MainWindow(QMainWindow):
             self._start_timer(self.settings.schedule_minutes)
         self._give_touch_bar()
 
-    # -- construction ----------------------------------------------------
     def _build_ui(self) -> None:
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -655,7 +654,6 @@ class MainWindow(QMainWindow):
         self._rebuild_sorting_menu()
         return frame
 
-    # -- model switcher --------------------------------------------------
     def _rebuild_model_menu(self) -> None:
         """Every backend and model, one click away from the main window."""
         self.model_menu.clear()
@@ -699,7 +697,6 @@ class MainWindow(QMainWindow):
         self._refresh_model_button()
         touchbar.refresh(self)
 
-    # -- the Touch Bar ---------------------------------------------------
     #: The Show filter's entries, in the few words the Touch Bar has room for.
     SHOW_SHORT = {"Show: everything": "All", "Show: job mail only": "Job mail",
                   "Show: everything but job mail": "Not job",
@@ -778,7 +775,6 @@ class MainWindow(QMainWindow):
                 found += [a for a in action.menu().actions() if a.isCheckable()]
         return found
 
-    # -- what gets sorted -------------------------------------------------
     def _rebuild_sorting_menu(self) -> None:
         """Everything that decides where mail goes, in one menu, in the order
         the questions come: what is sorted, what happens to the rest, and
@@ -900,7 +896,6 @@ class MainWindow(QMainWindow):
         self._refresh_category_filter()
         self._selection_changed()
 
-    # -- mailbox switcher ------------------------------------------------
     def _set_scan_button(self, busy: bool) -> None:
         """Scan when idle, Stop when not. One button, never disabled."""
         self.scan_button.setEnabled(True)
@@ -1352,7 +1347,6 @@ class MainWindow(QMainWindow):
         except OSError as exc:
             log.warning("Could not save settings: %s", exc)
 
-    # -- reading one mailbox at a time -----------------------------------
     def _rebuild_view_menu(self) -> None:
         """Every linked mailbox, each tickable, plus all and none. Shown
         whenever the app knows a mailbox, even one, so it is always in the
@@ -1463,7 +1457,6 @@ class MainWindow(QMainWindow):
             "Which mailboxes are shown in the table."
         )
 
-    # -- which columns are on screen --------------------------------------
     def _rebuild_columns_menu(self) -> None:
         if not hasattr(self, "columns_menu") or not hasattr(self, "table"):
             return
@@ -1796,7 +1789,6 @@ class MainWindow(QMainWindow):
         about.triggered.connect(self._about)
         help_menu.addAction(about)
 
-    # -- window / settings ----------------------------------------------
     def _restore_geometry(self) -> None:
         if self.settings.window_geometry:
             self.restoreGeometry(QByteArray.fromBase64(self.settings.window_geometry.encode()))
@@ -1979,7 +1971,6 @@ class MainWindow(QMainWindow):
         )
         self.banner.setVisible(True)
 
-    # -- unattended scanning ---------------------------------------------
     def _start_timer(self, minutes: int) -> None:
         self.schedule_timer.stop()
         if minutes > 0:
@@ -2243,7 +2234,6 @@ class MainWindow(QMainWindow):
         self._append_log("Settings saved.")
         self._update_status()
 
-    # -- time window -----------------------------------------------------
     def _window_selected(self, window: TimeWindow) -> None:
         self.settings.last_window = window.name
         self._sync_range_visibility()
@@ -2329,7 +2319,6 @@ class MainWindow(QMainWindow):
         self.settings.custom_end = end_dt.isoformat()
         return resolve_window(TimeWindow.CUSTOM, custom_start=start_dt, custom_end=end_dt)
 
-    # -- scanning --------------------------------------------------------
     @Slot()
     def rescan_everything(self) -> None:
         """Scan without reusing anything kept from a previous run: for a change
@@ -2466,7 +2455,6 @@ class MainWindow(QMainWindow):
         if outcome.items and self.settings.replies_armed:
             QTimer.singleShot(0, lambda: self.draft_replies(prompted=False))
 
-    # -- applying --------------------------------------------------------
     @Slot()
     def undo_last_apply(self) -> None:
         """Move the most recent batch back where it came from."""
@@ -2772,7 +2760,6 @@ class MainWindow(QMainWindow):
         box.exec()
         self._update_status(message)
 
-    # -- shared UI plumbing ----------------------------------------------
     def _register(self, worker: QThread) -> QThread:
         """Track a worker and reap it when it finishes. Otherwise finished
         QThreads pile up for the session, and one still running at quit is
@@ -3541,7 +3528,6 @@ class MainWindow(QMainWindow):
                 f"Removed {removed} message(s) from “{folder}”."))
         worker.start()
 
-    # -- new versions ----------------------------------------------------
     def _look_for_updates(self, by_hand: bool = False) -> None:
         """Ask GitHub for the latest release, if it is time to - or now, when
         asked from the menu. See updates."""

@@ -46,9 +46,6 @@ def rule(*conditions, actions=(Action("tick"),), **kwargs) -> Rule:
                 actions=list(actions), **kwargs)
 
 
-# --------------------------------------------------------------------------
-# Conditions
-# --------------------------------------------------------------------------
 class TestConditions:
     @pytest.mark.parametrize("field, operator, value, expected", [
         ("category", "is", "INTERVIEW", True),
@@ -147,9 +144,6 @@ class TestConditions:
             Condition(field, operator, "x").matches(bare, classification())
 
 
-# --------------------------------------------------------------------------
-# Rules
-# --------------------------------------------------------------------------
 class TestRules:
     def test_all_means_all(self):
         both = rule(Condition("subject", "contains", "interview"),
@@ -204,9 +198,6 @@ class TestRules:
         assert rule(Condition("subject", "contains", "x")).ready
 
 
-# --------------------------------------------------------------------------
-# Running them in order
-# --------------------------------------------------------------------------
 class TestApplyRules:
     def test_nothing_matching_returns_nothing(self):
         assert autoreply.apply_rules(
@@ -315,9 +306,6 @@ class TestApplyRules:
         assert time.perf_counter() - started < 2.0
 
 
-# --------------------------------------------------------------------------
-# Reading and writing rules
-# --------------------------------------------------------------------------
 class TestPersistence:
     def test_a_rule_round_trips(self):
         original = rule(Condition("subject", "contains", "interview"),

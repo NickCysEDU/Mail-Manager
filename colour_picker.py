@@ -209,7 +209,6 @@ class ColourWindow(QDialog):
             touchbar.Button("close", "Close", self._close),
         ], "colours")
 
-    # -- which frequency each meter reads ---------------------------------
     def _band_box(self):
         """One spin box per meter, so the rack can be pointed anywhere.
 

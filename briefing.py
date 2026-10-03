@@ -253,7 +253,7 @@ def build(items: Sequence, *, window_start: Optional[datetime] = None,
         ticked=ticked,
     )
 
-    # -- what wants a human ------------------------------------------------
+    # What wants a human
     ranked: List[Tuple[Tuple, Line]] = []
     for row, item in enumerate(items):
         urgency, why = _urgency(item)
@@ -269,7 +269,7 @@ def build(items: Sequence, *, window_start: Optional[datetime] = None,
     ranked.sort(key=lambda pair: pair[0])
     attention = [line for _key, line in ranked[:MOST]]
 
-    # -- what arrived, by kind ---------------------------------------------
+    # What arrived, by kind
     kinds: Counter = Counter()
     kind_folder: Dict[str, str] = {}
     kind_rank: Dict[str, int] = {}
@@ -288,7 +288,7 @@ def build(items: Sequence, *, window_start: Optional[datetime] = None,
                      urgency=kind_rank.get(label, Urgency.NOTE))
                 for label, count in kinds.most_common(MOST + 4)]
 
-    # -- where it is going -------------------------------------------------
+    # Where it is going
     going: Counter = Counter()
     for item in items:
         folder = item.target_folder
@@ -297,7 +297,7 @@ def build(items: Sequence, *, window_start: Optional[datetime] = None,
     folders = [Line(label=folder, count=count)
                for folder, count in going.most_common(MOST + 4)]
 
-    # -- who wrote ---------------------------------------------------------
+    # Who wrote
     wrote: Counter = Counter()
     for item in items:
         who = (item.email.sender_email or item.email.sender_short or "").strip()
@@ -307,7 +307,6 @@ def build(items: Sequence, *, window_start: Optional[datetime] = None,
                for who, count in wrote.most_common(MOST)
                if count > 1]
 
-    # -- loose ends --------------------------------------------------------
     # These lines count themselves in words, so the count field stays at one
     # (otherwise the list reads "5 x 5 ready to file").
     waiting: List[Line] = []

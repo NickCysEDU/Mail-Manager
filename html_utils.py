@@ -135,7 +135,6 @@ class _TextExtractor(HTMLParser):
         self.links: List[str] = []
         self._seen_links: Set[str] = set()
 
-    # -- helpers ---------------------------------------------------------
     @property
     def _suppressed(self) -> bool:
         if self._drop_tag is not None or self._hidden_tag is not None:
@@ -197,7 +196,6 @@ class _TextExtractor(HTMLParser):
             return None
         return bool(_ZERO_FONT.search(style))
 
-    # -- HTMLParser hooks ------------------------------------------------
     def handle_starttag(self, tag: str, attrs) -> None:  # noqa: D102
         tag = tag.lower()
 
@@ -288,7 +286,6 @@ class _TextExtractor(HTMLParser):
     def error(self, message: str) -> None:  # pragma: no cover - py3.8 compat hook
         return
 
-    # -- result ----------------------------------------------------------
     def result(self) -> str:
         return "".join(self._chunks)
 
@@ -512,9 +509,6 @@ def truncate_for_model(text: str, max_chars: int) -> Tuple[str, bool, int]:
     return head.rstrip(), True, original_length
 
 
-# --------------------------------------------------------------------------
-# Condensing for the model
-# --------------------------------------------------------------------------
 #: A quoted reply begins at one of these.
 _QUOTE_STARTERS = (
     re.compile(r"(?im)^\s*on .{4,120}\bwrote:\s*$"),

@@ -61,9 +61,6 @@ def make_item(uid="1", **overrides):
     return TriageItem(message, classification, FolderPlan(), **overrides)
 
 
-# ==========================================================================
-# Preview rendering
-# ==========================================================================
 class TestPreviewRendering:
     def test_badge_shows_category_confidence_and_folder(self):
         html = _disposition_badge(make_item())
@@ -107,9 +104,6 @@ class TestPreviewRendering:
         assert "&lt;script&gt;" in html
 
 
-# ==========================================================================
-# Settings dialog
-# ==========================================================================
 class TestSettingsDialog:
     @pytest.fixture
     def dialog(self, qapp):
@@ -308,9 +302,6 @@ class TestSettingsDialog:
         assert offered == {member.value for member in NonJobRouting}
 
 
-# ==========================================================================
-# Colour coding
-# ==========================================================================
 class TestColorCoding:
     def test_every_job_category_gets_its_own_colour(self):
         from gui import category_color
@@ -372,9 +363,6 @@ class TestColorCoding:
         assert not _swatch("#2E9E63").isNull()
 
 
-# ==========================================================================
-# Main window flows
-# ==========================================================================
 class TestMainWindowFlows:
     @pytest.fixture
     def window(self, qapp, tmp_path, monkeypatch):
@@ -542,9 +530,6 @@ class TestExport:
         assert any("Run a scan first" in text for _, _, text in dialog_calls)
 
 
-# ==========================================================================
-# start_scan / apply_moves wiring
-# ==========================================================================
 class TestScanWiring:
     """The Scan button once passed a keyword the worker no longer accepted, so
     it raised TypeError on click. Nothing caught it, because every test either

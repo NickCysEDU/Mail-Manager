@@ -65,7 +65,6 @@ class Vault:
         self._key: Optional[bytes] = None
         self._looked = False
 
-    # -- the key ---------------------------------------------------------
     #: Long enough for somebody to click Allow, short enough that an unattended
     #: run ends: macOS knows an app by its signature, so a re-signed copy is
     #: asked again.
@@ -120,7 +119,6 @@ class Vault:
         return ("Not encrypted: the Keychain is unavailable, so summaries are "
                 "not written to disk at all.")
 
-    # -- reading and writing ---------------------------------------------
     def read(self, path: Path) -> Optional[Any]:
         """The document at ``path``, sealed or not. None if unreadable.
 

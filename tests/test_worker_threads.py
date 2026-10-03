@@ -339,9 +339,6 @@ class TestConnectionTestWorker:
         assert "connection failed" in recorder.failures[0][0]
 
 
-# --------------------------------------------------------------------------
-# Reply rules
-# --------------------------------------------------------------------------
 def reply_items(count: int = 2):
     """Triage items the way a finished scan leaves them."""
     from models import (Category, Classification, EmailMessage, FolderPlan,
@@ -527,9 +524,6 @@ class TestReplyWorker:
         assert recorder.progress[-1][:2] == (5, 5)
 
 
-# --------------------------------------------------------------------------
-# On-device setup
-# --------------------------------------------------------------------------
 class TestKeychainReadWorker:
     """Reading a secret must never be done on the thread drawing the window.
 

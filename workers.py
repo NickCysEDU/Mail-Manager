@@ -261,7 +261,6 @@ class ScanWorker(_BaseWorker):
                 where = f" ({index} of {len(targets)})" if len(targets) > 1 else ""
                 engine = IMAPEngine(host=account.host, port=account.port)
                 try:
-                    # ---- 1. Mail ----------------------------------------
                     self._emit_progress(0, 100, f"Connecting to {account.label}…{where}")
                     engine.connect(account.address, passwords.get(account.id, ""))
                     self._log(
@@ -393,7 +392,6 @@ class ScanWorker(_BaseWorker):
             self.finished_ok.emit(outcome)
             return
 
-        # ---- 2. Classification ------------------------------------------
         # Most of this already happened on the classifier's thread while the
         # mailbox was read; what is left is the tail. Anything the fetch did
         # not stream is swept up here, so no message depends on the streaming
@@ -443,10 +441,8 @@ class ScanWorker(_BaseWorker):
                 "rules engine instead. Those rows say so in their reasoning."
             )
 
-        # ---- 3. Routing --------------------------------------------------
         self._finish_routing(outcome, messages, classifications, plan)
 
-    # -- the classifying half, which runs beside the fetch ----------------
     def _build_classifier(self) -> LLMEngine:
         return LLMEngine(
             provider=self.settings.provider,
@@ -586,7 +582,6 @@ class ScanWorker(_BaseWorker):
             for message, classification in zip(messages, classifications)
         ]
 
-        # ---- 4. What was taught last time -------------------------------
         # After routing: the memory speaks only where it disagrees with the
         # sorter, so it needs the sorter's answer.
         if self.settings.learn_from_corrections:
@@ -600,7 +595,6 @@ class ScanWorker(_BaseWorker):
                     self._log(f"{taught} message(s) filed the way you corrected "
                               "them before.")
 
-        # ---- 4b. Which of these are the same conversation -----------------
         # Before the rules, so a rule can act on a whole thread, and after the
         # sorter, because threading groups messages rather than judging them.
         try:
@@ -612,7 +606,6 @@ class ScanWorker(_BaseWorker):
                 self._log(f"{in_threads} message(s) are part of a conversation "
                           "with others in this scan.")
 
-        # ---- 5. Rules the user wrote --------------------------------------
         # Last, so a rule overrides both the sorter and the memory: it is the
         # most explicit statement of intent.
         self._apply_sorting_rules(outcome.items)
@@ -896,7 +889,6 @@ class ReplyWorker(_BaseWorker):
         self._log(result.describe())
         self.finished_ok.emit(result)
 
-    # -- the part that talks to the mailbox --------------------------------
     def _touch_mailboxes(self, result: "ReplyRun") -> None:
         """Save drafts and set flags, one connection per account."""
         by_account: Dict[str, List[Tuple[TriageItem, object]]] = {}

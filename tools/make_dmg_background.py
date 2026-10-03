@@ -49,7 +49,6 @@ def draw(scale: int = 1) -> QImage:
     painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
     painter.scale(scale, scale)
 
-    # -- ground ----------------------------------------------------------
     ground = QLinearGradient(0, 0, 0, HEIGHT)
     ground.setColorAt(0.0, GROUND_TOP)
     ground.setColorAt(1.0, GROUND_BOTTOM)
@@ -59,7 +58,6 @@ def draw(scale: int = 1) -> QImage:
     painter.setPen(QPen(QColor(0, 0, 0, 22), 1))
     painter.drawLine(QPointF(48, 96), QPointF(WIDTH - 48, 96))
 
-    # -- header ----------------------------------------------------------
     title = QFont()
     title.setPointSizeF(25)
     title.setWeight(QFont.Weight.DemiBold)
@@ -77,7 +75,7 @@ def draw(scale: int = 1) -> QImage:
                      int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter),
                      "Sorts your mail into folders. Runs on your Mac.")
 
-    # -- the instruction, which is the whole point of this window ---------
+    # The instruction, which is the whole point of this window
     start = QPointF(APP_SPOT[0] + 62, APP_SPOT[1])
     end = QPointF(APPS_SPOT[0] - 62, APP_SPOT[1])
     painter.setPen(QPen(ACCENT, 3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
@@ -103,7 +101,6 @@ def draw(scale: int = 1) -> QImage:
     painter.drawText(QRectF(0, 118, WIDTH, 22),
                      int(Qt.AlignmentFlag.AlignCenter), "Drag to install")
 
-    # -- footer ------------------------------------------------------------
     footer = QFont()
     footer.setPointSizeF(10.5)
     painter.setFont(footer)

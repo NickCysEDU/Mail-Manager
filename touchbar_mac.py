@@ -220,7 +220,6 @@ class _Runtime:
         finally:
             self.objc.objc_autoreleasePoolPop(token)
 
-    # -- Foundation values ----------------------------------------------------
     def string(self, text: str) -> int:
         return self.send(self.cls("NSString"), "stringWithUTF8String:",
                          text.encode("utf-8"), argtypes=[ctypes.c_char_p])
@@ -364,7 +363,6 @@ class Renderer:
                      True, argtypes=[_bool])
         _current = self
 
-    # -- small helpers --------------------------------------------------------
     def _keep(self, handle: _Handle, pointer: int, retain: bool = True) -> int:
         if pointer:
             if retain:
@@ -469,7 +467,6 @@ class Renderer:
             argtypes=[_id]), argtypes=[_id])
         return bar
 
-    # -- building ---------------------------------------------------------------
     def build(self, bar) -> _Handle:
         handle = _Handle(bar)
         with self.rt.pool():
@@ -579,7 +576,6 @@ class Renderer:
         handle.items[item.key] = made
         return made
 
-    # -- keeping it in step -----------------------------------------------------
     def arrange(self, handle: _Handle, arranged) -> None:
         if handle.released:
             return
@@ -711,7 +707,6 @@ class Renderer:
         handle.items.clear()
         handle.controls.clear()
 
-    # -- what AppKit reports ------------------------------------------------------
     def _press(self, handle: _Handle, key: str, value) -> None:
         """Hand a press to the bar once AppKit's call has returned."""
         bar = handle.bar()
@@ -765,7 +760,6 @@ class Renderer:
         self._close(popover)
         self._press(handle, key, int(index))
 
-    # -- for tests on a real Mac ------------------------------------------------
     def window_bar(self, window) -> int:
         """The bar AppKit has on a window now."""
         view = int(window.windowHandle().winId())

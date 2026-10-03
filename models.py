@@ -836,7 +836,6 @@ class TriageItem:
         """Why this row is where it is, when a correction put it there."""
         return getattr(self.learned_from, "because", "")
 
-    # -- routing ---------------------------------------------------------
     @property
     def disposition(self) -> Disposition:
         """Where this message goes: filed, held for review, or left alone.

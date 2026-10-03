@@ -251,9 +251,6 @@ class TestInAScan:
         assert len(pending) == 10 and not known
 
 
-# ==========================================================================
-# The whole scan, end to end
-# ==========================================================================
 class FakeIMAP:
     """Just enough IMAP to get a ScanWorker through its fetch phase."""
 

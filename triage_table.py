@@ -93,7 +93,6 @@ class TriageTableModel(QAbstractTableModel):
         #: once a scan lands.
         self._one_line_cache: List[Tuple[str, str]] = []
 
-    # -- data plumbing ---------------------------------------------------
     @property
     def items(self) -> List[TriageItem]:
         return self._items
@@ -261,7 +260,6 @@ class TriageTableModel(QAbstractTableModel):
         self.selectionChanged.emit()
         return True
 
-    # -- bulk operations -------------------------------------------------
     def conversation_of(self, row: int) -> List[int]:
         """Every row in the same conversation as this one, including it."""
         item = self.item_at(row)

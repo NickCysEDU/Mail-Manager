@@ -134,7 +134,6 @@ class Criteria:
         object.__setattr__(self, "subjects", _clean(self.subjects))
         object.__setattr__(self, "older_than_days", max(0, int(self.older_than_days or 0)))
 
-    # -- what it is ------------------------------------------------------
     @property
     def is_armed(self) -> bool:
         """Whether this asks for anything at all.
@@ -174,7 +173,6 @@ class Criteria:
         return (f"messages in {self.folder} "
                 + ", ".join(parts[:-1]) + f", and {parts[-1]}")
 
-    # -- what the server is asked ----------------------------------------
     def search_tokens(self, today: Optional[datetime] = None) -> List[str]:
         """The SEARCH command's arguments, as tokens: handed to imaplib one at
         a time, so a quoted subject with a space in it is not read as two

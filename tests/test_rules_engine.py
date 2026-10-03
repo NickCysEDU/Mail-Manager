@@ -18,9 +18,6 @@ def verdict(rules, subject="", body="", sender="", links=(), **kwargs):
     return rules.classify(subject=subject, body=body, sender=sender, links=links, **kwargs)
 
 
-# ==========================================================================
-# Normalisation, real mail is not clean text
-# ==========================================================================
 class TestNormalize:
     @pytest.mark.parametrize(
         "raw,expected",
@@ -64,9 +61,6 @@ class TestNormalize:
         assert tighten("m-o-v-e  f.o.r.w.a.r.d!") == "moveforward"
 
 
-# ==========================================================================
-# The categories
-# ==========================================================================
 class TestJobCategories:
     @pytest.mark.parametrize(
         "body",
@@ -246,9 +240,6 @@ class TestPrecedence:
         assert result.category is Category.NEXT_STEPS
 
 
-# ==========================================================================
-# Non-job topics
-# ==========================================================================
 class TestTopics:
     @pytest.mark.parametrize(
         "subject,body,topic",
@@ -297,9 +288,6 @@ class TestTopics:
         assert result.other_category is OtherCategory.SPAM
 
 
-# ==========================================================================
-# Calibration, the part that keeps it safe
-# ==========================================================================
 class TestConfidence:
     def test_it_never_exceeds_its_ceiling(self, rules):
         result = verdict(

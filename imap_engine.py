@@ -87,9 +87,7 @@ class ScanCancelled(IMAPError):
     """The user cancelled an in-flight operation."""
 
 
-# --------------------------------------------------------------------------
 # Modified UTF-7 (RFC 3501 §5.1.3)
-# --------------------------------------------------------------------------
 def encode_mutf7(text: str) -> str:
     """Encode a mailbox name to IMAP modified UTF-7."""
     out: List[str] = []
@@ -183,9 +181,6 @@ def quote_mailbox(name: str) -> str:
     return f'"{escaped}"'
 
 
-# --------------------------------------------------------------------------
-# Response parsing
-# --------------------------------------------------------------------------
 _LIST_RE = re.compile(
     rb'^\((?P<flags>[^)]*)\)\s+(?:"(?P<delim>(?:\\.|[^"\\])*)"|(?P<nil>NIL))\s+(?P<name>.+)$',
     re.DOTALL,
@@ -442,9 +437,6 @@ def parse_message(
     )
 
 
-# --------------------------------------------------------------------------
-# Move planning / reporting
-# --------------------------------------------------------------------------
 @dataclass(frozen=True)
 class MovePlan:
     """A single approved move."""
@@ -500,9 +492,6 @@ class ScanResult:
     warnings: List[str] = field(default_factory=list)
 
 
-# --------------------------------------------------------------------------
-# Engine
-# --------------------------------------------------------------------------
 class IMAPEngine:
     """A stateful connection to an IMAP account.
 
@@ -531,7 +520,6 @@ class IMAPEngine:
         self._selected: Optional[str] = None
         self._selected_readonly: Optional[bool] = None
 
-    # -- lifecycle -------------------------------------------------------
     def connect(self, email_address: str, password: str) -> None:
         """Open a TLS connection and authenticate."""
         email_address = clean_secret(email_address)
@@ -691,7 +679,6 @@ class IMAPEngine:
         finally:
             self.logout()
 
-    # -- low level -------------------------------------------------------
     def _require_conn(self) -> imaplib.IMAP4:
         if self.conn is None:
             raise IMAPError("Not connected. Call connect() first.")
@@ -729,7 +716,6 @@ class IMAPEngine:
                 return info.delimiter or "/"
         return "/"
 
-    # -- folders ---------------------------------------------------------
     def list_folders(self) -> List[MailboxInfo]:
         data = self._cmd("Listing mailboxes", self._require_conn().list)
         folders: List[MailboxInfo] = []
@@ -805,7 +791,6 @@ class IMAPEngine:
         except Exception as exc:  # subscription is a nicety, never fatal
             log.debug("Could not subscribe to %s: %s", folder, exc)
 
-    # -- selection -------------------------------------------------------
     def select(self, mailbox: str = "INBOX", readonly: bool = True) -> int:
         if self._selected == mailbox and self._selected_readonly == readonly:
             return -1
@@ -828,7 +813,6 @@ class IMAPEngine:
         except (TypeError, ValueError):
             return 0
 
-    # -- search / fetch --------------------------------------------------
     def search_window(self, start: datetime, end: Optional[datetime] = None) -> List[str]:
         """UIDs whose INTERNALDATE falls in ``[start, end)``.
 
@@ -922,7 +906,6 @@ class IMAPEngine:
         )
         return result
 
-    # -- attachments ------------------------------------------------------
     def message_size(self, uid: str) -> int:
         """RFC822.SIZE for one message, or 0 if the server will not say. Asked
         first, so a fifty-megabyte message can be declined rather than
@@ -1248,7 +1231,6 @@ class IMAPEngine:
         sibling.connect(*self._credentials)
         return sibling
 
-    # -- moves -----------------------------------------------------------
     def move_messages(
         self,
         plans: Sequence[MovePlan],
@@ -1362,7 +1344,6 @@ class IMAPEngine:
         self.select(folder, readonly=True)
         return len(self._search_all())
 
-    # -- clearing out by criteria ----------------------------------------
     def search_criteria(self, criteria, readonly: bool = True) -> List[str]:
         """UIDs matching a :class:`cleanup.Criteria`, in one command.
 
@@ -1475,7 +1456,6 @@ class IMAPEngine:
             return False
         return True
 
-    # -- diagnostics -----------------------------------------------------
     def probe(self, email_address: str, password: str) -> Dict[str, object]:
         """Connect, look around, and disconnect. Used by “Test Connection”."""
         self.connect(email_address, password)
@@ -1495,9 +1475,6 @@ class IMAPEngine:
             self.logout()
 
 
-# --------------------------------------------------------------------------
-# Helpers
-# --------------------------------------------------------------------------
 #: The UIDPLUS receipt for a COPY: the validity, the source set, and the
 #: destination set, in that order and in matching order within the sets.
 _COPYUID = re.compile(r"\[COPYUID\s+\d+\s+(\S+)\s+([^\]\s]+)\]", re.I)
@@ -1627,7 +1604,6 @@ def attachments_of(raw: bytes) -> List["Attachment"]:
     return found
 
 
-# -- BODYSTRUCTURE ---------------------------------------------------------
 # The server describes a message's parts without sending them: the only way to
 # know what is attached when a scan downloads only the first sixty-four
 # kilobytes. The reply is a nested parenthesised list, so it needs a real

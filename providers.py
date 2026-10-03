@@ -100,9 +100,7 @@ class ModelChoice:
     note: str = ""
 
 
-# ==========================================================================
 # HTTP plumbing (stdlib only - keeps the .app small and dependency-free)
-# ==========================================================================
 class HttpSession:
     """A tiny JSON-over-HTTPS client with abortable connections.
 
@@ -262,9 +260,6 @@ class HttpSession:
                 pass
 
 
-# ==========================================================================
-# Base
-# ==========================================================================
 class Provider:
     #: Longer than DEFAULT_TIMEOUT where this backend needs it. Only used
     #: when the caller did not ask for a particular timeout.
@@ -316,7 +311,6 @@ class Provider:
         self._session = session or HttpSession(timeout)
         self.notes: List[str] = []
 
-    # -- interface -------------------------------------------------------
     def complete(
         self,
         system: str,
@@ -352,7 +346,6 @@ class Provider:
         if message not in self.notes:
             self.notes.append(message)
 
-    # -- helpers ---------------------------------------------------------
     def _require_key(self) -> str:
         if self.needs_api_key and not self.api_key:
             raise ProviderAuthError(
@@ -382,9 +375,6 @@ class Provider:
         return stripped
 
 
-# ==========================================================================
-# Anthropic (official SDK)
-# ==========================================================================
 class AnthropicProvider(Provider):
     name = "anthropic"
     label = "Claude (Anthropic)"
@@ -522,9 +512,6 @@ class AnthropicProvider(Provider):
         return Completion(text, input_tokens, output_tokens, stop_reason, tuple(self.notes))
 
 
-# ==========================================================================
-# Google Gemini
-# ==========================================================================
 class GeminiProvider(Provider):
     name = "gemini"
     label = "Gemini (Google AI Studio)"
@@ -635,9 +622,6 @@ def _to_gemini_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
     return convert(schema)
 
 
-# ==========================================================================
-# OpenAI and anything that speaks its shape
-# ==========================================================================
 class OpenAIProvider(Provider):
     name = "openai"
     label = "OpenAI-compatible"
@@ -726,9 +710,6 @@ class OpenAIProvider(Provider):
         )
 
 
-# ==========================================================================
-# Ollama - on this Mac
-# ==========================================================================
 class OllamaProvider(Provider):
     name = "ollama"
     label = "On this Mac (Ollama)"
@@ -832,9 +813,6 @@ class OllamaProvider(Provider):
     installed_models = list_models
 
 
-# ==========================================================================
-# Local rules - no model at all
-# ==========================================================================
 class RulesProvider(Provider):
     """The hand-built classifier in :mod:`rules_engine`.
 
@@ -901,11 +879,6 @@ class RulesProvider(Provider):
         self._classifier = None
         super().close()
 
-
-
-# ==========================================================================
-# Registry
-# ==========================================================================
 
 #: Ordered the way they are offered: the one that needs no setup first.
 PROVIDERS: Tuple[type, ...] = (

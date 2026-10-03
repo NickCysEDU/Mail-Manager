@@ -24,7 +24,7 @@ from PySide6.QtOpenGL import (QOpenGLBuffer, QOpenGLFramebufferObject,
                               QOpenGLFramebufferObjectFormat, QOpenGLShader,
                               QOpenGLShaderProgram)
 
-# -- the few GL enums used, by value ---------------------------------------
+# The few GL enums used, by value
 GL_FLOAT = 0x1406
 GL_TRIANGLES = 0x0004
 GL_TRIANGLE_STRIP = 0x0005
@@ -60,7 +60,6 @@ GL_PROGRAM_POINT_SIZE = 0x8642
 GL_POINT_SPRITE = 0x8861
 GL_FUNC_ADD = 0x8006
 
-# -- the road, as the shader sees it ----------------------------------------
 #: How many times a frame the road is read, and over what stretch: from behind
 #: the camera to well past the last block, so the track runs on into the fog.
 ROAD_SAMPLES = 96
@@ -282,9 +281,6 @@ class _Mesh:
         self.buffer.release()
 
 
-# ==========================================================================
-# Shaders
-# ==========================================================================
 QUAD_VERTEX = """
 attribute vec2 aCorner;
 varying vec2 vUv;
@@ -1006,9 +1002,6 @@ void main() {
 """
 
 
-# ==========================================================================
-# Geometry, built once
-# ==========================================================================
 def _flat_normals(triangles):
     """(x, y, z) corners in threes, to x, y, z, nx, ny, nz per corner."""
     out = []
@@ -1407,9 +1400,6 @@ def streak_floats(half: float, count=420, loop=70.0, seed=5) -> list:
     return out
 
 
-# ==========================================================================
-# The world
-# ==========================================================================
 class RiderWorld:
     """Everything the rider draws on the card, for one GL context: made on the
     first frame in a context and dropped with it (a move into full screen
@@ -1501,7 +1491,6 @@ class RiderWorld:
         self._taken = set()
         self._taken_now = []
 
-    # -- meshes that depend on the road's width ---------------------------
     def _build(self, half: float) -> None:
         if self._half == half:
             return
@@ -1520,7 +1509,6 @@ class RiderWorld:
         self.barriers = _Mesh(barrier_floats(), [(b"aBar", 3)])
         self.streaks = _Mesh(streak_floats(half), [(b"aStreak", 4)], GL_LINES)
 
-    # -- framebuffers ------------------------------------------------------
     #: The world's light in packed floating point (eleven bits red and green,
     #: ten blue): a third of the memory of half floats, which a multisampled
     #: full screen needs. Falls back to half floats, then bytes.
@@ -1568,7 +1556,6 @@ class RiderWorld:
             w, h = w // 2, h // 2
         self.bloomed = [made(fbo.width(), fbo.height()) for fbo in self.chain]
 
-    # -- the road, read once a frame ----------------------------------------
     #: How much of the road's roll is drawn as its bank, and which way: the
     #: scene measures roll for a picture whose y runs down.
     ROLL_SHARE = -0.5
@@ -1647,7 +1634,6 @@ class RiderWorld:
         return (centre[0] + dx * c - dy * s, centre[1] + dx * s + dy * c,
                 point[2])
 
-    # -- one frame -----------------------------------------------------------
     def draw(self, scene, state, target: int, viewport: QRect,
              opacity: float, now: float, samples: int = 4) -> None:
         """The world, into ``target`` at ``viewport``, which is in the
@@ -1708,7 +1694,6 @@ class RiderWorld:
         gl.glActiveTexture(GL_TEXTURE0)
         gl.glBindTexture(GL_TEXTURE_2D, 0)
 
-    # -- what a frame needs, worked out once --------------------------------
     def _frame(self, scene, state, dt: float, aspect: float) -> dict:
         import colorsys
 
@@ -1858,7 +1843,6 @@ class RiderWorld:
         program.set("uFogFrom", 16.0)
         program.set("uFogTo", 72.0)
 
-    # -- the passes -----------------------------------------------------------
     def _draw_sky(self, frame) -> None:
         p = self.sky
         p.bind()
@@ -2290,7 +2274,6 @@ class RiderWorld:
         self.streaks.draw(self.gl, p)
         p.release()
 
-    # -- particles ------------------------------------------------------------
     def _spawn(self, count, place, speed, colour, size, life, spread=1.0,
                up=1.0, back=0.0) -> None:
         """``count`` points from ``place`` (across, up, along the road's
@@ -2340,7 +2323,6 @@ class RiderWorld:
         self.gl.glDisable(GL_PROGRAM_POINT_SIZE)
         p.release()
 
-    # -- what the game did this frame ------------------------------------------
     def _notice(self, scene) -> None:
         """Which blocks finished this frame, and which the craft met. The game
         marks a block done when its moment passes and says what happened
@@ -2442,7 +2424,6 @@ class RiderWorld:
                         self._spawn(140, sky, 7.0,
                                     tuple(c * 4.0 for c in colour), 2.4, 1.6)
 
-    # -- the polish -------------------------------------------------------------
     def _bloom(self, frame) -> None:
         gl = self.gl
         source = self.resolved
@@ -2524,9 +2505,6 @@ class RiderWorld:
         gl.glBindTexture(GL_TEXTURE_2D, 0)
 
 
-# ==========================================================================
-# What is read rather than seen
-# ==========================================================================
 class Hud:
     """The numbers over the world, drawn with the painter. The score is the
     biggest thing that is not the road and counts up, so earning is seen

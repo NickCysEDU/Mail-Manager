@@ -53,7 +53,6 @@ class SeekBar(QSlider):
         self._giveup.setInterval(1200)
         self._giveup.timeout.connect(self._stop_waiting)
 
-    # -- clicking ---------------------------------------------------------
     def _value_at(self, x: int) -> int:
         option = QStyleOptionSlider()
         self.initStyleOption(option)
@@ -104,7 +103,6 @@ class SeekBar(QSlider):
     def _stop_waiting(self) -> None:
         self._pending = None
 
-    # -- reports from the player -----------------------------------------
     def report(self, position: int) -> None:
         """Where the player says it is. Ignored while a seek is settling.
 
@@ -718,7 +716,6 @@ class Spectrum(QWidget):
         #: The GPU canvas, where there is a GPU. See _GpuCanvas.
         self._canvas = self._make_canvas()
 
-    # -- drawing on the graphics card --------------------------------------
     def _make_canvas(self):
         """A GPU canvas over the pane, where there is a GPU to draw on."""
         if not _gpu_wanted():
@@ -946,8 +943,6 @@ class Spectrum(QWidget):
             painter.end()
             flat.release()
 
-
-    # -- what it shows ----------------------------------------------------
     def set_scene(self, scene) -> None:
         was, self._scene = self._scene, scene
         # There is one of each scene for the session, so picking one returns it
@@ -1451,7 +1446,6 @@ class Spectrum(QWidget):
     def ready(self) -> bool:
         return bool(self._frames)
 
-    # -- arriving and leaving ---------------------------------------------
     def reveal(self) -> None:
         if self._reveal >= 1.0 and self.maximumHeight() >= self._full_height():
             return
@@ -1565,7 +1559,6 @@ class Spectrum(QWidget):
                                                             self._budget)
         return QSize(0, min(int(self._full_height() * self._reveal), floor))
 
-    # -- the numbers ------------------------------------------------------
     def _row(self) -> Optional[List[float]]:
         if not self._frames:
             return None
@@ -2223,7 +2216,6 @@ class Spectrum(QWidget):
             spark[3] = -1.6 - (phase * 5.1 % 1.0) * 1.4
             spark[4] = 1.0
 
-    # -- painting ---------------------------------------------------------
     def paintEvent(self, event) -> None:      # noqa: N802 - Qt's name
         """Paint, and never leave the painter open. An exception out of
         paintEvent is caught and printed by Qt, which carries on with a
@@ -2629,7 +2621,6 @@ class FullScreenSpectrum(QWidget):
         #: pressed.
         self.keys = _KeysCard(self)
 
-    # -- what goes in the bar ---------------------------------------------
     #: A slider's size hint describes its groove, not its handle, so rows sized
     #: from hints cut off the tops of the knobs.
     CONTROL_HEIGHT = 30
@@ -2645,7 +2636,6 @@ class FullScreenSpectrum(QWidget):
     def add_stretch(self) -> None:
         self._bar_layout.addStretch(1)
 
-    # -- showing and hiding ------------------------------------------------
     def _set_bar_opacity(self, value) -> None:
         self._effect.setOpacity(max(0.0, min(1.0, float(value))))
         self.bar.setVisible(self._effect.opacity() > 0.01)
@@ -2853,7 +2843,6 @@ class FlowRow(QLayout):
         self._gap = spacing
         self.setContentsMargins(0, 0, 0, 0)
 
-    # -- the bits QLayout insists on ---------------------------------------
     def addItem(self, item) -> None:      # noqa: N802 - Qt's name
         self._items.append(item)
 
@@ -2908,7 +2897,6 @@ class FlowRow(QLayout):
         """A wider space, to separate one group of controls from the next."""
         self._gaps[len(self._items)] = int(pixels)
 
-    # -- the actual placing ------------------------------------------------
     def _rows(self, rect):
         """Split the items into lines that fit, keeping each one's size."""
         rows, current, x, tallest = [], [], rect.x(), 0
@@ -3058,7 +3046,6 @@ class Sharpness:
         #: nothing is known about.
         self._seen: dict = {}
 
-    # -- what to draw at ---------------------------------------------------
     def _rungs(self, ratio: float) -> tuple:
         """The scales, with the display's logical resolution among them: on
         1.5x or 1.25x displays it is added, since the budget changes there.
@@ -3096,7 +3083,6 @@ class Sharpness:
         logical = round(1.0 / max(1.0, ratio), 4)
         return next((r for r in rungs if r <= logical), rungs[-1])
 
-    # -- what it cost ------------------------------------------------------
     def record(self, taken_ms: float, ratio: float) -> None:
         """Time one scene paint, and move a rung when the average asks."""
         if self._warm > 0:
@@ -3432,7 +3418,6 @@ class PostProcess:
         blit_scene(painter, rect, frame, smooth)
         self._record((_time.perf_counter() - started) * 1000.0)
 
-    # -- the expensive one, kept cheap -------------------------------------
     def _halo(self, rect, frame):
         """A small, blurred copy of the frame: the blur is the downscale, and
         later passes read this, so the cost barely changes with the frame's
@@ -3485,7 +3470,6 @@ class PostProcess:
         painter.drawPixmap(QRectF(rect), glow, QRectF(glow.rect()))
         painter.restore()
 
-    # -- the cached overlays -----------------------------------------------
     def _scanlines(self, painter, rect, amount: float) -> None:
         key = int(amount * 100)
         tile = self._lines.get(key)
@@ -3589,7 +3573,6 @@ class Waveform(QWidget):
         self.setToolTip("Click to jump to a point in the track")
         self.hide()
 
-    # -- what it is showing ------------------------------------------------
     def set_shape(self, shape) -> None:
         """The outline of the track, or nothing to clear it."""
         self._shape = list(shape or ())
@@ -3625,7 +3608,6 @@ class Waveform(QWidget):
         self._span = self._at = 0
         self.update()
 
-    # -- seeking -----------------------------------------------------------
     def _seek_to(self, x: float) -> None:
         if self._span <= 0 or self.width() <= 0:
             return
@@ -3646,7 +3628,6 @@ class Waveform(QWidget):
             return
         super().mouseMoveEvent(event)
 
-    # -- drawing -----------------------------------------------------------
     def paintEvent(self, event) -> None:      # noqa: N802 - Qt's name
         if not self._shape:
             return

@@ -335,9 +335,6 @@ class TestInMemoryStore:
         assert InMemoryCredentialStore().get_anthropic_key() == ""
 
 
-# --------------------------------------------------------------------------
-# Carrying settings across the rename
-# --------------------------------------------------------------------------
 def test_settings_survive_the_rename(tmp_path, monkeypatch):
     """Renaming the app moved its Application Support directory. Without this
     the rename would look, to anyone upgrading, like their settings vanished."""

@@ -69,9 +69,6 @@ def start_and_wait(worker: BlockingWorker) -> BlockingWorker:
     return worker
 
 
-# ==========================================================================
-# Worker primitives
-# ==========================================================================
 class TestWorkerStop:
     def test_cancel_sets_the_event_and_requests_interruption(self, qapp):
         worker = BlockingWorker()
@@ -103,9 +100,6 @@ class TestWorkerStop:
             worker.wait(5000)
 
 
-# ==========================================================================
-# The classifier releases its sockets
-# ==========================================================================
 class TestClassifierTeardown:
     def test_close_releases_the_http_client(self):
         closed = []
@@ -183,9 +177,6 @@ class TestScanWorkerTeardown:
         worker.cancel()
 
 
-# ==========================================================================
-# Window-level stop / shutdown
-# ==========================================================================
 class TestWindowStopAll:
     @pytest.fixture
     def window(self, qapp, tmp_path, monkeypatch):
@@ -318,9 +309,6 @@ class TestSettingsDialogTeardown:
         dialog.deleteLater()
 
 
-# ==========================================================================
-# The simplified filter control
-# ==========================================================================
 class TestShowFilter:
     @pytest.fixture
     def window(self, qapp, tmp_path, monkeypatch):
@@ -389,9 +377,6 @@ class TestEmptyState:
             window.close()
 
 
-# ==========================================================================
-# Stop actually stops
-# ==========================================================================
 class TestStopHalts:
     """Closing the backend looked like a transport error, which sent the scan
     down the local-fallback path and quietly finished it."""
@@ -494,9 +479,6 @@ class TestStopClearsTheUi:
         assert len(seen) == 1
 
 
-# ==========================================================================
-# Live metrics
-# ==========================================================================
 class TestMetrics:
     def test_the_analyze_readout_names_what_matters(self):
         from gui import _metrics_html

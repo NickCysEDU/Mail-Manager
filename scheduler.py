@@ -48,9 +48,6 @@ def interval_label(minutes: int) -> str:
     return f"Every {minutes} minutes"
 
 
-# --------------------------------------------------------------------------
-# Status file, shared between the app and the agent
-# --------------------------------------------------------------------------
 @dataclass
 class RunRecord:
     """What the last unattended scan did."""
@@ -127,9 +124,6 @@ def write_status(record: RunRecord) -> None:
         pass
 
 
-# --------------------------------------------------------------------------
-# launchd agent
-# --------------------------------------------------------------------------
 def agent_plist_path() -> Path:
     return Path.home() / "Library" / "LaunchAgents" / f"{LAUNCH_AGENT_LABEL}.plist"
 
@@ -226,9 +220,6 @@ def _launchctl(action: str) -> Tuple[bool, str]:
     return True, ""
 
 
-# --------------------------------------------------------------------------
-# The headless run itself
-# --------------------------------------------------------------------------
 def run_once(settings=None, store=None, apply_moves: Optional[bool] = None) -> RunRecord:
     """One unattended scan. Used by the agent and by the in-app timer.
 

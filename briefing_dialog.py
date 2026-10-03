@@ -219,7 +219,6 @@ class BriefingDialog(QDialog):
         close.clicked.connect(self.accept)
         layout.addWidget(buttons)
 
-    # -- the sections -----------------------------------------------------
     def _cards(self, report: Briefing) -> List[QWidget]:
         found: List[QWidget] = []
         if report.is_empty:

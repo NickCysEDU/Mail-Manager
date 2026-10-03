@@ -23,9 +23,6 @@ from imap_engine import encode_mutf7  # noqa: E402
 from models import Category, Classification, EmailMessage, FolderPlan, OtherCategory, TriageItem  # noqa: E402
 
 
-# --------------------------------------------------------------------------
-# No network
-# --------------------------------------------------------------------------
 @pytest.fixture(autouse=True)
 def no_update_checks(monkeypatch):
     """A window shown for five seconds starts an update check, which would
@@ -38,9 +35,6 @@ def no_update_checks(monkeypatch):
                         lambda self: self.failed.emit("no network in tests"))
 
 
-# --------------------------------------------------------------------------
-# Isolated application directories
-# --------------------------------------------------------------------------
 @pytest.fixture(autouse=True)
 def isolated_home(tmp_path, monkeypatch):
     """Point settings and logs at a temp dir for every test."""
@@ -125,9 +119,6 @@ def dialog_calls(monkeypatch):
     yield calls
 
 
-# --------------------------------------------------------------------------
-# Message builders
-# --------------------------------------------------------------------------
 def build_mime(
     subject: str = "Hello",
     sender: str = "Dana Reyes <dana@northwind.example>",
@@ -170,9 +161,6 @@ def mime_factory():
     return build_mime
 
 
-# --------------------------------------------------------------------------
-# Fake IMAP server
-# --------------------------------------------------------------------------
 class FakeIMAP:
     """A small, strict stand-in for ``imaplib.IMAP4_SSL``: it rejects unquoted
     mailbox names and unknown commands, so protocol mistakes fail tests
@@ -222,7 +210,6 @@ class FakeIMAP:
         self.appended: List[Tuple[str, str, bytes]] = []
         self.fail_append = False
 
-    # -- helpers ---------------------------------------------------------
     @staticmethod
     def _unquote(name) -> str:
         if isinstance(name, bytes):
@@ -235,7 +222,6 @@ class FakeIMAP:
     def _record(self, name: str, args: tuple) -> None:
         self.commands.append((name, args))
 
-    # -- imaplib surface -------------------------------------------------
     def login(self, user: str, password: str):
         self._record("LOGIN", (user,))
         if password != self.password:
@@ -315,7 +301,6 @@ class FakeIMAP:
             raise imaplib.IMAP4.error(f"Unsupported command {command}".encode())
         return handler(*args)
 
-    # -- UID commands ----------------------------------------------------
     def _uid_search(self, *args):
         if self.search_results is not None:
             uids = self.search_results
@@ -403,9 +388,6 @@ def fake_imap_factory():
     return FakeIMAP
 
 
-# --------------------------------------------------------------------------
-# Fake Anthropic client
-# --------------------------------------------------------------------------
 class FakeResponse:
     def __init__(self, text: str = "", stop_reason: str = "end_turn", usage=None, stop_details=None):
         self.content = [type("Block", (), {"type": "text", "text": text})()] if text else []
@@ -495,9 +477,6 @@ def default_payload():
     return _default_payload
 
 
-# --------------------------------------------------------------------------
-# Domain fixtures
-# --------------------------------------------------------------------------
 def make_email(uid: str = "1", **overrides) -> EmailMessage:
     defaults = dict(
         uid=uid,
@@ -560,9 +539,6 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
-# --------------------------------------------------------------------------
-# Qt housekeeping
-# --------------------------------------------------------------------------
 @pytest.fixture(autouse=True)
 def reap_deleted_widgets():
     """Actually destroy what each test asked to be destroyed.
@@ -585,9 +561,6 @@ def reap_deleted_widgets():
     app.processEvents()
 
 
-# --------------------------------------------------------------------------
-# git, found rather than assumed
-# --------------------------------------------------------------------------
 #: The repository root, for git calls that must run from inside it.
 GIT_ROOT = Path(__file__).resolve().parents[1]
 

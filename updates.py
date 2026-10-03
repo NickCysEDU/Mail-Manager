@@ -125,7 +125,6 @@ def offered(release: Optional[Release], current: str, skipped: str) -> bool:
             and release.version != (skipped or ""))
 
 
-# -- installing -------------------------------------------------------------
 def running_app() -> Optional[Path]:
     """This copy's bundle, when it is a built app in a folder it may replace;
     None from source, from a disk image, or where it cannot write."""

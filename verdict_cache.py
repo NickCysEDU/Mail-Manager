@@ -163,7 +163,6 @@ class VerdictCache:
         import config
         return config.app_support_dir() / FILENAME
 
-    # -- disk ------------------------------------------------------------
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "VerdictCache":
         """Read the file. Anything unreadable is an empty cache, never a raise:
@@ -194,7 +193,6 @@ class VerdictCache:
         self._dirty = False
         return path
 
-    # -- using it --------------------------------------------------------
     def __len__(self) -> int:
         return len(self._entries)
 

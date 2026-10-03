@@ -133,7 +133,6 @@ class Tube:
             gl.glBindFramebuffer(GL_FRAMEBUFFER, target)
             painter.endNativePainting()
 
-    # -- the buffers ---------------------------------------------------------
     def _fit(self, context, gl, width: int, height: int) -> None:
         """The screen at this size on this card, keeping what was on it.
 
@@ -179,7 +178,6 @@ class Tube:
         self._device = QOpenGLPaintDevice(QSize(width, height))
         self._key = key
 
-    # -- the beam ------------------------------------------------------------
     def _strike(self, scope, context, gl, keep: float, trace, drawing: bool,
                 flash: float, dpr: float) -> None:
         """The CPU's fade, and the CPU's beam laid over it."""

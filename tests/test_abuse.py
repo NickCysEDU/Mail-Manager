@@ -23,9 +23,6 @@ from models import Category, Classification, EmailMessage, FolderPlan, OtherCate
 from rules_engine import RuleClassifier
 
 
-# ==========================================================================
-# Settings: whatever ends up in the file, the app still starts
-# ==========================================================================
 class TestSettingsSurviveNonsense:
     @pytest.mark.parametrize("payload", [
         {},
@@ -85,9 +82,6 @@ class TestSettingsSurviveNonsense:
         assert again.imap_port == settled.imap_port
 
 
-# ==========================================================================
-# Accounts: addresses people actually type
-# ==========================================================================
 class TestAccountsTakeWhateverIsTyped:
     @pytest.mark.parametrize("address", [
         "", "   ", "@", "a@", "@b.com", "no-at-sign", "a b@c.com",
@@ -120,9 +114,6 @@ class TestAccountsTakeWhateverIsTyped:
             assert isinstance(accounts.credential_hint(host), str)
 
 
-# ==========================================================================
-# The sorter, fed things that are not really email
-# ==========================================================================
 class TestTheSorterCannotBeCrashed:
     @pytest.fixture(scope="class")
     @classmethod
@@ -162,9 +153,6 @@ class TestTheSorterCannotBeCrashed:
         assert verdict.confidence <= 1.0
 
 
-# ==========================================================================
-# Folder names, which end up as IMAP commands
-# ==========================================================================
 class TestFolderNamesAreSafe:
     @pytest.mark.parametrize("root", [
         "", "   ", "/", "//", "..", "../../etc", 'quote"inside', "back\\slash",
@@ -185,9 +173,6 @@ class TestFolderNamesAreSafe:
             assert plan.review_folder in plan.all_folders
 
 
-# ==========================================================================
-# Auto reply: the part that could embarrass somebody
-# ==========================================================================
 class TestAutoReplyIsHardToFireByAccident:
     def _message(self, **overrides):
         base = dict(uid="1", subject="Chat?", sender_name="Alex Ward",
@@ -282,9 +267,6 @@ class TestAutoReplyIsHardToFireByAccident:
         assert "confirm the date" in text
 
 
-# ==========================================================================
-# Appearance: every combination has to be legible
-# ==========================================================================
 class TestEveryPaletteIsReadable:
     @pytest.mark.parametrize("name", ["LIGHT", "DARK", "LIGHT_HIGH", "DARK_HIGH",
                                       "LIGHT_MAX", "DARK_MAX"])
@@ -311,9 +293,6 @@ class TestEveryPaletteIsReadable:
                 assert "QAbstractItemView" in css and len(css) > 500
 
 
-# ==========================================================================
-# Errors have to be actionable, not just accurate
-# ==========================================================================
 class TestFailuresExplainThemselves:
     @pytest.fixture
     def worker(self):
@@ -340,9 +319,6 @@ class TestFailuresExplainThemselves:
         assert worker._advice_for("authenticationfailed") != ""
 
 
-# ==========================================================================
-# Quitting
-# ==========================================================================
 class TestQuittingDoesNotLoseWork:
     def test_a_scan_that_was_applied_does_not_prompt(self, qapp, tmp_path, monkeypatch):
         from config import InMemoryCredentialStore
@@ -372,9 +348,6 @@ class TestQuittingDoesNotLoseWork:
             window.close()
 
 
-# ==========================================================================
-# TLS, which everything else depends on
-# ==========================================================================
 class TestCertificateBundle:
     def test_a_bundle_is_always_found(self):
         import certs
@@ -450,9 +423,6 @@ class TestKeychainCannotHangForever:
         assert CredentialStore(backend=Quick()).get("anything") == "secret"
 
 
-# ==========================================================================
-# The build script's signing step
-# ==========================================================================
 class TestSigningCannotShipAnAppThatWillNotStart:
     """A signed bundle that cannot load its own Python is worse than unsigned."""
 
@@ -507,9 +477,6 @@ class TestSigningCannotShipAnAppThatWillNotStart:
         assert "recreating it" in script
 
 
-# ==========================================================================
-# Credentials as they actually arrive: pasted
-# ==========================================================================
 class TestPastedCredentials:
     """A password is almost always pasted, and a paste brings things with it."""
 
@@ -565,9 +532,6 @@ class TestPastedCredentials:
         assert "AUTHENTICATIONFAILED" in inspect.getsource(IMAPEngine._authenticate)
 
 
-# ==========================================================================
-# Shapes of message that made the sorter stop responding
-# ==========================================================================
 class TestNoMessageCanHangTheSorter:
     """Found by running six thousand real messages through it.
 

@@ -182,7 +182,6 @@ class Memory:
         self._by_sender: Dict[str, List[Correction]] = {}
         self._by_domain: Dict[str, List[Correction]] = {}
 
-    # -- disk ------------------------------------------------------------
     @staticmethod
     def default_path() -> Path:
         import config  # local: config imports nothing from here, keep it that way
@@ -215,7 +214,6 @@ class Memory:
             raise OSError(f"could not write {path}")
         return path
 
-    # -- writing ---------------------------------------------------------
     def remember(self, correction: Correction) -> bool:
         """Record one correction. False if there was nothing to learn."""
         if not correction.sender or not correction.folder:
@@ -255,7 +253,6 @@ class Memory:
         self._entries = []
         self._index_dirty = True
 
-    # -- reading ---------------------------------------------------------
     def __len__(self) -> int:
         return len(self._entries)
 

@@ -289,7 +289,6 @@ class Scene:
     #: keeps it.
     KEPT: tuple = ()
 
-    # -- what every scene shares ------------------------------------------
     @staticmethod
     def flash(state) -> float:
         """How hard the strobe is hitting, 0 to 1, or 0 when it is off. Each
@@ -758,7 +757,6 @@ class Oscilloscope(Scene):
     #: transform, so a cached path stays valid.
     FLASH_GAIN = 0.03
 
-    # -- dwell -------------------------------------------------------------
     #: A beam glows brighter where it moves slowly, which is most of what
     #: oscilloscope music looks like. DWELL_AIM is the step between samples,
     #: in the figure's unit box, at full brightness, measured against the
@@ -807,7 +805,6 @@ class Oscilloscope(Scene):
         if mode in self.MODES:
             self._mode = mode
 
-    # -- the control ------------------------------------------------------
     @property
     def decay(self) -> float:
         return self._decay
@@ -815,7 +812,6 @@ class Oscilloscope(Scene):
     def set_decay(self, seconds: float) -> None:
         self._decay = max(self.MIN_DECAY, min(self.MAX_DECAY, float(seconds)))
 
-    # -- drawing ----------------------------------------------------------
     def paint(self, painter, rect, state) -> None:
         painter.fillRect(rect, QColor(2, 8, 4))
         flash = self.flash(state)
@@ -857,7 +853,6 @@ class Oscilloscope(Scene):
         if screen is not None:
             painter.drawImage(rect, screen, QRectF(screen.rect()))
 
-    # -- the tube ---------------------------------------------------------
     def _tube(self, rect, trace, drawing: bool, flash: float, dpr: float = 1.0):
         """Dim what is on the screen, lay the new trace over it, and hand it
         back. The fade is a DestinationIn fill; the graticule is drawn live
@@ -963,7 +958,6 @@ class Oscilloscope(Scene):
                    cap=Qt.PenCapStyle.RoundCap,
                    join=Qt.PenJoinStyle.BevelJoin)
 
-    # -- paths -------------------------------------------------------------
     def _points(self, trace, drawing: bool):
         """One trace, as points in a unit box, so resizing and the strobe's
         gain are a transform rather than a rebuild.
@@ -1340,7 +1334,6 @@ class Meters(Scene):
     def __init__(self) -> None:
         self._faces: dict = {}
 
-    # -- layout -----------------------------------------------------------
     def paint(self, painter, rect, state) -> None:
         painter.fillRect(rect, state.background)
         levels = state.dials or state.levels
@@ -1437,7 +1430,6 @@ class Meters(Scene):
                 best = (columns, rows, radius)
         return best[0], best[1]
 
-    # -- one meter --------------------------------------------------------
     def _meter(self, painter, box, value, label, state, flash,
                dpr: float = 1.0) -> None:
         key = (int(box.width()), int(box.height()), label,
@@ -2002,7 +1994,6 @@ class Rave(Scene):
         self._ring_wait = 0.0
         self._heard_for = 0.0
 
-    # -- the clock --------------------------------------------------------
     def _beats_done(self, state) -> float:
         """How many beats have gone by, counting fractions: a running total,
         because the pane's phase wraps at every beat.
@@ -2144,7 +2135,6 @@ class Rave(Scene):
         self._core(painter, horizon, span, hue, bass, kick, synth, flash,
                    self._weight(rect))
 
-    # -- the parts --------------------------------------------------------
     #: How big the haze is painted before being stretched over the frame: a
     #: gradient has no detail to lose, and a full-frame one costs fill rate.
     HAZE = 128
@@ -2693,7 +2683,7 @@ class Rider(Scene):
     MODES = ("Mono", "Ninja", "Wakeboard", "Puzzle")
     blurb = "a game: three lanes, and the track is the song"
 
-    # -- the road ---------------------------------------------------------
+    # The road
     LANES = 3
     LANE_WIDE = 1.30
     #: The near and far ends of the road. NEAR is behind the rider, so the road
@@ -2719,7 +2709,6 @@ class Rider(Scene):
     #: sixtieth of a second: about 50 ms. See ``_slide``.
     SNAP = 0.55
 
-    # -- pace -------------------------------------------------------------
     #: How far ahead the chart is read, in seconds: LOOK_BEATS at the slowest
     #: tempo.
     READ = 5.0
@@ -2758,7 +2747,6 @@ class Rider(Scene):
     #: How far apart the three blocks of one run are.
     RUN_GAP = 0.16
 
-    # -- one clock --------------------------------------------------------
     #: How far the road travels in a beat, and how many beats lie between the
     #: horizon and the rider. The road's position is a function of the beat, so
     #: a block laid on beat n arrives exactly on it, and everything moves
@@ -2826,7 +2814,6 @@ class Rider(Scene):
     AIM_PULL = 0.11
     AIM_EASE = 0.06
 
-    # -- the rig ----------------------------------------------------------
     #: The focal length as a share of the frame, at a crawl and at a sprint:
     #: shorter is wider, about sixty degrees to eighty. Wider than that shrinks
     #: the lanes.
@@ -3070,7 +3057,6 @@ class Rider(Scene):
         #: How hard it is, and what that changes - see set_difficulty.
         self._set_level("Normal")
 
-    # -- playing ----------------------------------------------------------
     def steer(self, way: int) -> bool:
         """Move a lane. Returns whether the key meant anything here."""
         was = self._lane
@@ -3149,7 +3135,6 @@ class Rider(Scene):
                 "stunned": self._stunned > 0.0,
                 "cells": [list(pile) for pile in self._cells]}
 
-    # -- the chart --------------------------------------------------------
     #: Which drum makes which shape, in the order they win a slot.
     PATTERNS = (("Kick", "wall"), ("Snare", "block"), ("Hats", "run"))
 
@@ -3624,7 +3609,6 @@ class Rider(Scene):
                                       high)
         return fallback if lane is None else lane
 
-    # -- the world --------------------------------------------------------
     #: The road's colour by how much is going on: purple at the quietest
     #: through blue, green and yellow to red at the loudest.
     TIERS = (0.78, 0.60, 0.33, 0.15, 0.00)
@@ -4508,7 +4492,6 @@ class Rider(Scene):
             else:
                 self._note(when, "missed")
 
-    # -- the grid ---------------------------------------------------------
     #: The puzzle grid: collected blocks drop into three columns, six deep, and
     #: three or more of a colour touching clear and pay.
     CELLS_WIDE = 3
@@ -4859,7 +4842,6 @@ class Rider(Scene):
         """Where a moment sits on the road, on the road's own curve."""
         return self._world(when)
 
-    # -- drawing ----------------------------------------------------------
     def _slide(self, step: float) -> float:
         """How much of the way to the wanted lane this frame is worth: SNAP per
         sixtieth of a second on the track's clock, the same at any frame
@@ -5489,7 +5471,6 @@ class Rider(Scene):
     #: The most of the frame the lamp may take.
     GLOW_MOST = 0.26
 
-    # -- what the things you do look like ---------------------------------
     #: How the screen answers a run: a ring spreading from the craft, a flash
     #: of colour from the frame's edge, and for moments that deserve one, a
     #: callout. Drawn in screen space, outside the bank and the shake, and gone
@@ -6200,9 +6181,6 @@ def by_name(name: str) -> Scene:
     return SCENES[0]
 
 
-# ==========================================================================
-# Post-processing
-# ==========================================================================
 #: What each scene asks for after it has drawn itself. Kept here rather than
 #: on the classes so the whole look of the set can be read at once.
 #:

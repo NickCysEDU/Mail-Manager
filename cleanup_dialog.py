@@ -78,7 +78,6 @@ class ClearOutDialog(QDialog):
         self._refresh_sentence()
         self._load_folders()
 
-    # -- the parts -------------------------------------------------------
     def _header(self) -> QWidget:
         text = QLabel(
             "Choose what to clear out, count it, then delete it. The count "
@@ -245,7 +244,6 @@ class ClearOutDialog(QDialog):
         close.clicked.connect(self.reject)
         return buttons
 
-    # -- what the controls say -------------------------------------------
     def criteria(self) -> Criteria:
         """The controls, as the thing the server will be asked."""
         return Criteria(
@@ -304,7 +302,6 @@ class ClearOutDialog(QDialog):
             self.only_bulk.blockSignals(False)
         self._changed()
 
-    # -- talking to the server -------------------------------------------
     def _load_folders(self) -> None:
         from workers import FolderListWorker
 
@@ -427,7 +424,6 @@ class ClearOutDialog(QDialog):
         self.cleared.emit(removed)
         self._load_folders()
 
-    # -- housekeeping ----------------------------------------------------
     def _busy(self, busy: bool, what: str = "") -> None:
         self.progress.setVisible(busy)
         self.stop_button.setVisible(busy)

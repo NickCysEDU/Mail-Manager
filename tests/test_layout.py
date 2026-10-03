@@ -43,9 +43,6 @@ def make_item(uid="1", **overrides):
     return TriageItem(message, classification, FolderPlan(), **overrides)
 
 
-# ==========================================================================
-# Nothing may run off the edge at any window width
-# ==========================================================================
 class TestFlowLayout:
     def build(self, qapp, labels, width=None):
         """A shown widget: an unshown one never runs its layout, so the
@@ -187,9 +184,6 @@ class TestWindowAtEverySize:
         assert window.status_label.text() != wide or "…" in window.status_label.text()
 
 
-# ==========================================================================
-# Table readability
-# ==========================================================================
 class TestReadability:
     @pytest.fixture
     def window(self, qapp, tmp_path, monkeypatch):
@@ -244,9 +238,6 @@ class TestReadability:
             MainWindow.COLUMN_WIDTHS[TriageTableModel.COL_SENDER]
 
 
-# ==========================================================================
-# Switching backend and rule set while a scan runs
-# ==========================================================================
 class TestLiveSwitching:
     def test_the_engine_can_change_backend_mid_flight(self):
         from llm_engine import LLMEngine
@@ -316,9 +307,6 @@ class TestLiveSwitching:
         assert worker.settings.ruleset == "legal"
 
 
-# ==========================================================================
-# Field rule sets
-# ==========================================================================
 class TestRuleSets:
     def test_every_ruleset_is_named_and_described(self):
         for name, label, blurb in rulesets.choices():

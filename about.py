@@ -87,7 +87,6 @@ class AboutDialog(QDialog):
         layout.activate()
         self.adjustSize()
 
-    # -- the pieces ------------------------------------------------------
     def _heading(self) -> QHBoxLayout:
         row = QHBoxLayout()
         row.setSpacing(14)
@@ -257,7 +256,6 @@ class AboutDialog(QDialog):
         self._links = (security, issues, source, copy)
         return row
 
-    # -- actions ---------------------------------------------------------
     def _open(self, url: str) -> None:
         QDesktopServices.openUrl(QUrl(url))
 

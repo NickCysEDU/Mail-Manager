@@ -138,13 +138,11 @@ class ClassifyPump:
         self._count = 0
         self._lock = threading.Lock()
 
-    # -- from the fetch threads ------------------------------------------
     def offer(self, messages: Sequence) -> None:
         """Hand over a group of messages. Called from whoever fetched them."""
         if messages:
             self._queue.put(list(messages))
 
-    # -- from the scan thread --------------------------------------------
     def start(self) -> "ClassifyPump":
         self._thread = threading.Thread(target=self._run, name="triage-classify",
                                         daemon=True)
@@ -169,7 +167,6 @@ class ClassifyPump:
         with self._lock:
             return self._count
 
-    # -- the thread itself -----------------------------------------------
     def _run(self) -> None:
         waiting: List = []
         try:

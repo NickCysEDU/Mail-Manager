@@ -70,9 +70,6 @@ RIDER = textwrap.dedent("""
 """)
 
 
-# ==========================================================================
-# The world's bookkeeping, offscreen
-# ==========================================================================
 def _bare_world():
     """A RiderWorld without a card: only what its bookkeeping needs."""
     import random
@@ -608,9 +605,6 @@ class TestTheSameGameEitherWay:
         assert game(painted) == game(stepped)
 
 
-# ==========================================================================
-# What it draws, on the card
-# ==========================================================================
 class TestTheWorldOnTheCard:
     def test_it_draws_at_every_rung(self):
         """At full resolution as well as half: a GL paint device already

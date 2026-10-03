@@ -200,9 +200,6 @@ def test_nothing_the_user_teaches_the_app_is_committed():
     assert len(corrections.Memory()) == 0
 
 
-# ==========================================================================
-# The fixtures, which were built from a real inbox
-# ==========================================================================
 FIXTURES = ROOT / "tests" / "fixtures"
 
 
@@ -434,9 +431,6 @@ class TestNoRealMailIsCommitted:
             assert not re.search(r"\bage \d{1,3}, of [A-Z]", body), (name, index)
 
 
-# ==========================================================================
-# What reaches the log, and what SECURITY.md promises does not
-# ==========================================================================
 class TestNothingSensitiveIsLogged:
     """SECURITY.md makes two promises about the log; these check them."""
 

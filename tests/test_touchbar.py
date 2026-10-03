@@ -696,4 +696,3 @@ def test_every_message_the_mac_side_sends_is_checked_first():
               for selector in selectors}
     assert sent - needed == set(), "sent without being checked"
     assert needed - sent == set(), "checked but never sent"
-

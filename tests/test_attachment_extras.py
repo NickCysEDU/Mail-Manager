@@ -1141,7 +1141,6 @@ class TestTheMeterScene:
         assert dials[4] > 0.4, "1.4 kHz did not move the 1.4 kHz needle"
         assert dials[8] < 0.4, "18 kHz moved with nothing there"
 
-    # -- how the needle moves ---------------------------------------------
     @staticmethod
     def _step_response(monkeypatch, target=1.0, seconds=1.0):
         """One needle, driven from rest to `target`, sampled at sixty."""
@@ -5874,7 +5873,6 @@ class TestTheAirIsAsVividAtFullScreenAsInAWindow:
             f"the outer thirds hold {window:.3f} of colour in a 640x360 "
             f"window and {full:.3f} at 1920x1080")
 
-    # -- against the strip the window actually shows --------------------
     #: The pane as it sits in a 1300-wide viewer, and a 16:10 full screen.
     STRIP = (906, 270)
     SCREEN = (1440, 900)
@@ -9462,7 +9460,6 @@ class TestThePlayedStrobeHasARateAndAShape:
             attachment_widgets._time.monotonic = was
         return seen
 
-    # -- the rate ---------------------------------------------------------
     def test_manual_starts_at_the_rate_it_always_had(self, qapp):
         """The default is twelve a second, the rate the rapid-fire key always
         used."""
@@ -9500,7 +9497,6 @@ class TestThePlayedStrobeHasARateAndAShape:
         assert spectrum._hand_rate == pytest.approx(0.5), (
             "moving the rate slider outside Manual changed the hand rate")
 
-    # -- the shape --------------------------------------------------------
     def test_hard_left_is_a_flash_on_and_off(self, qapp):
         spectrum = self._made(shape=0.0)
         spectrum.flash(1.0)
@@ -9556,7 +9552,6 @@ class TestThePlayedStrobeHasARateAndAShape:
         assert spectrum._hand_shape == pytest.approx(0.0), (
             "moving the sens slider outside Manual changed the hand shape")
 
-    # -- the two modes keep their own -------------------------------------
     def test_each_mode_keeps_its_own_pair_of_settings(self, qapp):
         spectrum = self._made(source="Bass", rate=0.9, shape=0.8)
         spectrum.set_strobe_source("Manual")
@@ -10470,7 +10465,6 @@ class TestTheRiderCameraIsOnABoom:
             out = scene._camera(QRectF(0, 0, cls.W, cls.H), 0.0, 0.0)
         return out
 
-    # -- the road banks into its turn --------------------------------------
     def test_the_road_banks_into_its_own_turn(self, qapp):
         """It rolled on a phase of its own, tumbling the world independently of
         the road, leaning one way while turning the other."""
@@ -10503,7 +10497,6 @@ class TestTheRiderCameraIsOnABoom:
                 f"the road at {at} is {scene._road(at)[0]:.3f} across and "
                 f"under the rider it is {here:.3f}")
 
-    # -- the eye rides the spline ------------------------------------------
     def test_the_eye_sits_on_the_road_not_beside_it(self, qapp):
         """Centred on the road: at world zero, a bend dragged the whole road
         across the frame instead of curving away."""
@@ -10529,7 +10522,6 @@ class TestTheRiderCameraIsOnABoom:
                 f"{scene._near + scene._chase:.2f} in front of an eye that "
                 f"wants it at {visualizers.Rider.NEAR_EYE}")
 
-    # -- the rig follows the music -----------------------------------------
     def test_the_view_opens_up_in_a_loud_passage(self, qapp):
         """The field of view follows the craft's speed, which is the song's
         amplitude."""
@@ -10784,7 +10776,6 @@ class TestTheRoadIsBuiltFromTheSong:
         scene._at = when / scene._beat * scene.PER_BEAT
         return scene._road(scene.RIDER_AT)
 
-    # -- the contour itself -------------------------------------------------
     def test_the_contour_hears_how_loud_the_track_is(self):
         shape = self._contour()
         loud = shape["loud"]
@@ -10823,7 +10814,6 @@ class TestTheRoadIsBuiltFromTheSong:
         assert max(low[:4]) < 0.2 and min(low[4:]) > 0.9
         assert attachment_audio.bass_line([], 8) == []
 
-    # -- and what the road makes of it -------------------------------------
     def test_a_chorus_runs_downhill(self, qapp):
         scene = self._scene(self._contour())
         quiet = self._at(scene, 4.0)[1]
@@ -10857,7 +10847,6 @@ class TestTheRoadIsBuiltFromTheSong:
         assert any(abs(value) > 1e-6 for value in (across, up, roll)), (
             "a road with no contour behind it came out perfectly flat")
 
-    # -- the colour and the crowd ------------------------------------------
     def test_the_colour_runs_from_purple_to_red(self, qapp):
         """Busy, loud passages turn the road hot; quiet ones cool."""
         import visualizers
@@ -11383,7 +11372,6 @@ class TestThePuzzleGrid:
             scene._cells = [list(pile) for pile in cells]
         return scene
 
-    # -- what counts as a match --------------------------------------------
     def test_three_of_a_colour_in_a_row_is_a_cluster(self, qapp):
         scene = self._grid([[1], [1], [1]])
         found = scene._clusters()
@@ -11407,7 +11395,6 @@ class TestThePuzzleGrid:
         scene = self._grid([[4, 4, 4], [], []])
         assert len(scene._clusters()) == 1
 
-    # -- the fuse ----------------------------------------------------------
     def test_a_match_lights_a_fuse_rather_than_clearing(self, qapp):
         import visualizers
 
@@ -11469,7 +11456,6 @@ class TestThePuzzleGrid:
             f"one cluster of six paid {big._score} and two of three "
             f"{small} between them")
 
-    # -- gravity -----------------------------------------------------------
     def test_what_is_left_falls(self, qapp):
         """Blocks above a cleared cluster drop down."""
         scene = self._grid([[2, 4], [2], [2]])
@@ -11496,7 +11482,6 @@ class TestThePuzzleGrid:
         assert scene._cells == [[], [], []]
         assert scene._cleared == 6
 
-    # -- overfill ----------------------------------------------------------
     def test_an_eighth_block_locks_the_grid(self, qapp):
         """A column overfilled locks the grid; six deep here, so the seventh
         does it."""
@@ -11535,7 +11520,6 @@ class TestThePuzzleGrid:
         assert scene._cells == [[], [], []], (
             "a block was collected while the grid was locked")
 
-    # -- the two games -----------------------------------------------------
     def test_the_grid_is_only_used_in_puzzle(self, qapp):
         import visualizers
 
@@ -11723,7 +11707,6 @@ class TestTheRiderUnderAPlaythrough:
         watched["scene"] = scene
         return watched
 
-    # -- what stops when the track stops -----------------------------------
     def test_a_stopped_track_holds_the_screen_still(self, qapp):
         """Everything stops when the rider is paused, every pixel. Four clocks
         kept running under a stopped track: the camera's easing, the field
@@ -11830,7 +11813,6 @@ class TestTheRiderUnderAPlaythrough:
             f"the road travelled {max(held) - min(held):.2f} units with the "
             f"track stopped")
 
-    # -- how it moves when it does -----------------------------------------
     def test_the_road_never_stops_between_beats(self, qapp):
         """The road never nearly stops between beats: with the lunge as all of
         the travel, the last frames of each beat ran at a two-hundredth of
@@ -11857,7 +11839,6 @@ class TestTheRiderUnderAPlaythrough:
             f"the road went backwards {len(backwards)} times, the worst by "
             f"{max(a - b for a, b in backwards):.3f} units")
 
-    # -- what you can see --------------------------------------------------
     def test_a_block_stands_out_from_what_is_around_it(self, qapp):
         """Blocks stay visible against the background: a block and its road
         differed in hue, not brightness, and the lamp washed out the far end
@@ -12011,7 +11992,6 @@ class TestASceneIsNotShownUntilItIsUpToSpeed:
         assert pane._fresh == 1.0, (
             "picking the scene that was already showing hid it again")
 
-    # -- the font machinery ------------------------------------------------
     def test_the_glyph_cache_is_warmed_once(self, qapp):
         """Once per process, on this thread: on a worker,
         QCoreTextFontDatabase::populateFamilyAliases races the GUI thread
@@ -12093,7 +12073,6 @@ class TestTheCoinsBesideTheObstacles:
         scene._shape(pattern, when, grey=grey)
         return scene
 
-    # -- where they go -----------------------------------------------------
     def test_a_trail_is_laid_in_the_lane_beside_an_obstacle(self, qapp):
         import visualizers
 
@@ -12183,7 +12162,6 @@ class TestTheCoinsBesideTheObstacles:
             f"coins were laid into lane {wanted}, which already holds "
             f"{[b for b in scene._blocks if b[2] != 'coin']}")
 
-    # -- what they pay -----------------------------------------------------
     @staticmethod
     def _take(scene, count, lane=1, on_it=True):
         """Drive through that many coins, taking or missing them."""
@@ -12267,7 +12245,6 @@ class TestTheCoinsBesideTheObstacles:
             f"coins landed in the grid: {got['cells']}")
         assert got["score"] == 150, f"coins scored {got['score']} in Puzzle"
 
-    # -- what they look like -----------------------------------------------
     def test_a_coin_reads_against_the_road_it_is_on(self, qapp):
         """The road runs from purple to red and is gold at a chorus, so a coin
         is read off the frame against all of it: from the constants this
@@ -12512,7 +12489,6 @@ class TestTheRoadTurnsOverAtTheBigMoments:
                     table[step] = loud
         return table
 
-    # -- where they go -----------------------------------------------------
     def test_the_road_turns_over_at_the_loudest_moments(self, qapp):
         # Spaced past TWIST_APART: closer drops are one corkscrew on purpose
         # (see test_they_are_kept_well_apart).
@@ -12549,7 +12525,6 @@ class TestTheRoadTurnsOverAtTheBigMoments:
         table = self._drops(8.0, 30.0)
         assert self._scene(table)._twists == self._scene(table)._twists
 
-    # -- what the turn does ------------------------------------------------
     def test_it_is_exactly_one_whole_turn(self, qapp):
         import visualizers
 
@@ -12664,7 +12639,6 @@ class TestTheRoadTurnsOverAtTheBigMoments:
         (flat, _f, tilt), (deep, _g, turned) = seen
         assert abs(deep.y() - flat.y()) < 0.5 and abs(turned - tilt) < 1e-6
 
-    # -- what is in one ----------------------------------------------------
     def test_nothing_to_dodge_inside_a_corkscrew(self, qapp):
         scene = self._scene(self._drops(10.0))
         start = scene._twists[0]
@@ -13100,7 +13074,6 @@ class TestWakeboardLeavesTheRoad:
             seen.append(scene._air)
         return seen
 
-    # -- the mode ----------------------------------------------------------
     def test_it_is_one_of_the_games(self, qapp):
         import visualizers
 
@@ -13123,7 +13096,6 @@ class TestWakeboardLeavesTheRoad:
         self._flight(scene)
         assert scene.jump() is True, "it could not jump again after landing"
 
-    # -- the arc -----------------------------------------------------------
     def test_it_goes_up_and_comes_down(self, qapp):
         scene = self._board()
         scene.jump()
@@ -13156,7 +13128,6 @@ class TestWakeboardLeavesTheRoad:
             f"the craft drifted from {was:.3f} to {scene._air:.3f} with "
             f"the track stopped")
 
-    # -- what it pays ------------------------------------------------------
     def test_a_jump_off_the_flat_is_worth_nothing(self, qapp):
         """The crest bonus cuts both ways: off the flat, nothing."""
         scene = self._board()
@@ -13216,7 +13187,6 @@ class TestWakeboardLeavesTheRoad:
         assert scene.report()["score"] == visualizers.Rider.AIR_WORTH * 2
         assert scene.report()["double"] == 1.0, "it was not spent"
 
-    # -- what happens up there ---------------------------------------------
     def test_nothing_touches_you_in_the_air(self, qapp):
         scene = self._board()
         scene.jump()
@@ -13946,7 +13916,6 @@ class TestTheCraftLeansIntoWhatItIsDoing:
             f"the bank eased from {early._swerve:.3f} to "
             f"{late._swerve:.3f} with the track stopped")
 
-    # -- off the frame -----------------------------------------------------
     @classmethod
     def _held(cls, swerve):
         """One frame of a still craft banked by hand, so two frames differ by
@@ -14079,7 +14048,6 @@ class TestTheScreenAnswersWhatYouDo:
     def _kinds(scene):
         return [pop[0] for pop in scene._pops]
 
-    # -- what answers what -------------------------------------------------
     def test_each_thing_gets_its_own_answer(self, qapp):
         cases = (("coin", False, "coin"), ("block", False, "prize"),
                  ("block", True, "hit"), ("power", False, "power"))
@@ -14158,7 +14126,6 @@ class TestTheScreenAnswersWhatYouDo:
         assert strengths == sorted(strengths) and \
             strengths[-1] > strengths[0], strengths
 
-    # -- how they live -----------------------------------------------------
     def test_they_go_away(self, qapp):
         scene = self._rider()
         self._into(scene, "coin")
@@ -14184,7 +14151,6 @@ class TestTheScreenAnswersWhatYouDo:
             scene._age_pops(0.0)
         assert scene._pops[0][1] == age
 
-    # -- how big they are --------------------------------------------------
     @classmethod
     def _share(cls, event):
         """How much of the frame one event moves at its peak, against the same
@@ -14273,7 +14239,6 @@ class TestTheScreenAnswersWhatYouDo:
             f"a milestone moves {share:.1%} and an ordinary prize "
             f"{plain:.1%}")
 
-    # -- and they never break the frame ------------------------------------
     def test_a_callout_leaves_the_painter_as_it_found_it(self, qapp):
         """The first version raised inside a saved painter (QFont was never
         imported), and a painter ended with a saved state takes the pane

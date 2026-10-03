@@ -31,7 +31,6 @@ def _text(raw: bytes, limit: int = MAX_VALUE) -> str:
     return out.strip()[:limit]
 
 
-# -- images ---------------------------------------------------------------
 def image_facts(data: bytes) -> Dict[str, str]:
     """Dimensions from the header, plus whether EXIF carries a location."""
     facts: Dict[str, str] = {}
@@ -123,7 +122,6 @@ def _exif(data: bytes) -> Dict[str, str]:
     return facts
 
 
-# -- audio ----------------------------------------------------------------
 def audio_facts(data: bytes) -> Tuple[Dict[str, str], Optional[bytes]]:
     """(tags, cover art bytes). Either may be empty."""
     if data[:3] == b"ID3":
@@ -290,7 +288,6 @@ def _flac_picture(body: bytes) -> Optional[bytes]:
         return None
 
 
-# -- pdf ------------------------------------------------------------------
 def pdf_facts(data: bytes) -> Dict[str, str]:
     facts: Dict[str, str] = {}
     try:

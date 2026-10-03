@@ -1038,7 +1038,6 @@ class AudioPane(QWidget):
                                                 kit, bands, harmonised, beaten,
                                                 rhythmic)
 
-    # -- transport --------------------------------------------------------
     @Slot()
     def _toggle(self) -> None:
         if self._player is None:
@@ -1209,7 +1208,6 @@ class AudioPane(QWidget):
         # extra line pushed the transport into the picture.
         self._apply_budget()
 
-    # -- the rider's sounds -------------------------------------------------
     def _sound_board(self):
         """The rider's sounds, made the first time they are wanted."""
         if self._board is None:
@@ -1755,7 +1753,6 @@ class AudioPane(QWidget):
         touchbar.give(full, self.touch_bar_items(full), "fullscreen")
         full.showFullScreen()
 
-    # -- the Touch Bar -------------------------------------------------------
     def touch_bar_items(self, full=None) -> list:
         """The transport, the scenes, the strobe and the picture, for the
         viewer's Touch Bar or, given ``full``, the full screen's."""
@@ -2332,7 +2329,6 @@ class AttachmentViewer(QDialog):
         else:
             self.audio._go_full_screen()
 
-    # -- the playing keys, in a window as well as full screen -------------
     def _plays(self, event, held: bool) -> bool:
         """Hand a playing key to the audio pane, if it wants it: the keys that
         play the scene work in the window as in full screen.
@@ -2389,7 +2385,6 @@ class AttachmentViewer(QDialog):
         if 0 <= row < self.list.count():
             self.list.setCurrentRow(row)
 
-    # -- showing one ------------------------------------------------------
     def _current(self) -> Optional[attachments.Attachment]:
         row = self.list.currentRow()
         return self._found[row] if 0 <= row < len(self._found) else None
@@ -2574,7 +2569,6 @@ class AttachmentViewer(QDialog):
             self._written.append(path)
         return path
 
-    # -- saving -----------------------------------------------------------
     @Slot()
     def _save_current(self) -> None:
         item = self._current()
@@ -2665,7 +2659,6 @@ class AttachmentViewer(QDialog):
                 self.resize(wanted.expandedTo(self.minimumSize()))
         super().showEvent(event)
 
-    # -- tidying up -------------------------------------------------------
     def done(self, result: int) -> None:      # noqa: D102 - Qt's name
         self.audio.stop()
         QTimer.singleShot(0, self._sweep)

@@ -74,9 +74,6 @@ class ClassificationCancelled(RuntimeError):
     """The user cancelled an in-flight batch."""
 
 
-# --------------------------------------------------------------------------
-# Schema
-# --------------------------------------------------------------------------
 CLASSIFICATION_SCHEMA: Dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -330,9 +327,6 @@ decision. Name the runner-up category and say why you rejected it. If you are be
 Return only the JSON object described by the schema."""
 
 
-# --------------------------------------------------------------------------
-# Engine
-# --------------------------------------------------------------------------
 @dataclass
 class UsageTotals:
     """Running token/cost totals for a scan."""
@@ -437,7 +431,6 @@ class LLMEngine:
             on_device=self.provider.on_device,
         )
 
-    # -- backend ---------------------------------------------------------
     @property
     def degradations(self) -> List[str]:
         """Request features the backend rejected, reported once each."""
@@ -526,7 +519,6 @@ class LLMEngine:
             self.provider._classifier = None
         self._fallback = None
 
-    # -- prompt ----------------------------------------------------------
     def build_prompt(self, message: EmailMessage, standalone: bool = True) -> str:
         """Render one email as the user-turn payload."""
         # Condense before truncating: quoted history, signatures and legal
@@ -602,7 +594,6 @@ class LLMEngine:
         )
         return "\n".join(parts)
 
-    # -- request ---------------------------------------------------------
     def _send(self, prompt: str, message: Optional[EmailMessage] = None) -> Completion:
         """One request through whichever backend is configured."""
         if self._closed:
@@ -760,7 +751,6 @@ class LLMEngine:
                 self._sleep(delay)
         raise LLMError(f"Request failed after {MAX_ATTEMPTS} attempts: {last_error}")
 
-    # -- classification --------------------------------------------------
     def draft_reply(self, message: EmailMessage, classification, rule,
                     me: str = "", guidance: str = "") -> Dict[str, Any]:
         """Write a reply body for one message. Returns the raw payload."""
@@ -944,7 +934,6 @@ class LLMEngine:
             for result in results
         ]
 
-    # -- diagnostics -----------------------------------------------------
     def test_connection(self) -> Dict[str, Any]:
         """Run one tiny classification end to end, whatever the backend is."""
         probe = EmailMessage(
@@ -985,9 +974,6 @@ class LLMEngine:
         }
 
 
-# --------------------------------------------------------------------------
-# Helpers
-# --------------------------------------------------------------------------
 def _as_completed(futures: Dict[Future, int]) -> Iterable[Future]:
     from concurrent.futures import as_completed
 

@@ -63,9 +63,6 @@ SURE = 0.05
 TUNINGS_KEPT = 4
 
 
-# ==========================================================================
-# Synthesis
-# ==========================================================================
 # Built the way the records are: detuned saws through a resonant filter that
 # closes as the note rings (a trance or house pluck), frequency-modulated glass
 # for the coins, sweeps and filtered noise for the hits and the power, in
@@ -548,9 +545,6 @@ def make_elsewhere(folder, names: Optional[Sequence[str]] = None) -> None:
         log.info("Making the rider's sounds when they are wanted (%s).", exc)
 
 
-# ==========================================================================
-# Which notes
-# ==========================================================================
 def climb(step: int, ladder: int) -> int:
     """Which rung of a ladder of ``ladder`` notes the ``step``th pickup of a
     run is: up one each pickup, then round the top rather than back to the
@@ -604,9 +598,6 @@ def classes_at(harmony: dict, when: float) -> Tuple[int, ...]:
     return tuple((tonic + step) % 12 for step in scale)
 
 
-# ==========================================================================
-# Playing them
-# ==========================================================================
 class SoundBoard:
     """The game's sounds, answering what the game did, in the record's key.
 
@@ -651,7 +642,6 @@ class SoundBoard:
         self._harmony: Optional[dict] = None
         self._cents = 0
 
-    # -- the record ---------------------------------------------------------
     def set_harmony(self, harmony: Optional[dict]) -> None:
         """The key and chords to play in; None for a track not heard yet. Its
         tuning's notes are made now, elsewhere, if they have not been."""
@@ -669,7 +659,6 @@ class SoundBoard:
     def in_key(self) -> bool:
         return pitched(self._harmony)
 
-    # -- playing ------------------------------------------------------------
     def _voice(self, name: str):
         """A loaded sound effect for ``name``, or None if the file is not
         made yet - it is never made here, on the thread drawing."""
@@ -752,7 +741,6 @@ class SoundBoard:
                 self._broken = True
                 return
 
-    # -- what to play -------------------------------------------------------
     def _note(self, voice: str, midi: int) -> str:
         return note_name(voice, midi, self._cents)
 

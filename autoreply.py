@@ -27,9 +27,6 @@ MAX_DRAFT_WORDS = 180
 MAX_MATCH_CHARS = 20000
 
 
-# ==========================================================================
-# Conditions and actions
-# ==========================================================================
 # What a condition can look at: (name, label, kind), where kind says what value
 # the field expects, and so which editor the settings page shows.
 FIELDS: Tuple[Tuple[str, str, str], ...] = (
@@ -391,7 +388,6 @@ class Condition:
             return f"{label}: {operator}"
         return f"{label} {operator} “{self.value}”"
 
-    # -- evaluation ------------------------------------------------------
     def _subject_of(self, message, classification, context) -> Any:
         if self.field == "category":
             return classification.category.value if classification.is_job_related else ""
@@ -689,7 +685,6 @@ class Rule:
     SORTING_ACTIONS = frozenset({"file_into", "tick", "untick", "bin_it",
                                  "leave", "stop"})
 
-    # -- what it is -------------------------------------------------------
     @property
     def drafts_a_reply(self) -> bool:
         return any(a.kind in ("draft", "draft_ai") for a in self.actions)
@@ -724,7 +719,6 @@ class Rule:
             doing += f", and {len(self.actions) - 3} more"
         return f"{conditions} → {doing}"
 
-    # -- matching ---------------------------------------------------------
     def matches(self, message, classification, context=None) -> Tuple[bool, str]:
         """Whether this rule applies, and why not when it does not."""
         if not self.enabled:
@@ -751,7 +745,6 @@ class Rule:
         said = missed.describe()
         return False, f"{said[0].lower()}{said[1:]} did not hold"
 
-    # -- may this one write anything just now ------------------------------
     def may_draft(self, message, context=None) -> Tuple[bool, str]:
         """Whether this rule may draft for this message now.
 

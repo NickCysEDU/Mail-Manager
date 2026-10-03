@@ -357,9 +357,6 @@ def _compact_button(text: str, tip: str, slot) -> QToolButton:
     return button
 
 
-# ==========================================================================
-# Helpers
-# ==========================================================================
 #: QThreads that outlived their window. Referenced so Qt never destroys a
 #: running QThread (which aborts the process), and so Python cannot collect it.
 _ABANDONED: List[QThread] = []
@@ -607,5 +604,3 @@ def _separator() -> QFrame:
     line.setFrameShape(QFrame.Shape.HLine)
     line.setFrameShadow(QFrame.Shadow.Sunken)
     return line
-
-

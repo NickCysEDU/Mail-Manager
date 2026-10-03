@@ -93,7 +93,6 @@ def _shown(widget: QWidget) -> bool:
     return widget.isVisibleTo(window)
 
 
-# -- items ---------------------------------------------------------------
 class Item:
     """One thing on a bar.
 
@@ -471,7 +470,6 @@ def only_when(items: Sequence[Item], condition: Callable[[], bool],
     return list(items)
 
 
-# -- a window's bar ------------------------------------------------------
 #: The events on a watched widget that can change what its item shows.
 _WIDGET_EVENTS = (QEvent.Type.EnabledChange, QEvent.Type.ShowToParent,
                   QEvent.Type.HideToParent)
@@ -547,7 +545,6 @@ class Bar(QObject):
         elif isinstance(thing, QTabWidget):
             thing.currentChanged.connect(self.changed)
 
-    # -- what is on it -----------------------------------------------------
     def arrangement(self) -> Dict[str, List[str]]:
         """The keys shown, at the top and in each popover."""
         def keys(items, top):
@@ -595,7 +592,6 @@ class Bar(QObject):
                                   self.changed)
         return True
 
-    # -- keeping it in step ---------------------------------------------------
     def changed(self, *_args) -> None:
         """Something an item reads may have changed: look again soon."""
         if _renderer is not None and self._handle is not None:
@@ -692,7 +688,6 @@ def _releaser(handle):
     return release
 
 
-# -- giving windows bars ---------------------------------------------------
 def give(window: QWidget, items: Sequence[Item], name: str,
          customizable: bool = False) -> Bar:
     """Give ``window`` a Touch Bar of ``items``, replacing any it had."""

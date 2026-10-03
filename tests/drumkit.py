@@ -240,9 +240,6 @@ def score(found: Sequence[float], truth: Sequence[float],
             matched / max(1, len(found)))
 
 
-# --------------------------------------------------------------------------
-# Styles
-# --------------------------------------------------------------------------
 # Patterns, as where each drum falls within a bar of four beats. A detector
 # tuned on a rock beat meets half time, breakbeats, hat rolls at three times
 # the tempo and four-to-floor kicks under a sub that never stops.

@@ -30,9 +30,6 @@ from models import FolderPlan
 UTC = timezone.utc
 
 
-# ==========================================================================
-# Modified UTF-7
-# ==========================================================================
 class TestModifiedUtf7:
     @pytest.mark.parametrize(
         "plain,encoded",
@@ -75,9 +72,6 @@ class TestQuoteMailbox:
         assert quote_mailbox("Résumé") == '"R&AOk-sum&AOk-"'
 
 
-# ==========================================================================
-# Response parsing
-# ==========================================================================
 class TestParseListLine:
     def test_quoted_name(self):
         info = parse_list_line(rb'(\HasNoChildren) "/" "Job Search/Interview"')
@@ -139,9 +133,6 @@ class TestParseInternaldate:
         assert parse_internaldate(blob) is None
 
 
-# ==========================================================================
-# Message parsing
-# ==========================================================================
 class TestParseMessage:
     def test_basic_headers(self):
         raw = build_mime(subject="Interview invitation", sender="Dana Reyes <dana@x.example>")
@@ -238,9 +229,6 @@ class TestExtractBody:
         assert attachments == ("cv.pdf",)
 
 
-# ==========================================================================
-# Engine: connection
-# ==========================================================================
 @pytest.fixture
 def engine_factory(fake_imap_factory):
     def build(**kwargs):
@@ -351,9 +339,6 @@ class TestConnection:
         assert server.logged_out
 
 
-# ==========================================================================
-# Engine: folders
-# ==========================================================================
 class TestFolders:
     def test_creates_the_whole_tree_when_absent(self, engine_factory):
         engine, server = engine_factory(folders=["INBOX"])
@@ -419,9 +404,6 @@ class TestFolders:
         assert "Résumé" in engine.folder_names()
 
 
-# ==========================================================================
-# Engine: search and fetch
-# ==========================================================================
 def _messages(count: int = 3):
     return {
         str(i): build_mime(subject=f"Message {i}", plain=f"Body of message {i}. " * 5)
@@ -515,9 +497,6 @@ class TestSearchAndFetch:
             engine.fetch_window(datetime(2026, 8, 1, tzinfo=UTC), cancel=cancel)
 
 
-# ==========================================================================
-# Engine: moves  (the part that must never lose mail)
-# ==========================================================================
 class TestMoves:
     def setup_engine(self, engine_factory, folders=None):
         folders = folders or ["INBOX"] + list(FolderPlan().all_folders)
@@ -668,9 +647,6 @@ class TestProbe:
         assert server.logged_out
 
 
-# ==========================================================================
-# Fetch performance: partial download and parallel connections
-# ==========================================================================
 class TestPartialFetch:
     def test_only_the_first_n_bytes_are_requested(self, engine_factory):
         engine, server = engine_factory(messages=_messages(3))

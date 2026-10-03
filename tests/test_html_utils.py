@@ -259,9 +259,6 @@ class TestRealisticEmails:
         assert len(result.links) <= 40
 
 
-# ==========================================================================
-# Condensing for the model, the token-efficiency layer
-# ==========================================================================
 from html_utils import (  # noqa: E402
     collapse_repeats,
     condense,

@@ -91,7 +91,6 @@ class TestTheRelease:
         assert not updates.offered(None, "1.2.0", "")
 
 
-# -- installing, on a real disk image ---------------------------------------
 def _app(folder: Path, version: str, ident: str = "com.example.updatetest",
          says: str = "old") -> Path:
     app = folder / "Test App.app"

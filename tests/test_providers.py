@@ -65,9 +65,6 @@ class FakeSession(HttpSession):
         self.closed = True
 
 
-# ==========================================================================
-# Registry
-# ==========================================================================
 class TestRegistry:
     @pytest.mark.parametrize("name", ["anthropic", "gemini", "openai", "ollama"])
     def test_every_backend_is_registered(self, name):
@@ -121,9 +118,6 @@ class TestRegistry:
         assert build_provider("ollama", model="mistral:7b").model == "mistral:7b"
 
 
-# ==========================================================================
-# Shared behaviour
-# ==========================================================================
 class TestJsonRecovery:
     @pytest.mark.parametrize(
         "raw",
@@ -154,9 +148,6 @@ class TestKeyRequirement:
         assert build_provider("ollama")._require_key() == ""
 
 
-# ==========================================================================
-# Gemini
-# ==========================================================================
 class TestGemini:
     def provider(self, session):
         return GeminiProvider(api_key="AIza-test", session=session)
@@ -220,9 +211,6 @@ class TestGemini:
             self.provider(FakeSession([{}])).complete(SYSTEM_PROMPT, "p", CLASSIFICATION_SCHEMA)
 
 
-# ==========================================================================
-# OpenAI-compatible
-# ==========================================================================
 class TestOpenAICompatible:
     def response(self, content=None, finish="stop", **extra):
         message = {"content": json.dumps(content or VERDICT)}
@@ -322,9 +310,6 @@ class TestOpenAICompatible:
         ).stop_reason == "max_tokens"
 
 
-# ==========================================================================
-# Ollama (on device)
-# ==========================================================================
 class TestOllama:
     def test_a_successful_call(self):
         session = FakeSession([{
@@ -401,9 +386,6 @@ class TestOllama:
         assert OllamaProvider(session=session).installed_models() == ["llama3.2:3b", "qwen2.5:7b"]
 
 
-# ==========================================================================
-# The engine, driven through each backend
-# ==========================================================================
 class TestEngineWithProviders:
     def test_the_engine_selects_the_named_backend(self):
         engine = LLMEngine(api_key="k", provider="gemini")
@@ -468,9 +450,6 @@ class TestEngineWithProviders:
         assert flash.usage.estimated_cost_usd < opus.usage.estimated_cost_usd
 
 
-# ==========================================================================
-# The HTTP transport, against a real local server
-# ==========================================================================
 class TestHttpSession:
     """Exercised against a throwaway localhost server rather than mocks: this
     is the transport for three of the four model backends."""
@@ -609,9 +588,6 @@ class TestHttpSession:
         assert session._live == []
 
 
-# ==========================================================================
-# Live model discovery, a hard-coded catalogue goes stale
-# ==========================================================================
 class TestModelDiscovery:
     def test_which_backends_can_list_their_models(self):
         listing = {c.name for c in providers.PROVIDERS if c.can_list_models}
@@ -667,9 +643,6 @@ class TestModelDiscovery:
         assert provider.rate() == (0.0, 0.0)
 
 
-# ==========================================================================
-# A backend that is not there must fail fast, once
-# ==========================================================================
 class TestUnreachableBackend:
     """An absent Ollama cost 6.7 s per message: a connect timeout plus the full
     retry ladder, for every email in the scan."""
@@ -724,9 +697,6 @@ class TestUnreachableBackend:
         assert engine.fallback_count == 20
 
 
-# ==========================================================================
-# Security properties
-# ==========================================================================
 class TestTransportSafety:
     """Every request carries the text of somebody's email."""
 

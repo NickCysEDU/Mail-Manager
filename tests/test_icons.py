@@ -31,7 +31,6 @@ def ink_bounds(image: QImage, threshold: int = 40):
     return min(xs), min(ys), max(xs), max(ys)
 
 
-# -- the app icon -----------------------------------------------------------
 def test_squircle_keeps_a_straight_edge_then_turns(qapp):
     """macOS icons are straight-sided out to about 60% before the corner starts.
 
@@ -90,7 +89,6 @@ def test_small_renders_drop_the_shadow_and_grow_the_mark(qapp):
     assert coverage(16) > coverage(512)
 
 
-# -- the menu bar item ------------------------------------------------------
 def test_menu_bar_icon_is_a_template(qapp):
     assert menu_bar_icon().isMask()
 

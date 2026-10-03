@@ -123,7 +123,6 @@ class Runner:
             self.failures.append(
                 f"{name} took {took:.1f}s on {len(payload)} chars: {payload[:120]!r}")
 
-    # -- the boundaries --------------------------------------------------
     def stress_rules_engine(self) -> None:
         import rules_engine
         engine = rules_engine.RuleClassifier()

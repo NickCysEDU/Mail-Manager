@@ -169,7 +169,6 @@ class AccountsPage(QWizardPage):
 
         self._add()
 
-    # -- the list --------------------------------------------------------
     def _add(self) -> None:
         self._accounts.append(Account(preset="icloud"))
         self._editing = len(self._accounts) - 1
@@ -214,7 +213,6 @@ class AccountsPage(QWizardPage):
         self._loading = False
         self._preset_changed()
 
-    # -- the form --------------------------------------------------------
     def _preset_changed(self) -> None:
         name = self.preset.currentData() or "custom"
         host = accounts.host_for(name)
@@ -263,7 +261,6 @@ class AccountsPage(QWizardPage):
             item.setText(self._describe(account))
         self.completeChanged.emit()
 
-    # -- what the wizard asks for ----------------------------------------
     def ready_accounts(self) -> list:
         """Only the ones with an address and a password worth storing."""
         return [a for a in self._accounts

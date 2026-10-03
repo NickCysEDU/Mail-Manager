@@ -69,7 +69,6 @@ class SearchingIMAP:
         self.fail_store_after = None
         self._stores = 0
 
-    # -- the commands the clear-out uses ---------------------------------
     def select(self, mailbox, readonly=False):
         name = str(mailbox)
         assert name.startswith('"') and name.endswith('"'), \
@@ -96,7 +95,6 @@ class SearchingIMAP:
     def logout(self):
         return ("BYE", [b""])
 
-    # -- search ----------------------------------------------------------
     def _search(self, args):
         tokens = []
         for arg in args:
@@ -184,7 +182,6 @@ class SearchingIMAP:
         return datetime(int(parts[2]), MONTHS.index(parts[1]) + 1,
                         int(parts[0]))
 
-    # -- store and expunge -----------------------------------------------
     def _store(self, args):
         uid_set, mode, flags = args[0], args[1], args[2]
         assert "SILENT" in str(mode).upper(), "the silent form is the cheap one"
@@ -220,9 +217,6 @@ def engine_on(server) -> imap_engine.IMAPEngine:
     return engine
 
 
-# ---------------------------------------------------------------------------
-# The mailbox itself
-# ---------------------------------------------------------------------------
 AWKWARD = [
     'say "hello"',                 # a quote, which ends an IMAP string early
     "back\\slash",                 # an escape

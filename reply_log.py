@@ -83,7 +83,6 @@ class ReplyLog:
         self._entries: List[Sent] = list(entries or ())
         self._path = path
 
-    # -- disk --------------------------------------------------------------
     @staticmethod
     def default_path() -> Path:
         import config
@@ -122,7 +121,6 @@ class ReplyLog:
             log.info("Could not write the reply log (%s).", exc)
             return False
 
-    # -- asking ------------------------------------------------------------
     def last_to(self, address: str, rule: str = "") -> Optional[datetime]:
         """When this address was last written to, by this rule or any.
 
@@ -156,7 +154,6 @@ class ReplyLog:
         return (now.astimezone(timezone.utc)
                 - last.astimezone(timezone.utc)) < timedelta(days=days)
 
-    # -- telling -----------------------------------------------------------
     def remember(self, address: str, rule: str = "",
                  now: Optional[datetime] = None) -> bool:
         """Write down that a draft went to this address. Not saved yet."""

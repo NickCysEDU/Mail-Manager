@@ -25,9 +25,6 @@ from models import (
 )
 
 
-# ==========================================================================
-# Category / OtherCategory
-# ==========================================================================
 class TestCategoryParsing:
     @pytest.mark.parametrize(
         "raw,expected",
@@ -102,9 +99,6 @@ class TestOtherCategory:
         assert OtherCategory.parse("CRYPTO") is None
 
 
-# ==========================================================================
-# FolderPlan
-# ==========================================================================
 class TestFolderPlan:
     def test_default_tree(self):
         plan = FolderPlan()
@@ -164,9 +158,6 @@ def test_sanitize_folder_component_collapses_whitespace():
     assert sanitize_folder_component("  Job   Search \n ") == "Job Search"
 
 
-# ==========================================================================
-# Classification validation (protocol layer 2)
-# ==========================================================================
 class TestClassificationValidation:
     def base(self, **overrides):
         payload = {
@@ -296,9 +287,6 @@ class TestClassificationValidation:
         assert other.category_label == "Other · Finance & Bills"
 
 
-# ==========================================================================
-# Routing (protocol layer 3) - the core safety table
-# ==========================================================================
 class TestRouting:
     def item(self, **kwargs):
         classification_kwargs = kwargs.pop("classification", {})
@@ -320,7 +308,6 @@ class TestRouting:
             **kwargs,
         )
 
-    # -- the happy path ---------------------------------------------------
     @pytest.mark.parametrize(
         "category,folder",
         [
@@ -336,7 +323,6 @@ class TestRouting:
         assert item.target_folder == folder
         assert item.approved is True
 
-    # -- the safety net ---------------------------------------------------
     @pytest.mark.parametrize("confidence", [0.0, 0.5, 0.899, 0.9499])
     def test_below_threshold_goes_to_needs_review_unchecked(self, confidence):
         item = self.item(classification={"confidence_score": confidence})
@@ -377,7 +363,6 @@ class TestRouting:
         item = TriageItem(EmailMessage(uid="1"), classification, FolderPlan())
         assert item.disposition is Disposition.REVIEW
 
-    # -- non-job mail -----------------------------------------------------
     def test_non_job_mail_is_left_alone_by_default(self):
         item = self.item(
             classification={
@@ -502,7 +487,6 @@ class TestRouting:
         )
         assert item.disposition is Disposition.REVIEW
 
-    # -- overrides --------------------------------------------------------
     def test_manual_override_wins_and_selects_the_row(self):
         item = self.item(classification={"confidence_score": 0.2})
         assert item.approved is False
@@ -536,9 +520,6 @@ class TestRouting:
         assert item.status_display.startswith("Failed:")
 
 
-# ==========================================================================
-# Summary
-# ==========================================================================
 class TestTriageSummary:
     def test_counts(self, item_factory):
         items = [
@@ -574,9 +555,6 @@ class TestTriageSummary:
         assert summary.output_tokens == 35
 
 
-# ==========================================================================
-# Time windows
-# ==========================================================================
 class TestTimeWindows:
     NOW = datetime(2026, 9, 4, 15, 30, tzinfo=timezone.utc)
 
@@ -660,9 +638,6 @@ class TestEmailMessage:
         assert message.local_date().utcoffset() == datetime.now().astimezone().utcoffset()
 
 
-# --------------------------------------------------------------------------
-# Reading the clock
-# --------------------------------------------------------------------------
 class TestClock:
     """12-hour time, because that is how the times in this app get read aloud."""
 

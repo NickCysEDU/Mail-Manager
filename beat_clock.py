@@ -40,7 +40,6 @@ class BeatClock:
 
     __hash__ = None
 
-    # -- time to beats and back -------------------------------------------
     def number(self, when: float) -> float:
         """The beat number at ``when``; beat 0 is the first beat."""
         if not self:
@@ -93,7 +92,6 @@ class BeatClock:
         division = max(1, int(division))
         return self.time(round(self.number(when) * division) / division)
 
-    # -- bars ---------------------------------------------------------------
     def in_bar(self, number: float) -> float:
         """Where beat ``number`` falls in its bar, from 0 (the first beat),
         counted from the downbeat where it is known."""

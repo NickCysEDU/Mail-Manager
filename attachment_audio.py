@@ -964,7 +964,6 @@ class _Analysis(QObject_base):
         _LIVE.add(self)
         _arm_shutdown()
 
-    # -- lifetime ---------------------------------------------------------
     def cancel(self) -> None:
         """Abandon the work. Safe to call more than once."""
         self._stop = True
@@ -1004,7 +1003,6 @@ class _Analysis(QObject_base):
     def cancelled(self) -> bool:
         return self._stop
 
-    # -- the work ---------------------------------------------------------
     def start_analysis(self, samples, rate: int, channels: int) -> None:
         if self._stop:
             return

@@ -68,9 +68,6 @@ TRANSACTIONAL_IN_BULK_UNVOUCHED = 0.45
 TRANSACTIONAL_TOPICS: Tuple["OtherCategory", ...] = ()
 
 
-# ==========================================================================
-# Normalisation - the part that makes everything else work on real mail
-# ==========================================================================
 # UTF-8 read as Latin-1, the commonest corruption in forwarded mail.
 _MOJIBAKE = {
     "â€™": "'", "â€˜": "'", "â€œ": '"', "â€\x9d": '"', "â€“": "-", "â€”": "-",
@@ -253,9 +250,6 @@ class _Matcher:
         return 0.0
 
 
-# ==========================================================================
-# Signal tables
-# ==========================================================================
 # Weights: 3.0 decisive, 2.0 strong, 1.2 moderate, 0.6 supporting. Phrases
 # match loosely, so "move forward" also matches "move-forward" and
 # "moveforward".
@@ -819,9 +813,6 @@ NON_JOB_SIGNALS: Tuple[Signal, ...] = (
 )
 
 
-# ==========================================================================
-# Non-job topic signals
-# ==========================================================================
 # Everyday topics, weighted and scored like the job tables. Sender signals are
 # the sharpest: a courier's own domain settles what prose rarely does.
 TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
@@ -1553,9 +1544,6 @@ def acknowledgement_score(subject: str, body: str) -> Tuple[float, List[str]]:
     return score, reasons
 
 
-# ==========================================================================
-# What a message *is*, when it contains no word that says so
-# ==========================================================================
 # A parcel notice that never says "delivery", a flight confirmation that never
 # says "flight", a friend moving a plan: a person reads their shape (a flight
 # number beside an airport pair, a booking reference, a bookings@ mailbox, two
@@ -1829,9 +1817,6 @@ def other_world_context(subject: str, body: str) -> Tuple[float, str]:
     return min(3.6, 1.8 * len(hits)), f"about {sorted(hits)[0]} rather than a job search"
 
 
-# ==========================================================================
-# Structural features
-# ==========================================================================
 # Phrase tables only recognise mail written the way they expect, which
 # templated mail mostly is and typed mail is not. These read form rather than
 # vocabulary, so paraphrase does not defeat them: whether a person or a machine
@@ -1991,7 +1976,7 @@ def structural_topic_scores(
     robot = _robot_sender(sender)
     short = len(body) < 700
 
-    # -- a one-time code ------------------------------------------------
+    # A one-time code
     codes = _BARE_CODE.findall(blob)
     if codes and short and not bulk:
         # Codes come with a deadline and an instruction, never with a pitch.
@@ -1999,7 +1984,7 @@ def structural_topic_scores(
         add(OtherCategory.SECURITY, 3.0 if expiring else 1.6,
             "a short code in a short message")
 
-    # -- account safety, without the word security ----------------------
+    # Account safety, without the word security
     if re.search(r"\b(?:password|sign(?:ed|ing)? in|signin|log(?:ged|ging)? in|"
                  r"account was|recovery|two[\W_]?factor|device we (?:don[\W_]?t )?recognise|"
                  r"recognize|end every other session|lock you out)\b", blob):
@@ -2009,7 +1994,7 @@ def structural_topic_scores(
         else:
             add(OtherCategory.SECURITY, 1.4, "about account access")
 
-    # -- money, and which way it went -----------------------------------
+    # Money, and which way it went
     if _MONEY.search(blob):
         if _SPENT.search(blob):
             add(OtherCategory.RECEIPT, 2.6, "an amount already taken")
@@ -2018,13 +2003,11 @@ def structural_topic_scores(
         if not _SPENT.search(blob) and not _OWED.search(blob):
             add(OtherCategory.FINANCE, 0.8, "an amount of money")
 
-    # -- parcels ---------------------------------------------------------
     if _PARCEL.search(blob):
         add(OtherCategory.SHIPPING, 2.4, "describes a parcel")
     if _DELIVERY_WINDOW.search(blob):
         add(OtherCategory.SHIPPING, 2.2, "gives a delivery window")
 
-    # -- travel ----------------------------------------------------------
     travel_hits = 0
     if _FLIGHT.search(f"{subject} {body}"):
         travel_hits += 1
@@ -2038,11 +2021,11 @@ def structural_topic_scores(
     elif travel_hits == 1:
         add(OtherCategory.TRAVEL, 1.0, "something that reads like a journey")
 
-    # -- something happening at a time and a place -----------------------
+    # Something happening at a time and a place
     if _CLOCK.search(blob) and _WEEKDAY.search(blob) and not bulk:
         add(OtherCategory.EVENT, 1.2, "a day and a time")
 
-    # -- a person, rather than a system ----------------------------------
+    # A person, rather than a system
     if not bulk and not robot and short and len(links) <= 1:
         voice = len(_PERSONAL_VOICE.findall(blob))
         if voice >= 2:
@@ -2050,7 +2033,7 @@ def structural_topic_scores(
         elif voice == 1:
             add(OtherCategory.PERSONAL, 1.2, "reads as written by hand")
 
-    # -- bulk mail: selling, or telling? ---------------------------------
+    # Bulk mail: selling, or telling?
     if bulk:
         selling = len(_SELLING.findall(blob))
         editorial = len(_EDITORIAL.findall(blob))
@@ -2063,9 +2046,6 @@ def structural_topic_scores(
 
     return scores, notes
 
-# ==========================================================================
-# Classifier
-# ==========================================================================
 # Sentences that tell the reader to do something. Applicant-tracking mail
 # buries the request in a cheerful acknowledgement, which phrase tables alone
 # misfile.
@@ -2281,7 +2261,6 @@ class RuleClassifier:
             + sum(len(t) for t in TOPIC_SIGNALS.values())
         )
 
-    # -- scoring ---------------------------------------------------------
     def _score(
         self, table: Tuple[Signal, ...], subject: str, subject_tight: str,
         body: str, body_tight: str,
@@ -2362,7 +2341,6 @@ class RuleClassifier:
             matches[category] = matched
             strongest[category] = peak
 
-        # ---- is this a working conversation? ---------------------------
         # Asked before the link evidence: a booking link says a meeting is
         # being arranged and nothing about what for.
         professional, professional_why = professional_context_score(
@@ -2384,7 +2362,6 @@ class RuleClassifier:
         working = (professional > 0.0 or context_now >= 1.0
                    or named_process > 0.0 or bool(from_hiring))
 
-        # ---- weak evidence the context has licensed --------------------
         # Only with the sender and the process established may the
         # conditional phrases count; without that they would file a
         # solicitor's letter under Offer.
@@ -2399,7 +2376,7 @@ class RuleClassifier:
                 strongest[category] = max(strongest[category], extra_peak)
                 matches[category].extend(extra_matched)
 
-        # ---- link evidence, which outweighs prose ----------------------
+        # Link evidence, which outweighs prose
         if any(domain in link_blob for domain in SCHEDULING_LINK_DOMAINS):
             if working:
                 scores[Category.INTERVIEW] += 3.0
@@ -2454,7 +2431,6 @@ class RuleClassifier:
         job_bonus = 0.0
         structure_notes: List[str] = []
 
-        # ---- subject shape ---------------------------------------------
         # A subject line is short, deliberate and written last: the most
         # reliable single feature in applicant-tracking mail.
         for pattern, weight, label in SUBJECT_PATTERNS:
@@ -2463,7 +2439,7 @@ class RuleClassifier:
                 if label not in structure_notes:
                     structure_notes.append(label)
 
-        # ---- sender and structure --------------------------------------
+        # Sender and structure
         agency = any(hint in sender_n.replace(" ", "") for hint in AGENCY_SENDER_HINTS)
         if agency:
             scores[Category.UNSOLICITED] += 1.2
@@ -2502,7 +2478,6 @@ class RuleClassifier:
             job_score += 2.5
             job_matches.append("an applicant-tracking-system address")
 
-        # ---- explicit requests to act ----------------------------------
         # Only once the message is established as job mail: "please confirm
         # your email address" is a request in any inbox.
         if job_score >= 2.0 or scores[Category.APPLICATION_RECEIVED] >= 2.5:
@@ -2539,7 +2514,6 @@ class RuleClassifier:
             matches[Category.NEXT_STEPS].append(
                 "(discounted: next steps are promised, not asked for)")
 
-        # ---- pick a category ------------------------------------------
         # Precedence is an order, not a tiebreak: an offer outranks the
         # paperwork attached to it even when the paperwork says more.
         def qualifies(category: Category) -> bool:
@@ -2560,7 +2534,6 @@ class RuleClassifier:
             default=0.0,
         )
 
-        # ---- job related? ----------------------------------------------
         # Measured before the reply discount: a reply in a thread is more
         # clearly part of a job search, not less.
         job_evidence = job_score + max(max(raw_scores.values(), default=0.0), best_score)
@@ -2633,7 +2606,6 @@ class RuleClassifier:
             matched=tuple(matched[:8]),
         )
 
-    # -- non-job ---------------------------------------------------------
     def _non_job_verdict(
         self, subject_n, subject_t, body_n, body_t, sender_n,
         non_job_score, non_job_matches, job_evidence, truncated, list_unsubscribe,
@@ -2792,7 +2764,6 @@ class RuleClassifier:
             matched=tuple(matched[:8]),
         )
 
-    # -- calibration -----------------------------------------------------
     def _confidence(
         self, best: float, runner_up: float, truncated: bool, strongest: float = 0.0
     ) -> float:

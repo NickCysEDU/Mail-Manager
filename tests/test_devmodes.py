@@ -35,9 +35,6 @@ def devscan():
     return module
 
 
-# ==========================================================================
-# The sample inbox
-# ==========================================================================
 class TestDemoData:
     def test_it_is_a_realistic_size(self):
         assert len(demo_data.DEMO_MESSAGES) >= 10
@@ -121,9 +118,6 @@ class TestDemoData:
         assert demo_data.verdict_for_prompt("something else entirely") is None
 
 
-# ==========================================================================
-# Demo mode in the window
-# ==========================================================================
 class TestDemoMode:
     @pytest.fixture
     def window(self, qapp, tmp_path, monkeypatch):
@@ -226,9 +220,6 @@ class TestDryRunMode:
             window.close()
 
 
-# ==========================================================================
-# Keyboard shortcuts
-# ==========================================================================
 class TestShortcuts:
     @pytest.fixture
     def window(self, qapp, tmp_path, monkeypatch):
@@ -267,9 +258,6 @@ class TestShortcuts:
             assert key in text
 
 
-# ==========================================================================
-# CLI flags
-# ==========================================================================
 class TestCliFlags:
     def test_new_flags_parse(self):
         args = main_module.build_parser().parse_args(["--demo", "--dry-run", "--verbose"])
@@ -339,9 +327,6 @@ class TestCliFlags:
         assert main_module.set_credentials() == 130
 
 
-# ==========================================================================
-# The terminal scanner
-# ==========================================================================
 class TestDevScan:
     def test_fake_mode_runs_the_whole_pipeline(self, devscan, capsys):
         assert devscan.main(["--fake", "--no-colour"]) == 0

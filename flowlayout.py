@@ -28,7 +28,6 @@ class FlowLayout(QLayout):
         self._vspacing = vertical_spacing
         self.setContentsMargins(QMargins(margin, margin, margin, margin))
 
-    # -- QLayout plumbing ------------------------------------------------
     def addItem(self, item: QLayoutItem) -> None:  # noqa: N802
         self._items.append(item)
 
@@ -83,7 +82,6 @@ class FlowLayout(QLayout):
         return size + QSize(margins.left() + margins.right(),
                             margins.top() + margins.bottom())
 
-    # -- the actual algorithm --------------------------------------------
     def _layout(self, rect: QRect, apply: bool) -> int:
         """Pack items into rows, then centre each row on its own middle.
 

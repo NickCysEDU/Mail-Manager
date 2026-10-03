@@ -60,9 +60,6 @@ class CredentialError(RuntimeError):
     """Raised when the system keychain cannot be read or written."""
 
 
-# --------------------------------------------------------------------------
-# Paths
-# --------------------------------------------------------------------------
 def app_support_dir() -> Path:
     """Per-user application data directory."""
     override = os.environ.get("ICLOUD_TRIAGE_HOME")
@@ -150,9 +147,6 @@ def log_dir() -> Path:
     return app_support_dir() / "logs"
 
 
-# --------------------------------------------------------------------------
-# Settings
-# --------------------------------------------------------------------------
 @dataclass
 class Settings:
     """Non-secret, user-visible configuration."""
@@ -269,7 +263,6 @@ class Settings:
         if not str(self.model).strip():
             self.model = providers.default_model_for(self.provider)
 
-    # -- validation ------------------------------------------------------
     def normalized(self) -> "Settings":
         """Return a copy with every field clamped into a usable range."""
         data = asdict(self)
@@ -381,7 +374,6 @@ class Settings:
     def is_configured(self) -> bool:
         return any(a.is_configured for a in self.mailboxes) or bool(self.icloud_email)
 
-    # -- mailboxes -------------------------------------------------------
     def _sync_mailboxes(self) -> None:
         """Reconcile the mailbox list with the original single-mailbox fields.
 
@@ -453,7 +445,6 @@ class Settings:
     def multi_account(self) -> bool:
         return len(self.enabled_accounts) > 1
 
-    # -- profile ---------------------------------------------------------
     @property
     def effective_row_lines(self) -> int:
         """Lines per table row: the spacing's, unless one was chosen."""
@@ -514,7 +505,6 @@ class Settings:
             topics=self.chosen_topics,
         )
 
-    # -- serialisation ---------------------------------------------------
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
@@ -539,7 +529,6 @@ class Settings:
                         "falling back to defaults.", type(exc).__name__)
             return cls()
 
-    # -- sharing a configuration -----------------------------------------
     #: Never in an export: window geometry means nothing elsewhere. The mailbox
     #: list is exported without passwords, which stay in the Keychain.
     PRIVATE_FIELDS = ("window_geometry", "splitter_state", "table_state")
@@ -593,7 +582,6 @@ class Settings:
             )
         return cls.from_dict(raw)
 
-    # -- disk ------------------------------------------------------------
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "Settings":
         if path is None:
@@ -692,9 +680,6 @@ def parse_iso(value: str) -> Optional[datetime]:
         return None
 
 
-# --------------------------------------------------------------------------
-# Credentials
-# --------------------------------------------------------------------------
 class CredentialStore:
     """Thin, testable wrapper over ``keyring``, imported lazily so the domain
     and IMAP tests run where there is no Keychain.
@@ -707,7 +692,6 @@ class CredentialStore:
         if read_timeout is not None:
             self.read_timeout = read_timeout
 
-    # -- backend ---------------------------------------------------------
     def _keyring(self) -> Any:
         if self._backend is not None:
             return self._backend
@@ -736,7 +720,6 @@ class CredentialStore:
         except Exception:  # pragma: no cover
             return "unavailable"
 
-    # -- generic ---------------------------------------------------------
     #: How long to wait for the Keychain before giving up. Only the headless
     #: paths use this: a window has somebody there to click.
     read_timeout: Optional[float] = None
@@ -826,7 +809,6 @@ class CredentialStore:
             # the desired end state either way.
             return
 
-    # -- typed accessors -------------------------------------------------
     @staticmethod
     def icloud_account(email: str) -> str:
         return f"icloud:{(email or '').strip().lower()}"
