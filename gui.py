@@ -192,6 +192,19 @@ class MainWindow(QMainWindow):
         self._prompt_cache: Dict[str, str] = {}
         self._prompt_engine: Optional[llm_engine.LLMEngine] = None
         self._prompt_engine_key: Optional[tuple] = None
+        #: The update check while it runs, and the window offering one.
+        self._update_look = None
+        self._update_dialog = None
+        self._attachment_window = None
+        self._visualiser_window = None
+        #: The batch an undo is putting back, while it runs.
+        self._undoing: Optional[UndoBatch] = None
+        #: The period the last scan covered, for the briefing.
+        self._scanned_window = (None, None)
+        self._replies_prompted = True
+        self._status_text = ""
+        self._window_wordings = ()
+        self.schedule_actions: Dict[int, QAction] = {}
 
         self.setWindowTitle(APP_DISPLAY_NAME)
         # 580 tall: between the toolbars and the status bar sit the table and
@@ -1932,13 +1945,13 @@ class MainWindow(QMainWindow):
         self._workers.clear()
         # The update check and an update's download are threads too, parented
         # to this window: destroyed while running, Qt aborts the process.
-        dialog = getattr(self, "_update_dialog", None)
-        fetch = getattr(dialog, "_fetch", None) if dialog is not None else None
+        dialog = self._update_dialog
+        fetch = dialog._fetch if dialog is not None else None
         if fetch is not None and shiboken6.isValid(fetch) and fetch.isRunning():
             fetch.installer.cancelled = True
             if not fetch.wait(3000):
                 _abandon(fetch)
-        look = getattr(self, "_update_look", None)
+        look = self._update_look
         if look is not None and shiboken6.isValid(look) and look.isRunning():
             if not look.wait(3000):
                 _abandon(look)
@@ -1999,7 +2012,7 @@ class MainWindow(QMainWindow):
 
         self.menu_bar.set_schedule(minutes)
         self.menu_bar.refresh_status()
-        for value, action in getattr(self, "schedule_actions", {}).items():
+        for value, action in self.schedule_actions.items():
             action.setChecked(value == minutes)
         self._append_log(
             "Automatic scanning is off." if minutes == 0
@@ -2055,7 +2068,7 @@ class MainWindow(QMainWindow):
         window. Rather than ignore it, ask whether to keep the changes, and
         carry that out.
         """
-        dialog = getattr(self, "_settings_dialog", None)
+        dialog = self._settings_dialog
         if dialog is None or not dialog.isVisible():
             return True
         answer = QMessageBox.question(
@@ -2281,7 +2294,7 @@ class MainWindow(QMainWindow):
 
     def _fit_window_label(self) -> None:
         """Pick the longest wording that fits beside everything else."""
-        wordings = getattr(self, "_window_wordings", ())
+        wordings = self._window_wordings
         if not wordings or not hasattr(self, "action_bar_layout"):
             return
         bar = self.action_bar_layout.geometry().width()
@@ -2498,7 +2511,7 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def _on_undo_done(self, report: MoveReport) -> None:
         self._set_busy(False)
-        batch = getattr(self, "_undoing", None)
+        batch = self._undoing
         self._undoing = None
         if batch is not None and batch in self._undo_stack:
             self._undo_stack.remove(batch)
@@ -2603,7 +2616,7 @@ class MainWindow(QMainWindow):
             lines.append("")
             lines.append(f"{len(failed)} could not be written:")
             lines.extend(f"  · {d.subject}: {d.error}" for d in failed[:5])
-        if getattr(self, "_replies_prompted", True):
+        if self._replies_prompted:
             QMessageBox.information(self, "Reply rules", "\n".join(lines))
         else:
             self._append_log(" ".join(line for line in lines if line))
@@ -3244,7 +3257,7 @@ class MainWindow(QMainWindow):
         # only the second ran.
         super().resizeEvent(event)
         self._fit_window_label()
-        if getattr(self, "_status_text", None):
+        if self._status_text:
             self._set_status(self._status_text)
         if hasattr(self, "splitter"):
             self._apply_preview_position(self.settings.preview_position)
@@ -3382,14 +3395,14 @@ class MainWindow(QMainWindow):
 
         from attachment_view import AttachmentViewer
 
-        existing = getattr(self, "_visualiser_window", None)
+        existing = self._visualiser_window
         if existing is not None and shiboken6.isValid(existing):
             existing.show()
             existing.raise_()
             existing.activateWindow()
             return
 
-        attached = getattr(self, "_attachment_window", None)
+        attached = self._attachment_window
         if attached is not None and shiboken6.isValid(attached) and attached.isVisible():
             QMessageBox.information(
                 self, "Attachments are open",
@@ -3413,8 +3426,8 @@ class MainWindow(QMainWindow):
         """
         import briefing_dialog
 
-        items = list(getattr(self.model, "items", []))
-        start, end = getattr(self, "_scanned_window", (None, None))
+        items = list(self.model.items)
+        start, end = self._scanned_window
         briefing_dialog.show(
             items, parent=self, window_start=start, window_end=end,
             mailboxes=[a.label or a.address
@@ -3425,7 +3438,7 @@ class MainWindow(QMainWindow):
         """Select a row the briefing pointed at, first clearing any filter
         hiding it.
         """
-        items = getattr(self.model, "items", [])
+        items = self.model.items
         if not (0 <= row < len(items)):
             return
         if not self.proxy.mapFromSource(self.model.index(row, 0)).isValid():
@@ -3470,7 +3483,7 @@ class MainWindow(QMainWindow):
             log.info("Could not read the corrections memory (%s).", exc)
 
         dialog = ClearOutDialog(account, password,
-                                items=list(getattr(self.model, "items", [])),
+                                items=list(self.model.items),
                                 protected=protected, parent=self)
         dialog.cleared.connect(
             lambda removed: self._set_status(
@@ -3538,7 +3551,7 @@ class MainWindow(QMainWindow):
             return
         if not by_hand and not updates.due(self.settings):
             return
-        if getattr(self, "_update_look", None) is not None:
+        if self._update_look is not None:
             return
         look = update_dialog.Look(self)
         look.found.connect(lambda release: self._update_found(release, by_hand))
@@ -3548,7 +3561,7 @@ class MainWindow(QMainWindow):
         look.start()
 
     def _update_looked(self) -> None:
-        look, self._update_look = getattr(self, "_update_look", None), None
+        look, self._update_look = self._update_look, None
         if look is not None:
             look.deleteLater()
 
@@ -3605,7 +3618,7 @@ class MainWindow(QMainWindow):
         import attachments as _attachments
         from attachment_view import AttachmentViewer
 
-        items = getattr(self.model, "items", [])
+        items = self.model.items
         item = items[row] if 0 <= row < len(items) else None
         if item is None:
             return
@@ -3661,7 +3674,7 @@ class MainWindow(QMainWindow):
         """
         from attachment_view import AttachmentViewer
 
-        existing = getattr(self, "_attachment_window", None)
+        existing = self._attachment_window
         if existing is not None:
             existing.close()
         viewer = AttachmentViewer(found, subject, self,
@@ -3672,7 +3685,7 @@ class MainWindow(QMainWindow):
         def finished(*_args) -> None:
             if source is not None:
                 source.close()
-            if getattr(self, "_attachment_window", None) is viewer:
+            if self._attachment_window is viewer:
                 self._attachment_window = None
 
         viewer.finished.connect(finished)
@@ -3682,7 +3695,7 @@ class MainWindow(QMainWindow):
 
     def _close_attachment_window(self) -> None:
         """Called on the way out, so a viewer never outlives the window."""
-        viewer = getattr(self, "_attachment_window", None)
+        viewer = self._attachment_window
         if viewer is not None:
             self._attachment_window = None
             viewer.close()
