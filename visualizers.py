@@ -1,13 +1,5 @@
-"""Scenes for the audio spectrum. One set of numbers, several ways to read it.
-
-Every scene is handed the same thing each frame: the equaliser bands, four
-smoothed aggregates taken from them, a drifting phase, and whether strobe is
-on. None of them computes a spectrum; the analysis happened once, before
-playback started, and the paint loop only interpolates.
-
-A scene is a function of state, with no memory of its own beyond what the
-caller keeps. That keeps switching themes instant and keeps every one of them
-cheap enough to run at thirty frames a second beside a mail sorter.
+"""Visualiser scenes. Each is handed the same analysed state every frame and
+draws it; none of them computes a spectrum.
 """
 
 from __future__ import annotations
@@ -33,8 +25,9 @@ log = logging.getLogger(__name__)
 
 
 def _on_card(painter) -> bool:
-    """Whether ``painter`` is drawing on the graphics card (see
-    attachment_widgets._GpuCanvas) rather than into an image."""
+    """Whether ``painter`` draws on the graphics card rather than into an
+    image.
+    """
     from PySide6.QtGui import QPaintEngine
 
     engine = painter.paintEngine()
@@ -42,24 +35,8 @@ def _on_card(painter) -> bool:
             and engine.type() == QPaintEngine.Type.OpenGL2)
 
 
-#: The face the meter dials are lettered in, and where it comes from.
-#:
-#: It ships with the app rather than being asked for by name, and that is
-#: the whole point of it. The dials are drawn from a photograph of a real
-#: meter whose numbers are set in a square, Eurostile-like face, and the
-#: code used to ask for one with a fallback list - Eurostile, Microgramma,
-#: Square721, Bank Gothic, then Verdana and DejaVu.
-#:
-#: None of the first four ship with macOS or with a build runner. Measured
-#: over the 181 families installed here, *nothing* installed has square
-#: digits. So Qt silently took the first name it recognised, which was
-#: Verdana: a humanist sans, round where the reference is square, and a
-#: different face again on Linux. That is why "xxx xxxx xxxx xxx xxxxx xx
-#: xxx", and why a fallback list was never going to fix it.
-#:
-#: Michroma is a square techno face under the SIL Open Font License, which
-#: is what the licence is for. It is loaded once, by file, so that every
-#: machine draws the same dial.
+#: The dials' typeface, shipped with the app so every machine draws the same
+#: dial: Michroma, under the SIL Open Font License.
 FONT_FILE = "Michroma-Regular.ttf"
 FONT_FAMILY = "Michroma"
 #: Its licence, which has to travel with it.
@@ -69,12 +46,8 @@ _LOADED: Optional[str] = None
 
 
 def dial_face() -> Optional[str]:
-    """The family the dials are lettered in, or None if it did not load.
-
-    Loaded once and remembered. A failure is not fatal - the dials fall
-    back to whatever Qt finds, which is what they did before - but it is
-    logged, because a face silently swapped for another is exactly the
-    thing this was written to stop.
+    """The family the dials are lettered in, or None if it did not load. Loaded
+    once; a failure is logged.
     """
     global _LOADED
     if _LOADED is not None:
@@ -83,9 +56,8 @@ def dial_face() -> Optional[str]:
         from PySide6.QtGui import QGuiApplication
 
         if QGuiApplication.instance() is None:
-            # Qt cannot register a font before there is an application,
-            # and the answer would be remembered for the life of the
-            # process. Ask again later rather than deciding now.
+            # A font cannot be registered before there is an application; ask
+            # again later.
             return None
     except Exception:      # noqa: BLE001
         return None
@@ -112,65 +84,26 @@ def dial_face() -> Optional[str]:
     return None
 
 
-#: The width, in real screen pixels, above which Qt stops being quick.
-#:
-#: Qt's raster engine has a dedicated path for one-pixel lines and nothing
-#: comparable above it. Measured on the Waterfall's ridges at 1080p - about
-#: a thousand antialiased curve segments - one frame took:
-#:
-#:      pen width 0.9   1.62 ms        pen width 1.01  58.00 ms
-#:      pen width 1.0   2.21 ms        pen width 2.0   66.35 ms
-#:
-#: A thirty-six fold cliff at exactly one pixel. This is the whole reason
-#: the scenes used to be cheap: the old fixed resolution budget kept the
-#: buffer at about a quarter of the screen's pixels, which put a 2.4 unit
-#: pen at 1.3 *real* pixels, under the cliff. Drawing at the resolution the
-#: screen actually has pushes every one of them over it. The scenes were
-#: fast because they were fuzzy.
+#: Qt's raster engine is fast for one-pixel lines and far slower above them (a
+#: frame of curves at 1080p: 2.2 ms against 58 ms), so wide lines are drawn as
+#: stacks of hairlines. See stroke.
 HAIRLINE = 1.0
 
-#: Rings of offset hairlines are spaced this far apart, in real pixels.
-#: Below one there are no gaps to see between them.
+#: Rings of offset hairlines are this far apart, in real pixels.
 HAIR_STEP = 0.9
 
-#: Past this many passes a real wide pen is cheaper, and correct.
-#:
-#: Fourteen is measured, and it is a floor as well as a ceiling. Swept
-#: over three scenes at 1080p, the Rave costs 31 ms a frame here, 40 at
-#: twenty passes, and about 100 at four, six, eight or ten - because at
-#: those a line that *should* stack gets a real pen instead. The
-#: Waterfall wants at least six for the same reason. A clamp on the
-#: Rave's own widths, to keep its trusses stacking, was tried and made
-#: that scene slower still: it moved lines out of the pen and into
-#: thirteen-pass stacks, which is the worst of both.
-#:
-#: Nothing in these scenes draws a line that thick, so this is a
-#: backstop. Raising it to 26 was tried, so that the Rave's widened
-#: trusses would stack rather than fall back to a pen: it halved that
-#: scene's worst frame and still left it at three times the median, so
-#: the width is kept where stacking is cheap instead.
+#: Past this many passes a real wide pen is cheaper. Measured on three scenes
+#: at 1080p.
 HAIR_MOST = 14
 
-#: Solved alphas, kept because the answer depends only on how wide the
-#: line is and how solid it is meant to be.
+#: Solved alphas, by width and solidity.
 _HAIR_ALPHA: dict = {}
 
 
 def smooth_path(points):
-    """A curve through these points, rather than a line between them.
-
-    Forty-four straight segments across a 1080p frame is one every
-    forty-four pixels, and at a ribbon's peak - where the direction
-    changes fastest - that reads as a corner. "Xxxxxx xxx xxx xxxxx xx
-    xxxxxxxx, xxxx xxxx sectioned and straight in places" is exactly
-    that: not the wrong shape, a shape drawn as a polygon.
-
-    Each sample becomes the control point of a quadratic, and the
-    midpoints between samples become the points the curve passes
-    through. The curve leaves every segment tangent to the one before
-    it, so there are no corners anywhere - at the same sample count,
-    which is the whole reason for doing it this way rather than by
-    adding points until nobody can see the joins.
+    """A smooth curve through these points: each sample is a quadratic's
+    control point and the midpoints between samples are on the curve, so
+    there are no corners.
     """
     path = QPainterPath()
     if not points:
@@ -185,41 +118,19 @@ def smooth_path(points):
         here, following = points[index], points[index + 1]
         path.quadTo(here, QPointF((here.x() + following.x()) * 0.5,
                                   (here.y() + following.y()) * 0.5))
-    # Straight to the last point, not a curve through the one before
-    # it: the loop above finishes at the midpoint of the final pair,
-    # so a quadratic controlled by the *earlier* of them turns back on
-    # itself. It put a hook on the end of every ribbon - 179 degrees
-    # of turn in one step, at the one place a ribbon is supposed to
-    # taper away.
+    # Straight to the last point; a quadratic there would turn back on itself.
     path.lineTo(points[-1])
     return path
 
 
 def stroke(painter, path, colour, width: float,
            cap=Qt.PenCapStyle.RoundCap, join=Qt.PenJoinStyle.RoundJoin) -> None:
-    """Draw ``path`` in ``colour`` at ``width``, the quick way where there is one.
-
-    A wide line is drawn as a handful of one-pixel lines nudged around a
-    circle - which is what a wide line *is*: the curve swept by a disc.
-    Above, HAIRLINE explains why that is worth doing.
-
-    The hairlines are cosmetic pens, so they stay one real pixel however
-    the painter is scaled, and the offsets are converted back out of real
-    pixels into whatever units the painter is working in.
-
-    Overlapping strokes accumulate alpha, so each pass is drawn fainter.
-    How much fainter is solved for rather than guessed at - see
-    ``_hair_alpha``, and the note there on why a constant cannot do it.
-
-    A Waterfall frame at 1080p went from 41.4 ms to 7.7 ms this way, and
-    the picture differs from the real thing by half of one channel step
-    out of 255.
+    """Draw ``path`` in ``colour`` at ``width``: as a stack of one-pixel lines
+    where that is cheaper (see HAIRLINE), each pass faint enough that the
+    stack reads as one line (see _hair_alpha).
     """
-    # Only where the passes stack the way the correction assumes they do.
-    # Under additive compositing they do not: each pass adds its light
-    # instead of covering what is under it, so a stack drawn at the
-    # reduced alpha comes out hollow - a dark core with bright edges,
-    # which is what it did to Ambience's ribbons.
+    # Only under ordinary compositing. Under additive compositing the passes
+    # add light, and the reduced alpha leaves a hollow line.
     if (painter.compositionMode()
             != QPainter.CompositionMode.CompositionMode_SourceOver):
         painter.setPen(QPen(colour, width, Qt.PenStyle.SolidLine, cap, join))
@@ -239,8 +150,7 @@ def stroke(painter, path, colour, width: float,
     faint = QColor(colour)
     faint.setAlphaF(_hair_alpha(spots, (thick - HAIRLINE) / 2.0,
                                 colour.alphaF()))
-    # Width zero is what makes it one real pixel whatever the painter is
-    # scaled to; setCosmetic says so out loud.
+    # Width zero keeps it one real pixel however the painter is scaled.
     pen = QPen(faint, 0.0, Qt.PenStyle.SolidLine, cap, join)
     pen.setCosmetic(True)
     painter.setPen(pen)
@@ -251,18 +161,9 @@ def stroke(painter, path, colour, width: float,
 
 
 def _hair_spots(reach: float) -> tuple:
-    """Where to put the hairlines to fill a disc of radius ``reach``.
-
-    The centre, then rings out to the edge no more than HAIR_STEP apart,
-    each with enough points that neighbours on it are no further apart
-    than that either - otherwise the ring scallops and the line looks
-    beaded rather than thick.
-
-    All of it or none of it. Stopping partway through leaves a line drawn
-    to the radius of the last ring that fitted, which is a *thinner* line
-    rather than a cheaper one: truncated at a five pixel width it put down
-    47 per cent of the ink. An empty answer means "too thick for this -
-    use a real pen", which is what ``stroke`` does with it.
+    """Where to put the hairlines to fill a disc of radius ``reach``: the
+    centre, then rings no more than HAIR_STEP apart. Empty when that would
+    take more than HAIR_MOST passes.
     """
     spots = [(0.0, 0.0)]
     if reach <= 0.05:
@@ -280,25 +181,9 @@ def _hair_spots(reach: float) -> tuple:
 
 
 def _hair_alpha(spots: tuple, reach: float, target: float) -> float:
-    """How solid each pass must be for the stack to read as one wide line.
-
-    There is no constant that does this. The passes overlap each other
-    most when they are nearly on top of one another and least when they
-    are spread out, so the same correction that is right for a 1.2 pixel
-    line lays down 56 per cent of the ink at 3.2 pixels. Measured against
-    a real pen, the share of the passes that has to carry the colour runs
-    from about 0.85 at 1.2 pixels to 0.25 at 3.2.
-
-    So it is solved instead. Take a straight line under the stack; at
-    every offset ``d`` across it, count the passes whose own offset puts
-    them within half a pixel of ``d`` - that is how many times that column
-    gets painted, and ``1 - (1 - a)**k`` is how solid it ends up. Sum
-    that across the line, average over the directions the line might run
-    in, and find the ``a`` that totals what a pen of this width would.
-
-    Bisection, over a histogram of those counts rather than the counts
-    themselves, so it is a few dozen multiplications. Cached: the answer
-    depends on nothing that changes within a frame.
+    """How solid each pass must be for the stack to put down as much ink as a
+    pen of this width. Solved by bisection over how many passes cover each
+    column across the line, and cached.
     """
     key = (round(reach, 2), round(target, 3))
     found = _HAIR_ALPHA.get(key)
@@ -330,18 +215,8 @@ def _hair_alpha(spots: tuple, reach: float, target: float) -> float:
 
 
 def bounded(value, most: float = 1.0, least: float = 0.0) -> float:
-    """A number from the analysis, forced back into the range it claims.
-
-    Levels are nought to one by construction and tempos are positive,
-    but a decode that goes wrong, a calibration that comes out zero or a
-    tempo found in silence can put a nan or an infinity in one. Several
-    of these scenes *accumulate* what they are given - the field's drift,
-    the rider's envelope followers - so a single bad frame does not draw
-    a bad frame, it poisons the scene for the rest of the session and
-    takes the window with it if the value reaches an ``int()``.
-
-    Nan comes back as the floor rather than as the nearest bound,
-    because a nan is an answer that was never computed.
+    """A number from the analysis, forced back into its range. A nan comes back
+    as the floor.
     """
     try:
         value = float(value)
@@ -354,32 +229,16 @@ def bounded(value, most: float = 1.0, least: float = 0.0) -> float:
     return most if value > most else value
 
 
-#: The range of tempos a scene is driven at, and what happens to a
-#: track that comes out beyond it.
-#:
-#: Tempo detectors make octave errors: they find the right pulse and
-#: report it doubled or halved. Measured across eight real records, one
-#: came out at 230 bpm on a track anybody would tap at 115. A road built
-#: on that is a different game from the song - it runs at 21.7 units a
-#: second where the others run at 12, lays its figures twice as thick,
-#: and gives 0.78 s of warning where the rest give 1.5.
-#:
-#: The bounds are wide enough to leave every real reading in the batch
-#: alone - 78, 128, 130, 137 and 155 all pass through - and only the
-#: octave error moves.
+#: The tempos a scene is driven at. Beyond them a tempo is taken for an octave
+#: error and folded back.
 TEMPO_LEAST = 70.0
 TEMPO_MOST = 165.0
 
 
 def folded_tempo(tempo: float) -> float:
-    """The same pulse, counted the way a person would count it.
-
-    Applied where the tempo and the beat phase are worked out together.
-    Folding it in a scene and leaving the phase alone is worse than not
-    folding it at all: the phase then belongs to a grid at the other
-    tempo, and the correction that keeps the road's origin on the beat
-    spends every frame pulling against it. Measured, that made the road
-    run at twice the speed its own beat asked for.
+    """The same pulse, counted the way a person would count it. Apply it where
+    tempo and phase are worked out together, or the phase belongs to the
+    other tempo.
     """
     try:
         tempo = float(tempo)
@@ -403,44 +262,21 @@ class Scene:
     name = "scene"
     blurb = "a scene"
 
-    #: How many pixels this scene can afford to draw at their real size.
-    #: Zero means "whatever the pane's own floor is". A scene raises it
-    #: when most of its frame is a blit rather than a stroke, because the
-    #: pane's floor is set for the ones that stroke curves and applying it
-    #: to the others softens them for nothing.
+    #: How many pixels this scene can draw at their real size; zero means the
+    #: pane's own floor. Raised by scenes that are mostly blits.
     sharp_pixels = 0
 
-    #: Whether a stretched buffer should be smoothed even when it goes up
-    #: by a whole number of pixels.
-    #:
-    #: False suits a picture made of thin bright lines: smoothing spreads
-    #: a one-pixel line over two and takes most of it away. It does not
-    #: suit a picture made of arcs and lettering, where doubling every
-    #: pixel is plainly doubling every pixel.
+    #: Whether a stretched buffer is smoothed even at a whole-number scale.
+    #: False suits thin bright lines; arcs and lettering want True.
     stretch_smooth = False
 
     def paint(self, painter: QPainter, rect, state) -> None:
         raise NotImplementedError
 
     def reset(self) -> None:
-        """Forget everything and start again.
-
-        There is one of each scene for the whole session - see SCENES -
-        so a scene that keeps state keeps it between one track and the
-        next and between one opening of the window and the next. The room
-        in the rave scene came back a minute down the corridor with its
-        lasers already running and its rings already in flight, which is
-        "it just doesn't look like it xxxxxx xxxxx, xxxxxxxxxx xxxx x xxxx
-        xxxx xxxxxx xxxx".
-
-        A scene with nothing to forget does not need to say so. The ones
-        that hold envelopes, positions or caches put themselves back to
-        how they were built.
-
-        Except what the viewer chose (KEPT). The pane resets a scene when
-        it is picked and when a track loads, and a scene put back to how
-        it was built went back to its first game, level and beam while the
-        boxes beside it still showed the choice.
+        """Forget everything and start again, keeping what the viewer chose
+        (KEPT). There is one of each scene for the session, so a new track
+        or a newly picked scene starts from here.
         """
         kept = {name: getattr(self, name) for name in self.KEPT
                 if hasattr(self, name)}
@@ -450,39 +286,27 @@ class Scene:
         for name, value in kept.items():
             setattr(self, name, value)
 
-    #: What the viewer has chosen with the pane's own controls, by
-    #: attribute name, which reset keeps.
+    #: What the viewer chose with the pane's controls, by attribute name; reset
+    #: keeps it.
     KEPT: tuple = ()
 
     # -- what every scene shares ------------------------------------------
     @staticmethod
     def flash(state) -> float:
-        """How hard the strobe is hitting, 0 to 1, or 0 when it is off.
-
-        Scenes ask for this and do something of their own with it. A white
-        rectangle over the top looked the same in all five and hid whatever
-        was underneath, which is the opposite of what a strobe should do.
+        """How hard the strobe is hitting, 0 to 1, or 0 when it is off. Each
+        scene does its own thing with it.
         """
         return state.hit if state.strobe else 0.0
 
-    #: How a smoothed strobe rises and falls. Quick up, slow down, about a
-    #: third of a second of tail.
+    #: How a smoothed strobe rises and falls: quick up, about a third of a
+    #: second down.
     BLOOM_RISE = 0.30
     BLOOM_FALL = 0.055
 
     def bloom(self, state) -> float:
-        """The strobe, smoothed, and advanced one frame.
-
-        The hit a scene is handed is a step: full height on the frame it
-        lands, then a linear decay over six. That is right for a scene
-        made of bars and wrong for anything with a shape in it, because a
-        step in the size of a shape is not a flash, it is a glitch - the
-        vaporwave sun nearly doubled its radius in one frame and sprang
-        back, which is what "xx xxxx xxxxx xxxx xxx xx xxxx xx xxxxxx
-        xxxxxxxx" was.
-
-        Call it once a frame. A scene that wants the raw step still has
-        ``flash``.
+        """The strobe, smoothed and advanced one frame, for scenes where a step
+        would read as a glitch. Call it once a frame; ``flash`` is the raw
+        step.
         """
         hit = self.flash(state)
         was = getattr(self, "_bloom", 0.0)
@@ -504,19 +328,13 @@ class Scene:
 
 
 class Plasma:
-    """The morphing coloured field the old media player drew behind things.
-
-    Sums of sines over a coarse grid, stretched up smooth. At full size
-    this would be millions of evaluations a frame; at 44 by 26 it is about
-    a thousand, and stretched with a smooth transform nobody can tell -
-    the thing being drawn has no hard edges in it anywhere.
+    """The morphing coloured field: sums of sines on a coarse grid, stretched
+    up smooth.
     """
 
     COLUMNS = 36
     ROWS = 22
-    #: Frames between recomputes. The field morphs over seconds, so
-    #: redrawing it thirty times a second rather than sixty is not
-    #: something anybody can see, and it is half the arithmetic.
+    #: Frames between recomputes; the field moves over seconds.
     EVERY = 2
 
     def __init__(self) -> None:
@@ -528,16 +346,8 @@ class Plasma:
 
     def paint(self, painter, rect, state, strength: float = 1.0,
               flash: float = None, going: float = 1.0) -> None:
-        """The field. ``flash`` overrides the strobe this reads.
-
-        ``going`` is how much of a frame's worth of movement to take:
-        zero holds the field exactly where it is, for a scene whose track
-        has stopped. The field has its own drift and would otherwise go
-        on folding under a paused song.
-
-        Ambience passes its own smoothed one: the field is half of what
-        that scene shows, and a field that snaps while the ribbons bloom
-        is not one strobe, it is two.
+        """The field. ``flash`` overrides the strobe, and ``going`` is how much
+        of a frame's movement to take: zero holds it still.
         """
         if rect.width() < 4 or rect.height() < 4:
             return
@@ -552,14 +362,9 @@ class Plasma:
             painter.drawImage(rect, self._image)
             return
         self._countdown = self.EVERY
-        # The field used to slide one way at one speed. Three clocks
-        # running at different rates, each turning a wave in a different
-        # direction, make it fold and drift instead - and the music drives
-        # both how fast they run and how deep the folds are, so a loud
-        # passage churns and a quiet one barely moves.
-        # Bounded, because these three accumulate: a level that arrives
-        # as an infinity puts the drift beyond every sine in the frame
-        # and it never comes back. See ``bounded``.
+        # Three clocks at different rates, turning waves in different
+        # directions, make the field fold rather than scroll; the music drives
+        # their speed and depth. Bounded, because they accumulate.
         bass, mid, high = (bounded(state.bass), bounded(state.mid),
                            bounded(state.high))
         pace = (0.55 + bass * 1.9 + mid * 0.8) * going
@@ -574,10 +379,7 @@ class Plasma:
             y = row / self.ROWS
             for column in range(self.COLUMNS):
                 x = column / self.COLUMNS
-                # Three waves at angles to each other, which is what makes
-                # the field fold through itself instead of scrolling.
-                # One wave across, one down, one diagonal - each on its
-                # own clock, so no single direction dominates.
+                # Three waves at angles to each other, each on its own clock.
                 value = (math.sin((x * 3.1 + self._drift_a) * math.pi)
                          + math.sin((y * 2.7 + self._drift_b) * math.pi)
                          + math.sin(((x - y) * 2.3 + self._drift_c) * math.pi))
@@ -610,17 +412,12 @@ class Vaporwave(Scene):
         sky.setColorAt(1.0, QColor.fromHsvF((hue + 0.78) % 1.0, 0.80, 0.46))
         painter.fillRect(QRectF(0, 0, width, horizon), sky)
 
-        # The strobe belongs to the sun here: a kick makes it flare rather
-        # than washing the whole frame white. Smoothed, and it is mostly
-        # light: at a raw hit of one the radius grew by 0.85 of the
-        # horizon in a single frame and sprang back over six, which reads
-        # as the sun glitching rather than as a beat.
+        # The strobe flares the sun rather than washing the frame, smoothed so
+        # it does not jump.
         flash = self.bloom(state)
         self._sun(painter, width, horizon, hue, state.bass, flash)
 
-        # No bar graph here on purpose: it stood in front of the city and
-        # hid the thing that is already showing the same numbers. The
-        # towers are the equaliser - one per band, rising with it.
+        # The towers are the equaliser: one per band.
         self._far_skyline(painter, width, horizon, state)
         self._skyline(painter, width, horizon, state)
         self._floor(painter, width, height, horizon, state)
@@ -628,13 +425,12 @@ class Vaporwave(Scene):
         self._ribbons(painter, width, horizon, state)
         self._stars(painter, width, horizon, state)
 
-    #: The gaps across the sun: how far apart they sit and how far up the
-    #: disc they go, both as a fraction of its radius.
+    #: The gaps across the sun: their spacing and how far up the disc they go,
+    #: as shares of its radius.
     BAR_APART = 0.105
     BAR_TOP = 0.90
 
-    #: How much of a strobe reaches the sun's size. The rest of it is
-    #: brightness, which is what a flare actually is.
+    #: How much of a strobe goes into the sun's size; the rest is brightness.
     FLARE_SIZE = 0.08
 
     @staticmethod
@@ -645,23 +441,8 @@ class Vaporwave(Scene):
 
     def _sun(self, painter, width, horizon, hue: float, bass: float,
              flash: float) -> None:
-        """The sun: a glow, a face, and the gaps cut across it.
-
-        The bars in front of it looked wrong, and fixing where they were
-        drawn was only half of it. They were drawn from one edge of the
-        sun's *bounding box* to the other, so they carried on out past the
-        glow and across the skyline as dark rectangles - but they also
-        implied a disc that was never there. All the sun had was a soft
-        radial glow with no edge anywhere, so bars across it had nothing
-        to belong to and read as rectangles lying on top of the picture.
-
-        So there is a disc now, with the face every picture of this has:
-        pale and warm at the top, deepening to magenta at the horizon. The
-        gaps are drawn inside a clip of that disc, which is what stops
-        them at its edge - no arithmetic, and they follow the circle
-        exactly. They are spaced evenly and grow towards the horizon, so
-        the sun dissolves into stripes at the bottom and stays whole at
-        the top, rather than being evenly barred like a barcode.
+        """The sun: a glow, a disc shaded from pale to magenta, and gaps cut
+        across it inside a clip of the disc, wider towards the horizon.
         """
         radius = self.sun_radius(horizon, bass, flash)
         if radius <= 1.0:
@@ -669,8 +450,7 @@ class Vaporwave(Scene):
         centre = QPointF(width / 2.0, horizon)
         sky = QRectF(0, 0, width, horizon)
 
-        # The air around it, which is what makes it a sunset rather than a
-        # circle on a background.
+        # The glow around it.
         glow = QRadialGradient(centre, radius * 1.55)
         glow.setColorAt(0.0, QColor.fromHsvF(
             hue, max(0.0, 0.55 - flash * 0.45), 1.0,
@@ -754,19 +534,14 @@ class Vaporwave(Scene):
             tall = horizon * (0.10 + value * 0.42)
             x = index * block
             shade = ((index / count) * 0.2 + state.hue + 0.6) % 1.0
-            # Darker bodies than before, so the lit windows and the roof
-            # line carry the shape rather than the block itself.
+            # Dark bodies, so the lit windows and roof lines carry the shape.
             painter.fillRect(QRectF(x, horizon - tall, block * 0.92, tall),
                              QColor.fromHsvF(shade, 0.88, 0.13, 1.0))
-            # A lit roof edge. This is what makes the city read against a
-            # bright sun instead of dissolving into it. Collected and
-            # filled once, like the windows: one fillRect per tower was
-            # twenty-seven brush changes a frame.
+            # A lit roof edge, so the city reads against the sun. Collected and
+            # filled once.
             roofs.addRect(QRectF(x, horizon - tall, block * 0.92,
                                  max(1.0, horizon * 0.006)))
-            # Lit windows. Collected into one path and filled once at the
-            # end: several hundred drawRect calls with a brush change each
-            # was most of what this scene cost at 1080p.
+            # Lit windows, collected into one path and filled once.
             if value > 0.25:
                 spacing = max(9.0, horizon * 0.022)
                 rows = int(tall / spacing)
@@ -776,17 +551,8 @@ class Vaporwave(Scene):
                         deep = max(2.0, spacing * 0.3)
                         windows.addRect(QRectF(x + block * 0.22, top,
                                                block * 0.2, deep))
-                        # The same window in the floor. The towers were
-                        # already reflected as solid blocks and the lit
-                        # windows were not, so the reflection was a
-                        # silhouette of a city whose lights were all out.
-                        #
-                        # Collected in the loop that is already running
-                        # over them and filled once, like the windows
-                        # themselves: building it anywhere else would walk
-                        # every tower a second time, and several hundred
-                        # rectangles a frame was most of what this scene
-                        # used to cost.
+                        # The window's reflection in the floor, collected in
+                        # the same loop and filled once.
                         mirrored.addRect(QRectF(
                             x + block * 0.22,
                             horizon + (tall - (row * spacing + 3))
@@ -804,35 +570,24 @@ class Vaporwave(Scene):
             (state.hue + 0.6) % 1.0, 0.30 - self.flash(state) * 0.25, 1.0,
             0.42 + self.flash(state) * 0.45))
 
-    #: How far the floor squashes what it reflects, and how much of a
-    #: window's light survives the trip. The same squash the towers'
-    #: own reflection uses, so the lights sit on the blocks they came
-    #: from rather than beside them.
+    #: How far the floor squashes what it reflects, and how much of a window's
+    #: light survives; the same squash as the towers' reflection.
     MIRROR = 0.5
     MIRROR_LIT = 0.38
 
-    #: How many lines of the floor go by in a bar. Four, so one arrives
-    #: on every beat: the floor is the only thing in this scene that
-    #: travels, so it is the only thing that can carry the tempo.
+    #: Floor lines in a bar: four, so one arrives on every beat.
     FLOOR_LINES = 15
     PER_BAR = 4.0
 
     def _scroll(self, state) -> float:
-        """Where the floor has got to, on the beat where there is one.
-
-        state.scroll is a free-running counter the pane advances by a
-        little each frame and a little more when the bass is up - fine for
-        a scene nobody is counting along with, and wrong for this one,
-        whose horizontal lines march towards you in plain sight. On a
-        record with a tempo they march *past* the beat, which reads as the
-        scene ignoring the music it is drawn from.
+        """Where the floor has got to: on the beat where there is one, so the
+        lines march with the music rather than past it.
         """
         tempo = getattr(state, "tempo", 0.0)
         if tempo <= 0.0:
             return state.scroll
-        # One line a beat, which is the phase the pane hands over. Read
-        # from the playhead each frame rather than accumulated, so a seek
-        # lands where it should instead of somewhere it remembered.
+        # One line a beat, read from the playhead each frame so a seek lands
+        # where it should.
         return getattr(state, "beat_at", 0.0)
 
     def _floor(self, painter, width, height, horizon, state) -> None:
@@ -870,15 +625,10 @@ class Vaporwave(Scene):
             painter.drawPath(path)
 
     def _stars(self, painter, width, horizon, state) -> None:
-        """A few fixed stars high in the sky, brightening with the treble.
-
-        Cheap detail that gives the top of the frame something to do now
-        the orb has gone, and it does not sit in front of the city.
-        """
+        """A few fixed stars high in the sky, brightening with the treble."""
         painter.setPen(Qt.PenStyle.NoPen)
         shade = (state.hue + 0.5) % 1.0
-        # One path, one fill. Fourteen brush changes a frame is not much on
-        # its own, but this scene was already the most expensive of the set.
+        # One path, one fill.
         sky = QPainterPath()
         for index in range(14):
             # Deterministic placement, so they do not crawl about.
@@ -904,19 +654,15 @@ class Tunnel(Scene):
         centre = QPointF(width / 2.0, height * 0.5)
         painter.fillRect(rect, QColor(6, 4, 14))
 
-        # A hit no longer shoves every ring down the corridor at once -
-        # that made the whole field jump and read as a glitch. It fires a
-        # shockwave instead: one bright ring thrown outwards, drawn after
-        # the corridor.
+        # A hit fires one bright ring outwards, drawn after the corridor,
+        # rather than moving every ring at once.
         flash = self.flash(state)
         rush = 0.0
         for index in range(self.RINGS, 0, -1):
             t = ((index + state.scroll + rush) % self.RINGS) / self.RINGS
             # Perspective: near rings are large and bright, far ones small.
             scale = t ** 1.8
-            # Bass swells the ring rather than squashing it. The squash made
-            # every ring an ellipse, which read as a mistake next to the
-            # circular scenes rather than as a reaction to the music.
+            # Bass swells each ring evenly; squashing it read as a mistake.
             swell = 1.0 + state.bass * 0.14
             radius = (14.0 + scale * max(width, height) * 0.62) * swell
             energy = state.levels[int(t * (len(state.levels) - 1))] if state.levels else 0.0
@@ -935,8 +681,7 @@ class Tunnel(Scene):
         """One ring thrown out of the middle on a hit, fading as it goes."""
         if flash <= 0.02:
             return
-        # Newest hits are small and bright; as the flash decays the ring
-        # is further out and fainter, which reads as one thing travelling.
+        # A new hit's ring is small and bright, and fainter as it travels out.
         travel = 1.0 - flash
         radius = 20.0 + travel * max(width, height) * 0.75
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -947,18 +692,15 @@ class Tunnel(Scene):
             painter.drawEllipse(centre, radius + step * 4, radius + step * 4)
 
     def _spokes(self, painter, centre, reach, state) -> None:
-        """The bands as rays out of the middle, not a row along the bottom.
-
-        A bar graph at the foot of this scene fought with the perspective;
-        spokes belong to it, and they read as the same numbers.
+        """The bands as rays out of the middle, which suit the perspective
+        better than a bar graph.
         """
         levels = state.levels
         count = len(levels)
         if not count:
             return
-        # The spokes do not take the strobe. They are the bars, and flashing
-        # them at the same moment as the rings and the shockwave made three
-        # things move on one beat, which reads as a mess rather than a hit.
+        # The spokes ignore the strobe; the rings and the shockwave already
+        # answer it.
         flash = 0.0
         painter.setBrush(Qt.BrushStyle.NoBrush)
         for index, value in enumerate(levels):
@@ -988,123 +730,55 @@ class Tunnel(Scene):
 
 
 class Oscilloscope(Scene):
-    """A real scope: the waveform itself, on a phosphor that takes its time.
-
-    What was here before derived a shape from band energies, which is a
-    picture of a spectrum pretending to be a waveform. This draws the
-    signal - the same samples that are in the file, triggered on a rising
-    zero crossing so the trace stands still instead of crawling.
-
-    The persistence is the point, and it is done the way the tube does it
-    rather than the way a drawing program would. There is a screen - an
-    image that survives between frames - and each frame dims what is
-    already on it and lays one new trace over the top. How fast it dims is
-    the decay control. Short reads like a modern digital scope; long smears
-    several cycles together and shows how a sound moves.
-
-    The first version of this kept a list of old traces and redrew all of
-    them every frame, fainter each time. That is a picture of persistence
-    rather than persistence, and it cost what it looked like it cost: at
-    the top of the decay slider, ninety antialiased thousand-point paths a
-    frame, which was around 120ms - eight frames a second on a machine
-    asked for sixty. A screen that fades costs one path a frame at any
-    decay setting, which is why the slider is now free to go anywhere.
+    """A real scope: the waveform itself, triggered on a rising zero crossing,
+    on a phosphor that fades. The screen is an image kept between frames:
+    each frame dims it and draws one new trace, so any decay costs the same.
     """
 
     name = "Oscilloscope"
     blurb = "the waveform swept round a circle, on a phosphor you can set"
 
-    #: How faint a trace is when its decay time is up. Not zero: the decay
-    #: is exponential, like a phosphor's, so "gone" has to be a number.
+    #: How faint a trace is when its decay time is up; the fade is exponential,
+    #: so "gone" needs a number.
     FADED = 0.02
-    #: The longest step the fade will take in one go. Coming back from a
-    #: paused window or a stalled frame, the real gap can be seconds, and
-    #: fading by seconds in one step wipes the screen with a visible jolt.
+    #: The longest step the fade takes at once, so a stalled frame does not
+    #: wipe the screen in one jolt.
     MAX_STEP = 0.25
     #: Seconds of persistence at each end of the slider.
     MIN_DECAY = 0.03
     MAX_DECAY = 1.50
 
-    #: How the beam is driven. Sweep is a clock going round once a frame;
-    #: X-Y drives it from the two channels at once, which is what a record
-    #: written for a scope expects and what draws the picture in it.
+    #: How the beam is driven: Sweep goes round once a frame; X-Y plots left
+    #: against right, which draws the picture in a record made for a scope.
     MODES = ("Sweep", "X-Y")
 
-    #: How far the trace swings either side of the zero ring, as a share
-    #: of that ring's radius. Fixed, so the shape of a trace does not
-    #: depend on anything that changes between frames - which is what
-    #: makes a built path worth keeping.
+    #: How far the trace swings either side of the zero ring, as a share of its
+    #: radius. Fixed, so a built path can be kept.
     SWING = 0.42
-    #: How much the strobe pumps the gain. The whole figure grows, the way
-    #: a scope's does when you turn the volts per division down, rather
-    #: than only the peaks moving - and a uniform scale is a transform, so
-    #: it costs nothing and does not invalidate a cached path.
+    #: How much the strobe pumps the gain: the whole figure grows, as a
+    #: transform, so a cached path stays valid.
     FLASH_GAIN = 0.03
 
     # -- dwell -------------------------------------------------------------
-    #: What makes this a tube rather than a drawing of one.
-    #:
-    #: A beam deposits energy at a rate, so how bright a stretch of trace
-    #: comes out depends on how long the beam spent there. Where the
-    #: signal moves slowly - the turning points, the corners of a figure,
-    #: anywhere the beam reverses - the phosphor is struck hard and glows
-    #: white. Where it crosses the screen quickly it barely marks it. That
-    #: single fact is most of what oscilloscope music looks like, and a
-    #: trace stroked at one alpha is a line drawing whatever else is done
-    #: to it.
-    #:
-    #: DWELL_STEP is the distance between two samples, in the figure's own
-    #: unit box, at which the beam is at full brightness: about what a
-    #: circle of radius one drawn with a thousand samples takes. Slower
-    #: than that saturates, faster than that fades - down to DWELL_LEAST,
-    #: because a fast stroke on a real tube is faint and not absent.
-    #: Measured against the trace's own median step rather than against a
-    #: fixed distance, which is a person turning the intensity up until
-    #: the figure is right: a small figure and a big one are then both
-    #: exposed properly and what shows is the shading *within* each,
-    #: which is the part that carries the shape. Below one, so the median
-    #: sits in the upper middle and there is room above it for the slow
-    #: parts to blaze.
+    #: A beam glows brighter where it moves slowly, which is most of what
+    #: oscilloscope music looks like. DWELL_STEP is the step between samples,
+    #: in the figure's unit box, at full brightness, measured against the
+    #: trace's own moving steps; faster stretches fade towards DWELL_LEAST.
     DWELL_AIM = 0.62
     DWELL_LEAST = 0.22
-    #: How many brightnesses the trace is cut into. Each is one stroke, so
-    #: this is also what the beam costs: six is enough that the shading
-    #: reads as continuous and few enough that a frame is six paths.
+    #: How many brightnesses the trace is cut into; each is one stroke a frame.
     DWELL_LEVELS = 6
-    #: How many samples share one brightness.
-    #:
-    #: Six paths a frame is cheap; the number of *stretches* inside them
-    #: is not. A figure written for a scope changes speed smoothly and
-    #: gives long runs, but an ordinary stereo mix is noise, and taking a
-    #: level per sample cut a thousand-point trace into eight hundred
-    #: stretches - each one a subpath with two ends to cap. Measured, that
-    #: was 154 ms a frame at full screen against 6 before.
-    #:
-    #: A block of eight caps it at a hundred and twenty-eight, and the
-    #: shading loses nothing anybody can see: the beam has mass and the
-    #: phosphor integrates, so brightness that changes every eighth of a
-    #: sample was never real.
+    #: How many samples share one brightness. A level per sample cut a noisy
+    #: trace into hundreds of short paths (154 ms a frame against 6).
     DWELL_BLOCK = 8
-    #: How far a parked beam is nudged so that it draws at all.
-    #:
-    #: A beam that stops moving is a stretch of trace with no length in
-    #: it, and Qt strokes nothing for a subpath of exactly zero length -
-    #: not even a round cap. Measured: a zero-length run painted 0 pixels
-    #: and one a ten-thousandth of a unit long painted the dot. A parked
-    #: beam is the brightest thing on a scope; it should not be the one
-    #: thing missing from it.
+    #: How far a parked beam is nudged so that it draws: Qt strokes nothing for
+    #: a subpath of zero length.
     DWELL_PARKED = 1e-4
 
-    #: How much wider the beam is drawn where it is brightest.
-    #:
-    #: A tube blooms in the glass as well as in the phosphor: drive the
-    #: spot hard and it grows. Without this the shading is a change of
-    #: colour on a line of constant thickness, which reads as a drawing
-    #: shaded in rather than as a filament being run hotter.
+    #: How much wider the beam is drawn where it is brightest, as a hot spot
+    #: blooms in the glass.
     DWELL_SPREAD = (0.80, 1.55)
-    #: How far the hottest parts wash out towards white. A phosphor struck
-    #: hard stops being green and goes white in the middle, which is the
-    #: other half of why a bright node looks bright.
+    #: How far the hottest parts wash out towards white.
     DWELL_WHITE = 0.34
 
     #: The beam and the glow, as the controls set them.
@@ -1116,16 +790,14 @@ class Oscilloscope(Scene):
         self._plasma = Plasma()
         #: The screen itself: what the beam has drawn and not yet lost.
         self._screen = None
-        #: When it was last dimmed, so the decay is in seconds rather than
-        #: in frames - the same slider then means the same thing whether
-        #: the window is managing sixty a second or fifteen.
+        #: When it was last dimmed, so the decay is in seconds whatever the
+        #: frame rate.
         self._last = None
-        #: The last trace burned in. A paused track hands the same one
-        #: back every frame, and drawing it again would pile brightness on
-        #: brightness until the screen was a solid disc.
+        #: The last trace burned in. A paused track hands the same one back,
+        #: and drawing it again would pile up brightness.
         self._burned = None
-        #: The screen on the graphics card, when the pane is drawing on
-        #: one (see scope_gl); False once the card has failed to keep one.
+        #: The screen on the graphics card when the pane draws on one (see
+        #: scope_gl); False once the card has failed.
         self._card = None
 
     @property
@@ -1148,9 +820,8 @@ class Oscilloscope(Scene):
     def paint(self, painter, rect, state) -> None:
         painter.fillRect(rect, QColor(2, 8, 4))
         flash = self.flash(state)
-        # A dim field behind the graticule, so the screen looks lit from
-        # within rather than painted on black. Kept faint and tinted
-        # towards the phosphor, because the trace is the subject.
+        # A faint field behind the graticule, so the screen looks lit from
+        # within.
         painter.save()
         painter.setOpacity(0.32 + flash * 0.25)
         self._plasma.paint(painter, rect, state, strength=0.45)
@@ -1180,13 +851,8 @@ class Oscilloscope(Scene):
                 log.exception("The scope's screen could not be kept on the "
                               "graphics card; keeping it on the CPU.")
                 self._card = False
-        # How many real pixels one unit of this rect is worth. The pane
-        # draws big frames into a smaller buffer and stretches them, so
-        # the rect a scene is handed is in logical units that can be
-        # nearly twice the pixels underneath. Sizing the tube from the
-        # rect alone built a 1920-wide screen to be squeezed into a
-        # 1030-wide buffer, which cost the full frame and then threw half
-        # of it away - and was most of what this scene cost.
+        # Real pixels per unit of this rect, so the tube is built at the size
+        # it is drawn at rather than the logical size.
         dpr = abs(painter.combinedTransform().m11()) or 1.0
         screen = self._tube(rect, trace, drawing, flash, dpr)
         if screen is not None:
@@ -1194,15 +860,9 @@ class Oscilloscope(Scene):
 
     # -- the tube ---------------------------------------------------------
     def _tube(self, rect, trace, drawing: bool, flash: float, dpr: float = 1.0):
-        """Dim what is on the screen, lay the new trace over it, hand it back.
-
-        Everything that makes this cheap is here. The screen is one image
-        that outlives the frame, so however long the phosphor is set to
-        glow, a frame is one fade and one path - not one path per frame of
-        history. The fade is a ``DestinationIn`` fill, which multiplies
-        what is already there by an alpha and touches nothing else, so the
-        graticule and the field behind it stay crisp: they are drawn live,
-        underneath, and never go into the tube at all.
+        """Dim what is on the screen, lay the new trace over it, and hand it
+        back. The fade is a DestinationIn fill; the graticule is drawn live
+        underneath and never goes into the tube.
         """
         size = QSize(max(0, int(rect.width() * dpr)),
                      max(0, int(rect.height() * dpr)))
@@ -1230,11 +890,7 @@ class Oscilloscope(Scene):
 
     def _fade_now(self, trace):
         """How much of the screen survives to this frame, or None where
-        ``trace`` is the one already burned into it.
-
-        A paused track hands back the trace it handed back last frame.
-        Neither fading nor redrawing it is right - the picture should
-        simply sit there - so a repeat is left alone entirely.
+        ``trace`` is the one already burned in (a paused track).
         """
         now = time.monotonic()
         step = self.MAX_STEP if self._last is None else min(
@@ -1243,16 +899,13 @@ class Oscilloscope(Scene):
         if trace is self._burned:
             return None
         self._burned = trace
-        # Exponential, so the trace is down to FADED of its brightness
-        # after `decay` seconds whatever the frame rate happens to be.
+        # Exponential, so the trace is at FADED after ``decay`` seconds
+        # whatever the frame rate.
         return self.FADED ** (step / max(1e-3, self._decay))
 
     def _fit(self, size):
-        """The screen at this size, keeping what was on the old one.
-
-        Scaled rather than cleared. Dragging a window edge is a stream of
-        sizes, and starting from black on every one of them means the
-        trace disappears for as long as the drag lasts.
+        """The screen at this size, scaled from the old one so a window being
+        resized keeps its trace.
         """
         screen = self._screen
         if screen is not None and screen.size() == size:
@@ -1273,21 +926,8 @@ class Oscilloscope(Scene):
 
     def _strike(self, beam, screen, trace, drawing: bool, flash: float,
                 dpr: float = 1.0) -> None:
-        """One pass of the beam: one stroke, and the bloom makes it glow.
-
-        The glow used to be three strokes - a wide translucent green under
-        a narrower one under a hot core - which is a reasonable way to draw
-        a lit phosphor and a bad way to pay for one. A real trace is not a
-        smooth curve: a thousand consecutive samples of music reverse
-        direction constantly, and a wide round-joined pen over a thousand
-        reversals costs four times what the same pen costs over a smooth
-        line. Measured at the size the pane actually draws, the three
-        strokes were 21ms of a 16ms frame, and the widest of them was half
-        of that on its own.
-
-        So the beam is struck once, hot, and the scene's bloom pass turns
-        it into a glow - which is what a bloom is for, and what it was
-        already doing to the old halo anyway.
+        """One pass of the beam: one hot stroke, which the scene's bloom turns
+        into a glow.
         """
         side = min(screen.width(), screen.height())
         if drawing:
@@ -1296,23 +936,17 @@ class Oscilloscope(Scene):
             scale = side * 0.30 * (1.0 + flash * self.FLASH_GAIN)
         beam.translate(screen.width() / 2.0, screen.height() / 2.0)
         beam.scale(scale, scale)
-        # A figure has detail in it that a fat beam fills in, so X-Y is
-        # struck finer than a sweep.
-        # In the tube's own pixels, so the beam ends up the same thickness
-        # against the graticule however much the pane is shrinking the
-        # frame it draws into.
-        # A shade thicker than it was. A real trace is a glowing filament
-        # rather than a pen line, and at 1.3 pixels the figures read as a
-        # diagram of one.
+        # X-Y figures are struck finer than a sweep, and the width is in the
+        # tube's own pixels so it is the same against the graticule at any
+        # size.
         core = ((1.8 if drawing else 2.2) + flash * 1.2) * dpr
         for level, path in enumerate(self._beams(self._points(trace,
                                                               drawing))):
             if path.isEmpty():
                 continue
             share = level / max(1, self.DWELL_LEVELS - 1)
-            # Bright and white where the beam lingered, faint and green
-            # where it hurried: a phosphor struck harder or softer rather
-            # than a pen changed for another pen.
+            # Bright and white where the beam lingered, faint and green where
+            # it hurried.
             colour = QColor.fromHsvF(
                 max(0.0, 0.34 - flash * 0.08),
                 max(0.0, (0.42 - flash * 0.3)
@@ -1320,55 +954,28 @@ class Oscilloscope(Scene):
                 1.0,
                 self.DWELL_LEAST + (1.0 - self.DWELL_LEAST) * share)
             thin, fat = self.DWELL_SPREAD
-            # Through ``stroke``, which fakes a wide line with a stack of
-            # hairlines. See HAIRLINE: Qt's raster engine falls off a
-            # thirty-six fold cliff at exactly one pixel of pen, and a
-            # trace is the worst thing to take over it - hundreds of
-            # reversals, every one of them a join. Measured on the worst
-            # trace in a real record at full screen, one wide pen over
-            # this path was 880 ms and the hairline stack is 3.
-            #
-            # Widths are handed over in the painter's own units, because
-            # that is what ``stroke`` scales; the beam is thought about
-            # in real pixels, hence the divide.
+            # Through ``stroke``, as a stack of hairlines: one wide pen over a
+            # real trace took 880 ms a frame, the stack 3. Widths are in the
+            # painter's units.
             stroke(beam, path, colour,
                    core * (thin + (fat - thin) * share) / scale,
-                   # Round-capped, because a beam that stops moving draws
-                   # a stretch of zero length and a flat cap draws
-                   # nothing at all for one - a parked beam is the
-                   # brightest thing on a scope, not the one thing
-                   # missing from it. Bevelled joins, because a trace
-                   # made of a thousand short segments has a join at
-                   # every one of them and a round join there is an arc
-                   # nobody can see and everybody pays for.
+                   # Round caps, so a parked beam still draws a dot; bevelled
+                   # joins, because a trace has a join at every sample.
                    cap=Qt.PenCapStyle.RoundCap,
                    join=Qt.PenJoinStyle.BevelJoin)
 
     # -- paths -------------------------------------------------------------
     def _points(self, trace, drawing: bool):
-        """One trace, as points in a box that does not depend on the window.
-
-        Built at unit scale so that resizing, and the strobe pumping the
-        gain, are a transform rather than a rebuild.
+        """One trace, as points in a unit box, so resizing and the strobe's
+        gain are a transform rather than a rebuild.
         """
         return (self._vector_points(trace) if drawing
                 else self._sweep_points(trace))
 
     def _beams(self, points):
-        """One path per brightness, dimmest first.
-
-        Per brightness rather than per stretch of trace. A stretch is a
-        run of samples that happen to share a level, and on real music
-        the level changes every few samples - so a path per run is a
-        thousand paths a frame, while a path per level is four however
-        noisy the signal is.
-
-        Dimmest first, so the bright stretches are laid over the faint
-        ones where they meet rather than under them.
-
-        Each run carries the point before it as well, so consecutive runs
-        share the sample between them and there is no gap where the
-        brightness changes.
+        """One path per brightness, dimmest first, so bright stretches lie over
+        faint ones. Each run starts at the point before it, so runs join
+        without a gap.
         """
         top = self.DWELL_LEVELS - 1
         if len(points) < 2:
@@ -1379,23 +986,15 @@ class Oscilloscope(Scene):
         steps = [math.hypot(points[i].x() - points[i - 1].x(),
                             points[i].y() - points[i - 1].y())
                  for i in range(1, len(points))]
-        # The seventieth of them rather than the middle one. A signal
-        # that is parked for more than half the trace - silence, a held
-        # note, the gap between two figures - has a median step of zero,
-        # and a reference of zero puts every moving part of the trace at
-        # the dimmest level there is. Taking a step from the part that is
-        # actually moving exposes the movement properly and leaves the
-        # parked beam where it belongs, which is blazing.
+        # The seventieth percentile of the steps rather than the median, which
+        # is zero when the beam is parked for over half the trace.
         ranked = sorted(steps)
         middle = ranked[min(len(ranked) - 1, int(len(ranked) * 0.70))]
         reach = max(1e-9, middle * self.DWELL_AIM)
         levels = []
         for start in range(0, len(steps), self.DWELL_BLOCK):
-            # Energy per unit length: how long the beam spent here. Over
-            # a block rather than a sample, because a single sample's
-            # spacing on real music jitters enough to dither the shading
-            # into noise - and see DWELL_BLOCK for what that dithering
-            # costs to draw.
+            # Energy per unit length, over a block of samples so the shading
+            # does not dither into noise.
             block = steps[start:start + self.DWELL_BLOCK]
             step = sum(block) / len(block)
             lit = 1.0 if step <= 1e-9 else min(1.0, reach / step)
@@ -1412,20 +1011,15 @@ class Oscilloscope(Scene):
         return paths
 
     def _run(self, run):
-        """One stretch of the trace as a path, parked or moving.
-
-        Always a curve, never a polyline. Drawing the fast stretches
-        straight was tried on the grounds that a beam crossing the whole
-        screen between two samples really does fly straight: it was
-        slower, at every threshold, because the curve cuts the corners
-        and there is less of it to stroke. 31 ms for the worst frame of a
-        real record with the curve, 56 without.
+        """One stretch of the trace as a path, parked or moving. Always a
+        curve: it is shorter to stroke than straight segments, and was
+        faster at every threshold.
         """
         spread = max(abs(run[-1].x() - run[0].x()),
                      abs(run[-1].y() - run[0].y()))
         if len(run) > 1 and spread < self.DWELL_PARKED:
-            # The beam stopped. See DWELL_PARKED: a hair, so that there
-            # is a subpath for the round cap to sit on.
+            # The beam stopped: a hair, for the round cap to sit on. See
+            # DWELL_PARKED.
             dot = QPainterPath()
             dot.moveTo(run[0])
             dot.lineTo(QPointF(run[0].x() + self.DWELL_PARKED, run[0].y()))
@@ -1433,19 +1027,9 @@ class Oscilloscope(Scene):
         return smooth_path(run)
 
     def _vector_points(self, trace):
-        """Left against right, plotted straight, in a unit box.
-
-        No trigger and no clock: where the beam is, is what the record
-        says. A disc cut for a scope draws a picture here; an ordinary mix
-        draws the blob a vectorscope shows, leaning with the stereo image.
-
-        The curve through them, rather than a line between them, is drawn
-        by the caller: a beam is a physical thing with a mass of electrons
-        in it and a deflection coil that cannot change direction
-        instantly, so it rounds every corner it is asked to draw. Joining
-        the samples with straight lines draws the corners the signal asks
-        for and not the ones a scope makes, which is why the figures came
-        out "straight and taking sharp turns".
+        """Left against right, plotted straight, in a unit box. The caller
+        draws a curve through the points, as a real beam rounds the corners
+        it is asked to draw.
         """
         count = len(trace) // 2
         # Stored as int16 so a long track's worth fits in memory.
@@ -1456,15 +1040,8 @@ class Oscilloscope(Scene):
                 for index in range(count)]
 
     def _sweep_points(self, trace):
-        """One sweep, swept around a circle rather than across.
-
-        The beam starts at twelve o'clock and goes round once; how far
-        the signal is from zero is how far the trace is from the ring.
-        A steady tone draws a closed flower, and the trace joins up with
-        itself because the capture is triggered on a zero crossing.
-
-        Built with the zero ring at radius one, so the caller scales it to
-        whatever the window is now.
+        """One sweep, around a circle: the distance from the ring is the
+        signal. Built with the zero ring at radius one.
         """
         count = len(trace)
         points = []
@@ -1478,10 +1055,8 @@ class Oscilloscope(Scene):
         return points
 
     def _from_levels(self, state):
-        """A fallback shape when no waveform was captured.
-
-        Older analyses have no traces; rather than draw nothing, the bands
-        are folded into something that at least moves with the music.
+        """A fallback shape from the bands, for analyses with no captured
+        waveform.
         """
         levels = state.levels
         if not levels:
@@ -1496,11 +1071,8 @@ class Oscilloscope(Scene):
         return out
 
     def _grid(self, painter, rect, flash) -> None:
-        """A polar graticule, drawn like a scope's rather than a chart's.
-
-        Rings for amplitude and ticks around the rim for phase. The spokes
-        used to run right through the middle and cross the trace, which
-        made the whole thing look like graph paper with a squiggle on it.
+        """A polar graticule: rings for amplitude and ticks around the rim,
+        with nothing crossing the trace.
         """
         centre = rect.center()
         reach = min(rect.width(), rect.height()) * 0.44
@@ -1547,11 +1119,8 @@ class Bars(Scene):
     SEGMENTS = 22
 
     def _segments(self, painter, rect, state, baseline, height, flash) -> None:
-        """Discrete blocks rather than a smooth bar.
-
-        This is the plain equaliser, so it looks like the thing itself: a
-        column of lit segments with a gap between each, amber near the top
-        and red at the very top, which is how a meter warns you.
+        """The plain equaliser as columns of lit segments, amber near the top
+        and red at the top.
         """
         levels = state.levels
         count = len(levels)
@@ -1586,16 +1155,8 @@ class Bars(Scene):
 
     @staticmethod
     def _height_for(db: float, calibration: dict) -> float:
-        """Where a given level sits, 0 at the foot and 1 at the top.
-
-        Undoes exactly what the analysis did. The bars are stretched to
-        fill the display, which makes a quiet recording watchable but
-        leaves a bar's height meaning nothing on its own; with the numbers
-        that did the stretching the scale can be drawn truthfully.
-
-        Relative to the loudest the track gets rather than to full scale,
-        because the analysis is not calibrated against an absolute
-        reference and a scale claiming otherwise would be made up.
+        """Where a level sits, 0 at the foot and 1 at the top: the analysis's
+        stretch undone, relative to the loudest the track gets.
         """
         reach = float(calibration.get("reach", 0.0))
         gamma = float(calibration.get("gamma", 0.72))
@@ -1660,10 +1221,9 @@ class Bars(Scene):
 
 
 def _dots_between(*tables, apart: float = 0.035) -> tuple:
-    """One point midway between each neighbouring pair of numbered marks.
-
-    A class body cannot be read from inside a comprehension defined in
-    it, so this is a function rather than two lines where it is used.
+    """A point midway between each neighbouring pair of numbered marks. A
+    function, because a class body cannot be read from inside a
+    comprehension in it.
     """
     marks = sorted({fraction for table in tables for _v, fraction in table})
     out: list = []
@@ -1675,130 +1235,51 @@ def _dots_between(*tables, apart: float = 0.035) -> tuple:
 
 
 class Meters(Scene):
-    """Ten analogue VU meters, laid out like a rack of them.
-
-    Copied from a photograph: a shallow arc across the top, dB marks above
-    it running -24 to +3, a second row of numbers inside reading 0 to 100,
-    the word dB below those, the band's frequency below that, and a long
-    needle hinged off the bottom of the face.
-
-    Everything except the needle is drawn once into a pixmap per cell size
-    and blitted, because ten faces of arcs and text every frame is most of
-    what a scene like this costs.
-
-    Colours come from the caller: this is the scene with a picker attached.
+    """Ten analogue VU meters in a rack, drawn from a photograph of a real one.
+    Each face is drawn once per cell size and blitted; only the needles
+    move. Colours come from the picker.
     """
 
     name = "VU meters"
     blurb = "ten analogue dials, one per band, with a colour picker"
 
-    #: Four megapixels drawn sharp. A face is rendered once per size and
-    #: blitted after that, so a full screen of them is ten pixmap copies
-    #: and ten needles - the pane's usual budget would halve the
-    #: resolution of an instrument panel whose whole point is that the
-    #: numbers on it are readable.
+    #: Four megapixels drawn sharp: the faces are blitted, so a full screen of
+    #: them is cheap, and the numbers should be readable.
     sharp_pixels = 4_000_000
 
-    #: Smoothed when it is stretched, unlike the scenes made of lines.
-    #: A dial is arcs and lettering, and doubling every pixel of those is
-    #: plainly doubling every pixel: "XX xxxxxx xxxxx xxxxxxx xxx xxxxx
-    #: xxxxxxxx pixelated in full screen".
+    #: Smoothed when stretched: arcs and lettering pixelate when doubled.
     stretch_smooth = True
 
-    #: The needle's travel, in degrees, measured the way Qt measures arcs.
-    #: Centred on straight up, so the face sits square in its cell - the
-    #: first attempt started at 202 and leaned the whole dial to the left.
+    #: The needle's travel, in degrees as Qt measures arcs, centred on straight
+    #: up.
     START = 145.0
     SWEEP = -110.0
 
-    #: The face's own shape, in radii, and the only place it is written
-    #: down. Everything else measures against these, so the drawing and
-    #: the space reserved for it cannot disagree - which they did, and
-    #: which is what made the dials look stretched.
-    #:
-    #: Taken off the reference rather than chosen: its arc is a 460-wide
-    #: chord rising 120, which is a radius of 280 and a sweep of 110
-    #: degrees, and the centre of that circle sits at the very bottom of
-    #: the face. So the face is a wide, shallow thing - about two radii
-    #: across and a quarter over one tall - and the code used to reserve
-    #: 2.55 by 2.20, which is 1.76 times the height it ever draws in.
-    #: The face's size, in radii, measured off the reference rather than
-    #: adjusted towards it.
-    #:
-    #: Its cell is 562 by 339 and its arc runs from (55,192) to (500,192)
-    #: over an apex at y=75 - a chord of 445 rising 117, which is a
-    #: radius of 270 and a sweep of 111 degrees. Everything drawn fits in
-    #: 499 by 269 of that cell, which is 1.85 radii by 1.00, and the
-    #: centre of the arc sits 1.12 radii below the top of it: at the very
-    #: bottom, where the needle is hinged and just past what is drawn.
-    #:
-    #: The numbers here were 2.34 by 1.46. Being too wide is what made
-    #: the faces small - the radius is whichever of the two dimensions
-    #: runs out first, and asking for a quarter more width than the face
-    #: uses throws that quarter away.
-    #: What a face actually draws in, measured rather than reasoned about.
-    #:
-    #: These were 1.95 by 1.02 and the drawing needs 1.89 by 1.10. Six per
-    #: cent of missing height does not sound like much and it is what put
-    #: the bottom row of a full screen off the bottom of it: every cell
-    #: overflowed by fourteen pixels, and the last row overflowed into
-    #: nothing. The needle is what does it - it hinges below the arc and
-    #: swings past the frequency label - so the reserved height has to
-    #: cover a face at rest and a face pinned, which is what the measuring
-    #: script checks at three deflections.
+    #: The face's shape in radii, measured off the reference photograph, and
+    #: the only place it is written: the drawing and the space reserved for it
+    #: both read these. The height covers the needle at rest and pinned.
     FACE_WIDE = 1.93
     FACE_TALL = 1.13
-    #: How far below the top of the face the arc's centre sits. The
-    #: difference between this and FACE_TALL is the room under the hub.
+    #: How far below the top of the face the arc's centre sits.
     FACE_DROP = 1.16
-    #: Where the two lines of text sit, above the centre and inside the
-    #: arc, which is where the reference puts them. They used to be below
-    #: the centre, outside everything, which is what the extra height was
-    #: being reserved for.
+    #: Where the two lines of text sit: above the centre, inside the arc.
     DB_AT = 0.46
     LABEL_AT = 0.24
-    #: Type sizes, as shares of the radius, in one place so a face keeps
-    #: its proportions at every size it is drawn at.
-    #: How far out the dB numbers sit. The reference puts them at 1.07
-    #: radii - close in, almost touching the arc - and 1.20 is what made
-    #: the face taller than the reference's by the difference.
-    #: The arc's own stroke, measured where nothing crosses it: 0.020
-    #: radii, which on the reference's 270 pixel radius is 5.3 px. It was
-    #: drawn at 0.030, and the part above 0 dB at 0.052 - one and a half
-    #: to two and a half times too heavy, which is most of why the face
-    #: read as a diagram rather than as an instrument.
+    #: Type sizes and the arc's stroke, as shares of the radius, measured off
+    #: the reference.
     ARC_STROKE = 0.020
     #: The run above 0 dB is heavier, but only a little.
     ARC_STROKE_HOT = 0.027
-    #: Where the arc's stroke sits. Not at the radius itself: measured,
-    #: it runs 0.95 to 0.98, so its centre line is a little inside.
+    #: Where the arc's stroke sits, a little inside the radius.
     ARC_AT = 0.968
-    #: Ticks reach outward past the arc, not inward from it. Measured at
-    #: -3, 0, +1, +2 and +3 the ink continues to about 1.05 radii and
-    #: there is none inside; they were being drawn from 0.84 to 1.00,
-    #: which is the wrong side of the line they mark.
+    #: Ticks reach outward past the arc.
     TICK_IN = 0.945
     TICK_OUT = 1.052
-    #: The small marks between them are dots, and they are outside the
-    #: arc too - measured widths of 0.005 to 0.008 of the sweep, against
-    #: 0.037 to 0.047 for a tick.
+    #: The small marks between them are dots, outside the arc.
     DOT_AT = 1.012
     DOT_SIZE = 0.011
-    #: A squarish face, like the reference's: its "0" is a rounded
-    #: rectangle rather than a circle. That is the Eurostile family,
-    #: which is not on a Mac, so this is the closest of the ones that
-    #: are - measured on the width of a "0" against its height and how
-    #: much of its box the ink fills.
-    #: In order of preference, because none of these is on every
-    #: machine and a face that silently falls back to the system default
-    #: is the thing this is trying to avoid. Eurostile and Microgramma
-    #: are the real article; the rest are the closest of what a Mac and a
-    #: Linux build machine actually carry, ranked by measuring the width
-    #: of a "0" against its height and how much of its box the ink fills.
-    #: The face, which ships with the app - see ``dial_face``. The rest
-    #: are only what Qt falls back to if that file ever goes missing, and
-    #: none of them is right: nothing installed on a Mac or on a build
-    #: runner has square digits.
+    #: The face ships with the app (see ``dial_face``); these are only what Qt
+    #: falls back to if the file goes missing.
     FAMILIES = ("Eurostile", "Microgramma", "Square721 BT", "Bank Gothic",
                 "Verdana", "DejaVu Sans", "Futura", "Gill Sans",
                 "Avenir Next", "Liberation Sans", "Helvetica Neue")
@@ -1809,44 +1290,20 @@ class Meters(Scene):
         family = dial_face()
         font.setFamilies(([family] if family else [])
                          + list(Meters.FAMILIES))
-        # Michroma has one weight and it is the right one. Asking for bold
-        # makes Qt synthesise a heavier version by smearing it sideways,
-        # which is what turned the numbers into blobs at small sizes.
+        # Michroma has one weight; asking for bold makes Qt smear it.
         font.setBold(not family)
         return font
-    #: 1.09 rather than the 1.07 measured to the reference's own label
-    #: centres, because this face's numerals are a shade taller than its
-    #: and at 1.07 their bottoms sat on the arc instead of above it.
-    #: Further out than it was, and smaller. Both because the face
-    #: changed: Michroma is a wide, square design, so the same point size
-    #: sets numbers half again as wide as Verdana's and they ran into the
-    #: arc, into the ticks, and into each other at the crowded left end.
-    #: Solved rather than nudged, against two things at once: the
-    #: reference's face is 1.85 radii wide, and the numbers have to clear
-    #: what is under them.
-    #:
-    #: Michroma is a wide design, so the size that looks right for a
-    #: humanist sans is half again too big here - at 0.098 radii of type
-    #: the face came out 2.09 across against the reference's 1.85, because
-    #: the outermost thing on a face is the "-24" and it had grown.
-    #:
-    #: The first solve cleared the *arc*, at 0.968 radii, and put the row
-    #: at 1.06. That is under the ticks, which reach out to 1.052, so
-    #: every number came to rest on a tick tip. What has to be cleared is
-    #: whichever of the two reaches further.
+    #: Where the dB numbers sit, clear of whichever of the arc and the ticks
+    #: reaches further.
     DB_AT_R = 1.12
     DB_TYPE = 0.072
-    #: Nearly as large as the dB row, which is what the reference has:
-    #: they read as two scales on one face rather than as a scale and a
-    #: footnote. At 0.082 they were a smudge under the arc.
+    #: Nearly as large as the dB row: two scales on one face.
     PERCENT_TYPE = 0.062
     UNIT_TYPE = 0.088
     LABEL_TYPE = 0.096
 
-    #: Where 0 dB - which is also 100 per cent - sits along the travel.
-    #: A VU movement deflects in proportion to voltage, so per cent is
-    #: linear along the arc and every dB mark falls where 20*log10 puts
-    #: it. Taking +3 dB as the end of the travel fixes the rest.
+    #: Where 0 dB (also 100 per cent) sits along the travel, with +3 dB at the
+    #: end. A VU movement is linear in voltage.
     _FULL = 1.0 / (10.0 ** (3.0 / 20.0))
 
     @staticmethod
@@ -1856,42 +1313,29 @@ class Meters(Scene):
     #: dB marks along the arc, and where each one sits across the sweep.
     DB_MARKS = tuple((db, (10.0 ** (db / 20.0)) / (10.0 ** (3.0 / 20.0)))
                      for db in (-24, -12, -3, 0, 1, 2, 3))
-    #: Where the per-cent row sits, inside the arc. Further in than the
-    #: 0.86 it was, for the same reason the dB row moved out: with a wide
-    #: face at 0.86 radii the numbers are nearly touching the scale they
-    #: are inside of.
+    #: Where the per-cent row sits, inside the arc.
     PERCENT_AT = 0.82
 
     #: Below this face radius the per-cent row is dropped as unreadable.
-    #: It used to be 150, which no cell on a 1080p screen ever reached
-    #: with ten meters on it, so the row that is half of what a VU face
-    #: looks like had never once been drawn outside a test.
     PERCENT_RADIUS = 76.0
     #: And below this, the face shows only what it can show clearly.
     ROOMY = 62.0
     #: The three numbers worth keeping when there is no room for seven.
     SPARSE_MARKS = ((-24, 0.0447), (0, 0.7079), (3, 1.0))
-    #: Per cent marks, on the inside. Linear in deflection, as the movement
-    #: is: the eyeballed set put 100 per cent at 0.82 of the travel, which
-    #: is nearly a decibel and a half out.
+    #: Per-cent marks on the inside, linear in deflection.
     PERCENT_MARKS = tuple((pc, pc / 100.0 / (10.0 ** (3.0 / 20.0)))
                           for pc in (0, 20, 40, 60, 80, 100))
-    #: Built from both tables: one dot between each neighbouring pair of
-    #: numbered marks, wherever they fall, thinned so two that nearly
-    #: coincide do not print on top of each other.
+    #: One dot between each neighbouring pair of numbered marks, thinned where
+    #: two nearly coincide.
     DOTS = _dots_between(DB_MARKS, PERCENT_MARKS)
-    #: Where the dots go: midway between each pair of marks that carries
-    #: a number, on both scales. A handful, evenly spread - the reference
-    #: has eight or nine of them. What was here was one per decibel from
-    #: -20 up, which is twenty-four marks crowded into the left half and
-    #: is what made the row read as a smear rather than as points.
+    #: Where the dots go: midway between each pair of numbered marks, on both
+    #: scales.
     @staticmethod
     def _between(marks):
         at = sorted(set(marks))
         return [(a + b) / 2.0 for a, b in zip(at, at[1:])]
 
-    #: Kept so anything that still names it finds an empty tuple rather
-    #: than an attribute error. The face draws DOTS above.
+    #: Kept as an empty tuple for anything that still names it.
     MINOR: tuple = ()
 
     def __init__(self) -> None:
@@ -1905,14 +1349,8 @@ class Meters(Scene):
         if not count:
             return
         columns, rows = self._grid(rect, count)
-        # Cells the size of a face, not the size of the frame divided up.
-        #
-        # A rack of ten on a wide screen is four across and three down,
-        # and a face is 1.74 times as wide as it is tall where a third of
-        # a 16:9 frame is 1.78 - so dividing the frame evenly left about a
-        # hundred pixels of air under every row, all of which piled up at
-        # the bottom and read as the rack having slipped upwards. The
-        # block is built at its own size and centred instead.
+        # Cells the size of a face, with the block centred, rather than the
+        # frame divided evenly.
         radius = self._radius(rect, columns, rows)
         cell_w = min(rect.width() / columns, radius * self.FACE_WIDE * 1.06)
         cell_h = min(rect.height() / rows, radius * self.FACE_TALL * 1.06)
@@ -1922,19 +1360,12 @@ class Meters(Scene):
         on_row = [min(columns, count - r * columns) for r in range(rows)]
         boxes = []
         flash = self.flash(state)
-        # How many real pixels one unit of this rect is worth, so a face
-        # is rendered at the resolution it will be shown at and no more.
-        # It used to be supersampled two to one whatever the pane was
-        # doing, which was right while the pane drew scenes at half size
-        # and stretched them, and pure waste once this one asked to be
-        # drawn sharp: ten faces at twice the size they are blitted at is
-        # four times the pixels to copy every frame.
+        # Real pixels per unit of this rect, so a face is rendered at the size
+        # it is shown.
         dpr = abs(painter.combinedTransform().m11()) or 1.0
         for index in range(count):
             row, column = divmod(index, columns)
-            # A short row is centred rather than left-aligned: three
-            # meters hanging off the left of a five-wide grid reads as
-            # two that failed to draw.
+            # A short row is centred.
             spare = (columns - on_row[row]) * cell_w / 2.0
             box = QRectF(left + spare + column * cell_w,
                          top + row * cell_h,
@@ -1943,18 +1374,10 @@ class Meters(Scene):
                      if index < len(state.dial_labels) else "")
             boxes.append((box, levels[index], label))
 
-        # The backlights first, all of them, before any face is drawn.
-        #
-        # Each one used to be filled inside its own cell, and a meter's
-        # backlight reaches half a radius past the face - so it stopped
-        # dead at the edge of the cell with a straight line down it, and
-        # the next meter's face was then drawn over the top of whatever
-        # had spilled. That is the strobe "clipping behind other meters".
-        # Light does not belong to a cell.
+        # All the backlights first, over the whole frame: a lamp reaches past
+        # its own cell, and filled inside it, it was cut off at the edge.
         if flash > 0.02:
-            # A wash over the whole frame first, so the lamps sit in lit
-            # air rather than in the dark. It is also what puts back the
-            # light the lamps near an edge had to give up.
+            # A wash over the whole frame, so the lamps sit in lit air.
             wash = QColor(state.dial_colour)
             wash.setAlphaF(min(1.0, 0.16 * flash))
             painter.fillRect(rect, wash)
@@ -1964,19 +1387,8 @@ class Meters(Scene):
             self._meter(painter, box, value, label, state, flash, dpr)
 
     def _backlight(self, painter, rect, box, state, flash) -> None:
-        """One meter's lamp coming up, over whatever is around it.
-
-        The lamp finishes inside the frame. A radial gradient is drawn by
-        filling a rectangle with it, and the rectangle is clipped to the
-        picture - so a lamp whose reach ran past the edge was cut off
-        while it was still bright, leaving a straight bright line down the
-        side of the frame. In a window the strip is short and every meter
-        is near an edge, which is "XX xxxxx xxxxxx xxxxxxx xxxx xx
-        xxxxxxxx xxxx xx xxxx".
-
-        So the reach is whatever fits. A lamp near an edge is a smaller
-        lamp rather than a cut one, and the wash below puts the light it
-        gave up back into the frame.
+        """One meter's lamp coming up, with its reach cut to what fits in the
+        frame, so a lamp near an edge is smaller rather than clipped.
         """
         geometry = self._geometry(QRectF(0, 0, box.width(), box.height()))
         pivot = geometry["pivot"] + box.topLeft()
@@ -2004,29 +1416,14 @@ class Meters(Scene):
 
     @staticmethod
     def _grid(rect, count: int):
-        """Columns and rows that make the faces as big as they can be.
-
-        Scored on the radius each arrangement yields rather than on how
-        square its cells come out. That sounds like the same thing and is
-        not: a face is twice as wide as it is tall, so the arrangement
-        with the tidiest cells is usually the one that wastes the most
-        room. Ten meters on a 16:9 screen in five columns of two gives
-        cells that are taller than they are wide, and the faces end up
-        limited by width with a third of every cell empty underneath.
-
-        Leaving a row short is allowed, and the short row is centred, so
-        the space it does not use sits at the ends where it reads as
-        margin rather than as a meter that failed to draw.
+        """The columns and rows that make the faces biggest, scored on the
+        radius each gives. A short row is allowed and centred.
         """
         best = (1, count, 0.0)
         for columns in range(1, count + 1):
             rows = (count + columns - 1) // columns
             left = count - (rows - 1) * columns
-            # Never one on its own at the bottom. Ten meters three across
-            # is four rows of 3, 3, 3 and 1, and that single meter under
-            # the rack reads as a mistake rather than as a layout - which
-            # is what "X xxxx x xxxx xxxxxx, xxx xxxx xxx xx xxx xxxxxx
-            # xxx" was about. Two or more is a short row; one is a stray.
+            # Never one meter alone on the last row.
             if rows > 1 and left == 1:
                 continue
             cell_w = rect.width() / columns
@@ -2034,8 +1431,8 @@ class Meters(Scene):
             if cell_w <= 48 or cell_h <= 34:
                 continue
             radius = Meters._radius(rect, columns, rows)
-            # A small nudge towards filling the grid, so that when two
-            # arrangements give nearly the same size the tidy one wins.
+            # A nudge towards filling the grid, so the tidier of two near-equal
+            # arrangements wins.
             radius *= 1.0 - 0.02 * (columns * rows - count)
             if radius > best[2]:
                 best = (columns, rows, radius)
@@ -2062,19 +1459,14 @@ class Meters(Scene):
 
     @staticmethod
     def _geometry(box) -> dict:
-        """Where the arc, the pivot and the text live inside one cell.
-
-        Worked out from the cell rather than assumed, so nothing can reach
-        outside it however the window is shaped.
+        """Where the arc, the pivot and the text go inside one cell, worked out
+        from the cell so nothing reaches outside it.
         """
         pad = min(box.width(), box.height()) * 0.05
         inner = box.adjusted(pad, pad, -pad, -pad)
         radius = min(inner.width() / Meters.FACE_WIDE,
                      inner.height() / Meters.FACE_TALL)
-        # Centred in whatever is left over, in both directions. A face is
-        # much wider than it is tall, so on most cells the width caps the
-        # radius and there is spare height; hung from the top, every dial
-        # sits jammed against the ceiling with a gap underneath.
+        # Centred in the spare room both ways.
         block = radius * Meters.FACE_TALL
         top = inner.top() + max(0.0, (inner.height() - block) / 2.0)
         centre_x = inner.center().x()
@@ -2082,12 +1474,7 @@ class Meters(Scene):
         return {
             "radius": radius,
             "centre": QPointF(centre_x, centre_y),
-            # At the arc's own centre. It was moved below it on the
-            # reasoning that a moving coil hinges lower, which is true of
-            # the movement and not of the face: on the reference the
-            # needle is a radius of the arc it reads against, and hinging
-            # it lower made it half as long again and dragged the whole
-            # face taller to fit.
+            # Hinged at the arc's own centre, as on the reference.
             "pivot": QPointF(centre_x, centre_y),
             "inner": inner,
         }
@@ -2095,10 +1482,8 @@ class Meters(Scene):
     def _render_face(self, box, label, state, dpr: float = 1.0):
         from PySide6.QtGui import QPixmap
 
-        # One and a half times what it is shown at, capped. Rendering a
-        # face exactly to size leaves its thin strokes and small numbers
-        # aliased against the arc; going much past this buys nothing and
-        # costs a bigger blit on every frame.
+        # Rendered at one and a half times its shown size, capped, so thin
+        # strokes and small numbers are not aliased.
         ratio = max(1.0, min(2.0, dpr * 1.5))
         pixmap = QPixmap(max(1, int(box.width() * ratio)),
                          max(1, int(box.height() * ratio)))
@@ -2121,11 +1506,7 @@ class Meters(Scene):
         span = QRectF(centre.x() - radius, centre.y() - radius,
                       radius * 2, radius * 2)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        # Two arcs, because a real face has two. The scale is one weight
-        # from the bottom of the range up to 0 dB and heavier from there
-        # to the end of the travel - that heavier run is the red zone, and
-        # it is the one marking on the instrument that means anything at a
-        # glance.
+        # Two arcs: the scale up to 0 dB, and a heavier red zone above it.
         zero = self._db_at(0.0)
         span = QRectF(centre.x() - radius * self.ARC_AT,
                       centre.y() - radius * self.ARC_AT,
@@ -2139,10 +1520,7 @@ class Meters(Scene):
         painter.drawArc(span, int((self.START + self.SWEEP * zero) * 16),
                         int(self.SWEEP * (1.0 - zero) * 16))
 
-        # A small face drops what it cannot show legibly rather than
-        # printing it on top of itself. Ten meters in a strip two hundred
-        # pixels tall leaves each one about forty pixels of radius, and
-        # everything a full face carries will not fit in that.
+        # A small face drops what it cannot show legibly.
         roomy = radius >= self.ROOMY
         marks = self.DB_MARKS if roomy else self.SPARSE_MARKS
 
@@ -2151,9 +1529,7 @@ class Meters(Scene):
                        self.TICK_IN, self.TICK_OUT,
                        max(1.0, radius * self.ARC_STROKE))
         if roomy:
-            # Dots, not lines. Every meter of this kind puts a row of
-            # small points inside the arc between the numbered marks, and
-            # short strokes hanging off the scale read as a comb instead.
+            # Dots, not lines.
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(dim)
             size = max(0.7, radius * self.DOT_SIZE)
@@ -2166,32 +1542,20 @@ class Meters(Scene):
             painter.setBrush(Qt.BrushStyle.NoBrush)
 
         font = self._lettering(painter.font())
-        # Measured against the radius, and the same proportion at every
-        # size. These were all a half larger than the reference, which is
-        # what made a face look like a diagram of a meter rather than a
-        # meter: the numbers were competing with the scale instead of
-        # labelling it.
+        # Sized against the radius, the same proportion at every size.
         font.setPointSizeF(max(6.0, radius * self.DB_TYPE))
         painter.setFont(font)
         painter.setPen(QPen(colour))
         for value, fraction in marks:
             self._label(painter, centre, radius * self.DB_AT_R, fraction,
                         str(value))
-        # The per-cent row shares the arc with the dB row. Ten faces across
-        # a window leaves it about a hundred pixels of arc for six numbers,
-        # which reads as a smudge, so it waits for a face big enough to
-        # carry it - which is what full screen is for.
+        # The per-cent row waits for a face big enough to carry it.
         if radius >= self.PERCENT_RADIUS:
-            # Out near the arc and set small. The per-cent marks are
-            # bunched into the left two thirds of the travel - a hundred
-            # per cent is 0 dB, not the end of the scale - so the room
-            # between them is the arc length at whatever radius they are
-            # drawn at, and at 0.70 radii in a face this size the numbers
-            # were wider than the gaps and ran into each other.
+            # Out near the arc and small, so the numbers do not run into each
+            # other.
             font.setPointSizeF(max(4.0, radius * self.PERCENT_TYPE))
             painter.setFont(font)
-            # Dimmer than the dB row, as the reference has them: two
-            # scales on one face, and only one of them is the scale.
+            # Dimmer than the dB row.
             inside = QColor(colour)
             inside.setAlphaF(0.62)
             painter.setPen(QPen(inside))
@@ -2235,10 +1599,8 @@ class Meters(Scene):
         angle = self._angle(fraction)
         point = QPointF(centre.x() + math.cos(angle) * distance,
                         centre.y() - math.sin(angle) * distance)
-        # The box the text is centred in. Narrower than the gap to its
-        # neighbour, or two numbers share pixels - which is why the inner
-        # row gets a much tighter one than the outer - but never narrower
-        # than the text, which is how "100" came out as "10(".
+        # The box the text is centred in: narrower than the gap to its
+        # neighbour, but never narrower than the text.
         size = max(8.0, distance * (0.11 if tight else 0.26))
         width = max(size * 2.0,
                     painter.fontMetrics().horizontalAdvance(text) + 4.0)
@@ -2253,30 +1615,12 @@ class Meters(Scene):
         pivot = geometry["pivot"]
         angle = self._angle(value)
         reach = QPointF(math.cos(angle), -math.sin(angle))
-        # Placed against the scale, measured from the arc's own centre, so
-        # the needle reads true; it is only hinged lower, where a real
-        # movement sits. Short of the arc rather than through it - at 0.86
-        # it crossed the scale it is reading and went through the number
-        # at the top.
+        # Short of the arc, measured from its centre.
         tip = centre + reach * (radius * 0.90)
-        # Stopped well short of the hinge, and with no collar drawn at
-        # it. The reference shows no hub at all: the needle simply runs
-        # off the bottom of the face, and the lowest thing on it is the
-        # frequency. Drawing a hub put the face's bottom edge a sixth of
-        # a radius lower than the reference's, which is what kept the
-        # proportions wrong however the rest was adjusted.
+        # Stopped short of the hinge, with no hub, as on the reference.
         tail = pivot + reach * (radius * 0.15)
-        # No halo behind it. There was one - a wide, faint stroke under
-        # the needle to suggest a lit pointer - and it read as a smear
-        # rather than as light, because a glow around a hard edge is a
-        # thing a camera does and this is not a photograph of a meter, it
-        # is a meter. The reference has none either: the needle there is
-        # a clean tapered blade.
-        #
-        # Tapered, in three strokes from the hinge out. A needle is
-        # broad where it is anchored and fine where it has to be read
-        # against a scale, and a line of one width is the one thing that
-        # makes a drawn meter look drawn.
+        # A tapered blade in three strokes, broad at the hinge and fine where
+        # it is read; no halo.
         for start, finish, width in ((0.0, 0.45, 0.032),
                                      (0.40, 0.78, 0.023),
                                      (0.74, 1.0, 0.015)):
@@ -2289,33 +1633,20 @@ class Meters(Scene):
 
 
 class Ambience(Scene):
-    """The one that came with the media player everybody had.
-
-    Smooth ribbons drawn from the middle outwards and mirrored top to
-    bottom, each one riding a different part of the spectrum, colours
-    wandering slowly through the wheel. No bars anywhere: this scene is
-    about long curves that fold over each other, and the overlaps doing
-    the work that a glow would.
-
-    Drawn additively, so where two ribbons cross they brighten - which is
-    what made the original look lit from behind rather than painted.
+    """Smooth ribbons from the middle outwards, mirrored top to bottom, each
+    riding part of the spectrum, drawn additively so they brighten where
+    they cross.
     """
 
     name = "Ambience"
     blurb = "mirrored ribbons folding over each other, as it was in 2001"
 
-    #: How many ribbons, and how many points along each. Sixty points is
-    #: past the width of a pixel at any size this is drawn at.
+    #: How many ribbons, and how many points along each.
     RIBBONS = 5
     STEPS = 44
 
-    #: How much of the strobe the shape gets. The rest is light.
-    #:
-    #: This scene is made of long curves, and a step in the shape of a
-    #: long curve is a lurch: the ribbons used to jump half their height
-    #: outwards and snap back inside a tenth of a second. They brighten
-    #: and bloom where they cross now, and barely move. The smoothing
-    #: itself is ``Scene.bloom``.
+    #: How much of the strobe goes into the shape; the rest is light, so the
+    #: ribbons brighten rather than lurch.
     BLOOM_SHAPE = 0.16
 
     def __init__(self) -> None:
@@ -2330,9 +1661,8 @@ class Ambience(Scene):
         middle = height * 0.5
         painter.fillRect(rect, QColor(3, 2, 8))
         flash = self._ease(state)
-        # The morphing field, behind everything and dim enough that the
-        # ribbons still read as the bright thing. It lifts with the strobe
-        # too, so the whole frame breathes rather than only the ribbons.
+        # The morphing field behind everything, dim enough that the ribbons
+        # stay the bright thing.
         self._plasma.paint(painter, rect, state,
                            strength=0.55 + flash * 0.28, flash=flash)
         levels = state.levels
@@ -2355,10 +1685,7 @@ class Ambience(Scene):
             colour = QColor.fromHsvF(shade, 0.72 - flash * 0.42, 1.0,
                                      min(1.0, 0.30 + band * 0.45
                                          + flash * 0.34))
-            # Capped. Additive compositing charges per pixel of stroke,
-            # and an uncapped width put a sixteen pixel ribbon across a
-            # 1080p frame ten times over - seventeen milliseconds before
-            # any polish, which is the whole frame gone.
+            # Capped: additive compositing is charged per pixel of stroke.
             thick = max(1.6, min(9.0, height * 0.010
                                   * (0.6 + band + flash * 0.5)))
             for side in (+1, -1):
@@ -2368,18 +1695,12 @@ class Ambience(Scene):
         painter.restore()
         self._core(painter, width, middle, state, flash)
 
-    #: Kept as a name on the scene because that is where it was found,
-    #: and because a test names it. The curve itself is shared with the
-    #: oscilloscope now - both draw a path through samples, and both were
-    #: drawing it as a polygon.
+    #: Kept as a name on the scene, which a test uses; the curve is shared with
+    #: the oscilloscope.
     _smooth = staticmethod(smooth_path)
 
     def _ribbon_path(self, width, middle, reach, turn, index, side):
-        """One curve, mirrored by ``side``.
-
-        Two sines of different periods rather than one, because a single
-        sine reads as a rope and two read as something being blown about.
-        """
+        """One curve, mirrored by ``side``: two sines of different periods."""
         points = []
         for step in range(self.STEPS + 1):
             across = step / self.STEPS
@@ -2388,8 +1709,8 @@ class Ambience(Scene):
                     * 0.66
                     + math.sin(across * math.tau * 2.7 - turn * 1.3 + index)
                     * 0.34)
-            # Pinched at both ends, so the ribbons meet rather than being
-            # cut off by the edge of the frame.
+            # Pinched at both ends, so the ribbons meet rather than run off the
+            # frame.
             pinch = math.sin(across * math.pi) ** 0.7
             points.append(QPointF(x, middle + side * wave * reach * pinch))
         return smooth_path(points)
@@ -2411,30 +1732,15 @@ class Ambience(Scene):
 
 
 class Waterfall(Scene):
-    """A spectrum analyser plotted as a landscape, seen from one corner.
-
-    Frequency runs left to right, time runs away from you, and how loud a
-    band was is how high the surface stands. Each new frame is laid down
-    at the front and the whole field slides back, so a sustained note
-    reads as a ridge running into the distance and a drum as a row of
-    peaks marching away.
-
-    Drawn with an oblique projection rather than a real camera: it costs
-    two multiplications a point and, for a plot seen from a fixed corner,
-    looks the same as the arithmetic nobody can afford sixty times a
-    second.
-
-    Colour is the height, quantised into a few bands and stroked one band
-    at a time - six paths a frame rather than a pen change per segment,
-    which is what makes it cheap enough to keep.
+    """A spectrum analyser as a landscape seen from one corner: frequency
+    across, time away from you, loudness as height. An oblique projection,
+    coloured by height in a few bands, one path each.
     """
 
     name = "Waterfall"
     blurb = "the spectrum as a landscape, running away from you"
 
-    #: Frames kept on screen. At sixty a second the field turns over in
-    #: about three quarters of a second, which reads as motion without
-    #: smearing everything into one lump.
+    #: Frames kept on screen, about three quarters of a second at sixty.
     DEPTH = 44
     #: How far each step back moves, as a fraction of the frame.
     SKEW_X = 0.30
@@ -2451,39 +1757,18 @@ class Waterfall(Scene):
         width, height = rect.width(), rect.height()
 
         field = getattr(state, "history", None) or [list(levels)]
-        # Every row is a line across the whole plot, so the cost is the
-        # number of rows times the number of bands - about twelve hundred
-        # antialiased segments at full depth, which is more than a slow
-        # machine can draw sixty times a second. On a big frame every
-        # other row is dropped: the ridges are wider there anyway and the
-        # landscape reads the same.
-        # Every other row at most. A third of them left fifteen ridges
-        # with gaps between, which reads as tangled lines rather than as
-        # a surface - the saving was not worth what it cost to look at.
-        # Every row, at every size.
-        #
-        # A big frame used to drop every other one, which is "xxxxxxxxx
-        # xxxxx xxx xxxx xxxxx xx xxxxxxxxxx xxxxxxxx xx xxxxxxxx". It was
-        # dropping them because the rows were expensive, and they are not
-        # any more - see the note on the pen below. At full density the
-        # scene costs 5.4 ms at 1512x982 against the 7.05 it cost at half
-        # density before, so this is denser *and* cheaper.
+        # Every row, at every size; the hairline pen made them cheap.
         field = field[-self.DEPTH:]
 
         flash = self.flash(state)
-        # The plot sits in the lower left, leaning up and to the right.
-        # Gutters for the axes, so the numbers sit beside the plot rather
-        # than on top of the data.
+        # The plot sits in the lower left, with gutters for the axes.
         left = max(38.0, width * 0.05)
         foot = max(30.0, height * 0.075)
         plot_w = (width - left) * (1.0 - self.SKEW_X) * 0.98
         plot_h = (height - foot) * (1.0 - self.SKEW_Y) * 0.80
         origin_x = left
         origin_y = height - foot
-        # The landscape used to rear up on a hit, which moves every ridge
-        # at once and reads as the plot glitching rather than as a beat.
-        # The strobe lights it instead: the floor brightens and the ridges
-        # gain colour, and the geometry stays where it was.
+        # The strobe lights the landscape rather than moving it.
         rise = plot_h
 
         self._floorplan(painter, rect, origin_x, origin_y, plot_w, flash)
@@ -2491,30 +1776,16 @@ class Waterfall(Scene):
         buckets = [QPainterPath() for _ in self.SHADES]
         total = len(field)
         for depth, row in enumerate(field):
-            # Oldest at the back, so it is drawn first and sits behind.
-            #
-            # Over the rows there are, not over the rows there would have
-            # been. A big frame draws every other one, so this divided 21
-            # by 43 and the landscape stopped half way back: "xxxxxxxxx xx
-            # xxxxxx xx xxx xxxxxxxx xxxx xxxxxxxx xx xxx xxxxxxxxxx
-            # xxxx". It was not shorter in time, it was shorter on screen.
-            # Spreading the rows it has over the whole plot costs nothing;
-            # drawing twice as many of them cost 12.2 ms a frame against
-            # 6.3, which is the other way this could have been fixed.
+            # Oldest at the back, drawn first, with the rows spread over the
+            # whole plot.
             back = (total - 1 - depth) / max(1, total - 1)
             offset_x = back * width * self.SKEW_X
             offset_y = back * height * self.SKEW_Y
             count = len(row)
             previous = None
-            # Which bucket the previous segment went into. Neighbouring
-            # bands are nearly always the same loudness, so this is how a
-            # row gets drawn as a handful of joined-up runs instead of
-            # forty-seven separate ones. It is worth doing because a
-            # subpath is stroked with a cap at each end, and forty-seven
-            # of them meant ninety-four round caps per row - measured at
-            # a third of what this scene cost on a big frame, for
-            # something nobody can see: the caps are drawn on top of each
-            # other at the joins.
+            # Which height band the previous segment went into, so a row is
+            # drawn as a few joined runs rather than one capped subpath per
+            # band.
             was = None
             for index, value in enumerate(row):
                 x = origin_x + offset_x + plot_w * (index / max(1, count - 1))
@@ -2526,10 +1797,8 @@ class Waterfall(Scene):
                     path = buckets[bucket]
                     if bucket != was:
                         path.moveTo(previous)
-                    # A curve between the two, with the control points
-                    # level with each end. Straight segments made every
-                    # ridge a zig-zag; this rounds the peaks the way a
-                    # spectrum actually moves between bands.
+                    # A curve between the two, with control points level with
+                    # each end, so the ridges are rounded rather than zig-zag.
                     half = (previous.x() + here.x()) * 0.5
                     path.cubicTo(QPointF(half, previous.y()),
                                  QPointF(half, here.y()), here)
@@ -2545,13 +1814,8 @@ class Waterfall(Scene):
             colour = QColor.fromHsvF(hue, 0.85 - flash * 0.5, value,
                                      min(1.0, 0.35 + share * 0.55
                                          + flash * 0.45))
-            # One pass a pixel wide, with the width carried as light.
-            #
-            # A width over one pixel is faked with a stack of hairlines,
-            # and this scene lays down a couple of thousand curve segments
-            # a frame: measured, 9.04 ms at 900x500 and 7.05 at 1512x982
-            # against 3.92 and 2.72 drawn as single passes. That saving is
-            # what pays for the density below.
+            # One pass a pixel wide, with the width carried as light: a stack
+            # of hairlines over thousands of segments cost twice as much.
             wide = 1.0 + share * 1.4 + flash * 0.4
             lit = QColor(colour)
             lit.setAlphaF(min(1.0, lit.alphaF() * wide))
@@ -2578,11 +1842,8 @@ class Waterfall(Scene):
 
     def _axis(self, painter, rect, state, origin_x, origin_y, plot_w,
               rise) -> None:
-        """Frequency along the front, level up the side, time going back.
-
-        Everything sits in a gutter outside the plot. It used to be
-        written over the data with stub ticks floating in mid-air, which
-        read as debris rather than as a scale.
+        """Frequency along the front, level up the side and time going back,
+        all in a gutter outside the plot.
         """
         if rect.width() < 380 or rect.height() < 220:
             return
@@ -2621,8 +1882,7 @@ class Waterfall(Scene):
                          Qt.AlignmentFlag.AlignRight
                          | Qt.AlignmentFlag.AlignVCenter, "dB")
 
-        # Along the front. Every fourth band, and never two in the same
-        # place however narrow the frame gets.
+        # Every fourth band along the front, never two in the same place.
         labels = state.labels
         if labels:
             room = max(1, int(len(labels) * 54.0 / max(1.0, plot_w)))
@@ -2644,9 +1904,7 @@ class Waterfall(Scene):
         # Into the distance, written along the depth edge and outside it.
         back_x = origin_x + rect.width() * self.SKEW_X
         back_y = origin_y - rect.height() * self.SKEW_Y
-        # One caption, in the empty triangle left of the depth edge. The
-        # duration used to be written separately at the far end, which put
-        # it on top of the landscape.
+        # One caption, in the empty triangle left of the depth edge.
         painter.setPen(QPen(dim))
         seconds = self.DEPTH / 60.0
         painter.drawText(
@@ -2658,29 +1916,11 @@ class Waterfall(Scene):
 
 #: Every theme, in the order the picker offers them.
 class Rave(Scene):
-    """A room lit by the kit, seen from inside it.
-
-    Every other scene here draws the spectrum. This one draws the *hits*:
-    the analysis picks the kick, the snare, the hats and the synth apart
-    before a note plays, and each one is wired to something different, so
-    what the room does is what the drummer did rather than a general
-    reaction to loudness.
-
-        kick    the floor and ceiling lunge towards you, and the horizon
-                pushes back - the whole room moves rather than a shape in it
-        snare   a ring leaves the middle and crosses the room
-        hats    beams flick out along the grid, one per hit
-        bass    how far the corridor opens up, and how hot the haze is
-        synth   the colour of everything, swung round the wheel
-
-    Perspective is one divide per point - x/z and y/z, with the grid laid
-    out in world coordinates and projected each frame. Not a camera in the
-    full sense: there is no rotation to speak of, because a lighting rig
-    does not tumble and a scene that does is unwatchable at this speed.
-
-    Drawn back to front so nearer things cover further ones, and every
-    line is one stroke of a path rather than a segment at a time, since a
-    grid is the one thing here with enough segments for that to matter.
+    """A room lit by the drums, seen from inside it. The kick pushes the room,
+    the snare sends a ring and turns the colour, the hats flick beams along
+    the grid, the bass opens the corridor, and the synth sets the colour.
+    Perspective is one divide per point, drawn back to front, a path per
+    line.
     """
 
     name = "Rave"
@@ -2689,67 +1929,34 @@ class Rave(Scene):
     #: How far down the corridor the grid runs, and how finely.
     DEPTH = 26
     ACROSS = 9
-    #: Nearest and furthest z. Nothing is drawn nearer than NEAR, because
-    #: a point at z=0 projects to infinity.
+    #: Nearest and furthest z; a point at z=0 would project to infinity.
     NEAR = 0.55
     FAR = 15.0
     #: How fast the world comes towards you at rest, in z per second.
     DRIFT = 2.6
 
-    #: How fast each part of the kit reaches the room, and how slowly it
-    #: lets go. A drum is a step, and a room that steps is a room that
-    #: glitches: the kick used to move the horizon, the focal length, the
-    #: walls and every line width in the single frame it landed on, and
-    #: back over the six after it. What a kick does to a room is push it,
-    #: and a push takes time to arrive and longer to fade.
-    #: How much a full bass front-loads the travel within a beat, as a
-    #: multiple of the average speed. At 0 the room moves evenly; at 1.6
-    #: the first frame of a beat travels 2.6 times as far as the mean and
-    #: the last barely moves.
-    #:
-    #: A multiple, because the curve is what the room's smoothness is.
-    #: This was ``through ** (1 / (1 + bass * SURGE))``, whose slope at the
-    #: start of a beat is not 2.6 times the mean, it is infinite: measured
-    #: at 128 bpm, the worst frame travelled 1.02 rows against a median of
-    #: 0.145, so the whole lunge happened in one frame and the rest of the
-    #: beat crawled. With a bass that moves the way a tracked band does,
-    #: two frames in eight seconds travelled *backwards*. That is "xxxx xx
-    #: xxxxx x xxx xxxxxxx".
-    #:
-    #: ``1 - (1 - t) ** k`` front-loads the same way and its slope at the
-    #: start is exactly k, so the lunge is as hard as it says and no
-    #: harder.
+    #: How hard a full bass front-loads the travel within a beat, as a multiple
+    #: of the average speed: ``1 - (1 - t) ** k`` has slope exactly k at the
+    #: start, so the lunge is as hard as it says and the room never goes
+    #: backwards.
     SURGE = 1.6
 
     #: How quickly the room notices that the track has stopped.
     GOING_EASE = 0.18
 
-    #: How fast the push behind the room follows the bass. The curve above
-    #: is chosen by it, so a value that jumps about changes where the room
-    #: is rather than how fast it is going.
+    #: How fast the push behind the room follows the bass.
     PUSH_RISE, PUSH_FALL = 0.22, 0.045
 
-    #: A ring is a big moment, not a snare.
-    #:
-    #: It used to fire on any snare over 0.75, which in most tracks is
-    #: every other beat: a thing that happens twice a bar cannot signify
-    #: anything, which is "I am not sure what's xxxxx xx xxxx xxx xxxxxx
-    #: xxxx gets bigger". What fires one now is the room getting louder
-    #: than it has been - the energy over the last breath against the
-    #: energy over the last several seconds - which is what a drop, a
-    #: chorus arriving or a break coming back in actually is.
+    #: A ring marks a big moment: the room getting louder than it has been over
+    #: the last several seconds, as at a drop.
     QUICK_RISE, QUICK_FALL = 0.40, 0.03
     CALM_RATE = 0.010
-    #: How much louder than the last several seconds counts as a moment,
-    #: how quiet the room can be and still have one, and how long before
-    #: another can fire.
+    #: How much louder than the last several seconds counts as a moment, how
+    #: quiet the room can be and still have one, and how long before another.
     RING_OVER = 1.30
     RING_QUIET = 0.04
     RING_WAIT = 0.45
-    #: Seconds of listening before the first ring can fire. The slow
-    #: average starts at nothing, so for the first moment of a track
-    #: everything is louder than it has been and the room fired three
-    #: rings before it had heard anything.
+    #: Seconds of listening before the first ring can fire.
     RING_SETTLE = 1.5
 
     THUMP_RISE, THUMP_FALL = 0.34, 0.075
@@ -2760,8 +1967,8 @@ class Rave(Scene):
     def __init__(self) -> None:
         self._z = 0.0
         self._spin = 0.0
-        #: What the trusses are built from: see TRUSS_NEAR. Filled once a
-        #: frame by ``_advance`` and read by ``_trusses``.
+        #: What the trusses are built from (see TRUSS_NEAR), filled once a
+        #: frame.
         self._chart: dict = _NO_CHART
         self._said = 0.0
         self._per_beat = 0.0
@@ -2773,8 +1980,8 @@ class Rave(Scene):
         self._fan = 0.0
         self._haze_key = None
         self._haze_image = None
-        #: The kit, smoothed: the kick pushing the room, the snare washing
-        #: its colour, the hats shaking the thing in the middle.
+        #: The drums, smoothed: the kick pushes the room, the snare washes its
+        #: colour, the hats shake the middle.
         self._thump = 0.0
         self._crack = 0.0
         self._beat_was = None
@@ -2782,9 +1989,8 @@ class Rave(Scene):
         self._wash = 0.0
         self._wash_hue = 0.0
         self._fizz = 0.0
-        #: How loud the room is over the last breath, and over the last
-        #: several seconds. A big moment is the first running away from
-        #: the second - see ``RING_OVER``.
+        #: How loud the room is over the last breath and over the last several
+        #: seconds; see RING_OVER.
         self._push = 0.0
         #: 1 while the track is going, 0 while it is paused.
         self._going = 1.0
@@ -2799,11 +2005,8 @@ class Rave(Scene):
 
     # -- the clock --------------------------------------------------------
     def _beats_done(self, state) -> float:
-        """How many beats have gone by, counting fractions.
-
-        Kept as a running total rather than read from the playhead each
-        frame, because the phase the pane hands over wraps at every beat
-        and a wrap is a jump. This adds up the wraps.
+        """How many beats have gone by, counting fractions: a running total,
+        because the pane's phase wraps at every beat.
         """
         at = getattr(state, "beat_at", 0.0)
         if self._beat_was is None:
@@ -2818,24 +2021,14 @@ class Rave(Scene):
         return self._beat_count
 
     def _advance(self, state) -> float:
-        """Move the world on by however long the last frame took.
-
-        By the clock rather than by the frame, so the room travels at the
-        same speed whatever the pane is managing - a corridor that speeds
-        up when the window is small is the sort of thing that makes a
-        scene feel cheap.
+        """Move the world on by the clock, so the room travels at the same
+        speed at any frame rate.
         """
         now = time.monotonic()
         step = 0.016 if self._last is None else min(0.1, max(0.0, now - self._last))
         self._last = now
-        # Nothing travels under a stopped track.
-        #
-        # The room's position is worked out from how far through the beat
-        # the track is *and* from the push behind it, and the push went on
-        # easing towards the last bass it saw after a pause - so the
-        # corridor crept forward and jittered while nothing was playing.
-        # Eased rather than switched, so that pausing is a stop rather
-        # than a freeze-frame.
+        # Nothing travels under a stopped track; eased, so a pause is a stop
+        # rather than a freeze.
         self._going += ((1.0 if getattr(state, "moving", True) else 0.0)
                         - self._going) * self.GOING_EASE
         step *= self._going
@@ -2846,61 +2039,40 @@ class Rave(Scene):
         kit = state.kit
         self._thump = ease(self._thump, kit.get("Kick", 0.0),
                            self.THUMP_RISE, self.THUMP_FALL)
-        # And a second, much faster envelope off the same kick, for the
-        # one thing that is meant to snap: a shake is a shake or it is a
-        # wobble.
+        # A much faster envelope off the same kick, for the shake.
         self._crack = ease(self._crack, kit.get("Kick", 0.0),
                            self.CRACK_RISE, self.CRACK_FALL)
         self._fizz = ease(self._fizz, kit.get("Hats", 0.0),
                           self.FIZZ_RISE, self.FIZZ_FALL)
         snare = kit.get("Snare", 0.0)
         if snare > self._wash + 0.12:
-            # A snare does not brighten the room, it repaints it: each one
-            # moves the colour on by a step of its own, and the colour
-            # then stays where it was put until the next.
+            # Each snare moves the colour on a step, and it stays there.
             self._wash_hue = (self._wash_hue + 0.13 + snare * 0.09) % 1.0
         self._wash = ease(self._wash, snare, self.WASH_RISE, self.WASH_FALL)
 
-        # Speed is the bass. It was one term of three and the smallest of
-        # them; it is the one that should be felt, because how fast a room
-        # comes at you is how hard the track is pushing.
+        # Speed is the bass.
         bass = max(state.bass, kit.get("Bass", 0.0))
         self._push = ease(self._push, bass, self.PUSH_RISE, self.PUSH_FALL)
         tempo = getattr(state, "tempo", 0.0)
-        # What the trusses are built from. Kept once a frame rather than
-        # read per truss, and cleared, because the answer for a given beat
-        # moves as the playhead does.
+        # Kept once a frame rather than read per truss.
         self._chart = getattr(state, "chart", None) or _NO_CHART
         self._said = getattr(state, "at", 0.0) or 0.0
         self._per_beat = 60.0 / tempo if tempo > 0.0 else 0.0
         self._beats_now = self._beats_done(state) if tempo > 0.0 else 0.0
         self._coming.clear()
         if tempo > 0.0:
-            # On the grid: one truss passes you every beat, exactly.
-            #
-            # A room that travels at whatever the bass happens to be is a
-            # room that never arrives anywhere - the only things in it
-            # with a length are the trusses, and if they drift past the
-            # beat then nothing in the scene is on the music. So the
-            # *distance* per beat is fixed and the bass changes how it is
-            # spent: at rest the room moves evenly through the beat, and
-            # under a heavy bass most of the beat's travel happens in the
-            # first part of it, which is a lunge on the beat and a coast
-            # before the next one. Same tempo, much more push.
+            # One truss passes every beat, exactly. The bass changes how the
+            # beat's distance is spent: evenly at rest, mostly at the start
+            # under a heavy bass.
             beats = self._beats_done(state)
             lunge = 1.0 + self._push * self.SURGE
             whole = math.floor(beats)
             through = beats - whole
-            # The curve is frozen with the track. Recomputing it while
-            # paused moves the room even though the beat has not, because
-            # the push is still easing.
+            # The curve is frozen with the track.
             if self._going > 0.02:
                 self._lunge_held = lunge
             went = 1.0 - (1.0 - through) ** self._lunge_held
-            # Never backwards. The curve is chosen by the push, so a push
-            # that moves within a beat moves the whole mapping, and the
-            # room can be asked to stand where it stood two frames ago.
-            # Beats only ever go forwards, so neither does the room.
+            # Never backwards.
             self._z = max(self._z, (whole + went) * self.TRUSS)
         else:
             self._z += step * self.DRIFT * (1.0 + self._push * 3.4
@@ -2914,21 +2086,16 @@ class Rave(Scene):
         self._quick = ease(self._quick, loud,
                            self.QUICK_RISE, self.QUICK_FALL)
         if self._calm is None:
-            # Seeded from the first frame rather than from nothing. A slow
-            # average starting at zero means that for the first second of
-            # any track everything is louder than it has been, and the
-            # room fired a ring before it had heard anything.
+            # Seeded from the first frame, or the start of every track reads as
+            # a moment.
             self._calm = loud
         self._calm += (loud - self._calm) * self.CALM_RATE
-        # The loudest the room has been lately, which is what a drop is
-        # measured against. From the eased level rather than the raw one,
-        # so a single frame cannot set it.
+        # The loudest the room has been lately, from the eased level so one
+        # frame cannot set it.
         self._peak = max(self._quick, self._peak * self.PEAK_FALL)
         if self._quiet is None:
-            # Seeded from the frame's own loudness, not from the eased
-            # level, which starts at nothing and takes a second to arrive.
-            # Seeded from that, the floor sat far below the room for the
-            # whole of an intro and the rig read the intro as a drop.
+            # Seeded from the frame's own loudness, so an intro does not read
+            # as a drop.
             self._quiet = loud
         self._quiet += (self._quick - self._quiet) * (
             self.QUIET_DOWN if self._quick < self._quiet else self.QUIET_UP)
@@ -2937,11 +2104,8 @@ class Rave(Scene):
         return step
 
     def _big_moment(self) -> float:
-        """How much of a moment this frame is, from 0 to 1.
-
-        Zero unless the room has got louder than it has been, and zero for
-        ``RING_WAIT`` seconds afterwards, so a long loud passage gives one
-        ring at the start of it rather than one a frame.
+        """How much of a moment this frame is, 0 to 1: zero unless the room is
+        louder than it has been, and for RING_WAIT seconds after a ring.
         """
         if (self._ring_wait > 0.0 or (self._calm or 0.0) < self.RING_QUIET
                 or self._heard_for < self.RING_SETTLE):
@@ -2950,23 +2114,13 @@ class Rave(Scene):
         if over < self.RING_OVER:
             return 0.0
         self._ring_wait = self.RING_WAIT
-        # The moment becomes the new normal. Without this a drop fires
-        # again every RING_WAIT for as long as it stays loud, because the
-        # slow average takes several seconds to climb: measured on a
-        # written arrangement, one drop sent three rings 0.45 apart.
-        #
-        # From the loudness itself rather than from the quick envelope,
-        # which is still on its way up when the first ring goes: taking
-        # the envelope left the bar low enough that the rest of the same
-        # rise cleared it again half a second later.
+        # The moment becomes the new normal, so one drop fires one ring.
         self._calm = max(self._calm, self._loud * 0.92)
         return max(0.35, min(1.0, (over - self.RING_OVER) * 1.4))
 
     def paint(self, painter, rect, state) -> None:
         step = self._advance(state)
-        # The eased kick everywhere the room moves. The raw hats still
-        # fire the beams, which are meant to be sudden; the snare no longer
-        # fires anything directly - it moves the colour, in _advance.
+        # The eased kick wherever the room moves; the raw hats fire the beams.
         kick = self._thump
         hats = state.kit.get("Hats", 0.0)
         synth = state.kit.get("Synth", 0.0)
@@ -2975,8 +2129,7 @@ class Rave(Scene):
 
         painter.fillRect(rect, QColor(3, 2, 8))
         centre = rect.center()
-        # The kick pushes the horizon away and pulls the walls in, which
-        # reads as the room breathing rather than as a shape being scaled.
+        # The kick pushes the horizon away and pulls the walls in.
         span = min(rect.width(), rect.height())
         focal = span * (0.62 - kick * 0.10)
         horizon = QPointF(centre.x(),
@@ -2993,12 +2146,8 @@ class Rave(Scene):
                    self._weight(rect))
 
     # -- the parts --------------------------------------------------------
-    #: How big the haze is actually drawn before being stretched over the
-    #: frame. A gradient has no detail in it, so nobody can tell - and a
-    #: full-frame gradient is pure fill rate, which is the one thing a
-    #: machine without a graphics card is worst at. Measured on a build
-    #: runner, this scene cost four times what it costs here while the
-    #: others cost twice; painting the haze small is most of that gap.
+    #: How big the haze is painted before being stretched over the frame: a
+    #: gradient has no detail to lose, and a full-frame one costs fill rate.
     HAZE = 128
 
     def _haze(self, painter, rect, horizon, bass, synth, flash) -> None:
@@ -3006,116 +2155,43 @@ class Rave(Scene):
         small = self._haze_tile(rect, horizon, bass, synth, flash)
         if small is None:
             return
-        # Smoothly, or the tile's own pixels show. It is 96 across and the
-        # frame is up to 1920, so without this the air comes out in
-        # twenty-pixel blocks - which nobody noticed while the tile was
-        # one gradient with two stops and everybody would notice now.
+        # Smoothly, or the tile's pixels show.
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         painter.drawImage(rect, small, QRectF(small.rect()))
         painter.restore()
 
-    #: How far round the wheel the air's second colour sits from its
-    #: first. A third: far enough that the two read as different lights
-    #: rather than as one light being uneven, close enough that they are
-    #: still the same room.
+    #: How far round the wheel the air's second colour sits from its first.
     HAZE_TURN = 0.46
     #: How far the wash reaches, as a share of the frame.
     HAZE_REACH = 1.9
 
-    #: The tallest the air is laid out, as height over width. A frame
-    #: taller than this gets the air of a frame this shape, stretched.
-    #:
-    #: "Xxxx xxxxx xxxxxxx xxx xxxxxxxxx xx xxxxxxxx xxxx xxx xxxxx xxxx
-    #: xxxxxxxx xx xxxx xxxxxx." The pane in the window is a strip - 906
-    #: by 270 points in a 1300 wide viewer - and in a strip the lamp at
-    #: the end of the room lights the middle while the sides keep the
-    #: wash: orange and magenta on one side, deep blue on the other, dark
-    #: in the corners. Laid out for a 16:10 screen the same lamp covers
-    #: most of the frame in one smooth gradient, and the variety goes.
-    #:
-    #: Two rounds were spent making up for that on a big frame - a lamp
-    #: shrunk as the frame grew, and the bare air it left filled with
-    #: extra light - and both were measured against a 640x360 window
-    #: rather than against the strip anybody actually sees. The extra
-    #: light is what washed the colour out: it carried the wash towards
-    #: full brightness, and a colour carried towards white is a pastel.
-    #: Measured on a real track at the same moment, windowed and full
-    #: screen, before this: brightness 0.633 against 0.746, saturation
-    #: 0.622 against 0.608. Across frames of the same synthetic music,
-    #: the spread of hues in a full screen was 0.104 against the strip's
-    #: 0.176.
-    #:
-    #: Air is soft, so it stretches without anything to show it has been
-    #: stretched, and laid out as the strip's the full screen is the
-    #: strip's picture: hue spread 0.170 against 0.176, colourfulness 84.8
-    #: against 82.6, saturation of the lit 0.605 against 0.583, brightness
-    #: 0.541 against 0.539. The lamp becomes a column of light down the
-    #: middle, which is what a lamp at the end of a room full of haze is.
+    #: The tallest the air is laid out, as height over width; a taller frame
+    #: gets this shape's air, stretched, so a full screen keeps the strip's
+    #: colour.
     HAZE_TALLEST = 0.3
-    #: How much deeper the room's wash is in a frame twice as tall as a
-    #: strip or more, as a share of what it is in a strip.
+    #: How much deeper the wash is in a frame much taller than a strip.
     HAZE_DEEPER = 0.25
 
     def _haze_tile(self, rect, horizon, bass, synth, flash):
-        """The air in the room, painted small and stretched.
-
-        It was one radial gradient with two stops: a colour at the
-        vanishing point fading to nothing. That is a glow, and a glow is
-        not the same thing as air - a room lit by a rig has more than one
-        lamp in it, and what makes it look like air rather than a smudge
-        is that the colours disagree with each other from place to place.
-
-        Three passes now, all in the same cached image, all free:
-
-          a deep vertical wash   the floor warmer than the ceiling, which
-                                 is what an actual room does - the light
-                                 lands on the floor
-          a wide second colour   a third of the way round the wheel from
-                                 the first, off to one side of the
-                                 vanishing point, so the two mix across
-                                 the middle distance
-          the hot core           four stops rather than two, opening
-                                 almost white at the very centre
-
-        The snare moves the hue (see ``_advance``) and both colours move
-        with it, a third apart, so a change of colour is a change of
-        *light* rather than a tint over the top.
-
-        Rebuilt when what it looks like changes enough to see, which on
-        moving music is most frames: the key is quantised to a hundredth
-        and a tracked band does not sit that still, so the cache turns out
-        to earn its keep mainly while the music is quiet - 540 rebuilds in
-        600 frames on a bass envelope that actually moves. It does not
-        matter, which is worth knowing before anyone tries to fix it: a
-        rebuild is 59 us against a 7.3 ms frame at 1920x1080, because the
-        tile is 128 across however big the frame is. The saving was never
-        the caching, it was painting the air small.
+        """The air in the room, painted small and stretched: a wash warmer at
+        the floor, a second colour a third of the wheel away, and a hot
+        core. Rebuilt when it changes enough to see; a rebuild costs
+        microseconds.
         """
         if rect.width() < 2 or rect.height() < 2:
             return None
         hue = (0.62 + synth * 0.3) % 1.0
         key = (round(hue, 2),
-               # Brightness, over a narrower range than it had.
-               #
-               # It used to run from 0.34 to 1.24 and clamp: quiet
-               # passages were nearly black, where a colour cannot show,
-               # and loud ones sat against the ceiling, where every colour
-               # goes to white. Both ends read as grey, which is how the
-               # same room could be "mostly grey and not that coloured"
-               # and "blinding at some points" at once. The floor is
-               # higher and the ceiling lower, and what moves with the
-               # music now is mostly the *depth* of the colour.
+               # Brightness, over a range that keeps the colour from going
+               # black or white.
                round(min(1.0, 0.38 + bass * 0.24 + flash * 0.13), 2),
                round(min(1.0, 0.52 + bass * 0.26), 2),
                round(0.58 + bass * 0.35, 2),
                round((horizon.x() - rect.left()) / rect.width(), 2),
                round((horizon.y() - rect.top()) / rect.height(), 2),
                round(min(1.0, 0.30 + bass * 0.34 + flash * 0.25), 2),
-               # How deep the colour runs. The bass is what makes the room
-               # vivid: quiet passages are muted and a bass hit floods
-               # them, which is the one thing a smooth wash of light can
-               # do that reads as loud without simply being brighter.
+               # How deep the colour runs: the bass makes the room vivid.
                round(min(1.30, 0.80 + bass * 0.50), 2))
         if self._haze_key == key and self._haze_image is not None:
             return self._haze_image
@@ -3124,19 +2200,14 @@ class Rave(Scene):
         def rich(base: float) -> float:
             """A saturation, taken as deep as the bass asks."""
             return max(0.0, min(1.0, base * deep))
-        # The frame's own shape, so a lamp is round on it: "ensure the rave
-        # background is round colour xxxxxxxx xxxx xx xx xx xxxxxxxx xxxx,
-        # xxx xx xxxx". Laid out as a strip and stretched to a full screen,
-        # every lamp was stretched with it, twice as tall as wide. The
-        # lamps are the size they are in a strip, though - see
-        # HAZE_TALLEST - which is what keeps the full screen as vivid.
+        # Laid out in the frame's own shape, so the lamps are round.
         size = QSize(self.HAZE, max(2, int(self.HAZE * min(
             rect.height() / max(1.0, rect.width()), 2.0))))
         image = QImage(size, QImage.Format.Format_ARGB32_Premultiplied)
         image.fill(Qt.GlobalColor.transparent)
         wide, tall = size.width(), size.height()
-        # What the lamps are sized by: the height a strip of this width
-        # would have, or the frame's own if it is shorter than that.
+        # What the lamps are sized by: the height of a strip this wide, or the
+        # frame's own if shorter.
         lamp = min(wide, tall, wide * self.HAZE_TALLEST)
         middle = QPointF(across * wide, down * tall)
         box = QRectF(0, 0, wide, tall)
@@ -3145,11 +2216,8 @@ class Rave(Scene):
         try:
             into.setPen(Qt.PenStyle.NoPen)
 
-            # The room's own light: dim at the ceiling, warmer at the
-            # floor, which is what an actual room does - the light lands
-            # on the floor.
-            # Deeper as the frame is taller than a strip: the lamps are a
-            # strip's size, so what a taller frame has more of is this.
+            # The room's light, warmer at the floor, and deeper in a frame
+            # taller than a strip.
             fill = 1.0 + self.HAZE_DEEPER * max(0.0, min(1.0, (
                 tall / wide - self.HAZE_TALLEST) / self.HAZE_TALLEST))
             wash = QLinearGradient(0.0, 0.0, 0.0, tall)
@@ -3182,9 +2250,7 @@ class Rave(Scene):
 
             # And the light at the end of it.
             glow = QRadialGradient(middle, max(1.0, lamp * spread * 2.0))
-            # The very centre is the lamp itself, so it is the one place
-            # allowed to be nearly white - and even there the bass pulls
-            # colour back into it.
+            # The lamp itself, the one place nearly white.
             glow.setColorAt(0.0, QColor.fromHsvF(shade, rich(0.34),
                                                  min(1.0, value * 1.25),
                                                  min(1.0, alpha * 1.05)))
@@ -3208,45 +2274,27 @@ class Rave(Scene):
             z = self.NEAR
         return QPointF(horizon.x() + focal * x / z, horizon.y() + focal * y / z)
 
-    #: How many depth bands the grid is drawn in. Each is one stroke with
-    #: its own weight, so the corridor dissolves into the haze instead of
-    #: stopping dead at the far end. Four is where it stops being visible
-    #: as banding and starts reading as distance.
+    #: How many depth bands the grid is drawn in, so the corridor fades into
+    #: the haze.
     BANDS = 4
-    #: Every this many rows, a frame around the corridor. They are what
-    #: gives the room a length: a grid alone is a floor and a ceiling, and
-    #: a truss every few metres is a building.
+    #: Every this many rows, a truss around the corridor.
     TRUSS = 5
 
-    #: What a truss is made of: the beat it belongs to.
-    #:
-    #: One truss passes you every beat - that is what ``_advance`` fixes
-    #: the distance per beat for - so a truss five slots away is the beat
-    #: five beats from now, and the chart the analysis found already says
-    #: what is on it. "Make rave obstacles react to music as well": these
-    #: are the only things in the room with a length, and until now every
-    #: one of them was the same size whatever the track did. A kick swells
-    #: the frame it lands on and a snare turns its colour, so the shape of
-    #: the corridor ahead of you is the shape of the bar coming.
-    #:
-    #: How far a hit may be from the beat and still belong to it, as a
-    #: share of a beat; and how much a kick swells the frame.
+    #: A truss is the beat it belongs to: one passes every beat, so a truss
+    #: five away is five beats ahead, and the chart says what is on it. A kick
+    #: swells the frame; a snare turns its colour. How near a hit must be to
+    #: the beat, as a share of one, and how much a kick swells it.
     TRUSS_NEAR = 0.40
     TRUSS_SWELL = 0.22
     TRUSS_TURN = 0.10
 
-    #: Lines across a side wall. Far fewer than the floor gets, because
-    #: the corridor is about eight times wider than it is tall: laid out
-    #: with the floor's count they came out a twentieth of a unit apart
-    #: and read as hatching rather than as a grid.
+    #: Lines across a side wall: far fewer than the floor's, as the corridor is
+    #: much wider than tall.
     UPRIGHTS = 3
 
-    #: How far the floor and the ceiling are from the eye, and how much
-    #: further a bass note pushes them. The corridor opening up is most of
-    #: what makes the room feel big.
-    #:
-    #: One definition, because the beams have to land on the floor the
-    #: grid drew rather than somewhere near it.
+    #: How far the floor and ceiling are from the eye, and how much further the
+    #: bass pushes them. One definition, so the beams land on the floor the
+    #: grid drew.
     LIFT_AT_REST = 0.55
     LIFT_ON_BASS = 0.22
 
@@ -3255,18 +2303,8 @@ class Rave(Scene):
         return cls.LIFT_AT_REST + bass * cls.LIFT_ON_BASS
 
     def _surfaces(self, lift, span):
-        """The four walls of the corridor: where a point across each one
-        is, how far its colour is turned, and how many lines it gets.
-
-        Floor, ceiling and both sides from one description, because they
-        are the same grid turned, and writing them out separately is how
-        four surfaces drift apart.
-        """
-        # The two walls are one surface with two faces. They share a hue,
-        # so drawing them in one path halves what they cost, and a stroke
-        # is what this scene spends its frame on. The cross-lines are
-        # drawn in halves (see _grid) so that nothing joins them across
-        # the room.
+        """The corridor's four walls, as one grid turned four ways."""
+        # The two side walls are one surface with two faces, drawn as one path.
         def walls(across):
             return ((-span if across < 0 else span),
                     (abs(across) * 2.0 - 1.0) * lift)
@@ -3279,34 +2317,21 @@ class Rave(Scene):
         )
 
     def _grid(self, painter, rect, horizon, focal, hue, bass, kick, flash):
-        """The corridor: four surfaces, fading with distance, with trusses.
-
-        It used to be a floor and a ceiling and nothing at the sides, so
-        the room was a pair of planes with the dark showing between them.
-        Closing it in is most of what makes it a room.
-
-        Each surface is drawn in depth bands rather than as one path, so
-        the near lines are bright and heavy and the far ones fade into the
-        haze. That is the whole difference between a wireframe and a
-        space: a grid drawn at one weight ends abruptly wherever the loop
-        happens to stop.
+        """The corridor: four surfaces in depth bands, near lines bright and
+        heavy, far ones fading, with trusses.
         """
         painter.setBrush(Qt.BrushStyle.NoBrush)
         weight = self._weight(rect)
         glow = self._glow(rect)
         lift = self._lift(bass)
         span = self.ACROSS * 0.5
-        # Counted down, not up. See ``_trusses``: with the offset rising,
-        # every row's z rises with it and the whole room travels *away*
-        # from you between one wrap and the next.
+        # Counted down, so the room travels towards you between wraps.
         offset = 1.0 - (self._z % 1.0)
         reach = self.FAR - self.NEAR
         for place, shift, lines in self._surfaces(lift, span):
             base = QColor.fromHsvF(
                 (hue + shift) % 1.0, 0.85 - flash * 0.4, 1.0, 1.0)
-            # The lines that run away from you, drawn whole: they carry
-            # the perspective, and cutting them into bands would show the
-            # joins.
+            # The lines running away from you are drawn whole.
             away = QPainterPath()
             for column in range(-lines, lines + 1):
                 across = column / lines
@@ -3321,32 +2346,20 @@ class Rave(Scene):
             # And the ones across it, marching towards you, in bands.
             for band in range(self.BANDS):
                 path = QPainterPath()
-                # A slice of the corridor, not every fourth row of it.
-                #
-                # This said range(band, DEPTH, BANDS), which walks the
-                # whole corridor taking every fourth row - so the four
-                # "depth bands" were four interleaved sets spread from
-                # your feet to the vanishing point, and dimming one dimmed
-                # a quarter of the lines everywhere rather than the far
-                # ones. It read as a faint texture and not as distance,
-                # and the test that was supposed to catch it could not,
-                # because the two came out within a tenth of a per cent of
-                # each other.
+                # A slice of the corridor's depth, not every fourth row of all
+                # of it.
                 first = band * self.DEPTH // self.BANDS
                 last = (band + 1) * self.DEPTH // self.BANDS
                 for row in range(first, last):
                     z = self.NEAR + (row + offset) * reach / self.DEPTH
-                    # In two halves, so a surface that is really two
-                    # faces - the pair of walls - does not draw a line
-                    # straight across the room joining them.
+                    # In two halves, so the pair of walls is not joined across
+                    # the room.
                     for lo, hi in ((-1.0, -0.002), (0.002, 1.0)):
                         path.moveTo(
                             self._project(horizon, focal, *place(lo), z))
                         path.lineTo(
                             self._project(horizon, focal, *place(hi), z))
-                # Bands further back are dimmer and thinner. Squared, so
-                # the fall is steep near the eye and gentle in the
-                # distance, which is how air actually works.
+                # Further bands are dimmer and thinner, squared.
                 near = 1.0 - band / self.BANDS
                 self._beam(painter, path,
                            self._shade(base,
@@ -3358,25 +2371,17 @@ class Rave(Scene):
         self._trusses(painter, horizon, focal, hue, lift, span, bass, kick,
                       flash, reach, weight, glow)
 
-    #: The frame this scene's line weights were chosen against. A line
-    #: thicker than a real pixel is drawn by ``stroke`` as a stack of
-    #: hairlines, so making them grow with the frame costs nothing.
+    #: The frame size this scene's line weights were chosen at.
     DRAWN_FOR = 700.0
 
     #: What the line width used to carry, as light instead.
     BEAM_LIFT = 1.6
 
-    #: The same for the trusses, which were the last thing drawn with a
-    #: real width. A line of width w at alpha a lays down about w times a
-    #: of ink, so the alpha is multiplied by the width it would have had.
-    #: ``_beam`` then applies BEAM_LIFT on top, so this takes it back out.
+    #: The trusses' alpha carries the width they would have had; ``_beam`` adds
+    #: BEAM_LIFT on top, so this takes it back out.
     TRUSS_LIFT = 1.0 / BEAM_LIFT
 
     #: How much of the contrast a big frame gets back as light.
-    #:
-    #: All of it, now. The grid is drawn with one-pixel lines and nothing
-    #: else - see ``_beam`` - so brightness is the only knob left, and it
-    #: is the one that was always free.
     LIFT = 1.15
 
     @classmethod
@@ -3386,15 +2391,8 @@ class Rave(Scene):
 
     @classmethod
     def _weight(cls, rect) -> float:
-        """How thick to draw, for a frame this size.
-
-        The lines used to be cosmetic - a fixed number of real pixels
-        however big the frame was - so a full screen got the same
-        hairlines spread over four times the area and washed out. Measured
-        across sizes, the contrast fell by a third from 640x360 to 1080p
-        and the brightest tenth of the picture went from 107 to 82 of 765.
-        That is "the rave scene doesn't xxxx xx xxxx xxxxxxxx xx xxxx
-        xxxxxx xxxx, xx xxxxxxxx xxxxx xxxxxx xx xxxxxxxx".
+        """How thick to draw for a frame this size, so a full screen keeps the
+        window's contrast.
         """
         return max(0.75, min(1.30, rect.height() / cls.DRAWN_FOR))
 
@@ -3406,33 +2404,10 @@ class Rave(Scene):
 
     @staticmethod
     def _beam(painter, path, colour) -> None:
-        """One line of the room, one pixel wide, one pass.
-
-        This scene is a corridor made of about six hundred line segments,
-        and it was drawing every one of them as a stack of hairlines to
-        fake a wide antialiased pen. Measured at 1080p, the whole scene:
-
-            stacked hairlines      32.3 ms a frame
-            one hairline a line     7.4 ms
-            one real wide pen      96.4 ms
-
-        Four and a half times the cost of the thing it is imitating, for a
-        room whose lines are *supposed* to be beams. A laser grid is not a
-        painted one: its lines are as thin as they can be and what makes
-        them read is how bright they are and how many there are. So the
-        weight is carried entirely by alpha now, which costs nothing, and
-        the scene went from the most expensive of the eight to cheaper
-        than the middle one.
-
-        The trusses and the thing in the middle still go through
-        ``stroke``: there are a dozen of them against six hundred, and
-        they are the two things in the room meant to look solid.
-
-        BEAM_LIFT is what the width used to carry. Measured against the
-        same scene drawn with stacked wide lines, 1.6 puts the contrast
-        and the brightest tenth of the picture back where they were - 24
-        of spread against 22, and a 95th percentile of 89 against 95 -
-        and it is free.
+        """One line of the room: one pixel wide, one pass, its weight carried
+        by alpha. A laser grid's lines are thin and bright; at 1080p this
+        costs 7.4 ms a frame against 32 for stacked hairlines. BEAM_LIFT
+        restores the contrast the width gave.
         """
         lit = QColor(colour)
         lit.setAlphaF(min(1.0, lit.alphaF() * Rave.BEAM_LIFT))
@@ -3442,15 +2417,8 @@ class Rave(Scene):
         painter.drawPath(path)
 
     def _on_beat(self, index: int) -> dict:
-        """What the kit plays on the beat a truss belongs to.
-
-        The chart is every hit in the track by name, from the same
-        element detection the strobe uses, so this can read *forward*:
-        the truss five slots down the room is the beat five beats from
-        now, and what is on it is known before it arrives.
-
-        Cached per frame, because six trusses ask and the answer for a
-        beat does not change within one.
+        """What the drums play on the beat a truss belongs to, read forward
+        from the chart and cached per frame.
         """
         if index in self._coming:
             return self._coming[index]
@@ -3473,34 +2441,14 @@ class Rave(Scene):
 
     def _trusses(self, painter, horizon, focal, hue, lift, span, bass, kick,
                  flash, reach, weight, glow) -> None:
-        """A frame round the corridor every few metres, coming at you.
-
-        The thing the room was missing: a grid tells you where the floor
-        is and a truss tells you how far down the room you are looking.
-        They brighten on the kick with everything else, and the nearest
-        one is much the brightest, so the eye has something travelling
-        rather than a field of lines that all move together.
+        """A frame round the corridor every few metres, coming at you,
+        brightest nearest.
         """
-        # The beat the nearest truss belongs to. One passes you every
-        # beat, so the one k slots away is k beats from now.
+        # The beat the nearest truss belongs to; the one k slots away is k
+        # beats on.
         first = math.ceil(self._z / self.TRUSS) if self._per_beat > 0.0 else 0
-        # On their own clock, not the grid's.
-        #
-        # They used to ride the grid's offset, which wraps every *row*:
-        # so a truss crept back one row's worth and then jumped forward
-        # five to where the next one had been, sixty times a minute. That
-        # is what stopped it reading as a continuous walk forward - the
-        # only things in the room with a length to them stuttered, and
-        # they did it whether anything was playing or not.
-        #
-        # And it counts *down*. With the offset rising, a row's z rises
-        # with it: measured over one beat at 128 bpm, the nearest truss
-        # went from z 2.78 out to 3.33 and then snapped back to 0.65 - the
-        # room crawling backwards and jumping forwards once a beat, which
-        # is the opposite of everything written above and is most of what
-        # "rave acts weird and glitchy" was. Counting the offset down runs
-        # the wrap the other way: the nearest truss closes on you through
-        # the beat and the next one takes its place.
+        # On their own clock, counted down, so the nearest truss closes on you
+        # through the beat and the next takes its place.
         offset = self.TRUSS - (self._z % self.TRUSS)
         for step in range(0, self.DEPTH, self.TRUSS):
             row = step + offset
@@ -3508,9 +2456,7 @@ class Rave(Scene):
                 continue
             z = self.NEAR + row * reach / self.DEPTH
             near = max(0.0, 1.0 - (z - self.NEAR) / reach)
-            # What is on this one's beat. See TRUSS_NEAR: the frame swells
-            # on a kick and turns colour on a snare, so the corridor ahead
-            # of you has the shape of the bar coming.
+            # What is on this one's beat; see TRUSS_NEAR.
             coming = self._on_beat(first + step // self.TRUSS)
             swell = 1.0 + coming.get("Kick", 0.0) * self.TRUSS_SWELL
             wide, tall = span * swell, lift * swell
@@ -3530,32 +2476,15 @@ class Rave(Scene):
                 (hue + 0.04 + coming.get("Snare", 0.0) * self.TRUSS_TURN)
                 % 1.0,
                 max(0.0, 0.6 - flash * 0.4), 1.0, 1.0)
-            # Hairlines, with the width carried as light, which is what
-            # the rest of the room already does - see ``_beam``.
-            #
-            # These were the last thing here drawn with a real width, on
-            # the grounds that a truss is meant to look solid. Five
-            # rectangles were costing 1.72 ms a frame at 1512x982 against
-            # 0.41 drawn as single passes, because a width over one pixel
-            # is faked with a stack of hairlines and the stack is the
-            # whole cost.
-            #
-            # Brightness cannot buy the width back: the near ones are
-            # already at full alpha, and what a wide line has that a thin
-            # one does not is area. Measured, the brightest twentieth of
-            # the frame fell from 0.784 to 0.643 at 1512x982 with all five
-            # on hairlines, and no amount of lift moved it. So the nearest
-            # one keeps its width and the four behind it do not.
+            # Hairlines with the width carried as light, except the nearest
+            # truss, which keeps its width.
             thick = ((0.9 + near * 2.2) * (1.0 + kick * 1.1) * weight
                      * (1.0 + coming.get("Hats", 0.0) * 0.35))
             alpha = ((0.16 + bass * 0.22 + kick * 0.34 + flash * 0.3)
                      * glow * (0.30 + near * near * 1.4)
                      * (1.0 + coming.get("Kick", 0.0) * 0.5))
             if step == 0:
-                # The nearest one keeps its width. It is the one the eye
-                # is on, it is the only one wide enough for the width to
-                # show, and one of them costs about a third of a
-                # millisecond where five cost 1.7.
+                # The nearest keeps its width: it is the one the eye is on.
                 stroke(painter, path, self._shade(base, min(1.0, alpha)),
                        thick)
             else:
@@ -3563,33 +2492,19 @@ class Rave(Scene):
                            self._shade(base, min(1.0, alpha * thick
                                                  * self.TRUSS_LIFT)))
 
-    #: How fast a ring closes on you, as a share of its own distance a
-    #: second, and how near it gets before it is done with.
-    #:
-    #: A share of its distance, not a fixed speed. A ring's *apparent*
-    #: size goes as one over its distance, so moving it at a steady speed
-    #: through the room means it sits far away looking tiny for a second
-    #: and then does the whole of its expansion in the last tenth of one.
-    #: That is why "I don't xxx xxx xxx xxxxxx xxxxxx xxxxx xx xxx xxxxxxx
-    #: xxxx xxxxx xxxx xx xx" - it was there, and it was over before you
-    #: could see it. Closing by a share of the distance each frame makes
-    #: the growth even, and the ring spends most of its life at a size
-    #: worth looking at: 0.8 of a second inside the frame rather than 0.15.
+    #: How fast a ring closes on you, as a share of its own distance a second,
+    #: so it grows evenly, and how near it gets before it is gone.
     RING_CLOSE = 2.1
     RING_GONE = 0.34
 
-    #: How many rings a moment sends, and how far apart they start. A
-    #: single outline was hard to read as anything; three, staggered down
-    #: the room, arrive as one shape with a depth to it.
+    #: How many rings a moment sends, and how far apart they start.
     RING_ECHOES = 3
     RING_APART = 1.7
 
     def _rings_now(self, painter, rect, horizon, focal, moment, step, hue,
                    flash):
-        """Rings from a big moment, leaving the far end and sweeping past.
-
-        See ``RING_OVER`` for what a moment is. This used to fire on any
-        snare over 0.75.
+        """Rings from a big moment (see RING_OVER), leaving the far end and
+        sweeping past.
         """
         if moment > 0.0:
             for echo in range(self.RING_ECHOES):
@@ -3600,25 +2515,19 @@ class Rave(Scene):
         weight = self._weight(rect)
         for ring in self._rings:
             ring[0] -= step * self.RING_CLOSE * ring[0]
-            # Past the eye rather than stopped at the near wall, so the
-            # last thing it does is sweep out through the edges of the
-            # frame instead of being taken away at its biggest.
+            # Past the eye, so the ring leaves through the edges of the frame.
             if ring[0] <= self.RING_GONE:
                 continue
             alive.append(ring)
             z, force = ring
             fade = max(0.0, min(1.0, (z - self.NEAR) / (self.FAR - self.NEAR)))
             radius = focal * (1.9 * force + 0.6) / z
-            # Brightest in the middle of its travel and fading again as it
-            # goes by, so it arrives out of the distance and leaves
-            # through the walls rather than blinking out at full strength.
+            # Brightest mid-travel, fading as it arrives and as it goes.
             going = max(0.0, min(1.0, (z - self.RING_GONE) / 0.9))
             lit = min(1.0, (1.0 - fade) * 1.15 * force * going)
             wide = (1.2 + (1.0 - fade) * 5.5 + flash * 2.0) * weight
-            # Three passes, cheapest first: a wide soft one under a narrow
-            # bright one, and a thin line just inside the rim. One outline
-            # of one width reads as a circle drawn on the picture; this
-            # reads as something with an edge that is lit.
+            # Three passes: a wide soft one, a narrow bright one and a thin
+            # line inside the rim.
             for grow, share, thin in ((1.0, 0.30, 2.6),
                                       (1.0, 1.00, 1.0),
                                       (0.90, 0.45, 0.45)):
@@ -3634,35 +2543,9 @@ class Rave(Scene):
         # Never more than a bar's worth on screen at once.
         self._rings = alive[-8:]
 
-    #: The hat beams. Where the lamps hang across the ceiling, how far
-    #: down the room a beam is thrown, how many rows back it starts, and
-    #: how quickly one fades.
-    #: The laser rig.
-    #:
-    #: One lamp either side, hung on the ceiling deep down the room, each
-    #: throwing a fan of beams onto the floor in front of you. The fan
-    #: sweeps back and forth rather than firing one beam at a time.
-    #:
-    #: A beam used to be one line per hat, thrown a couple of metres. Two
-    #: lines appearing and going out again at whatever the hats were doing
-    #: read as "random lines" however carefully they were placed: nothing
-    #: connected one to the next, and nothing in the room made a shape out
-    #: of them. A fan does. Nine beams from one point, all of them moving
-    #: together, is a thing somebody aimed.
-    #:
-    #: Long, too, and that is a matter of where the ends are rather than
-    #: how far apart they are in the room. A beam from z 8.5 to z 6.5
-    #: crosses two metres of room and draws 151 pixels, because both of
-    #: its ends are far away and perspective shrinks them together. The
-    #: lamps stay deep, at 8.5, where they sit near the vanishing point
-    #: and the fan opens towards you; the feet land between 0.7 and 2.5,
-    #: right in front of the eye, where perspective makes them large.
-    #: Measured across a sweep: 340 pixels of beam against 151, and
-    #: against 320 for the one line a hat used to throw.
-    #:
-    #: The feet stay on the floor. Reaching past the walls measured much
-    #: longer again, 604 pixels, and a beam that ends outside the room is
-    #: the floating line this was meant to stop being.
+    #: The laser rig: a lamp either side, deep down the room, each sweeping a
+    #: fan of beams onto the floor in front of you. Deep lamps and near feet
+    #: give the beams length in perspective.
     FAN = 11
     FAN_HANG = 0.78
     FAN_AT = 8.5
@@ -3672,71 +2555,32 @@ class Rave(Scene):
     #: Sweeps a second at rest, and how much the hats hurry it.
     FAN_SWEEP = 0.55
     FAN_HURRY = 1.8
-    #: How dim a beam is at the lamp against the end coming at you.
-    #:
-    #: Drawn as a gradient along the beam rather than in two pieces. Two
-    #: pieces is a step, and a step at 45 per cent of the way along is
-    #: exactly "it xxxxx xxxx xxx xxxxxx xxx xxxxxxxx xxxxxxx xxxxxxx xxx
-    #: xxxx" - which they did, from 0.45 to 1.0 in one pixel. Measured at
-    #: 1512x982 with 22 beams, a gradient pen costs 2.54 ms against 2.26
-    #: for the two-piece version and 2.38 for a four-piece one, so the
-    #: smooth one is worth its 0.28 ms.
+    #: How dim a beam is at the lamp against its near end, drawn as one
+    #: gradient so there is no step along it.
     FAN_FADE = 0.4
-    #: How much a strobe hit adds to the rig, and how much of its colour
-    #: it takes away. A flash is white.
+    #: How much a strobe hit adds to the rig and how much colour it takes away.
     FAN_STROBE = 0.75
     FAN_BLEACH = 0.45
     #: Below this there is no rig at all, so a quiet passage has none.
     FAN_FAINT = 0.03
-    #: Seconds of listening before the rig can come on, so that the first
-    #: sound of a track is not read as the loudest it has ever been.
+    #: Seconds of listening before the rig can come on.
     FAN_SETTLE = 2.0
 
-    #: How the rig decides a drop is happening.
-    #:
-    #: Not the question the rings ask. A ring marks the moment the room
-    #: gets louder, and the ratio it reads dies about two seconds into a
-    #: drop as the slow average catches up with it. Measured over a
-    #: written dubstep arrangement, that ratio came out at 0.16 through
-    #: the drop against 0.15 through the intro before it, which is no
-    #: difference at all - and a rig that goes out two seconds into the
-    #: drop is worse than one that never came on.
-    #:
-    #: A drop is a level, not a change. What the rig reads is where the
-    #: room sits between the quiet it keeps coming back to and the loudest
-    #: it has been: ``(now - quiet) / (loudest - quiet)``. That holds at 1
-    #: for as long as the drop lasts, falls to nothing in the breakdown,
-    #: and is 0 through an intro, an intro being the quiet. See QUIET_DOWN
-    #: for what "the quiet" is and why it is not an average.
-    #:
-    #: The loudest decays slowly, so the rig still knows about the first
-    #: drop a minute later. A track with no dynamics in it has no drop,
-    #: and the span guard leaves the rig off rather than on for ever.
+    #: A drop is a level, not a change: the rig reads where the room sits
+    #: between its usual quiet and the loudest it has been, ``(now - quiet) /
+    #: (loudest - quiet)``, which holds for the length of a drop. The loudest
+    #: decays slowly.
     PEAK_FALL = 0.9996
     PEAK_SPAN = 0.08
 
-    #: The quiet the track keeps coming back to.
-    #:
-    #: Not ``_calm``, which the rings use. That is an average over about a
-    #: second and three quarters, so four seconds into a drop it has risen
-    #: to 0.685 against the drop's own 0.702 and there is no span left to
-    #: measure anything in. An average of a loud passage is loud.
-    #:
-    #: A floor is not an average. It follows the room down quickly and
-    #: climbs back slowly, so it stays near the verse for the length of a
-    #: drop and is back where it belongs a second into the breakdown.
+    #: The quiet the track keeps coming back to: follows the room down quickly
+    #: and climbs back slowly, so it stays near the verse through a drop.
     QUIET_DOWN = 0.02
     QUIET_UP = 0.0004
 
     def _lasers_lit(self) -> float:
-        """How hard the rig is running, from 0 to 1.
-
-        Held up for as long as the passage is loud, rather than fired by
-        each hat. A drop is not an event, it is a minute. See PEAK_FALL
-        for what is being read and why it is not what the rings read.
-
-        The hats add to it, scaled by the level, so a roll inside a drop
-        shows and a roll in the intro does not bring the rig on.
+        """How hard the rig is running, 0 to 1: held for as long as the passage
+        is loud (see PEAK_FALL), with the hats adding to it in proportion.
         """
         quiet = self._quiet
         if (quiet is None or self._peak < self.RING_QUIET
@@ -3750,22 +2594,9 @@ class Rave(Scene):
 
     def _beams_now(self, painter, rect, horizon, focal, hats, step, hue,
                    bass, flash=0.0):
-        """The laser rig: two fans sweeping across the floor.
-
-        One line per hat is what this was, and two lines appearing and
-        going out again read as "random lines" however carefully each one
-        was placed. Nothing connected one to the next. A fan does: nine
-        beams leaving one point together, sweeping together, is a thing
-        somebody aimed.
-
-        Each beam runs from a lamp deep down the room to a foot on the
-        floor in front of you, so it crosses most of the room rather than
-        a fifteenth of it, and the perspective has a length to work on.
-        Each is drawn in two parts, brighter at the lamp end, which is
-        what a beam in haze does.
-
-        See ``_lasers_lit``: the rig follows how loud the passage is, so a
-        dubstep drop has it running for the whole drop.
+        """The laser rig: two fans sweeping across the floor, each beam from a
+        lamp deep down the room to a foot in front of you. See
+        ``_lasers_lit``.
         """
         lit = self._lasers_lit()
         if lit + flash * self.FAN_STROBE < self.FAN_FAINT:
@@ -3773,8 +2604,7 @@ class Rave(Scene):
         lift = self._lift(bass)
         span = self.ACROSS * 0.5
         self._fan += step * (self.FAN_SWEEP + self._fizz * self.FAN_HURRY)
-        # Back and forth, the way a rig sweeps, rather than round and
-        # round: a fan that spins has no front.
+        # Back and forth, the way a rig sweeps.
         phase = math.sin(self._fan) * 0.8
 
         pairs = []
@@ -3785,8 +2615,7 @@ class Rave(Scene):
             for index in range(self.FAN):
                 spread = (index / (self.FAN - 1.0)) * 2.0 - 1.0
                 angle = phase + spread * self.FAN_OPEN
-                # Mirrored exactly, so the two fans are one rig rather
-                # than two that happen to be near each other.
+                # Mirrored exactly, so the two fans are one rig.
                 foot = self._project(
                     horizon, focal,
                     side * math.sin(angle) * span * self.FAN_REACH, lift,
@@ -3794,8 +2623,8 @@ class Rave(Scene):
                     * (self.FAN_FAR - self.FAN_NEAR))
                 pairs.append((lamp, foot))
 
-        # A strobe hit takes the whole rig with it, on top of whatever the
-        # music already has it doing, and bleaches it towards white.
+        # A strobe hit takes the whole rig with it and bleaches it towards
+        # white.
         lit = min(1.0, lit + flash * self.FAN_STROBE)
         shade = (hue + 0.18) % 1.0
         deep = max(0.0, 0.42 - flash * self.FAN_BLEACH)
@@ -3813,23 +2642,10 @@ class Rave(Scene):
 
     def _core(self, painter, horizon, span, hue, bass, kick, synth, flash,
               weight=1.0):
-        """The thing in the middle: a wireframe that turns, swells and shakes.
-
-        Drawn last and small. It is the only object in the room with a
-        shape of its own, and the room is the subject.
-
-        The *kick* is what throws its corners about, and the bass is what
-        drives the room past you. They were both doing a bit of both,
-        which is why neither read as itself: a kick and a loud bassline
-        arrive together most of the time, so two effects sharing them look
-        like one effect. One object shaking and one room moving is a
-        difference you can see.
-
-        The hats still spin it (in ``_advance``), which is a different
-        thing again - a spin is continuous and a shake is not.
+        """The thing in the middle: a wireframe that turns with the hats,
+        swells and shakes with the kick. Drawn last and small.
         """
-        # The raw hit, not the eased one. The room is pushed slowly on
-        # purpose; the thing in the middle is supposed to be hit.
+        # The raw kick, not the eased one: it is meant to be hit.
         fizz = max(self._crack, self._fizz * 0.25)
         size = span * (0.045 + bass * 0.05 + kick * 0.05 + flash * 0.02
                        + fizz * 0.035)
@@ -3840,8 +2656,8 @@ class Rave(Scene):
         for corner in range(6):
             angle = turn + corner * math.tau / 6.0
             lean = math.sin(turn * 0.7 + corner) * 0.35
-            # Per corner, and on its own phase, so the shape breaks up
-            # rather than translating.
+            # Per corner, on its own phase, so the shape breaks up rather than
+            # moving.
             shake = 1.0 + fizz * 0.55 * math.sin(turn * 6.1 + corner * 2.3)
             points.append(QPointF(
                 horizon.x() + math.cos(angle) * size * shake,
@@ -3851,8 +2667,7 @@ class Rave(Scene):
                                  min(1.0, 0.5 + kick * 0.5 + fizz * 0.3))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         path = QPainterPath()
-        # Every corner to every other: a wireframe rather than an outline,
-        # which is what makes it read as a solid seen through.
+        # Every corner to every other: a wireframe.
         for a in range(len(points)):
             for b in range(a + 1, len(points)):
                 path.moveTo(points[a])
@@ -3866,141 +2681,62 @@ _NO_CHART: dict = {}
 
 
 class Rider(Scene):
-    """A game you play on the track the music builds.
-
-    Three lanes down a road that climbs, dives and twists with the song.
-    Blocks sit on the road on the beat; you move between lanes with the
-    arrow keys and try not to hit them.
-
-    What makes it a rhythm game rather than a scene with keys is that the
-    chart is laid out *ahead* of the playhead. ``state.kit`` says what is
-    happening now, which is too late to put a block in front of somebody:
-    it has to leave the horizon seconds before its beat so that it arrives
-    on it. ``state.chart`` carries every hit in the track by name, from the
-    same element detection the strobe uses, so this can read forward.
-
-    The first version of this put a block on every hit it found, which on a
-    house track is two kicks a second with hats between them: "xxxx xxx
-    xxxxxxx xxx xxx xxxx xxx it's unplayable". Hits are now a *candidate*
-    list, and the chart takes from it at a pace somebody can play - see
-    ``GAP`` - choosing the shape from whichever drum won the slot.
+    """A game played on a road the music builds: three lanes, blocks on the
+    beat, moved between with the arrow keys. The chart is laid ahead of the
+    playhead from every hit in the track, at a pace that can be played (see
+    GAP).
     """
 
     name = "Music rider"
-    #: The two games Audiosurf plays on the same road.
-    #:
-    #: Mono is the road: colours are points on a chain and greys are
-    #: hazards, and the grid is only somewhere for them to go. Puzzle is
-    #: the grid: a colour is worth nothing until three of them touch, and
-    #: what the road hands you is a supply problem.
+    #: The games. Mono: colours are points on a chain and greys are hazards.
+    #: Ninja: more greys, with coins for riding close. Wakeboard: jumps.
+    #: Puzzle: colours drop into a grid and score in clusters.
     MODES = ("Mono", "Ninja", "Wakeboard", "Puzzle")
     blurb = "a game: three lanes, and the track is the song"
 
     # -- the road ---------------------------------------------------------
     LANES = 3
     LANE_WIDE = 1.30
-    #: The near and far ends of the road. FAR was 34, which converges to
-    #: a sliver: two thirds of the road was a few pixels tall and the
-    #: whole thing read as a cone rather than as a road.
-    #: NEAR is behind the rider, not level with them, so that the road
-    #: runs off the bottom of the frame rather than stopping short of it
-    #: with a hard edge across the picture.
-    #:
-    #: It has to be behind, because the eye rides the road (see ``_eye``)
-    #: and the road under the near edge is not the road under the rider.
-    #: Swept over every phase of the hill, the bend and the roll, at five
-    #: frame sizes and both ends of the bank: from level with the rider
-    #: the near edge climbs up to 489 px into the picture.
-    #:
-    #: 2.4 rather than the 1.6 that was enough before. The road banks
-    #: into its own turn now - see ``_road`` - so the roll is largest
-    #: where the turn is, which is not where the old free-running roll
-    #: put it: at 1.6 the near edge came 158 px into a 1512x982 frame.
-    #: Swept again at the same five sizes, 2.4 keeps it 108 px or more
-    #: below the bottom of every one of them, and it is the best of them
-    #: - further back than that and the corner starts coming round again.
+    #: The near and far ends of the road. NEAR is behind the rider, so the road
+    #: runs off the bottom of the frame however it banks.
     NEAR, FAR = -2.4, 20.0
-    #: How far in front of the eye the road starts, and the z nearer
-    #: than which nothing is projected at all.
-    #:
-    #: 0.22 rather than a third. The road banks into its own turn, which
-    #: tips its near edge: one corner goes a long way down and the other
-    #: not nearly as far, and the camera's own lean then swings the high
-    #: one back up. At a third of a unit that corner came 50 px into a
-    #: 640x360 frame. Starting the road nearer to the eye pushes both
-    #: corners further down in proportion, which is the only lever here
-    #: that does not cost the bank.
+    #: How far in front of the eye the road starts, and the nearest z
+    #: projected.
     NEAR_EYE = 0.22
-    #: Cross-pieces down the road. The road is filled between them, so
-    #: this is also how smooth its bends look.
+    #: Cross-pieces down the road; also how smooth its bends look.
     RUNGS = 44
 
-    #: Where the eye sits above the road and how far back from the rider.
-    #:
-    #: High and back, which is the whole difference between seeing what is
-    #: coming and not: "xxx xxxxxxx xxxxxx xxxxx xxxx xxxx xx xxxx xx xxx
-    #: what's xxxxxx xx xx xxxx xxxxxx xxx xxxxxx". From 0.55 up and level
-    #: with the rider to 2.1 up and 2.4 behind, the road ahead goes from a
-    #: thin band across the middle of the frame to most of the picture.
+    #: Where the eye sits: high and behind the rider, so the road ahead fills
+    #: most of the picture.
     EYE_UP = 2.1
     EYE_BACK = 2.4
 
-    #: The longest a track can be, in seconds - a day of music.
-    #:
-    #: Not a limit, a sanity check on the playhead. Everything here is
-    #: measured *from* the playhead, and an infinite one is worse than a
-    #: large one: the origin is set from it too, so the road's position
-    #: comes out as infinity minus infinity, which is a nan, and the
-    #: first thing that asks which beat it is in raises out of paint.
+    #: The longest a track can be, in seconds: a sanity check on the playhead.
     LONGEST = 86400.0
 
     #: Where the rider sits along the road, and how fast it slides lanes.
     RIDER_AT = 3.0
-    #: How fast the rider slides to a new lane, as a share of the way
-    #: there each frame.
-    #:
-    #: The blueprint asks for "an incredibly tight interpolation window,
-    #: roughly 50ms-70ms". At 0.30 a lane change was nine tenths done
-    #: after 140 ms, which at twelve units of road a second is two units
-    #: of ground spent arriving. 0.55 puts it at 50 ms, and the
-    #: difference is whether a dodge you begin on the beat lands on it.
-    #:
-    #: A share of the way there per sixtieth of a second, not per frame.
-    #: See ``_slide``.
+    #: How fast the rider slides to a new lane, as a share of the way per
+    #: sixtieth of a second: about 50 ms. See ``_slide``.
     SNAP = 0.55
 
     # -- pace -------------------------------------------------------------
-    #: Seconds from the horizon to the rider. This is the reaction time the
-    #: game gives you and it is the number that decides whether it can be
-    #: played at all.
-    #: How far ahead the chart is read, in seconds. It has to cover
-    #: LOOK_BEATS of them at the slowest tempo anybody plays: three beats
-    #: at 60 bpm is three seconds.
+    #: How far ahead the chart is read, in seconds: LOOK_BEATS at the slowest
+    #: tempo.
     READ = 5.0
-    #: The least time between one figure and the next, in seconds and in
-    #: beats, whichever is longer.
-    #:
-    #: In beats as well as seconds, because a gap in seconds is a
-    #: different musical distance at every tempo, and a figure that lands
-    #: between beats is a figure that feels wrong however far apart they
-    #: are. Two beats is one every 0.94 s at 128 bpm and one every 0.69 at
-    #: 175, which is drum and bass keeping its feet.
+    #: The least time between figures, in seconds and in beats, whichever is
+    #: longer.
     GAP = 0.80
     GAP_BEATS = 2.0
-    #: And how that stretches and tightens with the energy of the
-    #: passage: three beats apart where nothing is happening, one and a
-    #: half where everything is. GAP_BEATS is the middle of it and is
-    #: what the pool of shapes is still indexed by, so the shapes cycle
-    #: the same way however thick the figures come.
+    #: How the gap stretches and tightens with the passage's energy, in beats.
     GAP_LEAST = 1.5
     GAP_MOST = 3.0
 
     def _apart(self, when: float) -> float:
-        """How many beats apart the figures are at this point in the
-        track: by the section it is in, where the track has been heard -
-        tight in a drop, loose in a break, tightening through a build as
-        the drop comes (see rider_layout.spacing) - and otherwise by how
-        loud it is. See GAP_LEAST."""
+        """How many beats apart the figures are here: by the section where the
+        track has been heard (see rider_layout.spacing), otherwise by how
+        loud it is.
+        """
         section = self._section_at(when)
         if section is not None:
             import rider_layout
@@ -4013,141 +2749,60 @@ class Rider(Scene):
             return self.GAP_BEATS
         energy = max(0.0, min(1.0, self._read(self._energy, when)))
         return self.GAP_MOST - (self.GAP_MOST - self.GAP_LEAST) * energy
-    #: How far a heavier drum may be from the first candidate and still
-    #: take its place, in beats and in seconds when there is no tempo.
-    #:
-    #: Six tenths of a beat, because that is what it takes to reach the
-    #: kick on the next beat from a hat on the half. At a sixth of a
-    #: second it could not: the first figure of the track landed on a hat
-    #: at the half-beat, the gap put the next one a hat later, and the
-    #: whole chart ran along the off-beat. Measured, the median figure sat
-    #: 234 ms from a beat, which is exactly half of one.
+    #: How far a heavier drum may be from the first candidate and still take
+    #: its place: six tenths of a beat, enough to reach the next kick from a
+    #: hat on the half beat.
     PREFER_BEATS = 0.6
     PREFER = 0.17
-    #: How much short of the gap still counts as far enough.
-    #:
-    #: The gap is a length of time and the beats are a grid, and the two
-    #: do not divide: at 90 bpm two beats is 1.333 s while GAP asks for
-    #: 0.80, so the gap used is 1.333 and the kick that lands exactly
-    #: there is short of it by a floating-point hair. Rejecting it costs
-    #: the whole slot, because the next candidate is a beat later and the
-    #: one after that. Measured over thirty seconds, 26 figures with this
-    #: and 18 without at 90 bpm, 40 against 33 at 140.
-    #:
-    #: It is not what keeps the chart on the beat. That is PREFER_BEATS.
+    #: How far short of the gap still counts, so float error on the grid does
+    #: not cost a slot.
     SLACK = 0.03
-    #: How far apart the three blocks of one run are. Inside a figure, not
-    #: between figures.
+    #: How far apart the three blocks of one run are.
     RUN_GAP = 0.16
 
     # -- one clock --------------------------------------------------------
-    #: How far the road travels in a beat, and how many beats of it lie
-    #: between the horizon and the rider.
-    #:
-    #: The whole world runs off this. It used to run off two clocks: the
-    #: ground and the pillars moved at ``RUN + bass * RUN_BASS`` road
-    #: units a second, which is 6 to 23, while a block's distance was
-    #: worked out from its *time* and came to a flat 6.5 whatever the
-    #: track was doing. So the road slid under the blocks and the
-    #: streetlights overtook them - "xxx xxxxxxxxxxxx xxxx xxxxxx xxxx xxx
-    #: obstacles xx xxx xxxx, xxx xxxx xxxxxxx xxxxx xxxxxx xxxx xxx
-    #: obstacles, this does not feel right".
-    #:
-    #: One clock instead: the road's position is a function of the beat,
-    #: so a block laid on beat n sits at n * PER_BEAT and is level with
-    #: the rider exactly when the road reaches it. Everything moves
-    #: together because there is only one thing moving.
-    #:
-    #: Three beats of look-ahead rather than the 2.6 seconds it was. In
-    #: beats, because a length of time is a different musical distance at
-    #: every tempo; and three because that is a bar's worth of warning at
-    #: four to the floor and it puts the road at 12 units a second at 128
-    #: bpm against the 6.5 the blocks used to manage.
+    #: How far the road travels in a beat, and how many beats lie between the
+    #: horizon and the rider. The road's position is a function of the beat, so
+    #: a block laid on beat n arrives exactly on it, and everything moves
+    #: together.
     LOOK_BEATS = 3.0
     PER_BEAT = (FAR - RIDER_AT) / LOOK_BEATS
 
-    #: Road units a second when no tempo has been found. About what
-    #: PER_BEAT comes to at an ordinary tempo, so a track the analysis
-    #: could not lock to still moves at the speed of one it could.
+    #: Road units a second when no tempo has been found.
     FREE_RUN = 11.0
 
-    #: How much a full bass front-loads the travel within a beat.
-    #:
-    #: The speed, now that the timing is not negotiable. At 0 the road
-    #: moves evenly through the beat; at 1.6 the first frame of a beat
-    #: travels 2.6 times as far as the mean and the last barely moves,
-    #: which is a lunge onto the beat and a coast before the next one.
-    #: Same arrival time, much more push - and the block arrives exactly
-    #: on the beat either way, because the curve is the identity at both
-    #: ends of it.
+    #: How much a full bass front-loads the travel within a beat. The curve is
+    #: the identity at both ends, so blocks still arrive on the beat.
     LUNGE = 1.6
-    #: And how much of the beat's travel is lunged rather than even.
-    #:
-    #: The floor under the coast is ``1 - LUNGE_MIX`` of the average
-    #: speed, so at 0.55 the road never drops below 45 per cent of its
-    #: own pace and still reaches 1.9 times it into the beat. All lunge
-    #: reached 2.5 times and dropped to a two-hundredth, which is a stop.
+    #: How much of the beat's travel is lunged rather than even; the road never
+    #: drops below 1 - LUNGE_MIX of its pace.
     LUNGE_MIX = 0.55
 
-    #: How hard the road bends, climbs and rolls.
-    #:
-    #: "Xxxx xxx xxxxx xxxxx xxx xx xx xxx xxxx xxxxxx xxxx
-    #: xxxxxxxxxxxx." Three or four times what it was, and all three grow
-    #: with how loud the passage is, so a drop throws the road about and a
-    #: quiet passage is nearly straight.
+    #: How hard the road bends, climbs and rolls, growing with the passage's
+    #: loudness.
     BEND = 2.6
     CLIMB = 1.9
     #: How tightly the road turns, in radians of phase per road unit.
-    #: Pulled out of the sine because the roll is its derivative.
     BEND_EVERY = 0.17
-    #: How much of the bend, the climb and the bank a quiet passage gets,
-    #: and how much a loud one adds.
-    #:
-    #: It used to run 0.35 to 1.00, which at a drop put the road 19 per
-    #: cent of the frame's width off its own line and rolled it fifteen
-    #: degrees - and the camera opens its field of view at a drop too, so
-    #: the two compounded and the pattern ahead became a diagonal band.
-    #: 0.45 to 0.80 keeps the wander at 15 per cent and the roll at
-    #: twelve degrees, and the energy is carried by the rig instead.
+    #: How much of the bend, climb and bank a quiet passage gets, and how much
+    #: a loud one adds.
     PUSH_REST = 0.45
     PUSH_GAIN = 0.35
     #: How slowly the road's bends follow the loudness, in seconds.
     PUSH_EASE = 0.9
 
-    #: How hard the track's own lean bends the road, and how far any
-    #: single reading of it may push. See ``_carve``.
-    #:
-    #: The lean is summed about its own middle and in units of how much
-    #: the record leans at all, so what comes out is a wander rather
-    #: than a ramp and a narrow mix turns as much as a wide one.
-    #:
-    #: Measured over the whole visible length of road on a real record:
-    #: with the lean summed raw and a tenth of it taken, the road moved
-    #: eight thousandths of a lane sideways and was straight a hundred
-    #: per cent of the time. The clamp is what keeps the tail from
-    #: turning a bend into a hairpin - one reading on that record is
-    #: thirteen spreads out on its own, and unclamped it swung the
-    #: visible road three and a half lanes.
+    #: How hard the track's own stereo lean bends the road, and the most one
+    #: reading may push. See ``_carve``.
     TRACK_BEND = 0.15
     LEAN_MOST = 1.5
 
-    #: How much of the track either side of a point is averaged into the
-    #: shape of the road there, in seconds.
-    #:
-    #: Three quarters of a second each way. A road is a landscape and a
-    #: song is not: its amplitude changes from one eighth of a second to
-    #: the next by more than any hill should, and a curve drawn through
-    #: readings that jump is a curve that jumps smoothly.
+    #: Seconds of the track either side of a point averaged into the road's
+    #: shape there.
     SMOOTH_FOR = 0.75
     #: How hard the road banks into its own turn.
-    #:
-    #: 1.2 puts the roll where the old free-running one was at its
-    #: strongest - about sixteen degrees - but now it is the turn that
-    #: puts it there. See ``_road``.
     BANK = 1.2
 
-    #: How far past the rider a block is still drawn. It has to go
-    #: somewhere rather than stop dead on the rider's nose.
+    #: How far past the rider a block is still drawn.
     GONE = 1.2
 
     #: Half a lane, and the rider gets the benefit of it.
@@ -4155,16 +2810,11 @@ class Rider(Scene):
     #: Seconds of flashing, and of not being hit again, after a hit.
     SORE = 0.9
 
-    #: How long the whole picture shows a hit, and what it does to it.
-    #:
-    #: The screen wash is the part that carries it. A shake says
-    #: something happened to the camera; a frame that goes red and dark
-    #: says something happened to *you*, which is what a hit is. Six
-    #: tenths of a second, which is about a beat and a half - long enough
-    #: to read and short enough to be over before the next figure.
+    #: How long the picture shows a hit: a red, dark wash says it happened to
+    #: you.
     HURT_FOR = 0.6
-    #: How hard a hit washes the frame, throws the camera and drops the
-    #: light out of everything else.
+    #: How hard a hit washes the frame, throws the camera and dims everything
+    #: else.
     HURT_WASH = 0.34
     HURT_THROW = 2.3
     HURT_DIM = 0.72
@@ -4172,76 +2822,47 @@ class Rider(Scene):
     SHAKE = 0.030
     SHAKE_FALL = 0.10
 
-    #: How far down the road the camera aims, how hard it turns towards
-    #: it, and how quickly the aim itself moves.
+    #: How far down the road the camera aims, how hard it turns towards it, and
+    #: how quickly the aim moves.
     AIM = 7.0
     AIM_PULL = 0.11
     AIM_EASE = 0.06
 
     # -- the rig ----------------------------------------------------------
-    #: The focal length as a share of the frame, at a crawl and at a
-    #: sprint. Shorter is wider: 0.86 is about sixty degrees across the
-    #: frame and 0.56 about ninety, which is the range a camera behind
-    #: something moving is worth having.
-    #: Shorter is wider. 0.86 is about sixty degrees across the frame and
-    #: 0.62 about eighty - the range a camera behind something moving is
-    #: worth having, stopped where it is because a wider one shrinks what
-    #: it is showing: at 0.56 two lanes are 30 px apart where you have to
-    #: choose between them, and at 0.62 they are 34.
+    #: The focal length as a share of the frame, at a crawl and at a sprint:
+    #: shorter is wider, about sixty degrees to eighty. Wider than that shrinks
+    #: the lanes.
     FOCAL_SLOW = 0.86
     FOCAL_FAST = 0.62
 
-    #: How much further back the eye is dragged at a sprint, and the
-    #: spring that drags it. Critically damped enough not to wobble: the
-    #: point is a lag of a fraction of a second, not a bounce.
+    #: How much further back the eye is dragged at a sprint, and the spring
+    #: that drags it, damped enough not to wobble.
     CHASE = 0.55
     CHASE_SPRING = 0.020
     CHASE_DAMP = 0.86
-    #: How fast the rig notices a passage has got louder. Slow: this is
-    #: the shape of the song, not the shape of the bar.
+    #: How fast the rig notices a passage has got louder: the shape of the
+    #: song, not the bar.
     RUSH_EASE = 0.02
 
     #: How far the view banks into a bend, in degrees for a full turn.
-    #:
-    #: The camera leans the way a rider leans. Without it a bend is the
-    #: picture sliding sideways; with it the horizon rolls and the road
-    #: stays under you, which is the difference between watching a road
-    #: and being on one.
     TILT = 5.0
-    #: How hard the camera follows the road up a hill, and how much of the
-    #: frame it is allowed to give up doing it.
-    #:
-    #: The rise it follows is the road ahead measured *from the road under
-    #: the rider* - see ``_eye`` - so this is a camera looking up a hill
-    #: rather than one reacting to where the whole road happens to sit.
-    #:
-    #: At a twentieth, the middle of the road ahead holds within 10 px of
-    #: one row through every phase of the hill, against 79 px with the
-    #: camera held still. Both of those are hills you can see: what moves
-    #: is the frame, not the road. Harder than this and it overshoots -
-    #: 30 px of swing at 0.08 - because it is then correcting more than
-    #: the hill put there. PITCH_MOST is a rail rather than the usual
-    #: case: the follow asks for 0.071 of the frame at its steepest.
+    #: How hard the camera follows the road up a hill, measured from the road
+    #: under the rider (see ``_eye``), and the most of the frame it may give
+    #: up.
     PITCH = 0.05
     PITCH_MOST = 0.085
 
     #: Where the horizon sits, as a share of the frame above its middle.
-    #: A pure translation of the picture - it changes where the road sits
-    #: in the frame and nothing about how much of it you can see.
     HORIZON_UP = 0.10
 
-    #: The shake, which was too much of the picture. A kick moved the
-    #: whole frame by three per cent of its width; at 1.1 per cent it is
-    #: a knock rather than a camera being dropped.
+    #: How much of the kick's shake reaches the camera.
     SHAKE_LESS = 0.25
 
-    #: What a hit does to the road: how far the speed drops, and how fast
-    #: it comes back. Half speed, back over about a second, which is long
-    #: enough to be a punishment and short enough not to be a sulk.
+    #: What a hit does to the road: how far the speed drops and how fast it
+    #: comes back.
     SLOW = 0.45
     SLOW_BACK = 0.030
-    #: How many pieces a hit throws off, how fast they go and how long
-    #: they last.
+    #: How many pieces a hit throws off, how fast and for how long.
     SPARKS = 14
     SPARK_GO = 7.0
     SPARK_FADE = 1.9
@@ -4249,32 +2870,29 @@ class Rider(Scene):
     def __init__(self) -> None:
         self._lane = 1
         self._lane_here = 0.0
-        #: What a run is judged on at the end: the prizes that went by and
-        #: the ones taken, the longest chain, and the greys the shield
-        #: took instead of you. See result.
+        #: What a run is judged on at the end; see result.
         self._offered = 0
         self._taken = 0
         self._chain_most = 0
         self._saves = 0
         self._finished = False
         self._result = None
-        #: The run as it went, for the strip at the end: when each block
-        #: was taken, missed or hit, and the road's colour then. And the
-        #: track's loudness and length, kept at the finish.
+        #: The run as it went, for the strip at the end, and the track's
+        #: loudness and length, kept at the finish.
         self._log: list = []
         self._ridden = None
-        #: Whether this run is the whole track, ridden from the start with
-        #: no seek in it - the only kind a best is kept for. See _finish.
+        #: Whether this run is the whole track with no seek in it, the only
+        #: kind a best is kept for. See _finish.
         self._whole = True
         #: Whether the playhead jumped this frame, and from where.
         self._jumped = False
         self._jumped_from = 0.0
-        #: What the road is counted in - the beat's length - and whether
-        #: that changed this frame. See _advance.
+        #: What the road is counted in (the beat's length), and whether that
+        #: changed this frame. See _advance.
         self._counted_in = None
         self._rebased = False
-        #: Set from outside, where the bests are kept: the best this
-        #: track has been played to before, and whether this run beat it.
+        #: Set where the bests are kept: this track's best before, and whether
+        #: this run beat it.
         self.best_before = None
         self.new_best = False
         self._at = 0.0
@@ -4282,37 +2900,33 @@ class Rider(Scene):
         self._heard = 0.0
         self._shake = 0.0
         self._sore = 0.0
-        #: 1 the moment something was hit, falling to nothing over
-        #: HURT_FOR. Everything the picture does about a hit reads this.
+        #: 1 the moment something was hit, falling to 0 over HURT_FOR.
         self._hurt = 0.0
-        #: How many coloured blocks have been taken in a row, and 1 the
-        #: moment one is. See CHAIN_FIRST.
+        #: Coloured blocks taken in a row, and 1 the moment one is. See
+        #: CHAIN_FIRST.
         self._chain = 0
         self._got = 0.0
         #: The last of each kind of run and how long it is. See _combo.
         self._combos: dict = {}
         #: Whether a grey has been touched yet. See CLEAN_BONUS.
         self._clean = True
-        #: How far off the road the craft is, how fast it is rising,
-        #: and how much of a peak it left from. See JUMP_UP.
+        #: How far off the road the craft is, how fast it is rising, and the
+        #: peak it left from. See JUMP_UP.
         self._air = 0.0
         self._air_up = 0.0
         self._air_from = 0.0
         self._airs = 0
         self._best_air = 0
-        #: Coins taken, coins in a row now, and the best row of the run.
-        #: See COIN_WORTH.
+        #: Coins taken, coins in a row, and the best row. See COIN_WORTH.
         self._coins = 0
         self._coin_run = 0
         self._coin_best = 0
-        #: How far through its spin each coin is, so a trail of them
-        #: turns together rather than each on its own phase.
+        #: How far through its spin each coin is, so a trail turns together.
         self._coin_spin = 0.0
-        #: The bumper: 1 when it is up, 0 the moment it shatters a grey,
-        #: and back to 1 over SHIELD_BACK.
+        #: The bumper: 1 when up, 0 the moment it shatters a grey, back over
+        #: SHIELD_BACK.
         self._shield = 1.0
-        #: Audiosurf's matrix, a list of colours per column from the
-        #: bottom up. See CELLS_WIDE.
+        #: The puzzle grid, a list of colours per column from the bottom up.
         self._cells = [[] for _ in range(self.CELLS_WIDE)]
         self._fuse = 0.0
         self._fused = 0
@@ -4325,85 +2939,69 @@ class Rider(Scene):
         self._best = 0
         self._hits = 0
         self._blocks: list = []
-        #: What became of each block the craft met, as the game decided
-        #: it: see struck.
+        #: What became of each block the craft met; see struck.
         self._struck: dict = {}
         self._laid = 0.0
         self._chart_from = None
-        #: When the last figure was put down, so the next one can be held
-        #: off until there is room for it.
+        #: When the last figure was put down.
         self._placed = -99.0
         self._loudness = 0.0
         self._pushing = 0.0
         self._speed = self.FREE_RUN
-        #: How hard the road lunges into a beat nobody has decided yet.
-        #: See LUNGE and _lunge_of.
+        #: How hard the road lunges into a beat not yet decided. See _lunge_of.
         self._lunge = 1.0
-        #: The lunge each beat was given as it came into view, by beat
-        #: number, and fixed from then. See _decide_lunges.
+        #: The lunge each beat was given as it came into view, fixed from then.
         self._lunges: dict = {}
-        #: Each beat's length of road against PER_BEAT, and where on the
-        #: road it starts in beats of PER_BEAT, decided with its lunge.
-        #: See _decide_lunges.
+        #: Each beat's length of road against PER_BEAT and where it starts,
+        #: decided with its lunge. See _decide_lunges.
         self._paces: dict = {}
         self._starts: dict = {}
         #: How driven the music is at each decided beat, 0 to 1.
         self._drives: dict = {}
-        #: The decided beats' starts in order, from the first: (number of
-        #: the first, starts), for finding the beat a point of road is on.
+        #: The decided beats' starts in order: (number of the first, starts).
         self._marks = None
-        #: Added to every place on the road, so that when the beats it is
-        #: counted in change - the first beat, the drums' own arriving - the
-        #: road carries on from where it was rather than jumping.
+        #: Added to every place on the road, so the road carries on when the
+        #: beats it is counted in change.
         self._road_shift = 0.0
         #: Where the beats fall (see beat_clock): the drums', or the pane's
         #: grid until they are known. None with no tempo.
         self._clock = None
-        #: Seconds in a beat, or 0 when nothing has found a tempo. Where the
-        #: tempo moves, the beat being played now.
+        #: Seconds in the beat being played, or 0 with no tempo.
         self._beat = 0.0
         #: A moment that is known to be on the beat, for snapping to.
         self._grid = None
-        #: Where the music clock was last frame, for working out how fast
-        #: the road is going against the track rather than the wall.
+        #: Where the music clock was last frame.
         self._last_heard = None
-        #: The moment beat zero started, for measuring distance from. See
-        #: ``_advance`` for why it is not the same thing as ``_grid``.
+        #: The moment beat zero started, which distance is measured from.
         self._origin = None
         #: How far through the current beat the track is, 0 to 1.
         self._pulse = 0.0
-        #: Set while an obstacle has just been hit: it slows the road and
-        #: throws pieces off. See SLOW and _sparks.
+        #: Set while an obstacle has just been hit. See SLOW and _sparks.
         self._slow = 1.0
         self._sparks: list = []
-        #: The playhead as it was last frame, so a paused track can be
-        #: told from a playing one.
+        #: The playhead last frame, to tell a paused track from a playing one.
         self._was_at = None
         #: The pane's count of jumps as of the last frame. See _advance.
         self._jumps_seen = None
-        #: Whether the drums' beat is still on its way (see _advance), and
-        #: whether the scene has shown a frame of road yet (see _lay).
+        #: Whether the drums' beat is still on its way, and whether any road
+        #: has been shown yet.
         self._waiting = False
         self._started = False
-        #: Blocks in sight and where they were, kept across the road being
-        #: counted afresh, and where the road was on the old count. See
-        #: _advance.
+        #: Blocks in sight and where they were, kept when the road is counted
+        #: afresh, and where the road was on the old count. See _advance.
         self._kept: list = []
         self._carried = None
-        #: How far the beat-locked parts of the road - arches, lines - have
-        #: come up since there was a beat to lock them to, 0 to 1.
+        #: How far the beat-locked parts of the road have come up since there
+        #: was a beat, 0 to 1.
         self._beat_shown = 0.0
         self._rolling = 1.0
-        #: Where the camera is looking, across the road and up it, and
-        #: how hard it is banked into the bend.
+        #: Where the camera is looking, and how hard it is banked.
         self._aimed = 0.0
         self._pitched = 0.0
         self._banked = 0.0
         #: How hard the road is running against its resting speed, eased.
         self._rushing = 0.0
         #: Where the eye is behind the rider, and the spring dragging it.
-        #: Starts where it rests, so the first frame is drawn from a
-        #: camera rather than from inside the rider's nose.
         self._chase = self.EYE_BACK
         self._chase_to = 0.0
         #: The shake's own clock, so it is not tied to anything else.
@@ -4414,8 +3012,8 @@ class Rider(Scene):
         self._beat_lit = 0.0
         #: How fast the craft is crossing lanes, for the bank.
         self._swerve = 0.0
-        #: What the screen is still answering, and where the craft is on
-        #: the glass for the answers to come from. See POPS.
+        #: What the screen is still answering, and where the craft is on the
+        #: glass. See POPS.
         self._pops = []
         self._craft_glass = None
         self._craft_spot = None
@@ -4425,12 +3023,9 @@ class Rider(Scene):
         self._went = 0.0
         self._bend = 0.0
         self._climb = 0.0
-        #: How high the road is under the rider. The eye rides on it
-        #: rather than hovering at a fixed height in the world - see
-        #: ``_eye``.
+        #: How high the road is under the rider; the eye rides on it.
         self._under = 0.0
-        #: And how far across it is, so the eye rides the road sideways
-        #: as well as up. See ``_advance``.
+        #: How far across the road is under the rider.
         self._side = 0.0
         #: The track's shape, and the road made out of it. See ``_shape``.
         self._shaped = None
@@ -4443,8 +3038,8 @@ class Rider(Scene):
         self._twists = ()
         #: Which twists have had their power block laid.
         self._twisted = set()
-        #: How the track moves and how it is put together, once it has
-        #: been heard, and what it was read from. See trackstyle.
+        #: How the track moves and how it is put together, and what that was
+        #: read from. See trackstyle.
         self._style = None
         self._styled_from = None
         #: The key and chords, for laying blocks along the melody.
@@ -4457,20 +3052,18 @@ class Rider(Scene):
         self._gate_step = 0
         #: When the last coin taken was due. See COIN_ROW_GAP.
         self._coin_last = None
-        #: How much of each section's share of obstacles is still owed.
-        #: See _greyed.
+        #: How much of each section's share of obstacles is still owed. See
+        #: _greyed.
         self._owed: dict = {}
         #: What the road was last planned from. See ``_carve``.
         self._planned = None
-        #: How much of the road's rise and fall a drawing shows: all of it
-        #: on the card, where the road can be seen a long way off, and a
-        #: share of it flat. See FLAT_RELIEF.
+        #: How much of the road's rise and fall a drawing shows: all of it on
+        #: the card, a share of it flat.
         self._relief = 1.0
         #: What the next thing collected is multiplied by, if anything.
         self._double = 1.0
         self._every = 1.0
         #: Where the road starts, a fixed distance in front of the eye.
-        #: Kept until the camera has been worked out for the frame.
         self._near = self.NEAR
         self._quick = 0.0
         self._quiet = None
@@ -4491,12 +3084,7 @@ class Rider(Scene):
         return self._mode
 
     def set_mode(self, mode: str) -> None:
-        """Change game, and start the new one fresh.
-
-        The two do not share a score, a grid or a chain, so carrying any
-        of it across would be carrying a number that meant something
-        else. The level is kept: see reset.
-        """
+        """Change game and start it fresh, keeping the level."""
         if mode in self.MODES and mode != self._mode:
             self.reset()
             self._mode = mode
@@ -4509,20 +3097,19 @@ class Rider(Scene):
         return self._difficulty
 
     def set_difficulty(self, name: str) -> None:
-        """Change how hard it is, and start again: a run at one level is
-        not a run at another, any more than one game is another."""
+        """Change the level and start again."""
         if name in self.DIFFICULTIES and name != self._difficulty:
             self.reset()
             self._set_level(name)
 
-    #: The game and the level: the player's, not the run's. And how much of
-    #: the hills the picture drawing it shows, which is the painter's.
+    #: The game and level (the player's) and the relief (the painter's), kept
+    #: across a reset.
     KEPT = ("_mode", "_difficulty", "_relief")
 
     def reset(self) -> None:
-        """A new run, in the game and at the level chosen. See
-        Scene.reset; the level is applied again, because what it sets -
-        the road in sight, the shield, the points - is built afresh."""
+        """A new run in the chosen game and level, with the level applied
+        again.
+        """
         super().reset()
         self._set_level(self._difficulty)
 
@@ -4532,9 +3119,8 @@ class Rider(Scene):
 
         level = rider_layout.level(name)
         self._difficulty = name if name in self.DIFFICULTIES else "Normal"
-        # How many beats of road are in sight, which is how much warning
-        # there is and how fast the road runs through them. On the
-        # scene, for everything that measures the road in beats.
+        # How many beats of road are in sight, set on the scene for everything
+        # that measures the road in beats.
         self.LOOK_BEATS = float(level["look"])
         self.PER_BEAT = (self.FAR - self.RIDER_AT) / self.LOOK_BEATS
         shield = level["shield"]
@@ -4543,8 +3129,8 @@ class Rider(Scene):
         if self._shield_back is None:
             self._shield = 0.0
         self._score_share = float(level["score"])
-        # The least time between figures, closer the harder it is - but
-        # never under a beat apart; see rider_layout.spacing.
+        # The least time between figures, never under a beat; see
+        # rider_layout.spacing.
         self._gap_least = self.GAP * float(level["spacing"])
         self._least_warning = float(level.get("warning")
                                     or self.LEAST_WARNING)
@@ -4567,33 +3153,20 @@ class Rider(Scene):
                 "cells": [list(pile) for pile in self._cells]}
 
     # -- the chart --------------------------------------------------------
-    #: Which drum makes which shape, and the order they win a slot in.
-    #: A kick beats a snare beats a run of hats, so the heaviest thing in
-    #: a slot is what you see.
+    #: Which drum makes which shape, in the order they win a slot.
     PATTERNS = (("Kick", "wall"), ("Snare", "block"), ("Hats", "run"))
 
-    #: Two bars of shapes, so a track with a kick on every beat is not two
-    #: bars of identical walls.
-    #:
-    #: Preferring the heaviest drum in a slot puts every figure on a beat,
-    #: which is what makes it feel like music - and on four-to-floor it
-    #: also means the kick wins every slot and every figure is a wall.
-    #: The drum decides when a figure lands, which is what keeps the chart
-    #: on the beat; the pool decides what it looks like. Indexed by the
-    #: slot, so it repeats every eight figures and a track lays out the
-    #: same way every time it is played.
+    #: Two bars of shapes, indexed by the slot, so a track lays out the same
+    #: way each time and four-to-the-floor is not all walls.
     POOL = ("wall", "block", "wall", "run",
             "wall", "block", "wall", "wall")
 
     def _lay(self, state) -> None:
-        """Put the next stretch of chart on the road.
-
-        Only the part that has come into view since the last frame, so
-        this walks each hit once however long the track is.
+        """Put the next stretch of chart on the road: only what has come into
+        view since the last frame.
         """
-        # The same empty table every time, so that a track with no chart
-        # yet does not look like a new chart on every frame and throw the
-        # road away sixty times a second.
+        # The same empty table every time, so no chart does not look like a new
+        # one each frame.
         chart = getattr(state, "chart", None) or _NO_CHART
         started, self._started = self._started, True
         if self._waiting:
@@ -4601,18 +3174,15 @@ class Rider(Scene):
         fresh = (chart is not self._chart_from or self._jumped
                  or self._rebased)
         if fresh and (self._jumped or not started):
-            # A seek, or the scene's first frame: laid from here. Left laid
-            # from where it was, a jump forward met everything it skipped
-            # in one frame, and a jump back found nothing.
+            # A seek, or the first frame: laid from here.
             self._chart_from = chart
             self._blocks = []
             self._laid = self._heard
             self._placed = -99.0
             self._twisted = set()
         elif fresh:
-            # The same ride counted afresh - the drums' beat arriving, the
-            # chart arriving: what is in sight stays where it is, and the
-            # rest is laid from the far end of the road.
+            # The same ride counted afresh: what is in sight stays, and the
+            # rest is laid from the far end.
             self._chart_from = chart
             end = self._when(self.RIDER_AT + self.IN_SIGHT)
             self._blocks = [block for block in self._blocks
@@ -4625,15 +3195,11 @@ class Rider(Scene):
                              if start <= end}
         ahead = self._heard + self.READ
         if self._clock:
-            # Further where the road runs slowly, so a block comes out of
-            # the distance rather than appearing half way down the road.
+            # Further where the road runs slowly, so a block comes out of the
+            # distance.
             ahead = max(ahead, self._when(self.RIDER_AT + self.SEEN))
-        # Committed only up to a little short of what has been read, so a
-        # candidate always has the ones after it in view when the heaviest
-        # nearby is chosen - see PREFER_BEATS. Committed to the edge, the
-        # window each frame reads is a sixtieth of a second long and holds
-        # one candidate, so the choice depended on where the frames fell
-        # rather than on the music.
+        # Committed a little short of what has been read, so each choice sees
+        # the candidates after it; see PREFER_BEATS.
         reach = (self._beat * self.PREFER_BEATS if self._beat > 0.0
                  else self.PREFER)
         commit = ahead - reach
@@ -4641,27 +3207,20 @@ class Rider(Scene):
             return
         low, self._laid = self._laid, commit
 
-        # Every hit in the window, heaviest first at the same moment, so a
-        # kick and a hat on the same beat give a wall rather than both.
+        # Every hit in the window, heaviest first at the same moment.
         due = []
         for order, (name, shape) in enumerate(self.PATTERNS):
             for when in chart.get(name, ()):
                 if low < when <= ahead:
-                    # Hats where the kick is playing are what the figures
-                    # land between, not on: they are everywhere, so the
-                    # next one after the gap was nearly always a hat, and
-                    # a half-time drop was laid entirely off its hats -
-                    # sixty-four figures, not one on the kick or the snare
-                    # it is made of. Where there are no drums, the hats are
-                    # the rhythm, and lay figures as ever.
+                    # Under a kick, the hats are what figures land between, not
+                    # on. With no drums they are the rhythm.
                     if name == "Hats":
                         section = self._section_at(when)
                         if section is not None and section.drums:
                             continue
                     due.append((when, order, shape))
-        # And the melody, after every drum: the synths' own onsets, then
-        # the notes the harmony pass heard in the lead. They are what a
-        # breakdown with no drums in it is laid from.
+        # Then the melody: the synths' onsets and the notes heard in the lead,
+        # which lay a breakdown with no drums.
         melodic = len(self.PATTERNS)
         for when in chart.get("Synth", ()):
             if low < when <= ahead:
@@ -4676,10 +3235,8 @@ class Rider(Scene):
             when, _order, shape = due[index]
             if when > commit:
                 break
-            # How far apart the figures are here. Audiosurf spawns more
-            # blocks where there is more going on, and the place to ask
-            # is where the figure lands rather than where the playhead
-            # is - a figure is laid three beats before anybody sees it.
+            # How far apart the figures are where this one lands, not where the
+            # playhead is.
             gap = self._gap_least
             if self._beat > 0.0:
                 gap = max(gap, self._beat * self._apart(when))
@@ -4687,15 +3244,11 @@ class Rider(Scene):
                 index += 1
                 continue
             # The heaviest drum within a moment of it, not whichever came
-            # first. A hat lands on the eighth and a kick on the beat, and
-            # taking the first candidate meant half the figures sat on an
-            # off-beat: measured on a 128 bpm track, the median figure was
-            # 234 ms from a beat, which is exactly half of one.
+            # first, or half the figures land off the beat.
             reach = (self._beat * self.PREFER_BEATS if self._beat > 0.0
                      else self.PREFER)
             def rank(at):
-                # A hit on the beat before a heavier one between beats:
-                # every figure lands on a beat.
+                # A hit on the beat before a heavier one between beats.
                 return (self._off_beat(due[at][0]) > self.ON_BEAT * self._beat,
                         self._weight(due[at][1]), self._off_beat(due[at][0]))
 
@@ -4712,25 +3265,9 @@ class Rider(Scene):
             figure, mirrored = self._figure(when, grey, shape)
             self._shape(figure, when, grey=grey, mirrored=mirrored)
             index = best + 1
-        # And something to do where the track went quiet.
-        #
-        # The chart is the drums, and a breakdown has none - so the road
-        # had nothing on it at all. Measured on a real record, it was
-        # bare 16 per cent of the time and one stretch ran 8.6 seconds,
-        # which is nine seconds of a game with nothing in it. Audiosurf
-        # thins out where a track thins out; it does not stop.
-        #
-        # Prizes rather than hazards, on the beat like everything else.
-        # A quiet passage is a place to collect, not a place to be
-        # caught out by something the music never played, and the rule
-        # that puts hazards on the beats you can hear coming would have
-        # to be broken to put one here.
-        #
-        # From the start of the window when nothing has been placed yet,
-        # rather than waiting for the chart to place something first:
-        # waiting meant a track the detector found no drums in at all -
-        # ambient, orchestral, a voice - had an empty road for its whole
-        # length.
+        # Prizes on the beat where the track goes quiet, so the road never sits
+        # empty for long, laid from the start of the window where nothing has
+        # been placed.
         if self._beat > 0.0:
             every = self._beat * self.QUIET_BEATS
             last = max(self._placed, low - every)
@@ -4741,9 +3278,7 @@ class Rider(Scene):
                 last = self._placed = when
                 figure, mirrored = self._figure(when, False, "block")
                 self._shape(figure, when, grey=False, mirrored=mirrored)
-        # And the powerup at the mouth of each corkscrew. Audiosurf 2
-        # puts "corkscrew loops and powerups timed perfectly with big
-        # moments in your music" - one comes with the other.
+        # The power block at the mouth of each corkscrew.
         for start in self._twists:
             if low < start <= commit and start not in self._twisted:
                 self._twisted.add(start)
@@ -4751,106 +3286,53 @@ class Rider(Scene):
                     [self._snap(start + self.TWIST_FOR * 0.5),
                      self.LANES // 2, "power", False, False])
         if fresh:
-            # Laid from right where the craft is, a hit just after it can
-            # be put on the beat just before it, and was met straight
-            # away: a prize nobody could have reached, counted as missed.
+            # Nothing at or behind the craft, which nobody could reach.
             self._blocks = [block for block in self._blocks
                             if block[0] > self._heard]
         self._blocks = self._blocks[-200:]
 
-    #: How long the road may have nothing on it before something is
-    #: put there anyway, in beats.
-    #:
-    #: Four, which is a bar. Long enough that a real gap in the drums
-    #: still reads as the track thinning out, short enough that it never
-    #: becomes a road with nothing to do on it.
+    #: How long the road may have nothing on it, in beats, before something is
+    #: put there: a bar.
     QUIET_BEATS = 4.0
 
-    #: Which slots carry an obstacle rather than a prize.
-    #:
-    #: A quarter of them. Audiosurf's greys are a hazard among the
-    #: colours, not the other way round - a road of nothing but obstacles
-    #: is a road you cannot score on, and tying them to the kick gave
-    #: exactly that: on four to the floor the kick wins every slot.
-    #:
-    #: Indexed by the slot like the shapes are, so a track lays out the
-    #: same way every time it is played, and the two pools are different
-    #: lengths so the pattern of shape-against-hazard does not repeat
-    #: every eight figures.
+    #: Which slots carry an obstacle rather than a prize: about a quarter,
+    #: indexed by the slot, with a length unlike the shapes' so the pattern
+    #: does not repeat every eight figures.
     GREY_POOL = (False, False, True, False, False, True, False)
 
-    #: And Ninja's, which is the same road with far more to dodge.
-    #:
-    #: Audiosurf 2: "the final monocolor mode is Ninja Mode, which
-    #: contains a much larger collection of obstacles and a special set
-    #: of bonuses for successfully dodging them". The bonuses are
-    #: already here - a coin trail goes beside every obstacle - so more
-    #: obstacles is more to dodge *and* more to be paid for dodging,
-    #: which is the shape the mode is meant to have.
-    #:
-    #: Four slots in seven against two. Still a pool rather than every
-    #: slot: a road of nothing but obstacles is a road nobody can score
-    #: on.
-    #:
-    #: The obstacles are what changes, not how often a figure lands.
-    #: Putting the figures closer together as well was tried and is not
-    #: worth having: the gap has a floor in seconds, so at 128 bpm both
-    #: games quantise to the same two beats and nothing happens at all,
-    #: while at slower tempos it pushes under the floor that "xxxx xxx
-    #: xxxxxxx xxx xxx xxxx xxx it's unplayable" put there. A larger
-    #: collection of obstacles is a larger collection of obstacles
-    #: whether or not there is more of everything else.
+    #: Ninja's: the same road with far more to dodge, four slots in seven, each
+    #: with coins beside it. The figures come no closer together.
     NINJA_POOL = (True, False, True, True, False, True, False)
 
     def _weight(self, order: int) -> int:
-        """How heavy a hit of the drum at ``order`` in PATTERNS is, lightest
-        last: the kick, and on half-time music the snare as well.
-
-        Half time is the kick on one and the snare it waits for on three,
-        and those are the two hits a head nods to. Ranked below the kick,
-        the snare lost every slot to the kick half a beat after it, and a
-        dubstep drop was laid entirely on that pickup - thirty-two figures
-        on the and of three, and not one on the snare or the downbeat.
-        Ranked with it, the one on the beat wins.
+        """How heavy a hit of the drum at ``order`` is: the kick, and on
+        half-time music the snare it waits for.
         """
         if order == 1 and self._style is not None and self._style.heavy > 0.5:
             return 0
         return order
 
-    #: The most obstacle a section may carry to its next kick: a little
-    #: over one, so the next kick is one obstacle and never two in a row
-    #: for want of kicks between.
+    #: The most obstacle a section may carry to its next kick: never two in a
+    #: row for want of kicks.
     OWED_MOST = 1.25
 
     def _greyed(self, when: float, order: int) -> bool:
-        """Whether the figure at this slot is an obstacle.
-
-        The drum still has a say: a slot the pool calls safe stays safe,
-        and one it calls dangerous is only dangerous if the heaviest
-        thing in it was the kick. So the obstacles land on the beats you
-        can hear coming.
+        """Whether the figure at this slot is an obstacle: the section's share,
+        paid on the heavy hits you can hear coming.
         """
-        # Obstacles land on the heavy hits you can hear coming: the kick,
-        # and on half-time music the snare it waits for.
+        # Obstacles land on the heavy hits: the kick, and on half-time music
+        # the snare.
         heavy = self._weight(order) == 0
-        # Nothing to dodge inside a corkscrew. The world turns all the
-        # way over there and left stops meaning left half way round, so
-        # an obstacle in one is not a thing you failed to dodge, it is a
-        # thing nobody could have. The corkscrew is the spectacle and
-        # the power block in it is the reward; the greys wait.
+        # Nothing to dodge inside a corkscrew, where left stops meaning left.
         if self._twist_at(when) is not None:
             return False
         if self._beat <= 0.0:
             return heavy
         section = self._section_at(when)
         if section is not None:
-            # How much of the section is to be dodged - see
-            # rider_layout.DANGER_SHARE - laid by carrying the share over
-            # from one slot to the next rather than drawing each afresh:
-            # drawn, a drop came out two thirds obstacles on one record and
-            # a fifth on another, and could run five in a row. A little of
-            # the track's own seed in where each lands keeps it from being
-            # a metronome.
+            # The section's share of obstacles (rider_layout.DANGER_SHARE),
+            # carried from slot to slot rather than drawn each time, with a
+            # little of the track's seed in where each lands.
             import random
 
             import rider_layout
@@ -4866,19 +3348,10 @@ class Rider(Scene):
                                      ^ int(section.start * 1000)).random()
             owed += share
             if not heavy:
-                # Owed all the same, and paid on the next kick. Counted on
-                # the kick's figures alone, a drop was its share of the
-                # figures that happened to land on a kick - a garage drop
-                # meant to be forty per cent obstacles came out at
-                # nineteen, most of its figures being on the snare. Held
-                # under OWED_MOST, so a run of snares cannot bank a row of
-                # obstacles for the next kicks.
+                # Owed all the same and paid on the next kick, held under
+                # OWED_MOST.
                 owed = min(owed, self.OWED_MOST)
-                # And paid on the snare when the kicks will not come: the
-                # spacing can settle on the snares for a whole part, and a
-                # second garage drop laid every figure there and had
-                # nothing in it to dodge at all. A snare is a hit you can
-                # hear coming as well; hats and the melody never are.
+                # And paid on the snare when the kicks will not come.
                 if order == 1 and owed >= self.OWED_MOST:
                     self._owed[key] = owed - 1.0
                     return True
@@ -4899,8 +3372,8 @@ class Rider(Scene):
 
     def _figure(self, when: float, grey: bool, shape: str) -> tuple:
         """What figure goes here, and whether it is mirrored: from the
-        section's palette where the track has sections (see rider_layout),
-        and from the pool of shapes where it has not."""
+        section's palette (see rider_layout), or the pool of shapes.
+        """
         section = self._section_at(when)
         if section is None or self._plan is None:
             return self._varied(shape, when), False
@@ -4912,9 +3385,7 @@ class Rider(Scene):
         return figure, mirrored
 
     def _varied(self, shape: str, when: float) -> str:
-        """What shape this slot takes: the drum decides when a figure
-        lands, the pool what it looks like, indexed by the slot so four to
-        the floor is not two bars of identical walls."""
+        """What shape this slot takes, from the pool, indexed by the slot."""
         if not self._clock:
             return shape
         slot = int(round(self._clock.number(when)
@@ -4922,42 +3393,26 @@ class Rider(Scene):
         return self.POOL[slot % len(self.POOL)]
 
     def _snap(self, when: float) -> float:
-        """The nearest beat to ``when``, or ``when`` if there is no grid:
-        the drums are a few tens of milliseconds either side of the beat
-        and not the same amount each time, and the figures go on the beat
-        itself."""
+        """The nearest beat to ``when``, or ``when`` with no grid."""
         if not self._clock:
             return when
         return self._clock.time(round(self._clock.number(when)))
 
-    #: How near a beat a hit has to be, as a share of one, to count as on
-    #: it when choosing what a figure lands on.
+    #: How near a beat a hit must be, as a share of one, to count as on it.
     ON_BEAT = 0.12
 
     def _off_beat(self, when: float) -> float:
-        """How far a moment is from the nearest beat, in seconds, or
-        nothing with no tempo - so that the chart falls back to taking the
-        heaviest drum and nothing else."""
+        """How far a moment is from the nearest beat, in seconds; 0 with no
+        tempo.
+        """
         if not self._clock:
             return 0.0
         beats = self._clock.number(when)
         return abs(beats - round(beats)) * self._clock.length(when)
 
-    #: Coins: what they are worth, how many sit beside one obstacle and
-    #: how far apart.
-    #:
-    #: The problem they solve is that dodging is free. Three lanes, one
-    #: obstacle, two ways past it - and the two are worth exactly the
-    #: same, so the best play is to sit in the far lane and wait, which
-    #: is the least interesting thing the game can ask for. Audiosurf 2
-    #: answers it in Ninja mode with "a special set of bonuses for
-    #: successfully dodging" rather than for merely not being hit, and
-    #: this is that bonus made concrete: a short trail of coins in the
-    #: lane *next to* the obstacle, spanning the moment it passes.
-    #:
-    #: So the far lane is safe and pays nothing, and the near lane pays
-    #: three coins to whoever will hold it while a grey goes by an arm's
-    #: length away. Twenty-five is Audiosurf 2's own base block value.
+    #: Coins: worth, how many sit beside one obstacle, and how far apart. A
+    #: trail in the lane next to an obstacle pays for holding it while the grey
+    #: goes by; the far lane is safe and pays nothing.
     COIN_WORTH = 25
     COIN_STEP = 25
     COIN_MOST = 200
@@ -4966,42 +3421,13 @@ class Rider(Scene):
     #: How long after the last coin a coin still carries its row on.
     COIN_ROW_GAP = 0.6
 
-    #: How long before a wall arrives its coin trail has to have ended.
-    #:
-    #: A wall closes two lanes of three, so there is no lane "beside" it
-    #: to be brave in - the one way through is the one way through, and
-    #: a coin in it would pay for having nowhere else to go. Measured on
-    #: a real record, walls are two thirds of every figure laid, so a
-    #: coin that only ever sat beside a single obstacle almost never
-    #: appeared at all: one trail in a minute of music.
-    #:
-    #: So the trail goes in a lane the wall is about to *close*, and
-    #: ends before it gets there. You ride the doomed lane, take what is
-    #: in it and leave. Three tenths of a second is six lane changes'
-    #: worth of room at the snap the craft actually moves at, and about
-    #: three quarters of a beat at 130.
+    #: How long before a wall arrives its coin trail must end: the trail runs
+    #: in a lane the wall is about to close.
     COIN_LEAD = 0.30
 
-    #: Wakeboard: how hard a jump pushes off, how hard it comes down,
-    #: how far ahead a crest is read, and what a jump off one pays.
-    #:
-    #: Audiosurf 2's fourth mode is "like mono but puts you on a
-    #: surfboard that can leap off the track, gaining more points for
-    #: jumping at a peak". The road already has peaks: it is cut from
-    #: the track's own amplitude, so a crest is where the music is about
-    #: to drop away. The jump is the one thing on this road that is not
-    #: locked to it - the blueprint's "the vehicle is completely locked
-    #: to the 3D spline" holds for every other game here.
-    #:
-    #: Three and a fifth of push against ten of gravity clears half a
-    #: unit, which is most of a block's height, and is two thirds of a
-    #: second in the air - about a beat and a half at 128, or one
-    #: figure's worth. Long enough to be a decision and short enough not
-    #: to be a way of sitting out the hard parts; and nothing at all is
-    #: collected up there, so it never is one. Two units of push was
-    #: tried first and lifted the craft a quarter of a unit, which
-    #: against a block six tenths tall does not read as leaving the
-    #: road at all.
+    #: Wakeboard: how hard a jump pushes off, gravity, how far ahead a crest is
+    #: read, and what a jump off one pays. About two thirds of a second in the
+    #: air, and nothing is collected up there.
     JUMP_UP = 3.2
     JUMP_DOWN = 10.0
     CREST_LOOK = 2.5
@@ -5009,29 +3435,19 @@ class Rider(Scene):
     AIR_WORTH = 150
 
     def jump(self) -> bool:
-        """Leave the road, in the game that lets you.
-
-        Returns whether the key meant anything, the way ``steer`` does,
-        so it is left to whatever else wanted it in the eight scenes and
-        three games that are not this one.
+        """Leave the road, in the game that allows it. Returns whether the key
+        meant anything, like ``steer``.
         """
         if self._mode != "Wakeboard" or self._air > 0.0 or self._air_up > 0.0:
             return False
         self._air_up = self.JUMP_UP
-        # What the road was doing at the moment it left, which is what a
-        # jump is scored on. Read here rather than on landing: by then
-        # the crest is behind you.
+        # The crest as the craft leaves, which the jump is scored on.
         self._air_from = self._crest()
         return True
 
     def _crest(self) -> float:
-        """How much of a peak the road is at, from nothing to one.
-
-        A crest is where the road ahead falls away from the road under
-        you. Heights are drawn larger downwards - see ``_eye`` - so the
-        road ahead sitting at a *larger* height than the road here is
-        the road dropping away, which is the top of a hill and the place
-        a board would leave the ground on its own.
+        """How much of a peak the road is at, 0 to 1: where the road ahead
+        falls away from the road underneath.
         """
         here = self._road(self.RIDER_AT)[1]
         ahead = self._road(self.RIDER_AT + self.CREST_LOOK)[1]
@@ -5045,9 +3461,8 @@ class Rider(Scene):
         self._air_up -= self.JUMP_DOWN * step
         if self._air > 0.0:
             return
-        # Down. What it paid is how much of a peak it left from, which
-        # is the whole of "more points for jumping at a peak": a jump
-        # off the flat scores nothing at all.
+        # Down. A jump pays for the peak it left from; off the flat it scores
+        # nothing.
         self._air = 0.0
         self._air_up = 0.0
         paid = int(self.AIR_WORTH * self._air_from * self._double)
@@ -5063,31 +3478,20 @@ class Rider(Scene):
                       text=(f"AIR +{paid}" if self._air_from > 0.6 else ""))
         self._air_from = 0.0
 
-    #: What a power block multiplies, and how long it waits to be spent.
-    #:
-    #: Audiosurf 1's blueprint: "Xxxxxxxx x xxxx xxxxxx x xxxxxxx Xxxxx
-    #: Xxxxxxxxxx Xxxxx xx xxx centre xxxx. Xxxxxxxxxx xx xxxxxxxxx
-    #: xxxxxxx xxx xxxxx xxxxx xx xxxxxxxx xxxxxx xxx xxxxxxxxx xxxx
-    #: xxxxxx xxx xxxxxx'x xxxx." Audiosurf 2 has the same thing at 1.5x
-    #: with a big one at 2x. Here it doubles the next thing collected
-    #: that pays - the next cluster in Puzzle, the next prize in Mono -
-    #: and is spent when it does.
+    #: What a power block multiplies (the next thing that pays), and how long
+    #: it waits to be spent.
     POWER_DOUBLE = 2.0
 
     def _coins_beside(self, when: float, lane: int, grey: bool) -> None:
-        """A trail of coins in the lane next to an obstacle.
-
-        Beside a single obstacle: the far lane is safe and pays nothing,
-        the near one pays for being held while a grey goes past.
-        """
+        """A trail of coins in the lane beside a single obstacle."""
         if not grey:
             return
         beside = [side for side in (lane - 1, lane + 1)
                   if 0 <= side < self.LANES]
         if not beside:
             return
-        # Which side, from the time, so a track lays out the same way
-        # every time it is played.
+        # Which side, from the time, so a track lays out the same way each
+        # time.
         side = beside[int(when * 613) % len(beside)]
         self._coin_trail(when - (self.COINS_RUN - 1) * self.COIN_GAP / 2.0,
                          side)
@@ -5103,12 +3507,7 @@ class Rider(Scene):
 
     def _coin_trail(self, first: float, side: int, count: int = 0,
                     gap: float = 0.0) -> None:
-        """Lay one, if the lane is free for the whole of it.
-
-        Never into a lane something else is already using: a coin a
-        player cannot take without being hit is not a reward, and one
-        sitting inside a prize is a coin nobody can see.
-        """
+        """Lay a trail if the lane is free for all of it."""
         count = count or self.COINS_RUN
         gap = gap or self.COIN_GAP
         last = first + (count - 1) * gap
@@ -5122,16 +3521,11 @@ class Rider(Scene):
 
     def _shape(self, pattern: str, when: float, grey: bool = True,
                mirrored: bool = False) -> None:
-        """One figure, as one or more blocks in lanes. See rider_layout
-        for what each is.
-
-        ``grey`` is Audiosurf's distinction and the whole of its Mono
-        mode: a grey block is an obstacle to be dodged and a coloured one
-        is a prize to be driven into. ``mirrored`` swaps left and right:
-        the second time a part of the track comes round.
+        """One figure, as blocks in lanes; see rider_layout. ``grey`` is an
+        obstacle to dodge, a colour a prize to take; ``mirrored`` swaps left
+        and right for a repeated part.
         """
-        # The lane comes from the time rather than from a random number,
-        # so a track lays out the same way every time it is played.
+        # The lane comes from the time, not a random number.
         seed = int(when * 977) % self.LANES
         top = self.LANES - 1
         if mirrored:
@@ -5146,8 +3540,8 @@ class Rider(Scene):
                 when, [lane for lane in range(self.LANES) if lane != seed],
                 grey)
         elif pattern == "gate":
-            # The open lane walks across the road and back, a gate at a
-            # time: a weave to the kick.
+            # The open lane walks across the road and back: a weave to the
+            # kick.
             walk = (0, 1, 2, 1)
             open_lane = walk[self._gate_step % len(walk)]
             self._gate_step += 1
@@ -5160,8 +3554,7 @@ class Rider(Scene):
                 when, [lane for lane in range(self.LANES) if lane != open_lane],
                 grey)
         elif pattern == "chicane":
-            # Two walls half a beat apart, their gaps side by side: one
-            # step and then another, the broken beat's double step.
+            # Two walls half a beat apart with their gaps side by side.
             first = 0 if seed < 1 or (seed == 1 and int(when * 31) % 2) else top
             second = 1
             later = when + max(self.CHICANE_LEAST, self._beat * 0.5)
@@ -5187,13 +3580,11 @@ class Rider(Scene):
                     # A run of prizes goes where the melody goes.
                     lane = self._melody_lane(at, lane)
                 self._blocks.append([at, lane, "run", False, grey])
-            # Beside the first of them only. A slalom already asks for
-            # three moves; paying for a fourth lane change between each
-            # pair would ask for something nobody can do.
+            # Coins beside the first of them only.
             self._coins_beside(when, seed, grey)
         elif pattern == "stairs":
-            # Across the lanes the way the melody goes: up the road to the
-            # right as it climbs, down to the left as it falls.
+            # Across the lanes the way the melody goes: right as it climbs,
+            # left as it falls.
             import rider_layout
 
             going = rider_layout.rising(self._harmony, when)
@@ -5203,13 +3594,11 @@ class Rider(Scene):
                 reversed(range(self.LANES)))
             for count, lane in enumerate(lanes):
                 at = when + count * max(step, self.RUN_GAP)
-                # Each step on the note being played then, where it can be
-                # heard; the sweep where it cannot.
+                # Each step on the note being played then.
                 self._blocks.append([at, self._melody_lane(at, lane),
                                      "run", False, False])
         elif pattern == "stream":
-            # A row of coins in one lane, a sixteenth apart: a hat roll to
-            # hold a lane through.
+            # A row of coins in one lane, a sixteenth apart.
             lane = self._melody_lane(when, seed)
             self._coin_trail(when, lane, count=self.STREAM, gap=step)
         elif pattern == "pair":
@@ -5218,9 +3607,8 @@ class Rider(Scene):
             for lane in lanes:
                 self._blocks.append([when, lane, "block", False, False])
 
-    #: The shortest a sixteenth may be, in seconds, when a figure steps
-    #: on them: past this at a fast tempo a lane change a sixteenth is
-    #: faster than the craft moves.
+    #: The shortest a sixteenth may be, in seconds, for figures that step on
+    #: them.
     SIXTEENTH = 0.14
     #: The shortest time between a chicane's two walls.
     CHICANE_LEAST = 0.26
@@ -5228,9 +3616,9 @@ class Rider(Scene):
     STREAM = 5
 
     def _melody_lane(self, when: float, fallback: int) -> int:
-        """The lane of the note the melody is on here - low notes left,
-        high right, across the range it spans in this part of the track -
-        or ``fallback`` where there is no melody to follow."""
+        """The lane of the melody's note here, low notes left and high right
+        across this part's range, or ``fallback`` with no melody.
+        """
         import rider_layout
 
         section = self._section_at(when)
@@ -5243,17 +3631,10 @@ class Rider(Scene):
         return fallback if lane is None else lane
 
     # -- the world --------------------------------------------------------
-    #: The colour of the road, by how much is going on in the music.
-    #:
-    #: Audiosurf runs a track from purple at its quietest through blue,
-    #: green and yellow to red at its loudest, and the colour is most of
-    #: how a track reads at a glance: you can see a chorus coming in the
-    #: hue of the road before you can hear it. These are the hues those
-    #: five tiers sit at on the wheel.
+    #: The road's colour by how much is going on: purple at the quietest
+    #: through blue, green and yellow to red at the loudest.
     TIERS = (0.78, 0.60, 0.33, 0.15, 0.00)
-    #: How far the synth may push the colour off its tier. Small: the
-    #: tier is the point, and a synth line that moved it a fifth of the
-    #: way round would make the whole scheme mean nothing.
+    #: How far the synth may push the colour off its tier.
     TIER_SYNTH = 0.05
 
     def _tier(self, energy: float, synth: float) -> float:
@@ -5265,9 +3646,9 @@ class Rider(Scene):
         return (hue + synth * self.TIER_SYNTH) % 1.0
 
     def _restyle(self, state) -> None:
-        """Read the track's style again if anything it is read from has
-        changed: the chart, the shape, the harmony or the tempo. Cheap - it
-        walks the chart once - but not every frame. See trackstyle."""
+        """Read the track's style again when the chart, shape, harmony or tempo
+        changes. See trackstyle.
+        """
         import trackstyle
 
         chart = getattr(state, "chart", None) or _NO_CHART
@@ -5275,9 +3656,8 @@ class Rider(Scene):
         harmony = getattr(state, "harmony", None)
         rhythm = getattr(state, "rhythm", None)
         flux = getattr(state, "flux", None)
-        # The tempo the pane counts in, not the ride's own: the ride's is
-        # decided by the style, and keyed on it the style would be read
-        # again every time it changed its own mind.
+        # Keyed on the tempo the pane counts in, not the ride's own, which the
+        # style itself decides.
         counted = bounded(getattr(state, "tempo", 0.0), most=1000.0)
         wanted = (id(chart), id(contour), id(harmony), id(rhythm),
                   round(counted, 3))
@@ -5300,41 +3680,29 @@ class Rider(Scene):
         self._owed = {}
 
     def _section_at(self, when: float):
-        """The part of the track ``when`` is in, once it has been heard
-        with a tempo; None before, or where no part is."""
+        """The part of the track ``when`` is in, once heard with a tempo;
+        otherwise None.
+        """
         if self._style is None or self._beat <= 0.0:
             return None
         return self._style.section_at(when)
 
-    #: When a better plan for the road arrives part way through a ride -
-    #: the drums and the tempo land a few seconds after the picture - the
-    #: road already in view is kept for this long past the playhead, and
-    #: the new one is faded in over the next stretch, so nothing on screen
-    #: moves. The world on the card sees about five seconds ahead.
+    #: When a better plan arrives mid-ride, the road in view is kept this many
+    #: seconds past the playhead and the new one faded in after it.
     PLAN_KEEP = 7.0
     PLAN_FADE = 4.0
 
     def _carve(self, state) -> None:
-        """Take the track's shape and make a road out of it.
-
-        Audiosurf does not invent its track: it reads the song once,
-        before anything is drawn, and makes the incline and the curves out
-        of it. The incline is the slope: "quiet, slow, or ambient sections
-        generate steep uphill climbs ... when a loud, high-energy section
-        occurs, the track plunges sharply downhill". So the road's height
-        is the loudness *summed* - see ``_terrain`` - and not the loudness
-        itself, which made a hill of every chorus rather than a descent
-        into it. The curve is the stereo lean summed along the road, as
-        Audiosurf steers with the panning, and a turn a phrase long on top
-        of it, in the character of the music - see ``_bends``.
-
-        Built again when anything it is made from changes - the shape, the
-        tempo, the sections - and never under the rider: see PLAN_KEEP.
+        """Make a road from the track's shape: the height is the loudness
+        summed (quiet climbs, loud plunges; see ``_terrain``), and the curve
+        is the stereo lean summed, with a turn a phrase long on top (see
+        ``_bends``). Built again when any of that changes, never under the
+        rider.
         """
         self._restyle(state)
         shape = getattr(state, "contour", None)
-        # And the tempo: the plan's sections and corkscrews are counted in
-        # it, and planned before it was known they were planned without.
+        # And the tempo, which the plan's sections and corkscrews are counted
+        # in.
         wanted = (id(shape), id(self._style), round(self._beat, 4))
         if wanted == self._planned:
             return
@@ -5346,33 +3714,15 @@ class Rider(Scene):
         if not loud:
             self._hill = self._curve = self._energy = self._low = ()
             return
-        # Kept as it came as well as centred, because the colour of the
-        # road and how thickly the figures come are both "how much is
-        # going on here", which is the reading itself.
+        # Kept as it came as well: the road's colour and how thick the figures
+        # come both read it directly.
         self._energy = tuple(loud)
         self._low = tuple((shape or {}).get("low") or ())
         hill = self._terrain()
         curve, run = [], 0.0
-        # The lean about its own middle, in units of how much this
-        # record leans at all.
-        #
-        # Summing it raw is what a road built from a *direction* wants,
-        # but a mix has a bias: measured on a real record the lean
-        # averaged -0.0097, which over three and a half minutes summed
-        # to -16 and swamped everything else in it. A road built from
-        # that turns constantly in one direction at a near-constant
-        # rate - and since the camera is pinned to the road, a constant
-        # rate is exactly what straight looks like. The whole visible
-        # length of it moved eight thousandths of a lane sideways: the
-        # road was straight a hundred per cent of the time.
-        #
-        # A mix that sits slightly left for a whole song is not a road
-        # that turns left for ever. It is a road that goes straight,
-        # because every part of it leans the same way. What turns a road
-        # is one part leaning further than the rest, which is the lean
-        # about its own middle - and dividing by how much it varies
-        # means a narrow mix turns as much as a wide one, rather than a
-        # nearly-mono record getting a road with no corners in it.
+        # The lean about its own middle, in units of how much this record
+        # leans: a mix's constant bias would otherwise sum to a road that turns
+        # one way forever, which looks straight.
         wide = [lean[index] if index < len(lean) else 0.0
                 for index in range(len(loud))]
         middle = sum(wide) / len(wide)
@@ -5380,12 +3730,7 @@ class Rider(Scene):
             sum((value - middle) ** 2 for value in wide) / len(wide))
         bends = self._bends(len(loud))
         for index, value in enumerate(wide):
-            # And no single reading may throw the road across it. The
-            # distribution has a long tail - one reading on the record
-            # measured above is thirteen spreads out on its own - and
-            # unclamped that one reading swung the visible road three
-            # and a half lanes sideways, which is a hairpin rather than
-            # a bend.
+            # And no single reading may throw the road across.
             step = (value - middle) / (spread or 1.0)
             run += max(-self.LEAN_MOST, min(self.LEAN_MOST, step))
             curve.append(run + bends[index])
@@ -5406,9 +3751,9 @@ class Rider(Scene):
         self._twists = twists
 
     def _kept_ahead(self) -> float:
-        """How far ahead, in seconds, the road is in view and so is kept
-        when it is planned again: PLAN_KEEP, or further where the road runs
-        slowly and more of the track is in sight."""
+        """How far ahead the road is in view, in seconds, and so kept when
+        re-planned.
+        """
         ahead = self.PLAN_KEEP
         if self._clock:
             ahead = max(ahead, self._when(self.RIDER_AT + self.SEEN)
@@ -5416,10 +3761,9 @@ class Rider(Scene):
         return ahead
 
     def _splice(self, old, new, when: float) -> tuple:
-        """``new``, but ``old`` for as long as it is in view past ``when``
-        (see _kept_ahead), and faded from one to the other over PLAN_FADE -
-        continuous where they meet, because the two can sit at any height
-        or offset from each other and only the shape of either matters."""
+        """``new``, but ``old`` for as long as it is in view past ``when``,
+        faded over PLAN_FADE and continuous where they meet.
+        """
         if not old or not new:
             return tuple(new)
         keep = min(len(new) - 1,
@@ -5438,29 +3782,22 @@ class Rider(Scene):
             out.append(before + (moved - before) * share)
         return tuple(out)
 
-    #: The slope of the road, in units of height a second, for each unit
-    #: of loudness below the track's middle - so a quiet passage climbs
-    #: and a loud one runs down. 2.4 is about nine per cent up or down at
-    #: the loudness a record normally strays from its middle by, at the
-    #: twelve units a second the road runs.
+    #: The road's slope, in height a second per unit of loudness below the
+    #: track's middle: quiet passages climb and loud ones run down.
     SLOPE = 2.4
-    #: What a build adds to the climb, rising through it to its crest,
-    #: and how hard the road falls away from the crest into the drop -
-    #: most of forty per cent at its steepest - and for how many bars.
+    #: What a build adds to the climb towards its crest, and how hard and for
+    #: how many bars the road falls into the drop.
     BUILD_CLIMB = 1.6
     DROP_PLUNGE = 4.5
     DROP_BARS = 2
 
-    #: How much of the rise and fall the flat picture shows. Its eye is
-    #: two units above the road and sees twenty units of it, and a hill
-    #: that fills the card's long view puts the flat road's far end above
-    #: the eye.
+    #: How much of the rise and fall the flat picture shows.
     FLAT_RELIEF = 0.3
 
     def _terrain(self) -> list:
-        """The road's height, as depth below where it started - the
-        convention everything else here reads heights in - a reading at a
-        time, from the slope. See SLOPE."""
+        """The road's height as depth below its start, a reading at a time. See
+        SLOPE.
+        """
         energy = self._eased(self._energy)
         middle = sorted(energy)[len(energy) // 2]
         slope = [self.SLOPE * (middle - value) for value in energy]
@@ -5485,24 +3822,18 @@ class Rider(Scene):
             depth.append(run)
         return depth
 
-    #: How hard a phrase's own turn pulls the road sideways, in the same
-    #: units the lean is summed in, a second, at a drop.
+    #: How hard a phrase's own turn pulls the road sideways, a second, at a
+    #: drop.
     BEND_RATE = 9.0
-    #: How much of that each kind of section gets.
-    #: Calm parts wind the most and drops the least: a calm part is ridden
-    #: slowly, so its turns come tighter, and a drop is ridden flat out.
+    #: How much of that each kind of section gets: calm parts wind most.
     BEND_SHARE = {"drop": 0.6, "groove": 0.75, "build": 0.6,
                   "break": 1.0, "intro": 0.95, "outro": 0.95}
 
     def _bends(self, count: int) -> list:
-        """A turn a phrase long, one way and then mostly the other, in the
-        character of the music: long sweeps a phrase of eight bars apart
-        on music that holds a steady four, turns every two bars on broken
-        and hard music, and every four on half time. How hard each pulls
-        is how much is going on in its section, and which way the first
-        goes and when two in a row go the same way comes from the track's
-        own seed - so every record winds its own way, the same way every
-        time.
+        """A turn a phrase long, one way and then mostly the other: long sweeps
+        on a steady four, every two bars on broken music, every four on half
+        time. Its strength follows the section, and its direction the
+        track's seed.
         """
         import random
 
@@ -5539,51 +3870,26 @@ class Rider(Scene):
             out.append(run)
         return out
 
-    #: The corkscrews: how loud a moment has to be to turn the road
-    #: over, how long one takes end to end, and how much road there is
-    #: between two of them.
-    #:
-    #: Audiosurf 2 puts "corkscrew loops and powerups timed perfectly
-    #: with big moments in your music", and what counts as a big moment
-    #: is already measured: the loudness contour the road's hill is cut
-    #: from. A corkscrew goes where the track is within a fifth of its
-    #: own loudest and nowhere else, which on most records means the
-    #: drops and the last chorus.
-    #:
-    #: Twenty-five seconds apart at the least, because a corkscrew is
-    #: an event and three in a row is a fairground ride. Measured on a
-    #: loud dance record, fourteen gave one every fifteen seconds and
-    #: ate a sixth of the track: the gate is a share of the *track's*
-    #: own peak, and on something compressed most of the song is near
-    #: it, so the spacing rather than the loudness is what decides. Two
-    #: and a half seconds end to end: long enough to read as a whole
-    #: turn of the world and short enough that nobody is upside down
-    #: while a decision matters.
+    #: The corkscrews: how loud a moment must be (near the track's own peak),
+    #: how long one takes, and the least road between two.
     TWIST_LOUD = 0.80
     TWIST_FOR = 2.5
-    #: How long before a corkscrew its tunnel begins and how long after it
-    #: the tunnel ends, and how long its mouth takes to open or close, in
-    #: seconds of the track. See _tunnel_at.
+    #: When a corkscrew's tunnel begins and ends around it, and how long its
+    #: mouth takes to open or close, in seconds. See _tunnel_at.
     TUNNEL_LEAD = 0.8
     TUNNEL_TAIL = 0.6
     TUNNEL_RAMP = 0.5
-    #: The tunnel's radius beyond the road's edge, and how high its middle
-    #: is above the road.
+    #: The tunnel's radius beyond the road's edge, and how high its middle is
+    #: above the road.
     TUNNEL_ROOM = 1.7
     TUNNEL_MIDDLE = 0.9
     TWIST_APART = 25.0
 
     def _find_twists(self) -> tuple:
-        """The moments the road turns over.
-
-        Into the drops, where the track has them: a corkscrew that starts
-        TWIST_FOR before a drop and lands the right way up on its first
-        beat, the biggest drops first and TWIST_APART between them. Where
-        it has none, the loudest moments, as before.
-
-        Off the track rather than off a timer, so a record corkscrews in
-        the same places every time it is played - which is the whole
-        promise of the scene.
+        """The moments the road turns over: into the drops, landing level on a
+        drop's first beat, biggest first; with no drops, the loudest
+        moments. From the track, so a record corkscrews in the same places
+        every time.
         """
         style = self._style
         if style is not None and self._beat > 0.0:
@@ -5606,18 +3912,12 @@ class Rider(Scene):
         loudest = max(self._energy)
         if loudest <= 0.0:
             return ()
-        # Loud for this track, and loud *against this track*. The first
-        # alone is a share of the peak, which every reading of a track
-        # with no dynamics in it meets - a wall of noise would corkscrew
-        # every fourteen seconds for no reason, because nothing in it is
-        # a big moment. Half way from the middle of the track to its
-        # peak is the second test, and on a flat track that is the whole
-        # track, so nothing passes.
+        # Loud against this track as well as near its peak, so a track with no
+        # dynamics never corkscrews.
         middle = sorted(self._energy)[len(self._energy) // 2]
         gate = max(loudest * self.TWIST_LOUD, (middle + loudest) / 2.0)
-        # Further apart on calm music, which has fewer big moments to spend
-        # them on: twenty-five seconds on a record with drums, up to
-        # seventy-five on one with none.
+        # Further apart on calm music: twenty-five seconds with drums, up to
+        # seventy-five without.
         apart = self.TWIST_APART * (1.0 + 2.0 * (
             style.calm if style is not None else 0.0))
         found = []
@@ -5631,16 +3931,11 @@ class Rider(Scene):
         return tuple(found)
 
     def _tunnel_at(self, when: float) -> float:
-        """How much of a corkscrew's tunnel there is at a moment of the
-        track, 0 to 1.
-
-        "Xxxxxxxxx xxxxx xxxx xxxx xxx xxxxx xxxx xxxxxxxxxx xxxxx." The
-        city stands along the road and turns with it, so through a
-        corkscrew it went round with the track - towers upside down over
-        the craft. A corkscrew is ridden through a tunnel now: it opens a
-        little before the road starts to turn and closes a little after it
-        is level again, and the city is outside it. Drawn by the world on
-        the card (rider_gl) and by _flat_tunnel here."""
+        """How much of a corkscrew's tunnel there is at a moment, 0 to 1. The
+        tunnel opens before the road turns and closes after it is level,
+        with the city outside it. Drawn by rider_gl on the card and
+        _flat_tunnel here.
+        """
         best = 0.0
         for start in self._twists or ():
             enter = start - self.TUNNEL_LEAD
@@ -5663,25 +3958,14 @@ class Rider(Scene):
 
     @staticmethod
     def _turned(through: float) -> float:
-        """The roll at that point of a corkscrew, in whole turns.
-
-        Smoothed at both ends rather than linear. A linear sweep starts
-        and stops the world spinning in one frame, which is a cut rather
-        than a corkscrew; this one is still at both ends and quickest
-        through the middle. It is exactly one whole turn either way, so
-        the world comes back to where it started and the moment the
-        twist ends is not a moment anything jumps.
+        """The roll at that point of a corkscrew, in whole turns: still at both
+        ends, quickest in the middle, and exactly one turn.
         """
         return through * through * (3.0 - 2.0 * through)
 
     def _eased(self, table) -> tuple:
-        """The readings with the jitter taken out of them.
-
-        A road is a landscape. The amplitude of a track changes from one
-        eighth of a second to the next by more than any hill should, and
-        a curve through readings that jump is a curve that jumps
-        smoothly. Averaged over a second or so of them, what is left is
-        the shape of the song rather than the shape of its transients.
+        """The readings averaged over a second or so, so the road follows the
+        song's shape rather than its transients.
         """
         reach = max(1, int(self._every * self.SMOOTH_FOR))
         out = []
@@ -5692,16 +3976,9 @@ class Rider(Scene):
         return tuple(out)
 
     def _read(self, table, when: float) -> float:
-        """One reading of the track's shape, between two of them.
-
-        On a Catmull-Rom curve through the readings, which is what the
-        blueprint asks the track to be and what it has to be to be drawn
-        at all. Straight lines between readings leave a corner at every
-        one of them, and a corner in the road is a corner in everything
-        laid on the road: the chevrons and lane dashes span a stretch of
-        it, so their two ends land on different sides of the kink and the
-        shape splays. On a real track at eight readings a second that is
-        not a subtle artefact - the markings came out as jagged spikes.
+        """One reading of the track's shape between two of them, on a
+        Catmull-Rom curve, so the road has no corners for its markings to
+        splay at.
         """
         if not table:
             return 0.0
@@ -5726,11 +4003,10 @@ class Rider(Scene):
             * share * share * share)
 
     def _when(self, at: float, exact: bool = False) -> float:
-        """The moment of the track a point on the road belongs to. Exact,
-        through each beat's lunge, for putting a block back where it was;
-        otherwise evenly through the beat, which is what the road's shape
-        is read with - read through the lunge, every beat put a kink in
-        the bends."""
+        """The moment of the track a point on the road belongs to: exact,
+        through each beat's lunge, for putting a block back; otherwise
+        evenly through the beat, which the road's shape is read with.
+        """
         reach = self._at + at - self.RIDER_AT
         if not self._clock:
             return (reach - self._road_shift) / self.FREE_RUN
@@ -5743,9 +4019,9 @@ class Rider(Scene):
         return self._clock.time(number + through)
 
     def _uncovered(self, covered: float, lunge: float) -> float:
-        """How far through a beat its road is ``covered`` (0 to 1) along:
-        the inverse of _covered, so a moment and its place on the road
-        always find each other again."""
+        """How far through a beat its road is ``covered`` along, 0 to 1: the
+        inverse of _covered.
+        """
         through = covered
         mix = self.LUNGE_MIX
         for _round in range(6):
@@ -5772,31 +4048,15 @@ class Rider(Scene):
         return first + bisect.bisect_right(starts, road) - 1
 
     def _road(self, at: float) -> tuple:
-        """Where the road is at distance ``at``: across, up, and rolled.
-
-        One function, called for every rung, every block and the rider, so
-        that everything on the road agrees about where the road is.
-
-        The roll is the rate the road is turning at, not a wobble of its
-        own. It used to be a third sine on a third phase, which tumbles
-        the world independently of where the road goes - so at some
-        phases the road leaned one way while turning the other, and which
-        lane a block was in became a guess. A track banks into its own
-        turn, which is both what makes it readable and what makes it a
-        track: "it's hard to see obstacle patterns in some angles".
+        """Where the road is at distance ``at``: across, up and rolled. One
+        function for every rung, block and the rider, so they all agree; the
+        roll is the rate the road turns, so it banks into its own bends.
         """
         push = self.PUSH_REST + self._pushing * self.PUSH_GAIN
         if self._curve:
             return self._from_track(at, push)
-        # Behind the rider the road runs straight.
-        #
-        # It is drawn from 2.4 behind them so that its near edge stays
-        # off the bottom of the frame, and at that distance the eye is a
-        # unit and a half away: the projection multiplies whatever is
-        # there by two hundred. A bend carried on back there swung the
-        # part of the road nobody can use across the whole frame and took
-        # its near edge off a corner, which is a road that reads as a
-        # diagonal slab. The curve belongs ahead of you.
+        # Behind the rider the road runs straight: it is magnified there, and a
+        # bend swung it across the frame.
         line = max(at, self.RIDER_AT)
         turn = math.cos(line * self.BEND_EVERY + self._bend) * self.BEND_EVERY
         return (math.sin(line * self.BEND_EVERY + self._bend)
@@ -5805,111 +4065,57 @@ class Rider(Scene):
                 -turn * self.BEND * push * self.BANK)
 
     def _cruise(self) -> float:
-        """The speed the road runs at with nothing pushing it.
-
-        One beat's worth of road a beat, which is what the road covers
-        when the lunge is flat. Everything about the rig is measured
-        against it rather than against a number, so it stays right at
-        every tempo.
+        """The road's speed with nothing pushing it: a beat's worth of road a
+        beat.
         """
         if self._beat > 0.0:
             return self.PER_BEAT / self._beat
         return self.FREE_RUN
 
     def _camera(self, rect, surge: float, bass: float) -> tuple:
-        """Where the eye is: the vanishing point, the focal length and
-        the bank, as one call a frame.
-
-        One place rather than a block inside ``paint``, so that a test
-        can ask the scene where it is looking instead of working it out
-        again from the constants and being wrong differently.
-
-        Moves the camera as well as reporting it - the aim, the hill and
-        the bank are all eased towards where the road is - so it is called
-        once a frame and no more.
+        """Where the eye is: the vanishing point, focal length and bank. Eases
+        the camera as well, so it is called once a frame.
         """
         span = min(rect.width(), rect.height())
-        # How hard the passage is pushing, which is what the rig follows.
-        #
-        # Audiosurf drives the field of view from the vehicle's linear
-        # speed, and its linear speed *is* the song's amplitude - loud
-        # passages are downhills. Here the average speed is not free to
-        # move: a beat covers exactly one beat's worth of road, which is
-        # what puts a block under the rider on its beat. So the rig reads
-        # the amplitude directly, which is the same quantity by a shorter
-        # route, and the speed carries it inside the beat as the lunge.
-        #
-        # Eased, because a field of view that jumped about would be a
-        # strobe rather than a camera.
-        # Every ease here is gated on whether the track is playing. A
-        # camera that goes on settling under a stopped song moves the
-        # whole picture, which is most of what "xxxxxxxxxx xxxxxx xxxx
-        # xxxx xxxxx xxxxx xx xxxxxx" was: measured, 72 per cent of the
-        # frame still changed from one frame to the next.
+        # How hard the passage is pushing, which the rig follows: the loudness,
+        # eased, and only while the track plays.
         going = self._rolling
         self._rushing += ((self._loudness - self._rushing)
                           * self.RUSH_EASE * going)
         wide = max(0.0, min(1.0, self._rushing))
-        # Never wider than FOCAL_FAST. The strobe and the bass open it a
-        # little further on top of the passage's own push, and without a
-        # floor the three together took it to 0.46 of the frame - past
-        # ninety degrees, where the edges of the road bow.
+        # Never wider than FOCAL_FAST, or the road's edges bow.
         focal = span * max(self.FOCAL_FAST,
                            self.FOCAL_SLOW
                            + (self.FOCAL_FAST - self.FOCAL_SLOW) * wide
                            - surge * 0.06 - bass * 0.04)
-        # And the eye is dragged back by it. A spring rather than a
-        # follow, so a drop pulls the rider away down the road for a
-        # moment before the camera catches up, and a climb lets it close
-        # in - which is the lag a camera on a boom would have and a
-        # camera welded to the ship would not.
+        # A spring drags the eye back at a drop and lets it close in on a
+        # climb.
         pull = (self.EYE_BACK * (1.0 + wide * self.CHASE) - self._chase)
         self._chase_to += pull * self.CHASE_SPRING * going
         self._chase_to *= self.CHASE_DAMP
         self._chase += self._chase_to * going
-        # Where the road starts, which is a fixed distance in front of
-        # the *eye* rather than a fixed distance behind the rider. The
-        # eye is on a spring now and slides back at a drop; measured from
-        # the rider, that brought the road's near edge 156 px into a
-        # 640x360 frame, which is the hard edge straight across the
-        # picture that NEAR exists to prevent.
+        # Where the road starts: a fixed distance in front of the eye, which
+        # moves.
         self._near = self.NEAR_EYE - self._chase
         centre = rect.center()
-        # The camera looks down the road rather than straight ahead while
-        # the road swings away from it.
-        #
-        # The road bends hard now, and a camera pinned to the middle of
-        # the frame meant the whole picture swung across it: "xxxxxx xx
-        # xxx xxxx xxx xxxxx". Aiming at where the road is a little way
-        # ahead holds the track roughly in the middle of the frame and
-        # turns the swing into a lean, which is what being on a road
-        # feels like. Eased, so the aim itself does not snap.
+        # The camera aims a little way down the road, so the track stays near
+        # the middle of the frame and a bend becomes a lean. Eased.
         across_ahead, up_ahead, _roll = self._road(self.RIDER_AT + self.AIM)
-        # Measured from the road under the rider, which is where the eye
-        # now sits: what is left is the lead, the bit of the bend that is
-        # still ahead of you.
+        # Measured from the road under the rider: the part of the bend still
+        # ahead.
         self._aimed += ((across_ahead - self._side - self._aimed)
                         * self.AIM_EASE * going)
-        # The rise *ahead of the rider*, which is the hill. Measured from
-        # the road under them, the same way everything else is.
+        # The rise ahead of the rider, which is the hill.
         self._pitched += ((up_ahead - self._under - self._pitched)
                           * self.AIM_EASE * going)
-        # How hard the road is turning, which is what the view banks
-        # into. The aim is already measured from under the rider.
+        # How hard the road turns, which the view banks into.
         self._banked += (self._aimed - self._banked) * self.AIM_EASE * going
-        # The shake is a decaying wobble on its own fast clock rather than
-        # a sine of the spin, which never stopped moving. In sixtieths of
-        # a second rather than in frames, so the rattle is the same
-        # rattle on a pane managing thirty as on one running at 120 -
-        # counted in frames it halves in frequency when the machine is
-        # busy, which turns a hit from a crack into a sway.
+        # The shake: a decaying wobble on a clock in sixtieths of a second, the
+        # same at any frame rate.
         self._wobble += self._went * 60.0
         shake = self._shake * self.SHAKE * self.SHAKE_LESS * span
-        # Up the hill with the road, within reason. A climb puts the road
-        # ahead higher in the frame, so the view drops to meet it - which
-        # is a positive lift on a negative rise, and the reason the sign
-        # is worth a line: the other way round the camera runs away from
-        # the hill and doubles its swing across the frame.
+        # Up the hill with the road, within reason. The sign matters: the other
+        # way the camera runs from the hill.
         lift = max(-self.PITCH_MOST, min(self.PITCH_MOST,
                                          self._pitched * self.PITCH))
         horizon = QPointF(
@@ -5917,58 +4123,33 @@ class Rider(Scene):
             + math.sin(self._wobble * 1.9) * shake,
             centre.y() - rect.height() * (self.HORIZON_UP + lift)
             + math.sin(self._wobble * 2.7) * shake)
-        # Negative on a right-hand bend, which is the way round it has to
-        # be: leaning right tips the camera's up-vector right, so the
-        # world turns the other way and the right-hand end of the horizon
-        # comes *up*. Qt's positive rotation takes it down.
+        # Negative on a right-hand bend, so the right of the horizon comes up.
         tilt = max(-self.TILT, min(self.TILT, -self._banked * self.TILT))
-        # Not the corkscrew, which turns the world round the road rather
-        # than the road: see ``paint``.
+        # Not the corkscrew, which turns the world about the road: see
+        # ``paint``.
         return horizon, focal, tilt
 
     def _from_track(self, at: float, push: float) -> tuple:
-        """The road where the track says it goes. See ``_shape``.
-
-        Straight behind the rider for the same reason the free-running
-        one is: that part of the road is magnified two hundred times and
-        nobody can use it.
+        """The road where the track says it goes; straight behind the rider.
+        See ``_shape``.
         """
         line = max(at, self.RIDER_AT)
         when = self._when(line)
-        # Not scaled by how loud it is here: how hard each part turns is in
-        # the plan already (see _bends), and calm parts wind the most.
+        # Not scaled by the loudness here: the plan already sets how hard each
+        # part turns (see _bends).
         across = self._read(self._curve, when) * self.TRACK_BEND
-        # The turn is what the curve is doing here, which is what the
-        # road banks into. Read over a step of road rather than
-        # differentiated, because the readings are a few a second and the
-        # difference between two of them *is* the slope.
+        # The turn is the curve's slope here, read over a step of road.
         on = self._read(self._curve, self._when(line + 1.0))
         turn = (on * self.TRACK_BEND - across)
-        # The height as it is, not scaled by how loud it is here: it is a
-        # height summed over the whole track, and scaling it by the moment
-        # moved the whole road ahead up and down with every change of
-        # level.
+        # The height as it is: a sum over the whole track.
         return (across,
                 self._read(self._hill, self._when(at)) * self._relief,
                 -turn * self.BANK)
 
     def _eye(self, horizon, focal, lane_x: float, up: float, at: float):
-        """A point on the road, on the glass.
-
-        Heights are measured from the road under the rider, not from the
-        world, which is the difference between a road and a glitch. The
-        eye sits ``EYE_UP`` above the world floor; a passage that lifted
-        the whole road by nearly that much brought it up to eye level,
-        where everything from here to the horizon lands within a few
-        pixels of the same row. Measured across every phase of the hill
-        the road ahead spanned anywhere from 265 px down to *minus* 35 -
-        negative, meaning the far end drew below the near end and the
-        road folded over on itself.
-
-        Subtracting the road under the rider pins the near end where it
-        belongs and leaves the hills as what they are, the shape of the
-        road ahead: the same sweep now spans 62 to 168 px, right way up
-        throughout.
+        """A point on the road, on the glass. Heights are measured from the
+        road under the rider, so the near end stays put and the hills keep
+        their shape.
         """
         z = max(self.NEAR_EYE, at + self._chase)
         across, lift, roll = self._road(at)
@@ -5980,16 +4161,14 @@ class Rider(Scene):
         return QPointF(horizon.x() + focal * sx / z,
                        horizon.y() + focal * (sy + self.EYE_UP) / z)
 
-    #: How far down the road, in road units, a block is in sight: past the
-    #: last of what the lit world draws.
+    #: How far down the road, in road units, a block is in sight.
     IN_SIGHT = 60.0
-    #: How long the arches and the beat lines take to come up once there is
-    #: a beat, in seconds of the track.
+    #: How long the arches and beat lines take to come up once there is a beat,
+    #: in seconds of the track.
     BEAT_SHOW = 1.0
 
-    #: A move of the playhead bigger than this in one frame is a seek, for
-    #: anything that drives the scene with a bare time and no count of its
-    #: jumps (see Spectrum.seek_to).
+    #: A playhead move bigger than this in one frame is a seek, for callers
+    #: with no count of jumps (see Spectrum.seek_to).
     JUMP = 0.35
 
     def _advance(self, state) -> float:
@@ -5999,11 +4178,8 @@ class Rider(Scene):
         bass = max(bounded(state.bass), kit.get("Bass", 0.0))
         loud = (bass + bounded(state.mid) + bounded(state.high)) / 3.0
 
-        # The playhead, which everything here is measured from: the pane's
-        # one moment a frame, already smooth, taken as it is. A second clock
-        # of the scene's own, eased towards it, ran a frame ahead while
-        # playing and on past a pause, and took seconds to find its place
-        # again after one.
+        # The playhead: the pane's one moment a frame, taken as it is. A clock
+        # of the scene's own ran ahead and on past a pause.
         said = bounded(getattr(state, "at", 0.0), most=self.LONGEST)
         first = self._was_at is None
         playing = getattr(state, "playing", None)
@@ -6019,8 +4195,8 @@ class Rider(Scene):
         else:
             jumped = abs(said - self._was_at) > self.JUMP
         self._jumps_seen = jumps
-        # How much of the track went by this frame: what everything the
-        # scene animates moves by, so a stopped track stops the lot.
+        # How much of the track went by this frame, which everything animated
+        # moves by, so a stopped track stops it all.
         if first or jumped or not moving:
             step = 0.0
         else:
@@ -6035,29 +4211,20 @@ class Rider(Scene):
         if jumped:
             self._jumped_from = self._heard
         self._heard = said
-        # A seek is a jump from somewhere the run has been; the first frame
-        # is not one, but a run that starts part way in is not the whole
-        # track either. See _finish.
+        # A seek is a jump from somewhere the run has been. See _finish.
         self._jumped = jumped
         if first and self._heard >= self.START_AGAIN:
             self._whole = False
 
-        # Truthiness is not a tempo test: a nan is true, and a nan beat
-        # is a nan road position, a nan block distance and finally an
-        # int() of a nan, which is a window that closes. Bounded at a
-        # thousand because the road is laid a beat at a time and a beat
-        # of a millionth of a second is a million figures a second.
+        # Bounded: a nan tempo is truthy, and a beat of a millionth of a second
+        # would lay a million figures a second.
         tempo = bounded(getattr(state, "tempo", 0.0), most=1000.0)
         self._beat = 60.0 / tempo if tempo > 0.0 else 0.0
         self._pulse = bounded(getattr(state, "beat_at", 0.0))
-        # The drums' own beats, once they are known, rather than the beat
-        # maps': those are phased from the first thing they heard and were
-        # a third of a beat out on real records. See trackstyle.rhythm_of.
+        # The drums' own beats once known (see trackstyle.rhythm_of).
         style = self._style
-        # When the drums' own beat is on its way, nothing is counted on
-        # another first: counted on the pane's and then on the drums', the
-        # road was laid twice in a track's first seconds and everything on
-        # it jumped. The road runs free until then.
+        # While the drums' beat is on its way, the road runs free rather than
+        # being counted on another grid first and laid twice.
         waiting = (bool(getattr(state, "rhythm_due", None))
                    and not (style is not None and style.from_drums))
         if waiting:
@@ -6069,10 +4236,8 @@ class Rider(Scene):
             drums_clock = style.clock()
             self._beat = drums_clock.length(said)
             self._pulse = drums_clock.number(said) % 1.0
-        # A change of what the road is counted in - the drums' reading
-        # arriving, a record found to run at twice the tempo it was heard
-        # at - lays the road again from here, as a seek does, without
-        # being one.
+        # A change of what the road is counted in lays the road again from
+        # here, as a seek does, without being one.
         if drums:
             counted_in = ("drums", round(style.tempo, 4),
                           round(style.beat_phase, 4), len(style.beats))
@@ -6080,10 +4245,8 @@ class Rider(Scene):
             counted_in = ("pane", round(self._beat, 5))
         rebase = counted_in != self._counted_in and self._counted_in is not None
         self._counted_in = counted_in
-        # The pane's own grid, where it is what the road is counted on: a
-        # beat from the playhead and the pulse, and a fixed one to measure
-        # distance from, only nudged towards it while playing - a fraction
-        # of a beat, never a whole one, so a moment's beat cannot change.
+        # The pane's grid, where that is what the road is counted on, nudged
+        # towards the playhead by less than a beat while playing.
         if not drums and self._beat > 0.0 and said > 0.0:
             self._grid = said + (1.0 - self._pulse) * self._beat
             start = said - self._pulse * self._beat
@@ -6098,16 +4261,15 @@ class Rider(Scene):
             clock = BeatClock(self._beat, self._origin)
         else:
             clock = None
-        # A beat to count from appearing, or going, is a change of
-        # coordinates rather than a distance; see _road_shift.
+        # A beat to count from appearing or going is a change of coordinates;
+        # see _road_shift.
         had_clock = bool(self._clock)
         onto_beat = bool(clock) != had_clock
         self._carried = None
         if onto_beat or jumped or rebase:
             if not jumped:
-                # Where the road would be now on the old count, which it
-                # carries on from, and where each block in sight is on it,
-                # so it can be put back there on the new one.
+                # Where the road would be now on the old count, and where each
+                # block in sight is on it, to carry them over.
                 self._carried = self._world(self._heard)
                 self._kept = [
                     (block, self.RIDER_AT + self._flat(block[0])
@@ -6121,24 +4283,10 @@ class Rider(Scene):
             self._drives = {}
             self._marks = None
         self._clock = clock
-        # From here on, a frame's worth of movement is however much of a
-        # frame the *track* moved. Everything the scene animates reads
-        # this rather than the wall clock, so a stopped track stops the
-        # lot: "xxxxxx xxxxx xxx xxxxxxxxxx xxxxxx xxxx xxxx xxxxx xxxxx
-        # xx xxxxxx". The road already did; the shake, the sparks, the
-        # field behind it, the fuse under the grid and the hurt from a
-        # hit all had clocks of their own.
+        # From here, a frame's movement is however far the track moved, so a
+        # stopped track stops everything.
         step *= self._rolling
-        # How loud this passage is, on the track's clock as well.
-        #
-        # These are envelope followers and they converge on whatever they
-        # are fed, so a held level walks them somewhere: the fast one
-        # settles on it, the slow one follows, and the peak decays
-        # towards them. What comes out is the *surge*, which colours the
-        # road, opens the field of view and lights the air - so a stopped
-        # track went on slowly changing colour and brightness. Measured,
-        # four per cent of the frame changed from one frame to the next
-        # and it grew from there.
+        # How loud this passage is, followed only while the track plays.
         if self._rolling > 0.02:
             self._quick += (loud - self._quick) * (0.40 if loud > self._quick
                                                    else 0.03)
@@ -6150,21 +4298,13 @@ class Rider(Scene):
             self._loudness = self._surge()
         elif self._quiet is None:
             self._quiet = loud
-        # What the road's bends are scaled by: the loudness, followed
-        # slowly. The loudness itself answers an attack at once, which is
-        # right for a flash and wrong for the shape of the road - scaled
-        # by it, every bend in view moved at once when the music hit, and
-        # the first note after a silence always reads as the loudest yet,
-        # so a second into a song the whole road jumped sideways by a
-        # fiftieth of the screen in one frame. Most of the way there in
-        # about a second, on the track's clock like everything else.
+        # What the bends are scaled by: the loudness followed slowly, so the
+        # road does not jump when the music hits.
         self._pushing += ((self._loudness - self._pushing)
                           * (1.0 - math.exp(-step / self.PUSH_EASE)))
         self._slow = min(1.0, self._slow + self.SLOW_BACK * self._rolling)
-        # Each beat's lunge, decided as the beat comes into view and held
-        # from then - see _decide_lunges. And not while the track is
-        # stopped, because the bass goes on easing after a pause and the
-        # road would move without the beat having.
+        # Each beat's lunge, decided as it comes into view, and not while
+        # stopped.
         beat_now = self._beat_number(self._heard)
         if self._rolling > 0.02 and beat_now is not None:
             self._decide_lunges(beat_now, bass)
@@ -6172,15 +4312,11 @@ class Rider(Scene):
         self._last_heard = self._heard
         rolled = self._world(self._heard)
         if self._carried is not None:
-            # New beats to count in, not a new place on the road: on from
-            # where the old count would have had it.
+            # New beats to count in, not a new place: on from where the old
+            # count had it.
             self._road_shift += self._carried - rolled
             rolled = self._carried
-        # Never backwards. The curve is chosen by the push, so a push that
-        # moves within a beat moves the whole mapping and the road can be
-        # asked to stand where it stood two frames ago. Beats only go
-        # forwards, so neither does the road - except across a seek, which
-        # is the one time it may.
+        # Never backwards, except across a seek.
         self._at = rolled if jumped else max(self._at, rolled)
         if self._kept:
             # The moment each kept block now stands for, on the new count.
@@ -6193,38 +4329,20 @@ class Rider(Scene):
         else:
             self._beat_shown = 0.0
         self._rebased = rebase or onto_beat
-        # Against the track's own clock, not the frame's: the frame's is
-        # gated by whether the track is playing, so dividing by it at a
-        # pause divides by nothing.
+        # Against the track's clock, not the frame's, which is zero at a pause.
         went = self._heard - (was_when if was_when is not None
                               else self._heard)
-        # Nothing across a seek: the road is measured from an origin and
-        # a seek re-bases it, so the step across one is a change of
-        # coordinates rather than a distance travelled.
+        # Nothing across a seek, which re-bases the road.
         self._speed = (0.0 if jumped or went <= 1e-6
                        else (self._at - was) / went)
         self._drift_sparks(step)
         self._bend += step * (0.30 + self._loudness * 0.85)
         self._climb += step * (0.19 + self._loudness * 0.55)
-        # Once a frame, after the road has moved: everything drawn this
-        # frame measures its height and its line from here.
-        #
-        # Sideways as well as up. The eye used to sit at world zero while
-        # the road wandered left and right past it, so a bend did not
-        # curve away ahead of you - it dragged the whole road across the
-        # frame and took the near end off one corner. Audiosurf pins the
-        # camera to the spline, x = 0, and the bend is then what it
-        # should be: the road ahead curving, with the part under you
-        # straight.
+        # Once a frame, after the road has moved: the road under the rider, up
+        # and across, which the eye rides on.
         self._under = self._road(self.RIDER_AT)[1]
         self._side = self._road(self.RIDER_AT)[0]
-        # On the track's clock, as everything else here is: ``step`` is
-        # nothing while the track is stopped. A share of a frame, both of
-        # them, went on being taken and a stopped track's held kick went
-        # on being added, so the shake settled towards where the two
-        # balanced for as long as the pause lasted - and moved the picture
-        # a pixel with it. In sixtieths of a second, which is what the
-        # share and the kick's push were measured in.
+        # On the track's clock, in sixtieths of a second.
         frames = step * 60.0
         self._shake = max(0.0, self._shake
                           - self._shake * min(1.0, self.SHAKE_FALL * frames)
@@ -6239,27 +4357,16 @@ class Rider(Scene):
         self._coin_spin += step * self.COIN_TURN
         self._fly(step)
         self._age_pops(step)
-        # How close the track is to a beat, 1 on it and falling away -
-        # held while the track is stopped rather than recomputed.
-        #
-        # The pane's clock closes on the playhead asymptotically, so a
-        # stopped track still creeps a hair every frame, and everything
-        # the beat lights moved with it. That was invisible while the
-        # beat only fed things held near the floor; the rim is a
-        # gradient across the whole frame and it showed up as a pixel
-        # changing between two frames a second apart under a stopped
-        # track. Stopped means stopped.
+        # How close the track is to a beat, 1 on it: held while stopped, so
+        # nothing it lights creeps.
         if self._rolling > 0.02:
             self._beat_lit = ((1.0 - self._pulse) ** 3
                               if self._beat > 0.0 else 0.0)
-        # How far over the road is turned, if it is turning at all.
-        # Worked out here rather than in the camera because the camera
-        # is asked for an answer more than once a frame.
+        # How far over the road is turned, if at all, worked out once a frame.
         through = self._twist_at(self._heard)
         self._rolled = 0.0 if through is None else self._turned(through)
-        #: How much of a sixtieth of a second this frame was worth on the
-        #: track's clock. The rig reads it: a shake counted in frames is
-        #: a different shake on every machine. See ``_slide``.
+        #: How much of a sixtieth of a second this frame was, on the track's
+        #: clock; the rig reads it. See ``_slide``.
         self._went = step
         self._burn(step)
         return step
@@ -6274,49 +4381,24 @@ class Rider(Scene):
             return 0.0
         return max(0.0, min(1.0, (self._quick - quiet) / span))
 
-    #: Audiosurf's Mono scoring, which is a chain rather than a tally.
-    #:
-    #: The first coloured block is worth one, and every one after it four
-    #: more - 1, 5, 9, 13 - up to two hundred. Hitting a grey breaks the
-    #: chain and the next colour starts at one again. What that does to
-    #: how it plays is the whole point: a run of forty clean blocks is
-    #: worth more than four runs of ten, so a grey costs far more than
-    #: the points it does not give you.
+    #: Mono scoring is a chain: the first colour is worth one and each after it
+    #: four more, up to two hundred. A grey breaks it.
     CHAIN_FIRST = 1
     CHAIN_STEP = 4
     CHAIN_MOST = 200
     #: And finishing without touching one is worth a third again.
     CLEAN_BONUS = 0.30
 
-    #: And what Ninja pays for the same thing, which is worth more
-    #: because there is so much more of it to get past.
-    #:
-    #: Audiosurf 2 has Mono's clean finish at 10 per cent and Ninja's
-    #: stealth bonus at "20 per cent or more" - twice as much, for the
-    #: mode with the spikes in it. Audiosurf 1's blueprint puts Mono's
-    #: at a flat 30, which is the number this road already used, so
-    #: Ninja's is twice that.
+    #: What Ninja pays for a clean finish: twice Mono's.
     STEALTH_BONUS = 0.60
 
-    #: Mono's bumpers: how long one takes to come back after it has
-    #: shattered a grey, and what using one costs.
-    #:
-    #: Audiosurf's Mono rides with side-lane bumpers that shatter a grey
-    #: safely, once, and then need time. Without them a single mistake
-    #: forty blocks into a chain takes the whole chain, which is a game
-    #: that punishes one slip more than it rewards a good minute. With
-    #: them the first slip costs the shield and the second costs the
-    #: chain, and the eight seconds between are played differently -
-    #: which is the tension the mechanic is for.
-    #:
-    #: It does not save the clean-finish bonus. Shattering a grey is
-    #: still touching one.
+    #: Mono's bumpers: how long one takes to come back after shattering a grey.
+    #: The first slip costs the shield and the second the chain. A shattered
+    #: grey still ends a clean run.
     SHIELD_BACK = 8.0
 
     def _collide(self) -> None:
-        # Over the lot of it. A jump clears whatever is in the lane and
-        # collects none of it either: it is not a way past the hard
-        # parts, it is a trade. See JUMP_UP.
+        # Over the lot of it: a jump clears the lane and collects none of it.
         if self._struck:
             self._forget_struck()
         if self._air > 0.0:
@@ -6339,17 +4421,10 @@ class Rider(Scene):
                     self._pop("power", hue=0.14, sat=0.08, text="DOUBLE")
                 continue
             if kind == "coin":
-                # Taken, or missed. A coin is worth more than the one
-                # before it and missing one puts the row back to nothing,
-                # which is what makes a trail worth holding the lane for
-                # rather than clipping the end of.
+                # Taken or missed. A missed coin ends the row.
                 if on_it:
                     self._record(block, "taken")
-                    # A row is one trail. A coin a good while after the
-                    # last is a new row, not the next of an old one: with
-                    # a stream of coins on every hat roll, a row that only
-                    # ended at a coin missed ran to a hundred and thirty
-                    # and every coin paid the most a coin can.
+                    # A coin long after the last starts a new row.
                     if (self._coin_last is not None
                             and when - self._coin_last > self.COIN_ROW_GAP):
                         self._coin_run = 0
@@ -6363,8 +4438,7 @@ class Rider(Scene):
                         self.COIN_WORTH + (self._coin_run - 1) * self.COIN_STEP))
                     self._got = 1.0
                     self._burst(self._lane_at(lane), prize=True)
-                    # Gold, and bigger the longer the row: a trail taken
-                    # whole should feel like more than three of one.
+                    # Gold, and bigger the longer the row.
                     self._pop("coin", hue=0.13, sat=0.60,
                               strength=0.75 + min(0.75,
                                                   self._coin_run * 0.12))
@@ -6375,8 +4449,7 @@ class Rider(Scene):
                 self._offered += 1
             if grey and on_it:
                 if self._shield >= 1.0:
-                    # Shattered rather than hit. It still counts as
-                    # having touched one, so the clean run is over.
+                    # Shattered rather than hit; the clean run is still over.
                     self._shield = 0.0
                     self._saves += 1
                     self._record(block, "shatter")
@@ -6385,8 +4458,7 @@ class Rider(Scene):
                     self._sore = self.SORE
                     self._shake = min(1.0, self._shake + 0.35)
                     self._burst(self._lane_at(lane), prize=True)
-                    # Saved, and it should look like being saved: a
-                    # cold white ring rather than the red of a hit.
+                    # A cold white ring, not the red of a hit.
                     self._pop("shatter", hue=0.55, sat=0.30,
                               text="SHIELD")
                     continue
@@ -6399,16 +4471,14 @@ class Rider(Scene):
                 self._coin_run = 0
                 self._clean = False
                 self._sore = self.SORE
-                # Each hit lands again, and one hard on the last lands
-                # harder: the whole picture answers, every time.
+                # Each hit lands again, and one hard on the last lands harder.
                 combo = self._combo("hit", when)
                 self._shake = min(1.0 + 0.15 * (combo - 1),
                                   self._shake + 0.8)
                 self._slow = self.SLOW
                 self._hurt = 1.0
                 self._burst(self._lane_at(lane))
-                # And say what it cost, when it cost something: a chain of
-                # forty going is the worst thing that can happen here.
+                # Say what it cost, when a long chain went.
                 self._pop("hit", hue=0.0, sat=0.95,
                           strength=1.0 + min(0.5, lost / 80.0)
                           + self.COMBO_LIFT * (combo - 1),
@@ -6419,8 +4489,7 @@ class Rider(Scene):
                 self._best = max(self._best, self._streak)
             elif on_it:
                 if self._mode == "Puzzle":
-                    # Worth nothing on its own: it goes in the grid, and
-                    # three of a colour touching is what pays.
+                    # Worth nothing on its own: it goes in the grid.
                     if self._stunned <= 0.0:
                         self._record(block, "taken")
                         self._note(when, "taken")
@@ -6444,8 +4513,8 @@ class Rider(Scene):
                     self._double = 1.0
                     self._got = 1.0
                     self._burst(self._lane_at(lane), prize=True)
-                    # Bigger as the run gets hotter, and bigger again for
-                    # one taken hard on the last.
+                    # Bigger as the run gets hotter, and again for one hard on
+                    # the last.
                     combo = self._combo("prize", when)
                     self._pop("prize", strength=0.7 + self._heat() * 0.6
                               + self.COMBO_LIFT * min(4, combo - 1))
@@ -6454,30 +4523,19 @@ class Rider(Scene):
                 self._note(when, "missed")
 
     # -- the grid ---------------------------------------------------------
-    #: Audiosurf's matrix, and the half of the game the road is the other
-    #: half of. Blocks you collect do not score on their own: they drop
-    #: into a grid of three columns, and three or more of a colour
-    #: touching each other clear it and pay.
-    #:
-    #: Three wide because there are three lanes, and six deep for Casual
-    #: and Pro - Elite gets seven, which is not a difficulty this has.
+    #: The puzzle grid: collected blocks drop into three columns, six deep, and
+    #: three or more of a colour touching clear and pay.
     CELLS_WIDE = 3
     CELLS_DEEP = 6
 
-    #: What a colour is worth, by the tier of the passage that produced
-    #: it: purple, blue, green, yellow, red. A block from a chorus is
-    #: worth eight of one from an outro.
+    #: What a colour is worth, by the tier of the passage that produced it.
     WORTH = (10, 20, 30, 50, 80)
 
-    #: How long a cluster sits before it goes, and what joining it does.
-    #:
-    #: Three quarters of a second, reset every time another block of the
-    #: same colour touches it. That window is the whole skill of the
-    #: game: it is what turns three blocks into nine.
+    #: How long a cluster sits before it goes, reset whenever another block of
+    #: its colour joins it: the window that grows three into nine.
     FUSE = 0.75
 
-    #: What an overfilled column costs. The grid locks for three seconds,
-    #: nothing can be collected, and the chain goes.
+    #: An overfilled column locks the grid for this long and breaks the chain.
     STUN = 3.0
 
     def _drop(self, colour: int, column: int) -> None:
@@ -6496,11 +4554,8 @@ class Rider(Scene):
         self._fuse_up()
 
     def _clusters(self) -> list:
-        """Every run of three or more of one colour that touch.
-
-        A flood fill over the cells, four-connected: blocks joined corner
-        to corner are not joined at all, which is the rule that makes the
-        grid a puzzle rather than a soup.
+        """Every run of three or more touching blocks of one colour: a flood
+        fill, four connected.
         """
         seen = set()
         found = []
@@ -6533,11 +4588,8 @@ class Rider(Scene):
         return found
 
     def _fuse_up(self) -> None:
-        """Start or restart the fuse if anything is matched.
-
-        Restarted rather than left running, which is what lets a cluster
-        be grown: another block of the same colour landing against it
-        gives you the whole window again.
+        """Start or restart the fuse if anything is matched, so a cluster can
+        be grown.
         """
         found = self._clusters()
         if not found:
@@ -6565,20 +4617,12 @@ class Rider(Scene):
         if not going:
             return
         for colour, group in going:
-            # Quadratic in the size, so one cluster of six is worth
-            # twice two of three - which is what makes the fuse window
-            # worth playing for rather than clearing on sight.
-            #
-            # And doubled if a power block is waiting to be spent, which
-            # is what one is for: it is worth carrying through a
-            # corkscrew and cashing on a big cluster rather than on the
-            # next thing that happens to clear.
+            # Quadratic in the size, so one cluster of six is worth twice two
+            # of three; doubled if a power block is waiting.
             self._score += self._paid(int(self.WORTH[colour] * len(group)
                                           * len(group) * self._double))
             self._cleared += len(group)
-        # A cluster going is the puzzle game's payout, and a big one is
-        # the biggest thing that game does - quadratic in the size - so
-        # it gets the biggest answer, and a word when it is worth one.
+        # A cluster going gets an answer to match its size.
         biggest = max(len(group) for _colour, group in going)
         self._pop("clear", hue=self.TIERS[going[0][0]], sat=0.85,
                   strength=0.7 + min(0.8, (biggest - 3) * 0.2),
@@ -6600,16 +4644,9 @@ class Rider(Scene):
         return min(len(self.WORTH) - 1, int(energy * len(self.WORTH)))
 
     def _worth(self) -> int:
-        """The score with the clean-finish bonus in, if it is still kept:
-        what the run is worth if it ends now. The end of the track pays it
-        (see _results) and the bests keep it.
-
-        It is not what the running score shows. That showed this, and so
-        dropped by a quarter the moment a grey was touched - including
-        the moment the shield saved you, which is the one time the game
-        says you did well. The running score is what has been earned;
-        what a clean run would add is said beside it (see bonus), and
-        paid at the end, as Audiosurf pays it.
+        """The score with the clean-finish bonus in, if still kept: what the
+        run is worth if it ends now. The running score shows what has been
+        earned, and the bonus is paid at the end.
         """
         if not self._clean:
             return self._score
@@ -6621,10 +4658,8 @@ class Rider(Scene):
                 else self.CLEAN_BONUS)
 
     def _burst(self, across: float, prize: bool = False) -> None:
-        """Throw pieces off the block that was just taken or hit.
-
-        A prize throws fewer and throws them up: a shower rather than a
-        wreck, so that the two read differently at a glance.
+        """Throw pieces off the block just taken or hit: a prize throws fewer,
+        upwards.
         """
         how_many = self.SPARKS // 2 if prize else self.SPARKS
         for index in range(how_many):
@@ -6663,14 +4698,10 @@ class Rider(Scene):
         return math.floor(self._clock.number(when))
 
     def _world(self, when: float) -> float:
-        """Where the road is at a moment of the track, in road units.
-
-        A moment's beat number comes from the beats (see beat_clock), and
-        each beat is a length of road of its own (see _decide_lunges), so
-        the road reaches the start of beat n exactly when beat n is played
-        however fast it is running. Inside a beat the travel is front-loaded
-        by the bass on a curve from none of the beat to all of it, which
-        costs nothing in timing.
+        """Where the road is at a moment, in road units: each beat is a length
+        of road of its own (see _decide_lunges), so the road reaches beat n
+        exactly when it is played; inside a beat the bass front-loads the
+        travel.
         """
         if not self._clock:
             return when * self.FREE_RUN + self._road_shift
@@ -6686,14 +4717,16 @@ class Rider(Scene):
         return through * (1.0 - self.LUNGE_MIX) + lunged * self.LUNGE_MIX
 
     def _lunge_of(self, number: int) -> float:
-        """The lunge of beat ``number``: as decided when it came into
-        view, or the undecided one for a beat still beyond it."""
+        """The lunge of beat ``number``, as decided, or the undecided one
+        beyond.
+        """
         found = self._lunges.get(number)
         return self._lunge if found is None else found
 
     def _pace_of(self, number: int) -> float:
-        """How long beat ``number``'s road is, against PER_BEAT: as decided,
-        or the nearest decided beat's beyond them."""
+        """How long beat ``number``'s road is against PER_BEAT, as decided or
+        the nearest decided beyond.
+        """
         found = self._paces.get(number)
         if found is not None:
             return found
@@ -6705,8 +4738,7 @@ class Rider(Scene):
         return self._paces[min(self._paces)]
 
     def _start_of(self, number: int) -> float:
-        """Where beat ``number`` starts on the road, in lengths of
-        PER_BEAT."""
+        """Where beat ``number`` starts on the road, in lengths of PER_BEAT."""
         found = self._starts.get(number)
         if found is not None:
             return found
@@ -6719,13 +4751,15 @@ class Rider(Scene):
         return self._starts[first] - (first - number) * self._pace_of(first)
 
     def beat_on_road(self, number: int) -> float:
-        """Where beat ``number`` is on the road, in road units: for drawing
-        anything that marks the beats."""
+        """Where beat ``number`` is on the road, in road units, for anything
+        that marks the beats.
+        """
         return self._start_of(number) * self.PER_BEAT + self._road_shift
 
     def gate_light(self, number: int) -> float:
-        """How brightly the arch on beat ``number`` is lit: all the way
-        where the music drives hard, turned well down where it is calm."""
+        """How brightly the arch on beat ``number`` is lit: fully where the
+        music drives, turned down where it is calm.
+        """
         drive = self._drives.get(number)
         if drive is None:
             drive = 0.5
@@ -6741,10 +4775,8 @@ class Rider(Scene):
             return number % 4
         return int(round(self._clock.in_bar(number))) % 4
 
-    #: How fast the road runs, against PER_BEAT: at its quietest and
-    #: calmest, and at its loudest and heaviest. The level sets how many
-    #: beats are in sight at the middle of that; the music moves it from
-    #: there. See _pace_target.
+    #: How fast the road runs against PER_BEAT, at its calmest and at its
+    #: heaviest. See _pace_target.
     PACE_LEAST = 0.4
     PACE_MOST = 2.0
     #: What the kind of section adds to how driven a beat is.
@@ -6754,21 +4786,18 @@ class Rider(Scene):
     PACE_BUILD = (-0.35, 0.15)
     #: How much of the way to its target each beat's pace goes.
     PACE_EASE = 0.3
-    #: The least warning a block gets however fast the road runs, in
-    #: seconds from the far end of the road to the craft, where the level
-    #: does not say (see rider_layout.DIFFICULTY).
+    #: The least warning a block gets however fast the road runs, in seconds,
+    #: where the level does not say.
     LEAST_WARNING = 0.6
-    #: How far past the craft, in road units, every beat's length of road
-    #: is decided: beyond the last of what the lit world draws.
+    #: How far past the craft every beat's road is decided, in road units.
     SEEN = 80.0
 
     def _pace_target(self, number: int) -> tuple:
-        """How fast the road wants to run over beat ``number``, and how
-        driven the music is there, 0 to 1: slow where the track is quiet
-        and calm, fast where it is loud and heavy."""
+        """How fast the road wants to run over beat ``number``, and how driven
+        the music is there, 0 to 1.
+        """
         if not self._energy:
-            # Nothing known about the track's shape yet: the level's own
-            # speed, neither calm nor driven.
+            # Nothing known about the track's shape yet.
             return 1.0, 0.5
         when = self._clock.time(number + 0.5)
         loud = self._read(self._energy, when)
@@ -6792,19 +4821,12 @@ class Rider(Scene):
         return pace, drive
 
     def _decide_lunges(self, now: int, bass: float) -> None:
-        """Give every beat coming into view its lunge and its length of
-        road, once.
-
-        Both shape where the road is, so a block between two beats sits
-        wherever its beat's curve puts its moment, and the road reaches it
-        exactly then only if the block is put on the same curve. Decided
-        as a beat comes into view, it is fixed before anything on it is
-        seen: from how loud the track is at that beat - which the analysis
-        knows in advance - and otherwise the bass now, and eased off after
-        a hit.
+        """Give every beat coming into view its lunge and its length of road,
+        once, before anything on it is seen: from the track's loudness at
+        that beat where it is known, otherwise the bass now, eased after a
+        hit.
         """
-        # From the beat after the last one decided, so they never have a
-        # gap between them, out past everything the road shows.
+        # From the beat after the last decided, out past everything shown.
         number = now if not self._paces else min(now, max(self._paces) + 1)
         horizon = None
         changed = False
@@ -6847,49 +4869,35 @@ class Rider(Scene):
                                    range(first, max(self._starts) + 1)])
 
     def _where(self, when: float) -> float:
-        """How far down the road a hit due at ``when`` is now.
-
-        The difference between where the road has got to and where that
-        moment of the track sits on it. Zero difference is the rider, so
-        a block is level with them exactly on its beat.
+        """How far down the road a hit due at ``when`` is now: zero is level
+        with the rider.
         """
         return self.RIDER_AT + self._flat(when) - self._at
 
     def _flat(self, when: float) -> float:
-        """Where a moment sits on the road: on the same curve the road
-        runs. See _world."""
+        """Where a moment sits on the road, on the road's own curve."""
         return self._world(when)
 
     # -- drawing ----------------------------------------------------------
     def _slide(self, step: float) -> float:
-        """How much of the way to the wanted lane this frame is worth.
-
-        SNAP is a share of the remaining distance per sixtieth of a
-        second rather than per frame. Taken per frame, the dodge window
-        is whatever the pane is managing: the same lane change takes
-        50 ms at 60 fps, 100 ms at 30 and 25 ms at 120, so a busy
-        machine plays a slower game than a quiet one and the blueprint's
-        "incredibly tight interpolation window" holds on neither.
-
-        Off the track's clock, so a stopped track slides nowhere.
+        """How much of the way to the wanted lane this frame is worth: SNAP per
+        sixtieth of a second on the track's clock, the same at any frame
+        rate.
         """
         if step <= 0.0:
             return 0.0
         return 1.0 - (1.0 - self.SNAP) ** (step * 60.0)
 
     def _step(self, state) -> float:
-        """The game, one frame on: everything that happens before any of
-        it is drawn, whichever way it is drawn."""
+        """The game, one frame on, before anything is drawn."""
         self._carve(state)
         step = self._advance(state)
         self._lay(state)
         wanted = self._lane_at(self._lane)
         was_across = self._lane_here
         self._lane_here += (wanted - self._lane_here) * self._slide(step)
-        # How hard the craft is moving sideways, for the bank. Against
-        # the track's own clock so it means the same on every machine,
-        # and eased so the craft rolls out of a move rather than
-        # snapping flat the instant it arrives.
+        # How hard the craft moves sideways, for the bank: on the track's clock
+        # and eased.
         if step > 0.0:
             self._swerve += ((self._lane_here - was_across) / step
                              - self._swerve) * self.SWERVE_EASE
@@ -6898,39 +4906,32 @@ class Rider(Scene):
         return step
 
     def _note(self, when: float, how: str) -> None:
-        """A block's outcome, for the ride drawn at the end - which is the
-        run the result is of, so nothing after the finish."""
+        """A block's outcome, for the ride drawn at the end; nothing after the
+        finish.
+        """
         if not self._finished:
             self._log.append((when, how, self._hue_now))
 
     def _record(self, block, how: str) -> None:
-        # The block itself is kept with its outcome, not only its id: an
-        # id is only unique while the thing is alive, and a block laid
-        # after one was dropped can be given the same one.
+        # The block itself is kept with its outcome: an id is only unique while
+        # the object lives.
         self._struck[id(block)] = (block, how)
 
     def _forget_struck(self) -> None:
-        # Held here, a block keeps its id to itself, so a block on the
-        # road with that id is this one.
+        # Only blocks still on the road.
         alive = {id(block) for block in self._blocks}
         self._struck = {key: kept for key, kept in self._struck.items()
                         if key in alive}
 
     def struck(self, block) -> Optional[str]:
-        """What the craft did to ``block``, as the game scored it: "taken",
-        "hit", "shatter" (the shield took it), or None - it went by, was
-        jumped over, or came while the craft could not be hurt.
-
-        The picture asks this rather than working it out from where the
-        craft was, so that what is drawn, what is heard and what is scored
-        cannot disagree: a prize jumped over was drawn going into the ship
-        and scored nothing.
+        """What the craft did to ``block`` as the game scored it: "taken",
+        "hit", "shatter", or None. Drawing and sound ask this, so they
+        cannot disagree with the score.
         """
         kept = self._struck.get(id(block))
         return kept[1] if kept is not None and kept[0] is block else None
 
-    #: How close to the end of the track counts as the end: a player
-    #: stops a few frames short, and waits for nothing after the last.
+    #: How close to the end counts as the end.
     FINISH_BEFORE = 0.3
 
     @staticmethod
@@ -6945,13 +4946,9 @@ class Rider(Scene):
     START_AGAIN = 2.0
 
     def _finish(self, state) -> None:
-        """The end of the track is the end of the run, and the start of
-        the track after it is a new one.
-
-        So is going back to the start part way through. Any other seek -
-        or starting part way in - leaves a run that is not the whole
-        track: it plays on and is judged, but no best is kept for it, or
-        a ride of the last minute would stand as the track's best.
+        """The end of the track ends the run, and going back to the start
+        begins a new one. Any other seek, or starting part way in, makes a
+        run that is judged but keeps no best.
         """
         if self._jumped:
             if (self._heard < self.START_AGAIN
@@ -6966,8 +4963,7 @@ class Rider(Scene):
         at = bounded(getattr(state, "at", 0.0), most=self.LONGEST)
         if self._finished:
             if at < min(2.0, length * 0.5):
-                # Back to the start: a new run, in the same game at the
-                # same level.
+                # Back to the start: a new run.
                 self.reset()
             return
         if at >= length - self.FINISH_BEFORE:
@@ -6992,25 +4988,21 @@ class Rider(Scene):
             "whole": self._whole, "difficulty": self._difficulty,
         }
 
-    #: The grades, best first: the share of the prizes taken, and the
-    #: most greys hit, to earn each.
+    #: The grades, best first: the share of prizes taken and the most greys
+    #: hit.
     GRADES = (("S", 0.95, 0), ("A", 0.85, 2), ("B", 0.70, 5), ("C", 0.50, 10))
 
     @classmethod
     def grade(cls, share: float, hits: int) -> str:
-        """A letter for a run. Both have to be earned: taking everything
-        while hitting everything is not an S."""
+        """A letter for a run; both conditions must be met."""
         for letter, least, most in cls.GRADES:
             if share >= least and hits <= most:
                 return letter
         return "D"
 
     def paint_on_card(self, painter, rect, state, world) -> None:
-        """The same game, drawn as a lit world on the graphics card.
-
-        See rider_gl. The game moves on exactly as it does in ``paint``;
-        only the drawing differs, and the words and numbers over the top
-        are still drawn with the painter, which is what draws type well.
+        """The same game drawn as a lit world on the graphics card (see
+        rider_gl), with the words and numbers still drawn by the painter.
         """
         import time as _time
 
@@ -7022,16 +5014,14 @@ class Rider(Scene):
         kit = state.kit or {}
         bass = max(state.bass, kit.get("Bass", 0.0))
         surge = self._loudness
-        # Kept moving, because the eye's springs and the wobble a hit
-        # throws are read by the world too.
+        # Kept moving: the world reads the eye's springs and the wobble too.
         self._camera(rect, surge, bass)
         self._hue_now = self._tier(surge, state.synth)
         device = painter.device()
         ratio = device.devicePixelRatioF() or 1.0
         box = painter.worldTransform().mapRect(rect)
-        # The target's height in its own pixels, which is what a GL
-        # viewport counts from the bottom of. A GL paint device reports
-        # its size in pixels already; anything else reports points.
+        # The target's height in its own pixels, which a GL viewport counts
+        # from the bottom.
         size = getattr(device, "size", None)
         tall = (int(size().height()) if callable(size)
                 else int(round(device.height() * ratio)))
@@ -7088,12 +5078,7 @@ class Rider(Scene):
         bass = max(state.bass, kit.get("Bass", 0.0))
 
         painter.fillRect(rect, QColor(3, 2, 8))
-        # The same morphing field the Ambience scene is built on, behind
-        # everything and dim: "xxxx xxx xxxxxxxxxx xx xxxxx xxxxx xxxx
-        # xxxxxxx xx xxx xxxxxxxx xxxxxxxxxx". It reads the same state, so
-        # it moves with the music on its own.
-        # Dim. It is the room the road is in, not the subject: at the
-        # strength Ambience uses it for its own sake it drowns the track.
+        # The same morphing field as Ambience, behind everything and dim.
         self._plasma.paint(painter, rect, state,
                            strength=0.07 + surge * 0.07 + flash * 0.05,
                            flash=flash, going=self._rolling)
@@ -7101,29 +5086,16 @@ class Rider(Scene):
         horizon, focal, tilt = self._camera(rect, surge, bass)
         hue = self._tier(surge, state.synth)
         self._hue_now = hue
-        # How close the track is to a beat, 1 on it and falling away.
-        # Worked out on the track's clock: see ``_advance``.
+        # How close the track is to a beat, 1 on it; see ``_advance``.
         beat = self._beat_lit
 
-        # The whole view banks into the bend. One transform around the
-        # horizon, so everything drawn after it leans together.
-        # And a hit throws it. A high-frequency roll on its own clock for
-        # as long as the hit lasts, on top of the lean: the blueprint's
-        # stun shake, which uncouples the camera from its own smoothing
-        # so that a failure is felt rather than noticed.
+        # The view banks into the bend about the horizon, and a hit adds a fast
+        # roll on top for as long as it lasts.
         lean = tilt + (math.sin(self._wobble * 2.3) * self._hurt
                        * self.HURT_THROW)
-        # A corkscrew turns the world round the road, all the way, and
-        # not the road: the glow and the gates either side go round, and
-        # the road, what is on it and the craft stay where they are on
-        # the glass. It used to turn all of it together about the
-        # horizon, and the craft went round the frame with it - at the
-        # top of the picture halfway through, which is the one thing a
-        # player steering it needs never to move. The lit world does the
-        # same with the road itself wound round (see rider_gl._twist);
-        # flat, the world going round behind a steady road is the part
-        # that can be drawn. The world is drawn first so that the road
-        # passes in front of it as it turns.
+        # A corkscrew turns the world round the road, not the road: the road,
+        # what is on it and the craft stay put on the glass. The world is drawn
+        # first, so the road passes in front of it.
         painter.save()
         painter.translate(horizon)
         painter.rotate(lean + self._rolled * 360.0)
@@ -7148,18 +5120,14 @@ class Rider(Scene):
         self._bits(painter, horizon, focal, hue)
         self._ship(painter, rect, horizon, focal, hue, flash,
                    max(beat, kit.get("Kick", 0.0)))
-        # Where the craft landed on the glass, through the bank and the
-        # throw that everything above was drawn inside, for the answers
-        # below to come from.
+        # Where the craft landed on the glass, for the answers below to come
+        # from.
         if self._craft_spot is not None:
             self._craft_glass = QTransform().translate(
                 horizon.x(), horizon.y()).rotate(lean).translate(
                 -horizon.x(), -horizon.y()).map(self._craft_spot)
         painter.restore()
-        # The beat, where nothing is read against anything. On the grid
-        # and on the drum both: the grid keeps it in time through a bar
-        # the drummer left alone, and the drum makes it land on what was
-        # actually played.
+        # The beat, on the grid and on the drum both.
         self._rim(painter, rect, hue,
                   max(beat, kit.get("Kick", 0.0)))
         self._pops_now(painter, rect)
@@ -7169,17 +5137,16 @@ class Rider(Scene):
         self._card(painter, rect, hue)
         self._results(painter, rect)
 
-    #: Where the grid sits and how big it is, as shares of the frame.
-    #: Bottom left, out of the road's way: the road runs up the middle
-    #: and the eye that is reading it is at the top.
+    #: Where the grid sits and how big it is, as shares of the frame: bottom
+    #: left, out of the road's way.
     CELL_AT = (0.035, 0.96)
     CELL_SIDE = 0.038
     CELL_GAP = 0.15
 
     def matrix_box(self, rect) -> QRectF:
-        """Where the grid is in a frame ``rect``, well and all: for the
-        grid, and for anything that has to keep out of its way - the count
-        beside it sat in the same corner, and the two overlapped."""
+        """Where the grid is in ``rect``, for the grid and for anything that
+        must keep out of its way.
+        """
         side = min(rect.width(), rect.height()) * self.CELL_SIDE
         step = side * (1.0 + self.CELL_GAP)
         left = rect.left() + rect.width() * self.CELL_AT[0]
@@ -7189,12 +5156,7 @@ class Rider(Scene):
                       self.CELLS_DEEP * step)
 
     def _matrix(self, painter, rect) -> None:
-        """Audiosurf's grid, in the corner.
-
-        Drawn from the bottom up, because that is the way it fills: a
-        column you can see the top of is a column with room in it, which
-        is the only thing you need to read off this at speed.
-        """
+        """The puzzle grid in the corner, drawn from the bottom up."""
         side = min(rect.width(), rect.height()) * self.CELL_SIDE
         step = side * (1.0 + self.CELL_GAP)
         box = self.matrix_box(rect)
@@ -7203,8 +5165,7 @@ class Rider(Scene):
         painter.setPen(Qt.PenStyle.NoPen)
         # The well first, so an empty column still reads as a column.
         stunned = self._stunned > 0.0
-        # Flashing while it is locked, which is the one thing here that
-        # has to be noticed rather than read.
+        # Flashing while locked.
         lit = stunned and int(self._stunned * 12) % 2 == 0
         well = (QColor(255, 60, 60, 90) if lit
                 else QColor(255, 255, 255, 28 if stunned else 16))
@@ -7216,8 +5177,7 @@ class Rider(Scene):
                     floor - (row + 1) * step, side, side))
         for column in range(self.CELLS_WIDE):
             for row, colour in enumerate(self._cells[column]):
-                # A cluster that is about to go pulses, so the window to
-                # grow it is visible rather than remembered.
+                # A cluster about to go pulses.
                 going = self._fuse > 0.0
                 shade = QColor.fromHsvF(
                     self.TIERS[min(colour, len(self.TIERS) - 1)],
@@ -7231,29 +5191,15 @@ class Rider(Scene):
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
     def _wash(self, painter, rect) -> None:
-        """What a hit does to the whole picture.
-
-        "Xxxx xxx xxxxxx xxxxxx xxxxx xx xx obstacle hit." A shake says
-        something happened to the camera. A frame that goes red from its
-        edges in, with the light dropped out of everything under it, says
-        something happened to *you*.
-
-        Two fills a frame and only while it is fading, so it costs
-        nothing the rest of the time.
+        """What a hit does to the whole picture: the frame goes red and dark
+        from its edges in. Drawn only while it fades.
         """
         if self._hurt <= 0.0:
             return
-        # Strongest at the moment of the hit and gone in HURT_FOR, with
-        # the curve front-loaded so it lands hard and lets go.
+        # Strongest at the hit and gone in HURT_FOR, front-loaded.
         hurt = self._hurt * self._hurt
-        # Multiplied, not washed over.
-        #
-        # Laying red over the picture can only add light to it, and on a
-        # world this dark that is a flashbulb: measured, the frame came
-        # out twice as bright after a hit as before one. Multiplying by a
-        # red takes the green and the blue out of everything and leaves
-        # the red where it was, so the frame goes red *and* dark, which
-        # is what damage looks like.
+        # Multiplied, not washed over, so the frame goes red and dark rather
+        # than brighter.
         painter.save()
         painter.setCompositionMode(
             QPainter.CompositionMode.CompositionMode_Multiply)
@@ -7262,8 +5208,7 @@ class Rider(Scene):
             int(255 - (255 - 46) * hurt * self.HURT_DIM),
             int(255 - (255 - 38) * hurt * self.HURT_DIM)))
         painter.restore()
-        # And a rim of red light from the edges in, which is the part
-        # that reads as a blow rather than as a filter.
+        # A rim of red light from the edges in.
         middle = rect.center()
         edge = QRadialGradient(middle, max(rect.width(), rect.height()) * 0.62)
         edge.setColorAt(0.0, QColor(150, 12, 16, 0))
@@ -7283,11 +5228,8 @@ class Rider(Scene):
 
     def _surface(self, painter, rect, horizon, focal, hue, surge,
                  flash) -> None:
-        """The road itself, filled.
-
-        "Make the track opaque." One path of quads between consecutive
-        rungs, filled once: a road drawn as lines is a ladder floating in
-        the dark, and blocks standing on nothing read as floating too.
+        """The road itself, filled: one path of quads between consecutive
+        rungs.
         """
         reach = self.FAR - self._near
         offset = self._at % 1.0
@@ -7308,20 +5250,8 @@ class Rider(Scene):
             far_y = here[0].y()
             last = here
         painter.setPen(Qt.PenStyle.NoPen)
-        # Into fog rather than to a point.
-        #
-        # The road ends somewhere, and where it ended it was a hard little
-        # vertex: the whole thing read as a cone with a tip rather than as
-        # a road going away. Filled with a gradient down its length, the
-        # far end simply stops being there.
-        # Dark, and it has to stay dark.
-        #
-        # A block and the road it stands on used to differ in hue and not
-        # in brightness: measured on a real track, an orange prize came
-        # out at a luminance of 0.400 on a road at 0.401 - a contrast of
-        # one to one, which is not dim, it is invisible. Hue alone does
-        # not separate two things at speed. So the road is held down near
-        # the floor and the blocks are the only bright thing on it.
+        # Into fog at the far end. Kept dark, so the blocks on it are the
+        # bright thing.
         shade = QColor.fromHsvF(
             (hue + 0.02) % 1.0, 0.85 - flash * 0.2,
             self.ROAD_LIT + surge * 0.04 + flash * 0.05, 1.0)
@@ -7334,33 +5264,22 @@ class Rider(Scene):
         fog.setColorAt(1.0, shade)
         painter.fillPath(deck, QBrush(fog))
 
-    #: How far down the road the fog has finished clearing, as a share of
-    #: the way from the far end to the rider.
-    #: How light the road's surface is. See ``_surface``.
+    #: How far down the road the fog has cleared, and how light the road's
+    #: surface is. See ``_surface``.
     ROAD_LIT = 0.085
 
     FOG = 0.35
-    #: How solid a block is at the far end of the road.
-    #:
-    #: The fog is there so blocks come out of the distance rather than
-    #: appearing whole, and it used to take them all the way to nothing.
-    #: Measured against the background right behind it, a block two and
-    #: a half beats out read at 1.14 to 1 - which is not dim, it is
-    #: invisible: "xxx xxxxxx xxx xxxxxxxxxx xx xxx xxxxxxxxx". Three to
-    #: one is the usual floor for something this size, and a block has to
-    #: be read while there is still time to move.
+    #: How solid a block is at the far end of the road: never so faint that it
+    #: cannot be read in time.
     FOG_LEAST = 0.55
 
-    #: How far apart the chevrons under the road are, in road units, and
-    #: how many rungs of it each one covers.
+    #: How far apart the chevrons under the road are, in road units, and how
+    #: many rungs each covers.
     MARK_EVERY = 2.0
 
     def _markings(self, painter, horizon, focal, hue, kit, flash) -> None:
-        """The pattern on the road, which moves under you.
-
-        "Xxx xxxxxxxx xxxxx xxx xxxxx xxxx xxxxx xx xxxxx." Chevrons at a
-        fixed spacing in road units, so they stream towards you at the
-        road's own speed, brightening on the kick.
+        """The chevrons on the road, streaming at the road's speed, brightening
+        on the kick.
         """
         kick = kit.get("Kick", 0.0)
         marks = QPainterPath()
@@ -7381,12 +5300,8 @@ class Rider(Scene):
             min(1.0, 0.20 + kick * 0.45 + flash * 0.3)))
 
     def _edges(self, painter, rect, horizon, focal, hue, kit, flash) -> None:
-        """The rails either side, which answer the kit.
-
-        "Xxx xxxxxxx xxxxx xxx xxxxx xx xxx xxxxx xxxx xxxxx xx xxxxxxxx
-        xx xxx xxxxx xx xxxx." The left rail is the snare and the right is
-        the hats, so the two sides of the road are doing different things
-        and the difference is the music.
+        """The rails either side: the left answers the snare, the right the
+        hats.
         """
         reach = self.FAR - self._near
         offset = self._at % 1.0
@@ -7416,48 +5331,29 @@ class Rider(Scene):
     MIRROR = 0.55
 
     def _walls(self, painter, rect, horizon, focal, hue, flash) -> None:
-        """The blocks, filled, with a lit edge.
-
-        "Make obstacles xxxxxx xxxx xxxxxx xx xxx xxxxx." Filled so they
-        sit on the road rather than floating over it, and outlined bright
-        so they read against it.
-        """
+        """The blocks, filled, with a lit edge."""
         edge = self.LANE_WIDE * 0.5 * 0.82
         tall = 0.62
         painter.setPen(Qt.PenStyle.NoPen)
-        # Grey first and coloured second, so the prizes are laid over
-        # the obstacles where they overlap - which is the way round that
-        # tells you the lane is worth taking.
+        # Greys first and colours over them.
         for grey_now in (True, False):
             for kind in ("wall", "block", "run"):
                 self._blocks_of(painter, rect, horizon, focal, hue, flash,
                                 kind, grey_now, edge, tall)
-        # And the coins over the top of both, because a coin sits beside
-        # an obstacle and the thing you need to see is which lane it is
-        # in.
+        # And coins over both.
         self._coins_now(painter, horizon, focal, flash)
 
-    #: How wide a coin is, how high off the road it floats, and how fast
-    #: it turns. Small: it is a reward for being in a lane rather than
-    #: something to steer at, and a coin the size of a block would hide
-    #: the obstacle it is next to.
+    #: How wide a coin is, how high it floats and how fast it turns: small, so
+    #: it never hides the obstacle beside it.
     COIN_SIZE = 0.26
     COIN_TALL = 0.40
     COIN_TURN = 2.6
-    #: How much bigger a power block is than a coin. It is the thing a
-    #: corkscrew is *for*, so it is not something to notice late.
+    #: How much bigger a power block is than a coin.
     POWER_SIZE = 1.9
 
     def _coins_now(self, painter, horizon, focal, flash) -> None:
-        """The coins, as discs standing on the road and turning.
-
-        White rather than the road's own colour. The road runs from
-        purple at its quietest to red at its loudest and a coin has to
-        read against every part of that - at a chorus the road is
-        already gold - so a coin is the one thing in the scene with no
-        hue at all, lit to the top of the scale. It is the greys' trick
-        the other way round: colour against grey there, white against
-        colour here.
+        """The coins, as white discs standing on the road and turning: the one
+        thing with no hue, so they read against any colour of road.
         """
         for when, lane, kind, _done, _grey in self._blocks:
             if kind not in ("coin", "power"):
@@ -7471,23 +5367,16 @@ class Rider(Scene):
             seen = self.FOG_LEAST + (1.0 - self.FOG_LEAST) * min(
                 1.0, near / max(1e-6, self.FOG))
             across = self._lane_at(lane)
-            # Turned a little further than the coin before it, so a
-            # trail of three reads as one object rolling rather than
-            # three things flickering.
+            # Each turned a little further than the one before, so a trail
+            # reads as one thing rolling.
             phase = self._coin_spin + when * 5.0
             size = self.COIN_SIZE * (self.POWER_SIZE if power else 1.0)
             tall = self.COIN_TALL * (1.25 if power else 1.0)
-            # Never edge-on to nothing: a disc exactly side on is one
-            # pixel wide and reads as a coin that vanished.
+            # Never fully edge-on.
             wide = size * max(0.28, abs(math.cos(phase)))
-            # A true ellipse rather than a ring of points. Everything in
-            # a coin sits at one distance, and at one distance the view
-            # is a straight scale, turn and shift of the road - so a disc
-            # lands on the glass as an ellipse exactly, and three points
-            # say which. It had been ten points joined by straight lines,
-            # which was round enough while the frame was drawn at half
-            # the screen's resolution and read as a ten-sided shape once
-            # it was drawn at all of it.
+            # A true ellipse: everything in a coin is at one distance, where
+            # the view is a straight scale, turn and shift of the road, so a
+            # disc lands on the glass as an ellipse and three points fix it.
             middle = self._eye(horizon, focal, across, -tall, at)
             side = self._eye(horizon, focal, across + wide, -tall, at)
             top = self._eye(horizon, focal, across, -tall - size, at)
@@ -7499,9 +5388,8 @@ class Rider(Scene):
             face = glass.map(disc)
             back = (QTransform.fromScale(self.BACKING, self.BACKING)
                     * glass).map(disc)
-            # The same dark silhouette every block gets, for the same
-            # reason: what a coin is read against is this rather than
-            # whatever the music has put behind it.
+            # The same dark silhouette every block gets, so a coin is read
+            # against that rather than whatever the music has put behind it.
             painter.fillPath(back, QColor(3, 2, 8, int(215 * seen)))
             painter.fillPath(face, QColor.fromHsvF(
                 0.13, (0.02 if power else 0.20) - flash * 0.1, 1.0,
@@ -7510,14 +5398,10 @@ class Rider(Scene):
                 0.12, 0.25 if power else 0.55, 1.0,
                 min(1.0, 0.6 + 0.4 * seen)))
 
-    #: What a grey obstacle and a coloured prize are made of.
-    #:
-    #: Audiosurf's Mono mode is grey against colour and nothing else, so
-    #: the two have to be unmistakable at the far end of the road. A grey
-    #: is a grey: no hue worth the name and no light in it. A prize is
-    #: the road's own colour at full strength, which is the tier the
-    #: passage is in - red in a chorus, blue in a verse.
-    #: How much wider than the block its dark backing is drawn.
+    #: What a grey obstacle and a coloured prize are made of, which must be
+    #: told apart at the far end of the road: a grey has no hue and no light in
+    #: it, a prize is the road's own colour at full strength. BACKING is how
+    #: much wider than the block its dark backing is drawn.
     BACKING = 1.16
 
     GREY_SAT = 0.10
@@ -7547,15 +5431,12 @@ class Rider(Scene):
             if shape != kind or grey is not grey_now:
                 continue
             at = self._where(when)
-            # Gone once it is behind the rider. Clamping it to NEAR
-            # instead left everything that had already gone past
-            # stacked against the bottom of the frame at the size of a
-            # house, which is most of what the first attempt looked
-            # like.
+            # Gone once it is behind the rider; clamped to NEAR instead,
+            # everything already passed piled up at the bottom of the frame.
             if at < self.GONE or at > self.FAR:
                 continue
-            # Out of the fog with the road, rather than appearing
-            # whole at the far end of it.
+            # Out of the fog with the road, rather than whole at the far end of
+            # it.
             near = max(0.0, min(1.0, 1.0 - (at - self._near)
                                 / max(1e-6, self.FAR - self._near)))
             seen = self.FOG_LEAST + (1.0 - self.FOG_LEAST) * min(
@@ -7584,16 +5465,11 @@ class Rider(Scene):
             edges.lineTo(top_r)
             edges.lineTo(top_l)
             edges.lineTo(foot_l)
-            # The block in the road under it. Squashed and dim, the
-            # way a wet floor holds a light: one more quad a block,
-            # and it is most of what makes them stand on the road
-            # rather than hover over it.
-            #
-            # Every block that is drawn at all gets one. Dropping them
-            # past a distance was tried: it took a third of the frame's
-            # fills out and saved 0.2 ms of 8.9, and what it spent was
-            # the thing that makes a block sit on the road at exactly
-            # the distances a player is reading. Not a trade.
+            # The block's reflection in the road under it, squashed and dim:
+            # one more quad a block, and most of what makes blocks stand on the
+            # road rather than hover. Every drawn block gets one; dropping
+            # distant ones saved 0.2 ms of 8.9 and lost it at the distances a
+            # player reads.
             pool = QPainterPath()
             pool.moveTo(foot_l)
             pool.lineTo(foot_r)
@@ -7602,31 +5478,21 @@ class Rider(Scene):
             pool.lineTo(self._eye(horizon, focal, across - edge,
                                   tall * self.MIRROR, at))
             pool.closeSubpath()
-            # A dark silhouette under it first. Whatever is behind a
-            # block - the lamp at the end of the road, a bright wash, the
-            # plasma at a drop - this is what the block is actually read
-            # against, so how well it reads stops depending on the
-            # background at all.
+            # A dark silhouette under it first, so how well a block reads does
+            # not depend on what is behind it.
             painter.fillPath(backs, QColor(3, 2, 8, int(225 * seen)))
             painter.fillPath(pool, QColor.fromHsvF(
                 shade, wet, lit * 0.62, 0.30 * seen))
-            # One path per block rather than one for the lot, because
-            # each is a different distance into the fog.
+            # One path per block, since each is a different distance into the
+            # fog.
             painter.fillPath(faces, QColor.fromHsvF(
                 shade, wet, lit, 0.90 * seen))
             self._beam(painter, rims, QColor.fromHsvF(
                 shade, max(0.0, wet - 0.45), 1.0,
                 min(1.0, (0.85 + flash * 0.15) * seen)))
-            # And an edge all the way round it, at full strength however
-            # far away it is.
-            #
-            # A block at the far end of the road is a dozen pixels of a
-            # colour that the lamp behind it has already washed out:
-            # measured on real tracks, one eighteen units out read at
-            # 1.05 to one against what surrounded it, which is
-            # invisible. Everything else about a block fades with
-            # distance, as it should - this does not, because it is the
-            # thing that says a block is there at all.
+            # And an edge all the way round, at full strength at any distance:
+            # far away, a block's face is a few pixels the lamp has washed out,
+            # and the edge is what says it is there.
             self._beam(painter, edges, QColor.fromHsvF(
                 shade, max(0.0, wet - 0.55), 1.0,
                 min(1.0, 0.55 + 0.45 * seen)))
@@ -7635,54 +5501,26 @@ class Rider(Scene):
             backs = QPainterPath()
             edges = QPainterPath()
 
-    #: The horizon lamp: how far it reaches as a share of the frame, and
-    #: how much the bass opens it.
-    #: How far the lamp reaches, as a share of the frame, and how much
-    #: the bass opens it.
-    #:
-    #: It sits at the vanishing point, which is exactly where a block is
-    #: when there is still time to move out of its lane. Reaching over
-    #: half the frame it did not light the end of the road, it erased it:
-    #: measured on a real track, the brightest pixel of a block eighteen
-    #: units out came to 1.02 against what surrounded it. A glow at the
-    #: end of the road, not a sky.
+    #: The horizon lamp: how far it reaches as a share of the frame, and how
+    #: much the bass opens it. Kept small, since it sits where a block is read
+    #: while there is still time to move; reaching half the frame, it washed
+    #: those blocks out.
     GLOW_REACH = 0.30
     GLOW_BASS = 0.10
-    #: The most of the frame the lamp may take. It sits exactly where the
-    #: road's far end is, which is where a block has to be read while
-    #: there is still time to move: at full strength it washed that part
-    #: of the picture out altogether.
+    #: The most of the frame the lamp may take.
     GLOW_MOST = 0.26
 
     # -- what the things you do look like ---------------------------------
-    #: How the screen answers a run: a ring spreading from the craft, a
-    #: flash of colour from the frame's edge, and for the moments that
-    #: deserve one, a callout.
+    #: How the screen answers a run: a ring spreading from the craft, a flash
+    #: of colour from the frame's edge, and for moments that deserve one, a
+    #: callout. Drawn in screen space, outside the bank and the shake, and gone
+    #: inside half a second, at the edges or around the craft, never where a
+    #: block is read.
     #:
-    #: Measured against the beat on the same road, the things a player
-    #: did registered fifteen times weaker than the music did. A beat
-    #: moved 43 per cent of the frame; taking a coin moved 2.7, a prize
-    #: 2.3, and reaching a chain of forty 2.6 - indistinguishable from
-    #: any other prize, so the moment a run became worth protecting was
-    #: not a moment at all. A hit moved 13.5. The flag every collection
-    #: set so that something could answer it had never been drawn.
-    #:
-    #: Screen space, outside the bank and the shake, because these are
-    #: the game talking to the player rather than things in the world.
-    #: Rings and flashes are gone inside half a second and mostly at the
-    #: edges or around the craft, which is never what a block down the
-    #: road is read against.
-    #:
-    #: Per kind: how long it lives, how far a ring spreads as a share of
-    #: the frame, how strong the edge flash is, how bright the ring, and
-    #: how thick.
-    #:
-    #: A hit had no edge flash of its own at first, on the grounds that
-    #: the damage wash already reddens the edges - and measured, it
-    #: moved 13.6 per cent of the frame, less than a coin. The wash
-    #: *multiplies*, and a black frame multiplied by red is still black,
-    #: so on this road it barely showed. The worst thing that can happen
-    #: on the road now has the heaviest ring and a red flash of its own.
+    #: Per kind: how long it lives, how far a ring spreads as a share of the
+    #: frame, how strong the edge flash is, how bright the ring, and how thick.
+    #: A hit has the heaviest ring and a red flash of its own: the damage wash
+    #: multiplies, so on a dark road it barely shows.
     POPS = {
         "coin":      (0.40, 0.30, 0.30, 0.85, 1.0),
         "prize":     (0.38, 0.24, 0.18, 0.60, 0.8),
@@ -7709,9 +5547,8 @@ class Rider(Scene):
         self._combos[which] = (when, count)
         return count
 
-    #: Chains worth stopping the world for. Ten is the first that means
-    #: anything, and past a hundred the chain is paying its cap, so the
-    #: moments thin out rather than go on counting.
+    #: Chains worth a callout. Past a hundred the chain pays its cap, so they
+    #: thin out.
     MILESTONES = (10, 25, 50, 75, 100, 150, 200, 300, 500)
     #: A chain at least this long is worth telling somebody they lost.
     LOST_WORTH = 10
@@ -7725,10 +5562,9 @@ class Rider(Scene):
                            hue % 1.0, sat, text])
         # Never a queue of them: the newest few are all anybody sees.
         if len(self._pops) > 12:
-            # The oldest go, but never the end of the track: it is what
-            # the results card comes up from, and a burst of pickups on
-            # the last beat is exactly when it would otherwise be pushed
-            # out.
+            # The oldest go, but never the finish: the results card comes up
+            # from it, and a burst of pickups on the last beat would otherwise
+            # push it out.
             kept = [pop for pop in self._pops if pop[0] == "finish"]
             rest = [pop for pop in self._pops if pop[0] != "finish"]
             self._pops = kept + rest[len(rest) - (12 - len(kept)):]
@@ -7765,10 +5601,9 @@ class Rider(Scene):
             if flash is not None and flash[0] > 0.01:
                 self._pop_flash(painter, rect, *flash)
         finally:
-            # Always, and after the flash as well as the rings: a
-            # painter left with a saved state takes the whole pane down
-            # at the end of the frame, and one left with this pen and
-            # brush draws whatever comes next in them.
+            # Always restored, after the flash as well as the rings: an
+            # unbalanced save takes the pane down at the end of the frame, and
+            # a leftover pen and brush would draw whatever comes next.
             painter.restore()
 
     def _pop_rings(self, painter, rect, span, origin):
@@ -7779,15 +5614,14 @@ class Rider(Scene):
             life, spread, edge, bright, thick = self.POPS[kind]
             through = min(1.0, age / life)
             fade = (1.0 - through) ** 2
-            # The edge flash is one fill for the lot of them: the
-            # strongest wins, rather than every pop paying for a
-            # gradient across the whole frame.
+            # One edge flash for all of them, the strongest, rather than a
+            # gradient across the frame for each.
             if edge > 0.0:
                 amount = edge * strength * fade
                 if flash is None or amount > flash[0]:
                     flash = (amount, hue, sat)
-            # The ring. Fast out and slowing, so it reads as something
-            # thrown off the craft rather than something drawn round it.
+            # The ring: fast out and slowing, so it reads as thrown off the
+            # craft rather than drawn round it.
             if spread > 0.0 and bright > 0.0:
                 out = 1.0 - (1.0 - through) ** 3
                 radius = max(1.0, span * spread * strength * out)
@@ -7816,11 +5650,9 @@ class Rider(Scene):
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
     def _callout(self, painter, rect, text, hue, through, strength) -> None:
-        """A word across the upper middle of the frame, for a moment.
-
-        Up fast and held, then gone: the size lands in the first tenth
-        and the fade takes the last half, so it is read rather than
-        glimpsed. Above the road's far end, where nothing is read.
+        """A word across the upper middle of the frame, for a moment: full size
+        in the first tenth and faded over the last half, above the road's
+        far end where nothing is read.
         """
         grow = min(1.0, through / 0.10)
         size = max(10.0, rect.height() * 0.075 * (0.7 + 0.3 * grow)
@@ -7832,8 +5664,7 @@ class Rider(Scene):
         painter.setFont(font)
         box = QRectF(rect.left(), rect.top() + rect.height() * 0.18,
                      rect.width(), size * 2.0)
-        # A dark stroke under the word so it reads over anything the
-        # music has put behind it.
+        # A dark stroke under the word, so it reads over anything behind it.
         painter.setPen(QColor(0, 0, 0, int(200 * fade)))
         for dx, dy in ((-2, 0), (2, 0), (0, -2), (0, 2)):
             painter.drawText(box.translated(dx, dy),
@@ -7843,32 +5674,16 @@ class Rider(Scene):
         painter.drawText(box, int(Qt.AlignmentFlag.AlignHCenter
                                   | Qt.AlignmentFlag.AlignTop), text)
 
-    #: How hard the frame's own edge lights on the beat, and how far in
-    #: from the edge it reaches.
-    #:
-    #: The beat had nowhere left to hit. Everything the road is made of
-    #: is held near the floor on purpose - a block is read against the
-    #: road, the lamp and the sky behind it, and brightening those is
-    #: exactly how blocks became invisible the first time. Measured
-    #: against the other scenes on the same 128 bpm track, the rider
-    #: swung the picture's brightness 0.026 on a beat where the rave
-    #: swung 0.140, and changed 7 per cent of the frame where the rave
-    #: changed 97.
-    #:
-    #: So it hits where nothing is read: the edge. A rim of the road's
-    #: own colour on the kick, transparent well before the middle, which
-    #: is a lot of pixels doing something and none of them behind a
-    #: block.
+    #: How hard the frame's edge lights on the beat, and how far in it reaches.
+    #: The road is kept dark so blocks read against it, so the beat hits the
+    #: edge instead: a rim of the road's colour on the kick, transparent well
+    #: before the middle.
     RIM_MOST = 0.45
     RIM_REACH = 0.58
 
     def _rim(self, painter, rect, hue, punch) -> None:
-        """The frame's edge, lit on the beat.
-
-        Outside the bank and the shake, because it belongs to the
-        picture rather than to the road: a rim that tilted with the
-        camera would read as part of the world and this is the world
-        hitting *you*.
+        """The frame's edge, lit on the beat. Outside the bank and the shake:
+        it belongs to the picture, not the road.
         """
         if punch <= 0.02:
             return
@@ -7881,10 +5696,8 @@ class Rider(Scene):
             min(1.0, self.RIM_MOST * punch)))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(rim)
-        # One fill, not a ring of four. Skipping the transparent middle
-        # was tried and is slower: four gradient fills of a band cost
-        # more than one of the whole frame, because the per-call setup
-        # is what dominates rather than the pixels.
+        # One fill, not a ring of four: four gradient bands cost more than one
+        # full-frame fill, because the per-call setup dominates.
         painter.drawRect(rect)
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
@@ -7892,19 +5705,11 @@ class Rider(Scene):
     def _ring_fill(painter, rect, middle, reach: float) -> None:
         """Fill only the part of ``rect`` a radial gradient can reach.
 
-        A radial brush that is transparent outside ``reach`` still costs
-        the whole rectangle to fill, and at 1920x1080 that is two
-        million pixels for a lamp a few hundred across. It costs the
-        whole rectangle for a transparent *middle* too. Measured, the
-        two gradients in this scene were 3 ms of a 9.6 ms frame.
-
-        So the rectangle is clipped to the circle's bounding box, which
-        is the same picture: nothing is drawn in the part left out.
-
-        Skipping a transparent *middle* the same way was tried and is
-        slower - four gradient fills of a band cost more than one of the
-        whole frame, because the per-call setup dominates rather than
-        the pixels - so only the bounding box is worth taking.
+        A radial brush costs its whole rectangle even where it is
+        transparent: at 1920x1080 the two gradients here were 3 ms of a 9.6
+        ms frame. Clipping to the circle's bounding box draws the same
+        picture. Skipping a transparent middle the same way is slower, since
+        per-call setup dominates.
         """
         box = QRectF(middle.x() - reach, middle.y() - reach,
                      reach * 2.0, reach * 2.0).intersected(rect)
@@ -7914,9 +5719,10 @@ class Rider(Scene):
 
     def _flat_tunnel(self, painter, rect, horizon, focal, hue, beat,
                      flash) -> None:
-        """A corkscrew's tunnel, drawn flat: every colour wheeling round
-        the end of the road, and a ring round the road at every beat - the
-        way the world draws it on the card. See _tunnel_at."""
+        """A corkscrew's tunnel drawn flat: every colour wheeling round the end
+        of the road and a ring round the road at every beat, as the world on
+        the card draws it. See _tunnel_at.
+        """
         if not self._twists:
             return
         inside = self._tunnel_at(self._heard)
@@ -7933,8 +5739,8 @@ class Rider(Scene):
             painter.save()
             painter.setOpacity(painter.opacity() * inside * 0.85)
             # Past the frame's corners every way: the picture turns over
-            # through a corkscrew, and a frame-sized fill turned with it
-            # left the corners black.
+            # through a corkscrew, and a frame-sized fill left the corners
+            # black.
             wide = math.hypot(rect.width(), rect.height())
             painter.fillRect(rect.adjusted(-wide, -wide, wide, wide),
                              QBrush(wheel))
@@ -7966,26 +5772,15 @@ class Rider(Scene):
 
     def _glow(self, painter, rect, horizon, hue, surge, bass, beat,
               flash) -> None:
-        """A lamp at the end of the road, behind everything.
-
-        The road runs into something rather than into nothing, and it is
-        the cheapest depth in the scene: one gradient a frame.
+        """A lamp at the end of the road, behind everything: the cheapest depth
+        in the scene, one gradient a frame.
         """
         reach = max(1.0, rect.height() * (self.GLOW_REACH
                                           + bass * self.GLOW_BASS))
-        # The area to fill is worked out from the *widest* the lamp can
-        # ever be, not from how wide it is now.
-        #
-        # Nothing in this frame settles exactly: the pane's levels ease
-        # towards a held row asymptotically, so under a stopped track
-        # the bass still creeps in the tenth decimal place and anything
-        # measured from it creeps with it. A gradient's interior rounds
-        # through that without moving, but the *edge of the area it is
-        # painted into* is a step, and a step on a creeping number
-        # changes. Measured: one pixel of a 640x360 frame, one step of
-        # red, between two frames a second apart with the track
-        # stopped. The widest case is a constant for a given frame, so
-        # the area is one too.
+        # The area to fill comes from the widest the lamp can ever be, which is
+        # constant for a frame size. The bass never settles exactly, so an area
+        # measured from it creeps, and its edge shows as one pixel changing
+        # under a stopped track.
         widest = max(1.0, rect.height() * (self.GLOW_REACH
                                            + self.GLOW_BASS))
         lamp = QRadialGradient(horizon, reach)
@@ -8004,12 +5799,8 @@ class Rider(Scene):
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
     def _lanes(self, painter, horizon, focal, hue, beat, flash) -> None:
-        """The lines between the lanes.
-
-        Without them the road is one slab and which lane you are in is a
-        guess: "xxx xxxxxxx xxxxx xxxxxxx xxx xxxxx xx xxxxx xxxxx".
-        Drawn brighter than the chevrons and dashed down the road, so they
-        read as lane markings rather than as more decoration.
+        """The lines between the lanes, brighter than the chevrons and dashed
+        down the road, so they read as lane markings.
         """
         reach = self.FAR - self._near
         offset = self._at % 2.0
@@ -8037,11 +5828,8 @@ class Rider(Scene):
 
     def _pillars(self, painter, horizon, focal, hue, kit, beat,
                  flash) -> None:
-        """Gates down either side, passing at the road's own speed.
-
-        What gives the road somewhere to be. They stand on the kick and
-        light on the snare, so the two sides of the frame are doing
-        something the music is doing.
+        """Gates down either side, passing at the road's own speed: they stand
+        on the kick and light on the snare.
         """
         edge = self.LANE_WIDE * self.LANES / 2.0 + 0.45
         tall = self.PILLAR_TALL * (1.0 + kit.get("Kick", 0.0) * 0.35)
@@ -8056,8 +5844,8 @@ class Rider(Scene):
                 head = self._eye(horizon, focal, side * edge, -tall, at)
                 posts.moveTo(foot)
                 posts.lineTo(head)
-                # A short arm turning in over the road, so a pillar reads
-                # as a gate rather than as a stick.
+                # A short arm turning in over the road, so a pillar reads as a
+                # gate.
                 posts.lineTo(self._eye(horizon, focal,
                                        side * (edge - 0.55), -tall, at))
         self._beam(painter, posts, QColor.fromHsvF(
@@ -8081,18 +5869,9 @@ class Rider(Scene):
         self._beam(painter, shards, QColor.fromHsvF(
             (hue + 0.5) % 1.0, 0.25, 1.0, 0.85))
 
-    #: How long a run has to get before the craft is as hot as it gets,
-    #: and how much of a lift that is worth.
-    #:
-    #: A chain of forty is worth far more than four of ten, and it felt
-    #: exactly the same as a chain of one: a number in small text at the
-    #: top of the frame. What a run is worth is the whole of Mono's
-    #: scoring, so what a run is worth has to be something you can see
-    #: without reading - and something you can feel yourself lose.
-    #:
-    #: Forty because that is the number the scoring is built around: at
-    #: forty the chain is paying near its cap, which is the point at
-    #: which a grey stops costing points and starts costing the run.
+    #: How long a run has to get before the craft is as hot as it gets, and how
+    #: much of a lift that is worth. Forty, because there the chain pays near
+    #: its cap and a grey starts costing the run rather than points.
     CHAIN_HOT = 40.0
     HEAT_HALO = 1.7
     HEAT_HUE = 0.10
@@ -8100,30 +5879,18 @@ class Rider(Scene):
     def _heat(self) -> float:
         """How far into a run the craft is, from nothing to all of it."""
         if self._mode == "Puzzle":
-            # The grid's game keeps no chain: what it is building is the
-            # cluster sitting in the columns.
+            # The grid's game keeps no chain: what it builds is the cluster in
+            # the columns.
             return max(0.0, min(1.0, sum(len(pile) for pile in self._cells)
                                 / max(1.0, self.CELLS_WIDE * self.CELLS_DEEP)))
         return max(0.0, min(1.0, self._chain / self.CHAIN_HOT))
 
-    #: How far the craft rolls into a lane change, and how quickly the
-    #: roll follows the move.
-    #:
-    #: The craft slid between lanes perfectly flat, which reads as a
-    #: shape being moved rather than a thing being ridden. The whole
-    #: road banks into its own turns already - the blueprint asks for it
-    #: twice - and the one thing on the road that never did was the
-    #: thing you are steering.
-    #:
-    #: The slide is nine tenths done in 50 ms, so the roll has to be
-    #: quicker than that to be a bank rather than a wobble arriving
-    #: after the move: a third of the way there each frame settles
-    #: inside three.
-    #: Measured: one lane peaks the swerve at 16 units a second and two
-    #: at 32, so 1.0 puts a single change at 16 degrees and leaves the
-    #: ceiling for a dash across the road. At 3.4 every move of any size
-    #: hit the ceiling, which is a bank that reads as a switch rather
-    #: than as the craft leaning into what it is doing.
+    #: How far the craft rolls into a lane change, the most it rolls, and how
+    #: quickly the roll follows the move. One lane peaks the swerve at 16 units
+    #: a second and two at 32, so 1.0 banks a single change 16 degrees and
+    #: keeps the ceiling for a dash across the road. The slide is nine tenths
+    #: done in 50 ms; a third of the way each frame settles inside three, so
+    #: the roll keeps up with it.
     SWERVE_BANK = 1.0
     SWERVE_MOST = 26.0
     SWERVE_EASE = 0.34
@@ -8145,12 +5912,10 @@ class Rider(Scene):
         across = self._lane_here
         broad, long = self.FLAT_CRAFT.get(self._difficulty, (1.0, 1.0))
         wide = self.LANE_WIDE * 0.42 * broad
-        # Nose forward and up, tail low and wide, so it reads as a craft
-        # leaning into the road rather than as a bar lying on it.
-        # Nose down the road, tail towards the camera: pointed the other
-        # way it read as an arrow aimed at the viewer.
-        # Heights are drawn larger downwards, so being off the road
-        # is a height taken away.
+        # Nose down the road and tail towards the camera, so it reads as a
+        # craft leaning into the road; pointed the other way it read as an
+        # arrow at the viewer. Heights grow downwards, so being off the road is
+        # a height taken away.
         lift = self._air
         self._craft_spot = self._eye(horizon, focal, across, -0.14 - lift,
                                      at + 0.4)
@@ -8158,10 +5923,8 @@ class Rider(Scene):
                          at + 1.4 * long)
         left = self._eye(horizon, focal, across - wide, -0.02 - lift, at)
         right = self._eye(horizon, focal, across + wide, -0.02 - lift, at)
-        # And the craft itself answers the kick. A halo around it rather
-        # than a brighter fill: the fill is already near the top of the
-        # scale, and what wants to be felt is the thing being ridden
-        # reacting rather than the thing being lit. In the foreground and
+        # The craft answers the kick with a halo rather than a brighter fill,
+        # which is already near the top of the scale. In the foreground and
         # below the road's far end, so it is never what a block is read
         # against.
         if punch > 0.02:
@@ -8172,16 +5935,9 @@ class Rider(Scene):
             reach = max(2.0, rect.height() * self.HALO_REACH
                         * (0.75 + punch * 0.5)
                         * (1.0 + heat * (self.HEAT_HALO - 1.0)))
-            # On whole pixels, both of them.
-            #
-            # A soft glow does not need placing to a fraction of a pixel,
-            # and a gradient's ramp does: nothing in a frame settles
-            # exactly - the camera closes on its mark asymptotically -
-            # so a centre carried at full precision moves a millionth of
-            # a pixel every frame and rounds differently somewhere along
-            # the ramp. Measured as one pixel of a 640x360 frame
-            # changing by one step of red between two frames a second
-            # apart with the track stopped. Stopped means stopped.
+            # On whole pixels: the camera never settles exactly, so a gradient
+            # centred at full precision rounds differently somewhere along its
+            # ramp each frame, and a pixel changes under a stopped track.
             middle = QPointF(round(spot.x()), round(spot.y()))
             reach = float(round(reach))
             halo = QRadialGradient(middle, reach)
@@ -8199,10 +5955,9 @@ class Rider(Scene):
         path.lineTo(left)
         path.lineTo(right)
         path.closeSubpath()
-        # Banked into the move, around the craft's own middle, so the
-        # nose comes up on the side it is heading for. Everything from
-        # here to the end of the craft is drawn inside it; the bumpers
-        # go with it, because they are bolted to the thing.
+        # Banked into the move around the craft's own middle, so the nose comes
+        # up on the side it is heading for. Everything to the end of the craft
+        # is drawn inside it, the bumpers included.
         bank = max(-self.SWERVE_MOST,
                    min(self.SWERVE_MOST, -self._swerve * self.SWERVE_BANK))
         rolled = abs(bank) > 0.05
@@ -8221,9 +5976,8 @@ class Rider(Scene):
             1.0, 0.85))
         stroke(painter, path, QColor.fromHsvF(shade, 0.2, 1.0, 1.0),
                2.0 * max(0.75, min(1.3, rect.height() / 700.0)))
-        # The bumpers, when they are up: two short bars either side of
-        # the craft. Faint while they are coming back, so the state you
-        # are playing in is something you can see rather than remember.
+        # The bumpers, when up: two short bars either side of the craft, faint
+        # while they are coming back.
         if self._shield > 0.01:
             ready = self._shield >= 1.0
             guard = QPainterPath()
@@ -8269,10 +6023,10 @@ class Rider(Scene):
     def _results(self, painter, rect) -> None:
         """The end of the track: how the run went, over the stopped road.
 
-        The score and what it was made of, and under them the whole ride
-        along the track's own shape - each block taken, in the road's
-        colour at the time, each one missed and each hit - drawn across in
-        a moment. Stays until the track is played again from the start.
+        The score and what made it, then the ride along the track's shape,
+        each block taken in the road's colour at the time and each miss and
+        hit, drawn across in a moment. Stays until the track is played again
+        from the start.
         """
         if not self._finished or self._result is None:
             return
@@ -8480,17 +6234,16 @@ def by_name(name: str) -> Scene:
 #: grain     film noise, which hides banding in the gradients
 #: aberration how far the red and blue channels separate, in pixels
 POST = {
-    # A room full of haze and beams: heavy bloom, a strong vignette, and
-    # the colour fringing a wide lens gives. No scanlines - this is not a
-    # screen, it is a place.
+    # A room of haze and beams: heavy bloom, a strong vignette and the fringing
+    # of a wide lens. No scanlines.
     "Rave": {"bloom": 0.92, "vignette": 0.52, "aberration": 1.6,
              "grain": 0.04},
-    # A CRT showing a sunset: bloom for the neon, scanlines and a little
-    # lens error for the tube, grain to hide banding in the sky gradient.
+    # A CRT showing a sunset: bloom for the neon, scanlines and a little lens
+    # error for the tube, grain to hide banding in the sky.
     "Vaporwave city": {"bloom": 0.60, "scanlines": 0.16, "vignette": 0.42,
                        "grain": 0.05, "aberration": 1.2},
-    # Glass and neon, no tube: heavy bloom, a strong vignette to sell the
-    # depth, and the colour fringing a wide lens gives at the edges.
+    # Glass and neon, no tube: heavy bloom, a strong vignette for depth, and
+    # fringing at the edges.
     "Neon tunnel": {"bloom": 0.75, "vignette": 0.58, "aberration": 1.8},
     # Phosphor: the glow is most of the look, and the scanlines are the
     # screen it is painted on.
@@ -8518,21 +6271,14 @@ def post_for(scene) -> dict:
     return POST.get(getattr(scene, "name", ""), {})
 
 
-#: What the strobe should be doing in each scene, as (source, rate,
-#: sensitivity), used when somebody picks a scene and has not set the
-#: controls themselves.
-#:
-#: One setting cannot suit all of them, because the scenes do quite
-#: different things with a flash. The meters brighten, so a fast strobe
-#: there is a lamp flickering; the tunnel lurches, so a fast one is
-#: motion sickness; the rave scene is built to be hit hard and a slow
-#: one leaves it looking asleep. These are starting points, not locks -
-#: touching either slider stops them being applied.
+#: What the strobe does in each scene, as (source, rate, sensitivity), used
+#: when a scene is picked and the controls have not been set by hand. One
+#: setting cannot suit them all: a fast strobe on the meters is a flickering
+#: lamp, in the tunnel it is motion sickness, and a slow one leaves the rave
+#: asleep. Touching either slider stops them being applied.
 STROBE_SETUP = {
-    # Hits the whole room, and is meant to: the eagerest of the set, and
-    # still short of the point where the strobe starts running through
-    # held notes. Reaching that is something somebody does with the two
-    # sliders, not something that happens because they picked a scene.
+    # Hits the whole room: the eagerest of the set, still short of running
+    # through held notes.
     "Rave": ("Kick", 0.58, 0.58),
     # Neon and glass: the flash is a lurch forward, so it wants to be
     # rare enough to read as an event.
@@ -8545,8 +6291,7 @@ STROBE_SETUP = {
     # The road is already on the beat, so the strobe is the room around
     # it rather than the beat itself.
     "Music rider": ("Kick", 0.40, 0.50),
-    # The trace gains gain on a hit; the hats give it a shimmer without
-    # moving the picture.
+    # The hats give the trace a shimmer without moving the picture.
     "Oscilloscope": ("Hats", 0.55, 0.55),
     # A graph. The flash brightens the bars and nothing moves.
     "Equaliser": ("Snare", 0.40, 0.50),

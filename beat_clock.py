@@ -1,8 +1,6 @@
-"""Where the beats of a track fall.
-
-A steady grid (one beat length and the time of one beat) or, where the
-tempo moves, the list of beat times themselves. Beat numbers are
-continuous: 12.5 is half way from beat 12 to beat 13.
+"""Where the beats of a track fall: a steady grid, or the beat times themselves
+where the tempo moves. Beat numbers are continuous, so 12.5 is half way from
+beat 12 to beat 13.
 """
 
 from __future__ import annotations
@@ -90,15 +88,17 @@ class BeatClock:
         return 60.0 / span if span > 0.0 else 0.0
 
     def nearest(self, when: float, division: int = 1) -> float:
-        """The time of the nearest beat, or of the nearest ``division``th
-        of one."""
+        """The time of the nearest beat, or of the nearest ``division``th of
+        one.
+        """
         division = max(1, int(division))
         return self.time(round(self.number(when) * division) / division)
 
     # -- bars ---------------------------------------------------------------
     def in_bar(self, number: float) -> float:
-        """Where beat ``number`` is in its bar, 0 to BAR: 0 is the first
-        beat. Counted from the downbeat where it is known."""
+        """Where beat ``number`` falls in its bar, from 0 (the first beat),
+        counted from the downbeat where it is known.
+        """
         first = 0.0
         if self.downbeat is not None:
             first = round(self.number(self.downbeat))

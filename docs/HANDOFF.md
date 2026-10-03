@@ -1,724 +1,183 @@
 # Handoff
 
-Where this round of work got to, what was measured, and what is worth doing
-next. The list at the bottom is meant to be ticked off, everything already
-ticked was done in this round, and the untinted boxes below it are what a
-future session should pick up.
+Notes for whoever works on this next: where things are, what breaks if it is
+forgotten, how to measure, and what is open. The [handbook](HANDBOOK.md)
+describes the app itself.
 
----
+## Where things are
 
-## Round three: Music rider, and the road it runs on
+- **Mail:** `imap_engine.py` (IMAP), `rules_engine.py` and `rulesets.py` (the
+  built-in sorter), `llm_engine.py` and `providers.py` (models), `models.py`
+  (routing, no Qt), `gui.py`, `triage_table.py`, `settings_dialog.py`.
+- **Links and updates:** `link_open.py`; `updates.py` (no Qt) and
+  `update_dialog.py`.
+- **Attachments and the visualiser:** `attachment_view.py` (the window),
+  `attachment_widgets.py` (the picture, `Spectrum`, and the GPU canvas),
+  `attachment_audio.py` (analysis, in worker processes), `visualizers.py`
+  (scenes; `Rider` is the game), `rider_gl.py` (the game's lit world),
+  `rider_sound.py`, `rider_layout.py`, `rider_bests.py`, `trackstyle.py`
+  (tempo, beat, downbeat, sections), `harmony.py` (key and chords),
+  `beat_clock.py`, `beatmap.py`, `av_sync.py`.
 
-The visualiser pane has nine scenes. One of them, **Music rider**, is a
-game, and this round turned it into a replica of Audiosurf - built to the
-blueprint in `audiosurf clone guidelines.rtf` in the working folder and
-then to Audiosurf 2's own documented mechanics. It is four games on one
-road now, and almost everything below was found by *measuring* rather
-than by reading the code.
+## Rules that break things if forgotten
 
-### The one tool that matters
+### Everywhere
 
-    ./dev playtest ~/Music/*.mp3
-
-Plays real records through the real pane, headless, frame by frame, and
-reports where each block landed against its beat, what the road's speed
-did, whether it ever went backwards or stood empty, what a player who
-dodges perfectly is still hit by, how many coins that player took, how
-many corkscrews the track earned, and what a frame costs. Nearly every
-fault in this list was found there and then written back into the suite
-as a test. A test says a block arrives on the beat when the chart is
-three evenly spaced kicks; a record says whether it does when the
-detector heard the kick 40 ms late and the tempo came out at 87.3.
-
-No song, path or frame of one is ever written into the repository.
-`*.png` is in the ignore file for exactly this reason: `--save` writes a
-frame of the scene while somebody's music is playing.
-
-### The four games
-
-| Game | What it is |
-|---|---|
-| **Mono** | Grey against colour. A chain: 1, 5, 9 … capped at 200, broken by a grey. Clean finish +30%. A side bumper shatters the first grey free and comes back over 8 s. |
-| **Ninja** | The same road with 4 hazard slots in 7 rather than 2 - fifteen hazards a minute against seven on a real record. Clean finish +60%. |
-| **Wakeboard** | **Up** leaves the road. A jump is paid by how much of a crest it left from: a measurement, not a switch, so half a crest is half the points. Nothing touches you or is collected in the air. |
-| **Puzzle** | The grid: 3 wide, 6 deep, 4-connected, 750 ms fuse, cascading gravity, quadratic cluster scoring, overfill stun. |
-
-Coins sit where you have to be brave to take them - beside a single
-obstacle, or in a lane a wall is *about to close*, ending 0.3 s before it
-arrives. Corkscrews turn the world over round the craft at the song's
-loudest moments - the craft stays put on the glass - with a power block at
-the mouth of each.
-
-### Invariants. Break these and the scene breaks
-
-Each one cost a round of measurement to find. Each has a test.
-
-- **One clock.** The road's position is a function of the beat:
-  `PER_BEAT = (FAR - RIDER_AT) / LOOK_BEATS`, so a block laid on beat *n*
-  sits at *n* of them and arrives exactly on it. Before this there were
-  two clocks and blocks slid over the ground.
-- **`_origin` is not `_grid`.** `_grid` is re-derived every frame and
-  phase-locked; `_origin` is a *fixed* distance origin. A distance
-  measured from something that walks with you is always the same
-  distance, and that is a road that never moves.
-- **A block must be read against the road.** The road, the lamp and the
-  sky behind it are held near the floor on purpose. An obstacle and the
-  road it stood on once differed in hue and not in brightness - 0.400
-  against 0.401 - which is invisible. Anything that brightens the middle
-  of the frame has to be measured against `TestTheRoadIsBuiltFromTheSong`
-  and the coin and block contrast tests before it ships.
-- **Stopped means stopped.** Every clock in the scene runs on the
-  track's own time: the shake, the sparks, the field, the camera easing,
-  the envelope followers, the fuse, the bumper's recharge and the origin's
-  own phase correction. That last one crept ten units of road a second
-  under a stopped song.
-- **The same game on every machine.** A share *per frame* is a different
-  game on every machine. The lane slide and the camera's shake are shares
-  per sixtieth of a second: the dodge window holds between 50 and 67 ms
-  from 30 fps to 144, and was 167 ms at 30 and 25 at 120.
-- **Nothing the analysis says can close the window.** `SpectrumState.settle()`
-  forces every number back into its range once a frame, before any scene
-  sees it. A nan is *truthy*, and a nan tempo used to raise out of paint
-  on the first frame.
-
-### Measured, at the end of this round
-
-- A block arrives a median of **10 ms** from its own beat on a real
-  record; the road runs 4.8 to 19 units a second around a mean of 12.3,
-  with a floor at 45% of the mean rather than stopping.
-- A beat changes **43% of the frame** and swings its brightness 0.064.
-  It was 7% and 0.026, which is what "the beat isn't felt" measured as.
-  The beat hits at the frame's *edge* and on the craft, never in the
-  middle, so block contrast is identical on the beat and off it.
-- A frame costs **8.7 ms median at 1920x1080** against a 16.7 ms budget.
-  On the graphics card, at a Retina full screen's every pixel with 4x
-  multisampling and all of the polish, it is **10.2 ms at 2880x1800**,
-  where the CPU took 41.9 and had to draw at half the resolution.
-- A scene's first frame costs 12-16 ms rather than up to 168. The font
-  machinery is warmed on a worker thread and a scene is drawn invisibly
-  for its first six frames.
-- The road bends up to 1.37 lane widths and is within a third of a lane
-  of straight 63% of the time. It was straight **100%** of the time: the
-  stereo lean was summed with its own bias in it, and summing a biased
-  signal gives a ramp, which with the camera pinned to the road is
-  exactly what straight looks like.
-- 14,625 hostile inputs through `tools/stress.py`: nothing raised,
-  nothing hung.
-- Across eight real records of different genres: zero hits for a player
-  that dodges properly, zero backwards steps, a block a median of 8 to
-  15 ms from its beat, and the road bare between 0 and 3.4 per cent of
-  the time. Before the quiet-passage fill, two of those eight were bare
-  for a quarter of the run and one stretch ran 8.6 seconds.
-
-### Watch out for
-
-- **Never draw text off the GUI thread.** The font machinery's one-off
-  cost is 145 ms, and moving it to a worker thread to keep it off the
-  frame clock segfaults the process:
-  `QCoreTextFontDatabase::populateFamilyAliases` is not thread-safe and
-  races the GUI thread doing the same thing. It is warmed on the GUI
-  thread while the pane is built, where a stall costs nothing because
-  nothing is animating yet. A crash is not a trade for a stall.
-- **Anything drawn as a gradient goes on whole pixels.** The same
-  asymptote bites twice: a filled path's antialiased edge rounds through
-  a millionth of a pixel unmoved, and a radial gradient's smooth ramp
-  does not. The craft's halo is placed and sized on integers for that
-  reason, and the lamp's fill area is computed from a constant. Both
-  were found the same way - one pixel of a 640x360 frame changing by one
-  step of red between two frames a second apart with the track stopped -
-  and `xxxx_xxxxxxx_xx_xxxxxx_xxxxx_xxxxx_xxx_xxxxx_xx_xxxxxxx` is the
-  test that catches it every time.
-- **Nothing in a frame settles exactly.** The pane's level envelopes
-  ease towards a held row, and the clock closes on the playhead, both
-  asymptotically - so under a *stopped* track every number still creeps
-  in the tenth decimal place. A gradient's interior rounds through that
-  without moving; the edge of the region it is painted into does not,
-  because a step function on a creeping number is a step. Anything
-  clipped to an area has to compute that area from a constant, not from
-  a value that creeps. Measured as exactly one pixel of a 640x360 frame
-  changing by one step of red, which is the sort of thing that is
-  invisible and still wrong.
-- **Measure before culling for speed.** Dropping a block's reflection
-  past a distance took a third of the frame's fills out and saved 0.2 ms
-  of 8.9 - and spent the thing that makes a block sit on the road at
-  exactly the distances a player reads. The test caught it. Four
-  gradient fills of a band also cost more than one fill of the whole
-  frame, because the per-call setup dominates the pixels.
-- **Mutation runs edit the source in place.** `finally` restores it - but
-  a killed run does not, and a previous session left the game box
-  hard-wired to two modes and `_collide` returning early in mid-air. A
-  green full suite is the proof that no mutant survives, because every
-  mutant written for this scene is caught by a test.
-- **A test that means "figures" must exclude coins.** A coin trail is
-  three things a sixth of a second apart on purpose.
-- **`_pulse` is an attribute, not a method.** The beat phase. The rim
-  flash is `_rim`.
-- **The pane draws on the graphics card, and the suite cannot see it.**
-  `_GpuCanvas` in `attachment_widgets.py` is a `QOpenGLWidget` laid over
-  the pane; `_paint_on_gpu` runs the same `_paint` into a 4x multisampled
-  framebuffer at the screen's real resolution, and the polish goes on
-  after. The suite runs on the offscreen platform, where no context can
-  be made, so every other test goes through the CPU path - which is also
-  the fallback. `tests/test_gpu_canvas.py` is the only file that runs the
-  card: each test is a subprocess on the real platform reporting JSON,
-  and it skips on a machine with no context. Anything that touches
-  drawing has to pass both. `MAIL_MANAGER_GPU=0` forces the CPU path.
-  `CardSharpness` measures each frame *finished* (`glFinish`), because
-  on a card the calls return long before the drawing is done, and it
-  judges on a median of thirty, never a running average.
-- **Traps on the card, each found the hard way.**
-  A framebuffer counts rows from the bottom: a sub-rectangle read from
-  one has to be flipped, and it only shows when the scene is not
-  centred. A hidden widget's resize events are held back until it is
-  shown, so the canvas is resized in `update()` as well as
-  `resizeEvent`, or it draws a pane of no height. A `QOpenGLPaintDevice`
-  made as a temporary is collected while it is being painted on - keep
-  a reference. Reparenting into full screen can bring a new context, so
-  `initializeGL` throws away every framebuffer. Shrinking on the card is
-  done in halves; one blit reads a pixel in sixteen and the bloom comes
-  out beaded. Never monkeypatch `QGuiApplication.instance` in a test -
-  pytest-qt's teardown calls it; `_platform_name()` is the seam.
-
----
-
-## Round two: non-job mail, church, and going public
-
-**Non-job mail had no menu.** Job mail could be ticked and filed in one
-click; everything else sat in the table doing nothing, could not be ticked,
-and said "Leave in place" without any hint that this was a setting rather
-than a fact. The setting lived in two places, one of them a submenu inside
-the button for choosing which AI to use. There is now a **Sorting** button in
-the toolbar holding all three questions - what to sort, what happens to the
-rest, which topics earn a folder - and the third of those had no interface at
-all before. A row that will not tick says which of the two reasons applies and
-offers to change it.
-
-**Church is a topic.** 161 signals, and the gap that made it work was
-denominations - the word in the masthead and the footer of every parish
-mailing, and the most portable vocabulary in the whole table. Four rows in the
-labelled set were parish mail labelled Newsletter and Personal because Church
-did not exist when they were labelled; all four now classify correctly, and
-real mail wrongly sent to Junk fell from 0.10% to 0.07%.
-
-**Form loses to subject.** Newsletter, Promotion and Personal describe how a
-message is written; every other topic describes what it is about. A parish
-bulletin is a newsletter in form and church mail in substance. So a subject
-topic with real evidence now beats a form topic, and that is the rule that
-made the church newsletters land correctly.
-
-**The repository can be published.** The labelled set was built from a real
-inbox and named the people who wrote to it, the companies that interviewed
-them, the church they attend, and two people who had died. tools/anonymise.py
-replaces the names and keeps the language, verified by re-scoring rather than
-by reading: 87.3% exact, unchanged. Four wrong versions were caught that way.
-It refuses to guess at names in running prose and flags those rows instead;
-the two it flagged were rewritten by hand.
-
-**Two switches can only be thrown after the repository is public.** GitHub
-refuses both while it is private, and About links to the first of them:
-
-- **Private vulnerability reporting** - Settings → Code security. This is what
-  makes `/security/advisories/new` accept a report from somebody who is not a
-  maintainer, and that URL is the "Security concern…" button in About. Until
-  it is on, that button leads to a 404 for everyone but the owner.
-- **The DMG on the release** has to be rebuilt from the published commit, so
-  that the build stamp in About names a commit a reader can actually look up.
-
-Dependabot alerts and its automated security fixes are already on; those two
-GitHub does allow on a private repository.
-
-**Everything that can explain itself does.** Nineteen of twenty-nine controls
-in the main window had no tooltip, which in help mode means no explanation at
-all. tests/test_first_run.py walks every clickable, typeable and draggable
-widget in the window, the preview and the settings dialog, and fails on any
-that cannot explain itself.
-
----
-
-## What changed, in one paragraph each
-
-**The window is four files instead of one.** `gui.py` had reached 6,541 lines.
-It is now `widgets.py` (shared pieces), `triage_table.py` (the table and the
-preview), `settings_dialog.py` (everything configurable) and `gui.py` (the
-window itself), with every symbol re-exported so no import anywhere else
-changed. Pruning the imports afterwards found a real bug: `MainWindow` had two
-`resizeEvent` methods, and the second had been silently shadowing the first
-since they were written.
-
-**It learns from being corrected.** Move a message somewhere the app did not
-suggest and it writes that down. An exact address needs one correction; a
-domain needs two from two different people, and never at a shared mail host.
-The most recent correction always wins, so changing your mind takes effect
-immediately. The Folders tab lists what it learned, says why, and has a Forget
-button.
-
-**It does not pay twice for the same answer.** Verdicts are kept between scans,
-keyed on mailbox, UID and a hash of every setting that changes what a verdict
-would be. Re-scanning the same window costs nothing. Failures and rules-engine
-fallbacks are deliberately never kept.
-
-**It sorts while it fetches.** The two halves of a scan ran end to end, each
-idle while the other worked. They now overlap. Correctness does not depend on
-it, anything the fetch does not stream is swept up and classified anyway, and
-there is a test for exactly that case.
-
-**The sorter reads the From line.** A careers mailbox is not a person writing
-to you however warmly it is written, which stopped eight adversarial rejections
-reading as personal notes. A second table of otherwise-too-generic phrases
-counts only once a hiring mailbox or a named process has licensed it, the
-thing a language model does that a phrase table does not.
-
-**The sorter is four times faster.** Before running a signal's regex, check
-that the longest word of its phrase is in the text at all. 43.5 ms per message
-to 10.1 ms, with every eval fixture scoring exactly what it scored before.
-
-**Undo works, and works more than once.** An IMAP `COPY` gives the message a
-new UID and the old undo used the old one, so it either did nothing or moved a
-stranger. It now reads the server's `COPYUID` receipt, and refuses to guess when
-there is not one. The stack is ten deep.
-
-**Nothing personal can reach the repository.** `tests/test_privacy.py` reads
-every tracked file and fails on an address that could belong to a real person.
-It found three in the existing tests on the day it was written.
-
----
-
-## Where it stands, measured
-
-Run `./dev eval`, `./dev test` and `python tools/corpus.py` to reproduce any of
-these.
-
-| Set | Job vs not | Exact category | Of those it filed |
-|---|---|---|---|
-| labelled (102) | 99.0% | 87.3% | 54/55, 98.2% |
-| adversarial (39) | 87.2% | 59.0% | nothing filed; all held for review |
-| held out (24) | 70.8% | 37.5% | nothing filed |
-| meetings (15) | 100% | 80.0% | 2/2 |
-| acknowledgements (11) | 100% | 100% | 7/7 |
-
-**SpamAssassin corpus**, 6,046 real messages: 0 unreadable, ~140 messages a
-second, **0 of 4,150 ham messages filed as job mail**, 3 sent to Junk (0.07%).
-That first figure is the one that matters and it must stay at zero.
-
-**Speed.** Rules engine 10.1 ms per message. Lexicon opens in 38 ms using
-1.95 MB, down from 70 ms and 10.5 MB, and neither number now grows with the
-table. Test suite 4,601 tests (with the evaluation sets present) in about five minutes on four workers.
-
----
-
-## Things a future session should know
-
-- **The audio analysis runs in worker processes** (`attachment_audio._worker`,
-  spawned). Three consequences. Any script that constructs the viewer and
-  analyses a track must put its body under `if __name__ == "__main__":` -
-  a spawned worker imports the main module again, and an unguarded script
-  runs itself once per worker. `main.py` calls `multiprocessing.freeze_support()`
-  first, which is what stops a worker in the built app opening a second
-  window; the self-test runs a worker to prove it. And a test that
-  monkeypatches `analyse` or `onset_frames` does not reach the workers - set
-  `attachment_audio.WORKERS = False` to test the thread path.
-- **The kit, the traces and the bands arrive in any order now.** The drums run
-  alongside the picture, so they can land first; `set_beats` merges the kit
-  back in rather than replacing the table, and the relay holds the kit until
-  the bands have gone out. The road's contour comes with the bands and is
-  final (`set_contour`); `set_traces` leaves it alone.
-- **The rider's world is `rider_gl.py`, and `Rider.paint_on_card` calls it.**
-  `Rider._step` is the game's frame; `paint` is `_step` plus the flat
-  drawing, `paint_on_card` is `_step` plus the world plus the HUD. Change
-  the game in `_step` and both follow. The world reads the scene and never
-  writes to it. Its tests are `tests/test_rider_world.py`; the ones that
-  draw run through the card harness in `test_gpu_canvas.py`.
-- **Traps in the world, each found the hard way.** A GL paint device reports
-  its height in *pixels*: multiplying by the pixel ratio put the world off
-  the top of the frame, and only at full resolution, which is exactly where
-  the governor was not when it was looked at - so check the world at rung
-  (4, 1.0) as well as whatever the governor settles on. PySide resolves no
-  overload for a uniform set by name to a float, so uniforms go by location
-  (`_Program.set`). `out` is a reserved word in GLSL 1.20. A pane and its
-  canvas must not be a reference cycle, and paintGL holds the collector off:
-  a GL widget freed by the collector in the middle of another widget's frame
-  leaves no context current and the painter crashes (twice as likely with the
-  world, which allocates enough to set the collector off). And the release Qt
-  recommends in `aboutToBeDestroyed` cannot be done from PySide - the
-  context's wrapper is already gone - so everything the world makes is a Qt
-  object that frees its GL names with its context.
-- **The rider's sounds are `rider_sound.py`, and they listen rather than being
-  called.** The pane hands the scene to a listener after every frame
-  (`Spectrum.set_listener`); the sound board reads the scene's pops, the
-  same record the world answers, so a sound and a flash cannot disagree.
-  A sound is changed by editing its function and bumping `VERSION`, or the
-  cached WAV from the last build is played instead. The files are made in a
-  spawned process the first time the rider is chosen (`make_elsewhere`).
-- **A run ends in `Rider._finish`,** from the track's own length (its contour),
-  which is why it works the same in the app and in the playtest tool. The
-  result is `Rider.result()`; the card is `Rider._results`, drawn by both the
-  flat and the lit path. Bests are `rider_bests.py`, offered by the viewer's
-  listener (`AudioPane._keep_best`) and keyed by `rider_bests.fingerprint`.
-  The "finish" pop is never trimmed from the scene's twelve: the card fades
-  in from it.
-- **What became of a block is `Rider.struck(block)`,** recorded by `_collide`
-  as it decides ("taken", "hit", "shatter", or None). The record holds the
-  block itself, not only its id, so a block laid after one was dropped can
-  never inherit its outcome; it is pruned to the blocks still on the road
-  each frame. rider_gl's `_notice` reads it and nothing else - do not go back
-  to working out "taken" from the craft's lane. An obstacle's last stretch is
-  `RiderWorld._rammed` (pinned to `NOSE`, squashed); a prize's is the pull-in
-  in `_draw_blocks`.
-- **The running score is `_score`; `_worth()` has the clean bonus in** and is
-  for the card and the bests only. `Rider.bonus(mode)` is the share.
-- **A corkscrew is in the road samples, not the camera.** `RiderWorld._twist`
-  puts the turn due at each point into that sample's roll and records it
-  in the sample's fourth float (unused by the shaders); `_turn_at` reads it
-  back. The camera is placed on the road with the turn left out
-  (`_on_road(..., plain=True)`) and then turned rigidly about the road's
-  line at the craft (`_about`). The turn counts on through finished
-  corkscrews rather than resetting, which is what stops the fold. Solids and
-  towers are placed with `onRoadAs` (the roll at their anchor). The towers'
-  one-piece turn is not pinned by a pixel test - every tower stands at a
-  different depth, so no pair of roads agrees at all of their anchors; the
-  craft's is (`test_the_craft_turns_over_in_one_piece`). The flat picture
-  turns only `_glow` and `_pillars`, drawn first.
-- **A seek is `Rider._jumped`,** set in `_advance` for a jump of the playhead
-  after at least one earlier frame (the first frame is never one - tests that
-  lay blocks by hand and paint at 1.0 s depend on that). A seek re-lays the
-  road in `_lay` (and drops anything the beat grid put behind the craft);
-  `_finish` turns one back to the start into a new run and any other into a
-  run that is not `_whole`, which `AudioPane._keep_best` does not keep. A run
-  whose first frame is past `START_AGAIN` is not whole either.
-- **A self-test line that says something is missing must raise, not
-  return.** `check()` only fails on an exception, and `build_app.sh` only
-  refuses to ship on a failed check. `_dial_face` returned "NOT bundled" for
-  every release until it was made to raise; anything added to the self test
-  should be checked with a test that breaks it and expects `self_test() == 1`
-  (see `TestTheSelfTestHasTeeth`).
-- **The rider is laid from four modules.** `harmony.py` (key, tuning, chords,
-  lead; runs in its own worker part, `"harmony"`), `trackstyle.py`
-  (`rhythm_of` is the heavy half and runs in the drums worker after the kit;
-  `read` is the cheap half and runs in `Rider._restyle`), `rider_layout.py`
-  (which figures, how many, how often) and `visualizers.Rider` (lays them).
-  The pane carries `state.harmony`, `state.rhythm` and `state.flux` (the kit's
-  onset strength, kept on `beatmap.BeatMap.flux`). Tests ride whole written
-  records through the game with `tests/ridekit.py`; `tests/songkit.py` writes
-  both audio (chords, tuning, lead) and charts (styles, sections).
-- **The drums worker sends two messages, and the rhythm is its last.** In
-  `_AnalysisThread._run_in_workers` every part but "picture" ends on one
-  message and the loop closes the pipe on it; "elements" is now followed by
-  "rhythm", so "elements" `continue`s. Anything added after it must keep that
-  shape. The picture part sends "beats" straight after "bands".
-- **Keys that stop the road being re-planned under the rider.**
-  `Rider._styled_from` keys the style on the chart, shape, harmony, rhythm
-  and the tempo *the pane counts in* (not `_beat`, which the style itself
-  changes - drum and bass - and would re-read forever). `_planned` keys the
-  road on the shape, the style and `_beat`. A late plan is spliced in beyond
-  `PLAN_KEEP` seconds (`_splice`). A change of `_beat` re-bases the road
-  (`_rebased`) without counting as a seek.
-- **Laying is committed short of what is read** (`commit` in `_lay`), and
-  snapping counts from the drums' fixed beat (`_anchor`): both were frame-rate
-  dependent, and `test_whatever_the_frame_rate` pins it. Obstacle shares are
-  carried per section in `_owed`, not drawn, and owed on every figure: see
-  below. Committed to the edge, the
-  heaviest-nearby choice never sees the hit after the one it is choosing
-  for - at every frame rate alike, so the frame-rate test cannot see that;
-  `TestTheHeaviestHitNearby` can. `Rider._weight` ranks the drums, and in
-  half time the snare ranks with the kick, for placement and obstacles both.
-- **Half time is read from the kick** (`rhythm`'s `"half"`: the snare two
-  beats from the kick's strongest beat against one beat from it, faded out
-  as the kick comes to every beat). Counting the snare's strong beats read
-  no real dubstep record as half time - the kick is loud in the snare's
-  bands. Half time counted at `HALVED_FROM` (155) or faster is recounted at
-  half in `rhythm_of`: hip hop counted at 176 is a backbeat at 88.
-- **The road and the blocks run on one curve.** `_world` (the road) and
-  `_flat` (a block's place) both warp each beat by `_lunge_of(n)`, the lunge
-  `_decide_lunges` gives beat n as it comes into view and never changes.
-  Anything that wants to push the road around inside a beat has to go
-  through there, or blocks between beats stop arriving on time
-  (`TestEveryBlockArrivesOnItsMoment`; `./dev playtest`'s "off" column).
-- **The rider's sounds are stereo synth voices** (`rider_sound`, cache
-  `VERSION` 5): notes are `pluck` (pickups) and `chime` (coins); `voice_of`
-  says which a name is. Each note taken is echoed through the board's
-  `later` on the scene's `_beat` (`SoundBoard.ECHOES`), never rendered into
-  the file, so one set of notes serves every tempo. The level is
-  `volume() * level()`, `level` being the pane's **Effects** slider, kept in
-  `viewer.json` beside the bests - not in the mail settings, which the main
-  window saves whole. "Unpitched" is tested as no semitone standing over its
-  neighbours (`TestTheSoundsThemselves._line`), not against the range's
-  average, which a brightly filtered sound fails for its slope.
-- **A note put off is the pane's own `QTimer`** (`AudioPane._later`, one
-  single-shot timer a note). `QTimer.singleShot(ms, TimerType, callable)` is
-  not an overload PySide has: it raised on the first echo, the pane dropped
-  the game's listener, and the game was silent. Every sound test stubs
-  `later`, so none of them could see it; `TestTheyAreReallyPlayedLater` runs
-  the real one, and `SoundBoard._play_at` plays a note at once if `later`
-  raises.
-- **The pane's moment is `Spectrum._now`, asked once a frame.** `_heard()`
-  runs the player's 50 ms position reports forward smoothly; `_now` adds the
-  allowance (`av_sync`). Everything drawn reads `_now` and nothing asks
-  `_heard()` again inside a frame (`TestOneMomentAFrame`). A band frame is
-  shown at `FRAME_MIDDLE`, the middle of its 2048-sample window; a rising
-  band steps up and a falling one eases. A hit fires at `now +
-  min(NEAREST_MOST, step / 2)` - uncapped, half the step was half a second on
-  a first frame. `tests/test_on_the_beat.py` is the click track a timing
-  change is checked against, frame by frame, through the real pane.
-- **The drums' beat is put on the hits** (`trackstyle.on_the_hits`, the end
-  of `rhythm_of`): a line through the numbered kicks (else snares) against
-  the grid. Its slope is taken only within `REFINE_MOST` of the folded beat,
-  otherwise only the phase moves. `Spectrum._clock` counts from the rhythm's
-  tempo and phase whenever there is one.
-- **`av_sync` asks Core Audio through ctypes**, no dependency: the default
-  output device's latency, safety offset, buffer and largest stream latency.
-  `Allowance` asks again every `ASK_EVERY` and gives up for good after one
-  exception. The listener's trim is `viewer.json`'s `"sync"`, within
-  `AudioPane.SYNC_MOST`. The self test checks it ("the picture on the
-  beat").
-- **Levels are `rider_layout.DIFFICULTY`, applied in `Rider._set_level`.**
-  `LOOK_BEATS` and `PER_BEAT` are set on the scene there, so anything that
-  measures the road in beats must read them from the scene, not the class.
-  `set_difficulty` and `set_mode` each reset and keep the other. Points go
-  through `_paid`; Expert's `_shield_back` is None, which is no shield. Bests
-  are keyed by `AudioPane.best_kept_as`: Normal keeps the key bests had before
-  levels, the others are `"{mode} {level}"`.
-- **Crafts are `rider_gl.CRAFTS`, one a level (`CRAFT_FOR`)**, meshes cached
-  per craft in `RiderWorld._crafts`. `ship_triangles()` with no name is the
-  Arrow, the craft there always was. A longer craft grows forwards
-  (`TAIL_SHARE`). The flat picture's proportions are `Rider.FLAT_CRAFT`. A
-  grabbed frame is at the device pixel ratio: a loop over the logical size
-  samples a quarter of it, which is how the first road-hidden test passed a
-  craft that hid more.
-- **A corkscrew's tunnel hides the towers; it does not fix them.** They still
-  turn with the road. The tube is placed on the road by `onRoad` and drawn
-  after the ship, blended (`RiderWorld._draw_tunnel`), with how much of it is
-  there at each road sample (`inside`) read in `_read_road` from
-  `Rider._tunnel_at`. The flat picture's is `Rider._flat_tunnel`.
-- **Obstacles are owed on every figure** (`Rider._greyed`), carried up to
-  `OWED_MOST` and paid on the next heavy hit, or on a snare once the cap is
-  reached. Owed on the kick's figures alone, a garage drop came out at a
-  fifth obstacles and a second one at none. `danger_share` scales the share
-  by one less the calm, so an ambient record still has nothing to dodge.
-- **Never `hide()` a control that lives inside a holder.** The holder shows
-  and the control does not: that is how the Game box and the meters' Colours
-  button were missing from the window from Puzzle until now. The scene's own
-  controls are shown and hidden as groups (`_group`: `rider_group`,
-  `scope_group`, `meter_group`) by `_show_visual_controls`, and tests check
-  `isVisibleTo(pane)`, which sees a hidden child where `isVisible` on an
-  unshown pane cannot.
-- **The sounds are notes when the key's confidence is 0.05 or more**, and
-  nothing else is asked. `harmony.tonality` is kept but is not a gate: on
-  real mixes it is near zero whether the key came out right or not.
-- **Chords are heard over `harmony.CONTEXT` readings either side.** A bare
-  arpeggio was three chords taking turns; the key's relative is settled by
-  chord durations, so a change here is checked against the DJ program's keys
-  before it ships (`key_eval.py` in the session's scratchpad).
-- **The scope's screen lives on the card when the pane does** (`scope_gl.Tube`,
-  from `Oscilloscope.paint` when `_on_card(painter)`). It is composed as the
-  CPU composes it - a plain buffer dimmed, the new trace struck multisampled
-  into a scratch buffer and laid over - so the two agree to a hundredth
-  (`TestTheScopeOnTheCard`). It is sized to what the beam can reach
-  (`scope_gl.reach`), and a failure falls back to the CPU tube for good.
-  It rebinds the painter's framebuffer itself before `endNativePainting`:
-  Qt's engine restores its state there but not the target.
-- **A script run on the card must not reach the interpreter's teardown.**
-  `on_the_card` ends every script with `os._exit` and sets an excepthook
-  that does the same. An exception that reached Qt from a paint was kept in
-  `sys.last_traceback` with its painter still begun, and at exit PySide took
-  Qt apart before that was let go: `QPainter::end` on a dead device, an
-  abort, and a crash report on the screen. The runner also fails a
-  script that does not exit 0, which is how such an exception now shows.
-- **Measured locally, not in the suite:** the key profiles (fitted), the
-  tempo choice and the beat phase against a DJ program's analysis of the
-  local library. The scripts and every measurement stay in the session's
-  scratchpad; nothing about the library is in the repository. The towers'
-  one-piece turn through a corkscrew is still not pinned by a pixel test.
-- **Brace a shell variable that touches a curly quote.** `"as “$IDENTITY”"`
-  is read by macOS's bash as a variable whose name includes the quote's
-  bytes; under `set -u` it stopped `build_app.sh` after the bundle was
-  made and before it was signed or started - only on machines with a
-  signing identity, which is why it went unseen. `${IDENTITY}`.
-  `tests/test_abuse.py` checks every script for it.
-- **`./dev test` runs `-n 4 --dist loadfile`.** Whole files per worker, because
-  the Qt tests share one `QApplication` per process. A single file is about two
-  seconds; the whole suite is about five minutes.
+- **Every shortcut is unique.** Qt fires neither of two actions bound to the
+  same keys. `test_no_two_actions_share_a_shortcut` checks the main window.
+- **A self-test line that reports a problem must raise.** `check()` only fails
+  on an exception, and `build_app.sh` only refuses to ship on a failure.
 - **Never assert on a menu by calling `exec`.** It enters a native modal loop
-  that pytest's thread-based timeout cannot interrupt, and the suite hangs
-  rather than failing. `build_table_menu()` and `build_header_menu()` return the
-  menu; the caller shows it.
-- **Progress signals emitted from the classifying thread arrive by queued
-  delivery.** Correct in the app, invisible to a test with no event loop. The
-  final progress update is emitted from the scan thread for that reason.
-- **The eval fixtures are hand-written stand-ins.** `./dev tune` scores against
-  a real inbox and prints only counts and confidence bands. `--write` produces
-  a labelled set and refuses to write anywhere inside the repository.
-- **Before adding a phrase to the sorter, ablate it.** Twenty-six of the
-  conditional phrases first written for the adversarial set were shaped too
-  closely to it; removing them changed none of the four numbers above. The
-  general ones did all the work.
-- **`tools/anonymise.py` protects what the sorter reads, taken from the
-  engine.** Rewriting a host the rules engine has a signal for changes the
-  verdict and the fixture then measures a different app. That list is derived
-  from `SCHEDULING_LINK_DOMAINS`, `ASSESSMENT_LINK_DOMAINS` and every
-  sender-field signal, never typed out beside it.
-- **Anonymising is verified by re-scoring, not by reading.** Four wrong
-  versions were caught that way, including one that took the set from 87% to
-  57%. If a score moves, a signal was keyed on somebody's name.
-- **The eval fixtures are the only place `.example` is not required.** Public
-  vendor names - Workday, iCIMS, Calendly, Instagram - stay, because the
-  sorter names them. `tests/test_privacy.py` knows the difference.
+  that the suite's timeout cannot interrupt.
+- **Progress from a worker arrives by queued delivery,** which a test with no
+  event loop never sees.
+- **Brace shell variables next to curly quotes:** `${IDENTITY}`, never
+  `$IDENTITY”`.
+- **Before adding a phrase to the sorter, ablate it.** Most phrases written
+  for one adversarial set changed nothing; the general ones did the work.
+- **Anonymising is checked by re-scoring.** If a score moves, a signal was
+  keyed on somebody's name. `tests/test_privacy.py` fails on any address that
+  could be a real person's.
 
----
+### Heavy jobs
 
-## The list
+- **One track per process, one at a time, with memory checked first.** A batch
+  of decodes run beside other heavy work once took the machine down.
+- **Scripts that build the viewer and analyse audio need
+  `if __name__ == "__main__":`.** The analysis runs in spawned processes, which
+  import the main module again.
+- **Mutation runs edit source in place.** A killed run leaves the mutant in;
+  check `git diff` after one.
 
-### Music rider, next
+### The visualiser window
 
-- [ ] **The four Audiosurf character classes are not built.** Pointman's
-  LIFO buffer, Vegas's shuffle, Pusher, Eraser. They all act on the
-  puzzle grid with mouse clicks, and this scene has no mouse input - so
-  they need an input design before they need code.
-- [x] **Run the playtest over a batch rather than one record.** Done,
-  over eight of different genres, and it immediately found two things a
-  single track had hidden for the whole project: the road going bare for
-  8.6 seconds where the drums stopped, and a tempo octave error that
-  drove one track at twice its own speed. Run it one song at a time in
-  one process - a previous session killed the machine by running the
-  batch next to two other heavy jobs - and run it after anything that
-  touches the chart, the clock or the road.
-- [x] **A GPU renderer.** Done, and without the new dependency or the
-  separate repository this item used to predict: Qt's own OpenGL paint
-  engine ships in PySide6 and draws the same QPainter calls, so no scene
-  changed. `_GpuCanvas` and `_paint_on_gpu` in `attachment_widgets.py`.
-  A Retina full screen is drawn at every real pixel with 4x multisampling
-  - it was half resolution, stretched, which is what "soft" was. At
-  2880x1800 on an M1: 10.2 ms with every effect, against 41.9 on the CPU.
-- [x] **Profile the scene at 4K and above.** Measured on the card on an
-  M1 at MacBook Air, 14-inch and 16-inch MacBook Pro, 5K and 6K sizes:
-  8.9, 11.2, 13.8, 22.7 and 32.3 ms at full quality. `CardSharpness`
-  governs it - samples first, then the logical resolution - and a 5K
-  display settles at 10 ms, a 6K at 9.6. The numbers are on the class.
-- [ ] **Frame pacing: about one refresh in ten does not get exactly one new
-  frame.** The pane's 16 ms timer runs at 62.5 Hz against a 60 Hz display and
-  the two drift past each other: measured with Core Video's own refresh
-  times, 87-91 refreshes in a hundred get exactly one new frame, a hitch
-  1.2-2.2 times a second. Tried and measured, and each was worse, so none
-  shipped: driving frames straight off a CVDisplayLink (60-75 in a hundred -
-  a frame begun at the refresh finishes near the next one); an exact 60 Hz
-  schedule (99, 96 and 57 in three runs - it depends where it starts); and
-  that schedule phase-locked towards mid-refresh (70-79 - Qt's own repaint
-  scheduling between the request and the paint spreads completion evenly
-  across the interval, so steering the request does not steer the frame).
-  Qt only enforces a minimum 8.3 ms between a widget's repaints; it does not
-  lock them to the display. The next thing worth trying is presenting from a
-  layer that reports its own presentation times (a CAMetalLayer), which
-  would be the instrument this needed.
-- [ ] **Bigger spectacle now has a budget to spend.** The card draws the
-  scene at 2880x1800 in under 5 ms, so real particle counts, a denser
-  road and a proper bloom are affordable on a MacBook's own screen.
-  Anything added has to be measured against the 5K and 6K rungs as well,
-  because on a small card that is where it costs.
-- [ ] **The levels are a first design, to be tuned by playing them.** Asked
-  for "work with me": the five dials are one table
-  (`rider_layout.DIFFICULTY`), and each craft is one row of `CRAFTS`. What
-  a player says after an evening of Hard and Expert is worth more than any
-  number in them now.
-- [ ] **The allowance for the ear is measured on built-in speakers only.**
-  Core Audio's answer there is 19 ms. Bluetooth headphones report far more,
-  by design, and have not been tried here; **Timing…** is the way out if
-  the answer is wrong.
-- [ ] **The city through a corkscrew is hidden, not fixed.** The tunnel
-  closes over the towers turning with the road. A city that stays put
-  while the road rolls under it would need the road to be seen over empty
-  air, which is what the tunnel is for.
+- **The picture's share of the pane** is worked out in
+  `AudioPane._spectrum_budget` from `minimumHeightForWidth` at the pane's
+  real width, on resize and on every layout request. The window's minimum
+  width comes from its layout, set on first show.
+- **The transport line has one height** with the slider or the waveform
+  (`addStrut`).
+- **A new track keeps the picture open** (`Spectrum.clear(keep_open=True)`);
+  the progress bar is drawn outside the new scene's fade.
 
-### Done in this round
+### The picture
 
-- [x] **1.** `Ctrl+R` was bound twice, so Qt fired neither. Every shortcut is now
-  unique, and there is a check before adding one.
-- [x] **2.** The Manage Models button appeared only for some backends.
-- [x] **3.** The hotel and restaurant sectors were pruned from the lexicon; they
-  cost more than they earned.
-- [x] **4.** Learning from corrections, per address and per domain, with a way
-  to see and forget it.
-- [x] **5.** User-defined sorting rules, a rule that only files and ticks now
-  runs after every scan, since it touches nobody's mailbox.
-- [x] **6.** Incremental scan: verdicts kept between runs, keyed on a settings
-  hash so a changed model invalidates them.
-- [x] **7.** Conversation threading, by references first and by subject and
-  correspondent second. Offered, never enforced.
-- [x] **8.** Multi-level undo, and the `COPYUID` fix that made undo work at all.
-- [x] **9.** Per-account folder roots.
-- [x] **10.** The preview names the phrases that fired and the categories that
-  nearly won.
-- [x] **11.** Accessible names on every control the window owns, in one method
-  so "is anything missing" is answerable.
-- [x] **12.** `gui.py` split into four files.
-- [x] **13.** An empty grid says which of the three reasons it is empty, and
-  offers a Clear filters button for the only one with a fix.
-- [x] **14.** Preview pane below the table or beside it.
-- [x] **15.** Multi-select bulk re-file, tick, untick and copy from the table's
-  context menu.
-- [x] **16.** Column widths and hidden columns reset from the header menu.
-- [x] **17.** Fetching and classifying overlap.
-- [x] **18.** A literal prefilter before every regex, 4.3× on the rules engine.
-- [x] **19.** The lexicon as a memory-mapped blob, with the JSON as fallback.
-- [x] **20.** The log view is capped at 2,000 blocks.
-- [x] **21.** `./dev tune` for training against a real inbox, plus the privacy
-  test that stops anything from it reaching the repository.
-- [x] **22.** Topic ties are broken by score, then strongest phrase, then hard
-  evidence, then a written precedence, not by dict insertion order.
-- [x] **23.** `personal_register` no longer fires on mail from a careers
-  mailbox.
+- **One moment a frame.** Everything drawn reads `Spectrum._now`. The pane's
+  clock (`_heard`) holds at a seek target until the player moves past it,
+  is exact while paused, and closes on the first report after a resume at a
+  capped rate.
+- **Scene changes** fade over the last frame on the GPU (`_GpuCanvas.hold`,
+  `cover`); a change during a change folds the two frames first. The CPU path
+  fades from the background.
+- **The suite cannot see the GPU.** It runs offscreen, where every test goes
+  through the CPU path. `tests/test_gpu_canvas.py` runs scripts on the real
+  platform; anything that touches drawing must pass both.
+- **On the card:** a framebuffer counts rows from the bottom; a hidden
+  widget's resizes are held back until it is shown; keep a reference to a
+  `QOpenGLPaintDevice`; reparenting can bring a new context, so
+  `initializeGL` drops every buffer; shrink in halves; uniforms go by
+  location; `out` is reserved in GLSL 1.20.
+- **Never draw text off the GUI thread.** The font database is not
+  thread-safe.
+- **Gradients go on whole pixels,** and anything clipped to an area takes it
+  from a constant: nothing in a frame settles exactly, and a creeping edge
+  shows as one pixel changing under a stopped track.
 
-### Done in round two
+### The game
 
-- [x] **Non-job mail has a menu.** The Sorting button, holding what to sort,
-  what happens to the rest, and which topics get a folder.
-- [x] **A row that will not tick says why**, and offers the one-click fix.
-- [x] **Church is a topic**, with 161 signals, trained against a xxxx xxxxxx
-  xxxxxxx xxxx.
-- [x] **Form loses to subject** when the subject has real evidence.
-- [x] **Every control can explain itself**, with a test that keeps it that way.
-- [x] **The fixtures carry no real identities**, with a test on every run.
-- [x] **CI**: tests, eval scores and a self-test on macOS; pyflakes on Linux.
-- [x] **The log is `0600`** and no longer records a subject line anywhere.
-- [x] **The README says what is true** - test count, accuracy, topic count,
-  and where the sorting control actually is.
-- [x] **The screenshot is drawn by `./dev screenshot`**, from the app, on any
-  machine, in two seconds.
-- [x] **The two lexicon forms are checked to be the same build**, so a
-  rebuilt JSON with a stale blob cannot ship silently.
-- [x] **The DMG was built, mounted, installed and run** - the installed copy
-  reports itself frozen, finds its own certificates, and loads the mapped
-  lexicon.
+- **The road is a function of the beat:** `PER_BEAT = (FAR - RIDER_AT) /
+  LOOK_BEATS`, set per level in `_set_level`. Read it from the scene.
+- **Stopped means stopped.** Every clock in the game runs on track time.
+- **A share per frame is a different game per machine.** Slides and shakes
+  are shares per sixtieth of a second.
+- **`Rider.struck(block)` is what happened to a block.** Do not work it out
+  from the craft's lane.
+- **Every figure snaps to the nearest beat;** on-beat hits are preferred
+  over heavier ones between beats.
+- **A seek re-lays the road; a re-count keeps what is in sight.** Blocks in
+  sight are carried over through the exact inverse of the road's curve
+  (`_when(..., exact=True)`).
+- **A corkscrew's turn is in the road samples, not the camera;** towers stand
+  on the road with the corkscrew's roll taken out unless inside the tunnel.
+- **A run's log** (`Rider._log`) records each block's outcome until the
+  finish; the strip at the end draws it.
+- **Sounds:** bump `rider_sound.VERSION` when a sound changes, or the cached
+  file is played. Notes are put off with the pane's own timers.
 
-### Worth doing next
+### Timing
 
-Ordered by what they would be worth, not by effort.
+- `trackstyle.choose_tempo` scores each candidate on the drums' fold on the
+  beat and on the bar, the snare on the beat and the hats on the eighth.
+  `rhythm_of` then halves tempos over `TOO_FAST` without a kick on every
+  beat. `_first_beat` picks the bar's first beat from the kick, the snare
+  and loudness changes, each scaled with a floor (`FIRST_BEAT_FLOOR`).
+- Chords are left out of the downbeat on purpose: they arrive from another
+  worker, often after the drums, and would move the bar mid-ride.
 
-- [ ] **Held-out accuracy is 37.5%.** It is the only number that has not moved,
-  and it is the one that describes mail the app has never seen. Start with
-  `./dev tune --corrections`: every disagreement there is a real gap with a real
-  example behind it.
-- [ ] **Nothing learns from a whole conversation.** Threading groups messages
-  and the sorter still reads each one alone. A confident verdict on one message
-  is strong evidence about its siblings, and "Re: (no other context)" is exactly
-  the message the sorter cannot read.
-- [ ] **The corrections memory only learns folders.** It could learn that a
-  sender is job-related at all, which is the more valuable half, a recruiter
-  writing from a personal Gmail is the case the rules engine will never get.
-- [ ] **`_grouped()` in `workers.py` opens one connection per (account, folder)
-  pair.** Undoing a batch that was filed into eight folders is eight logins.
-- [ ] **The verdict cache never shrinks below `MAX_AGE_DAYS`.** A UIDVALIDITY
-  change silently invalidates a whole mailbox's worth and nothing notices;
-  `forget_mailbox` exists and nothing calls it.
-- [ ] **No test opens the built `.app`.** Every failure mode of PyInstaller
-  hidden imports is invisible until somebody runs the bundle by hand.
-- [ ] **`rules_engine.py` is 2,900 lines** and the signal tables are most of it.
-  They would read better as data than as literals, but only if something needs
-  to edit them at run time, which nothing does yet.
-- [ ] **The corrections memory could learn a topic, not just a folder.** It
-  already knows a church sender files to Church; it does not yet conclude that
-  the *next* message from that sender is church mail. That is the mechanism
-  that would have caught the two parish notices with no church vocabulary in
-  them at all.
-- [ ] **The app is signed ad-hoc**, so Gatekeeper refuses it until somebody
-  right-clicks and chooses Open. A paid Apple Developer certificate and
-  notarisation would remove that, and it is the single biggest thing standing
-  between this and "double-click to install".
+## Measuring
+
+```bash
+./dev test                     # 4,601 tests
+./dev playtest ~/Music/*.mp3   # real records through the real pane
+./dev eval                     # the sorter on a labelled set
+python tools/corpus.py         # the SpamAssassin corpus
+```
+
+`./dev playtest` reports where blocks land against their beats, the road's
+speed, and frame cost. Run it one record at a time. No song or frame of one is
+ever written into the repository.
+
+Timing changes are checked against a DJ program's beat grids for a private set
+of 300 records, outside the repository; only counts are recorded here.
+
+| | before | now |
+|---|---|---|
+| tempo right (or an octave out) | 269 | 290 |
+| on the beat, right tempo | 237 | 256 |
+| first beat of the bar agrees (of 193) | 128 | 147 |
+
+The beat being half a beat out (19 records) is unchanged: no rule tried held
+up on held-out records.
+
+Sorter, from `./dev eval` and `tools/corpus.py`:
+
+| Set | Job vs not | Exact category |
+|---|---|---|
+| labelled (102) | 99.0% | 87.3% |
+| adversarial (39) | 87.2% | 59.0% |
+| held out (24) | 70.8% | 37.5% |
+
+On the SpamAssassin corpus, none of 4,150 genuine messages is filed as job
+mail. That must stay at zero.
+
+## Releasing
+
+Set `APP_VERSION`, build with `./dev build` (which signs with the local
+certificate from `tools/make_signing_identity.sh`), `./build_dmg.sh`, tag
+`vX.Y.Z`, and attach the `.dmg` to a GitHub release. The updater only installs
+a build signed with the same certificate as the running copy, with the same
+bundle ID and the version the release says, and checks the download against
+the size and SHA-256 GitHub reports.
+
+Private vulnerability reporting must be on in the repository's settings, or
+About's security link is a 404 for everyone but the owner.
+
+## Open
+
+- **Held-out accuracy is 37.5%.** `./dev tune --corrections` lists real gaps.
+- **Nothing learns from a whole conversation;** each message is read alone.
+- **Corrections only learn folders,** not that a sender is job-related.
+- **`workers._grouped()` opens one connection per account and folder.**
+- **The verdict cache ignores UIDVALIDITY changes;** `forget_mailbox` is
+  unused.
+- **No test opens the built `.app`.**
+- **Frame pacing:** about one refresh in ten does not get exactly one frame.
+  A display link and a fixed 60 Hz schedule were both worse.
+- **The difficulty levels want tuning by play.** They are one table,
+  `rider_layout.DIFFICULTY`.
+- **The audio allowance is measured on built-in speakers only;** Bluetooth
+  reports more, and **Timing…** is the way out.
+- **The character classes** (Pointman, Vegas, Pusher, Eraser) need mouse input
+  on the grid first.
+- **Gatekeeper:** without a paid Developer ID, the first launch needs
+  right-click, Open.

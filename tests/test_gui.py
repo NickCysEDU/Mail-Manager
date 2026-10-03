@@ -353,6 +353,21 @@ class TestMainWindow:
         yield window
         window.close()
 
+    def test_no_two_actions_share_a_shortcut(self, window):
+        """Qt fires neither of two actions bound to the same keys."""
+        from collections import defaultdict
+
+        from PySide6.QtGui import QAction
+
+        bound = defaultdict(list)
+        for action in window.findChildren(QAction):
+            for keys in action.shortcuts():
+                if not keys.isEmpty():
+                    bound[keys.toString()].append(action.text())
+        shared = {keys: names for keys, names in bound.items()
+                  if len(names) > 1}
+        assert len(bound) > 10 and not shared, shared
+
     def test_startup_does_not_read_the_keychain(self, qapp, tmp_path):
         """Reading the Keychain also imports keyring, which is the single
         largest avoidable cost between launching and seeing a window."""

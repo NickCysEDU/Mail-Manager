@@ -1505,8 +1505,7 @@ class MainWindow(QMainWindow):
                  "Ctrl+Shift+A"),
                 ("Untick everything shown", "none", "Ctrl+D"),
                 (None, None, None),
-                ("Reset ticks to suggestions", "suggested",
-                 "Ctrl+Shift+R")):
+                ("Reset ticks to suggestions", "suggested", None)):
             if label is None:
                 self.ticks_menu.addSeparator()
                 continue

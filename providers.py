@@ -874,7 +874,7 @@ class RulesProvider(Provider):
     on_device = True
     default_model = "rules-v1"
     models = (
-        ModelChoice("rules-v1", "Built-in rule set", "≈300 weighted signals, no network"),
+        ModelChoice("rules-v1", "Built-in rule set", "Over a thousand signals, no network"),
     )
 
     def __init__(self, *args, ruleset: str = "general", **kwargs) -> None:

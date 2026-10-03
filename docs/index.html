@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Mail Manager - sort your job-search email in iCloud</title>
-<meta name="description" content="A Mac app that reads your iCloud inbox, works out which messages are part of your job search, and files them into folders you approve. No API key needed.">
+<title>Mail Manager</title>
+<meta name="description" content="A Mac app that sorts your mail into folders you approve. Runs on your Mac; no API key needed.">
 <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon-32.png">
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <meta property="og:title" content="Mail Manager">
-<meta property="og:description" content="Sorts your job-search mail into folders. Runs on your Mac, offline by default.">
+<meta property="og:description" content="Sorts your mail into folders you approve. Runs on your Mac.">
 <meta property="og:image" content="https://nickcysedu.github.io/Mail-Manager/assets/social-preview.png">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary_large_image">
@@ -45,9 +45,6 @@
   h2 { font-size: 26px; margin: 52px 0 14px; letter-spacing: -0.01em; }
   h3 { font-size: 17px; margin: 0 0 6px; }
   p { color: var(--fg); }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 11px; padding: 18px 20px; }
-  .card p { margin: 0; color: var(--muted); font-size: 15px; }
   table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 15px; }
   th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); }
   th { color: var(--muted); font-weight: 600; }
@@ -66,66 +63,44 @@
 <header>
   <img class="logo" src="assets/icon-128.png" width="104" height="104" alt="">
   <h1>Mail Manager</h1>
-  <p class="tag">Sort your job-search email in iCloud. On your Mac, in seconds, without an API key.</p>
+  <p class="tag">Sorts your mail on your Mac. No account, no API key, and nothing moves until you say.</p>
   <p>
     <a class="btn" href="https://github.com/NickCysEDU/Mail-Manager/releases/latest">Download for macOS</a>
     <a class="btn ghost" href="https://github.com/NickCysEDU/Mail-Manager">View the source</a>
   </p>
-  <p class="meta">macOS 13 or later &middot; about 51 MB &middot; MIT licensed</p>
+  <p class="meta">macOS 13 or later &middot; Apple silicon and Intel &middot; MIT licensed</p>
 </header>
 
 <img class="shot" src="screenshot.png" alt="The approval table, showing a summary, category, destination folder and confidence score for every message">
 
-<h2>The problem</h2>
-<p>You applied to forty places. Your inbox is now rejections, assessment links,
-"we received your application", recruiter spam, and one interview invitation you
-have not spotted yet.</p>
-
 <h2>What it does</h2>
-<div class="grid">
-  <div class="card"><h3>Reads the window you pick</h3><p>The last day, three days, a week, or any range. Messages are fetched without being marked as read.</p></div>
-  <div class="card"><h3>Says what each one is</h3><p>Offer, interview, next steps, acknowledgement, referral, rejection, or cold outreach, with a plain-language reason.</p></div>
-  <div class="card"><h3>Files only what you tick</h3><p>Every message gets a tick box. Nothing moves until you press Apply.</p></div>
-  <div class="card"><h3>Admits when it is unsure</h3><p>Anything below the confidence bar goes to Needs Review instead of a category folder.</p></div>
-  <div class="card"><h3>Makes its own folders</h3><p>The Job Search folders are created in your iCloud account on the first scan. You never touch Mail.</p></div>
-  <div class="card"><h3>Runs on a schedule</h3><p>Scan on a timer, from the menu bar, or in the background after you quit.</p></div>
-</div>
+<p>Mail Manager reads a window of your inbox over IMAP, works out what each
+message is, and shows a table: a summary, a category, a folder and a confidence
+score for every row. Tick what you want filed and press Apply.</p>
+<p>Job-search mail goes into folders such as Interview, Next Steps, Offers and
+Not Interested. Everyday mail can be sorted too, or left where it is. Anything
+it is unsure of goes to Needs Review rather than a guess. Nothing is marked as
+read, and a filing can be undone.</p>
 
-<h2>No API key required</h2>
-<p>The built-in sorter is a rule set, not a model: about 530 weighted signals
-covering the language hiring mail actually uses, plus the shape of the subject
-line, the sender's domain, and whether an instruction is a real request or a
-hypothetical one. Measured against a language model's verdicts on 102 real
-messages:</p>
-<table>
-  <tr><th>Job-related or not</th><td><strong>98%</strong> agreement</td></tr>
-  <tr><th>Exact category</th><td><strong>83%</strong> agreement</td></tr>
-  <tr><th>Of the messages it filed</th><td><strong>98% correct</strong></td></tr>
-</table>
-<p>It is instant, free, private and deterministic, and nothing leaves your Mac.
-If you would rather use Claude, Gemini, GPT or a local Ollama model, switch from
-the gear button in the toolbar.</p>
+<h2>No API key</h2>
+<p>The built-in sorter is a rule set that runs on your Mac: instant, free, and
+no message text leaves the machine. On 102 real messages it agreed with a
+language model on job versus not job 99% of the time, and on the exact category
+87%. You can use Claude, Gemini, an OpenAI-compatible service or a local Ollama
+model instead.</p>
 
 <h2>Installing</h2>
 <ol class="steps">
-  <li>Download the disk image and drag <strong>Mail Manager</strong> onto Applications.</li>
-  <li>On first launch, right-click the app and choose <strong>Open</strong>. macOS asks once, because this build is not signed with a paid Apple certificate.</li>
-  <li>The setup asks for your iCloud address and an
-      <a href="https://account.apple.com">app-specific password</a>. iCloud rejects your normal password over IMAP.</li>
-  <li>Press <strong>Scan &amp; Analyze</strong>.</li>
+  <li>Download the disk image and drag <strong>Mail Manager</strong> to Applications.</li>
+  <li>The first time, right-click the app and choose <strong>Open</strong>. It is not signed with an Apple Developer certificate.</li>
+  <li>Add a mailbox with its app password, and press <strong>Scan &amp; Analyze</strong>.</li>
 </ol>
-
-<h2>Or build it yourself</h2>
-<pre><code>git clone https://github.com/NickCysEDU/Mail-Manager.git
-cd Mail-Manager
-./dev demo     # opens the app with sample mail, no setup at all
-./dev build    # builds Mail Manager.app
-./build_dmg.sh # builds the disk image</code></pre>
+<p>New versions are offered in the app and install in one click.</p>
 
 <h2>Privacy</h2>
-<p>With the built-in sorter, no message text leaves your Mac. Your iCloud
-app-specific password and any model API keys are stored in the macOS Keychain,
-never in a file. Message bodies never reach the log. The full account is in
+<p>With the built-in sorter, no message text leaves your Mac. Passwords and keys
+are kept in the Keychain, and what the app keeps about your mail is encrypted.
+The details are in
 <a href="https://github.com/NickCysEDU/Mail-Manager/blob/main/SECURITY.md">SECURITY.md</a>.</p>
 
 <footer>

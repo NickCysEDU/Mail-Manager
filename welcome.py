@@ -323,9 +323,8 @@ class ClassifierPage(QWizardPage):
         form.addRow(self.key_label, self.key)
         form.addRow(self.note)
         form.addRow(_body(
-            "<p>The built-in sorter is a rule set: about 530 weighted signals covering "
-            "the language hiring mail actually uses. It is instant, free, and no message "
-            "leaves your Mac.</p>"
+            "<p>The built-in sorter is a rule set that runs on your Mac. It is "
+            "instant and free, and no message leaves your Mac.</p>"
             "<p>You can switch to a language model later from the gear button in the "
             "toolbar. Either way, anything the sorter is unsure about goes to "
             "<i>Needs Review</i>.</p>"
