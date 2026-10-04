@@ -544,6 +544,7 @@ class Spectrum(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.setMaximumHeight(0)
+        self._listener = None
         self._frames: List = []
         self._rate = 15
         self._position = 0
@@ -2279,7 +2280,7 @@ class Spectrum(QWidget):
         self._listener = listener
 
     def _tell_listener(self) -> None:
-        listener = getattr(self, "_listener", None)
+        listener = self._listener
         if listener is None:
             return
         try:

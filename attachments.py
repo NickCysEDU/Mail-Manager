@@ -386,7 +386,7 @@ def demo_attachments(message) -> list:
                 f"startxref\n{start}\n%%EOF\n").encode()
         return bytes(out)
 
-    names = list(getattr(message, "attachments", ()) or ())
+    names = list(message.attachments)
     made = []
     for index, name in enumerate(names, start=1):
         ext = extension(name)

@@ -66,21 +66,18 @@ def message_ids(raw: str) -> List[str]:
 
 
 def _own_id(message) -> str:
-    ids = message_ids(getattr(message, "message_id", "") or "")
+    ids = message_ids(message.message_id)
     return ids[0] if ids else ""
 
 
 def _referenced(message) -> List[str]:
     """Everything this message says it is answering."""
-    out: List[str] = []
-    for header in ("in_reply_to", "references"):
-        out.extend(message_ids(getattr(message, header, "") or ""))
-    return out
+    return message_ids(message.in_reply_to) + message_ids(message.references)
 
 
 def _correspondent(message) -> str:
     """Who the conversation is with, as far as this message says."""
-    return (getattr(message, "sender_email", "") or "").strip().lower()
+    return message.sender_email.strip().lower()
 
 
 class _Groups:
@@ -134,7 +131,7 @@ def thread_keys(messages: Sequence) -> List[str]:
     # stripped on the way. Only messages that agree on both are joined.
     by_pair: Dict[Tuple[str, str], List[str]] = defaultdict(list)
     for key, message in zip(keys, messages):
-        subject = normalise_subject(getattr(message, "subject", "") or "")
+        subject = normalise_subject(message.subject)
         who = _correspondent(message)
         if subject and who:
             by_pair[(subject, who)].append(key)

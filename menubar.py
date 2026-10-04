@@ -102,6 +102,7 @@ class MenuBarController(QObject):
         self._provider = ""
         self._model = ""
         self._ruleset = ""
+        self._scheduled = True
         self._schedule_minutes = 0
 
     def available(self) -> bool:
@@ -263,7 +264,7 @@ class MenuBarController(QObject):
             full = text or record.describe()
             if text:
                 short = full.splitlines()[0]
-            elif not getattr(self, "_scheduled", True):
+            elif not self._scheduled:
                 short = "Automatic scanning is off"
             else:
                 short = record.summary()

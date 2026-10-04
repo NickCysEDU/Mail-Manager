@@ -498,9 +498,9 @@ class ModelsDialog(QDialog):
         worker.cancel()
 
     def done(self, result: int) -> None:  # noqa: N802
-        for name in ("_worker", "_probe"):
-            spare = getattr(self, name, None)
-            setattr(self, name, None)
+        spares = (self._worker, self._probe)
+        self._worker = self._probe = None
+        for spare in spares:
             if spare is not None and spare.isRunning() and not spare.stop(4000):
                 _abandon(spare)
         super().done(result)
@@ -527,6 +527,14 @@ class SettingsDialog(QDialog):
         self._removed_accounts: List[Account] = []
         self._row_lines_touched = False
         self._loading_rule = False
+        self._ollama_worker = None
+        self._ollama_probe = None
+        self._ollama_state = None
+        self._keychain_worker = None
+        #: Which rule each row of the filtered list is.
+        self._rule_rows: List[int] = []
+        self._verdicts = None
+        self._corrections = None
         #: What is on screen behind this dialog, so a rule can be tried on it.
         self._sample_items: List[TriageItem] = list(sample_items)
 
@@ -1050,10 +1058,6 @@ class SettingsDialog(QDialog):
         self.ollama_stop.setVisible(False)
         _paint_button(self.ollama_stop, "danger")
         self.ollama_stop.clicked.connect(self._stop_ollama_step)
-        self._ollama_worker = None
-        self._ollama_probe = None
-        self._ollama_state = None
-        self._keychain_worker = None
         self.ollama_button.clicked.connect(self._do_ollama_step)
 
         self.model_combo = RoomyCombo()
@@ -1212,8 +1216,6 @@ class SettingsDialog(QDialog):
 
     def _refresh_ollama_panel(self, spec) -> None:
         """Say what is missing for the on-device backend, and offer to fix it."""
-        if not hasattr(self, "ollama_note"):
-            return
         on_device = bool(getattr(spec, "on_device", False))
         # Decided here and nowhere else: further down, past two early returns,
         # a backend whose probe had not answered could leave it hidden with
@@ -1228,7 +1230,7 @@ class SettingsDialog(QDialog):
         # packets costs the full timeout, and the endpoint is whatever was
         # typed.
         self._start_ollama_probe()
-        state = getattr(self, "_ollama_state", None)
+        state = self._ollama_state
         self.ollama_note.setVisible(True)
         if state is None:
             self.ollama_note.setText("Checking what is installed…")
@@ -1289,7 +1291,7 @@ class SettingsDialog(QDialog):
             self.provider_combo.currentData() or providers.DEFAULT_PROVIDER)
         if not getattr(spec, "on_device", False):
             return
-        state = getattr(self, "_ollama_state", None)
+        state = self._ollama_state
         if state is None or not state.models:
             return
         wanted = self._chosen_model()
@@ -1308,7 +1310,7 @@ class SettingsDialog(QDialog):
         """Run whichever step the panel is offering, off the UI thread."""
         if self._ollama_worker is not None:
             return
-        state = getattr(self, "_ollama_state", None) or ondevice.status()
+        state = self._ollama_state or ondevice.status()
         step = state.next_step()
         if step == "install" and not ondevice.install_command():
             QDesktopServices.openUrl(QUrl(ondevice.DOWNLOAD_URL))
@@ -1428,7 +1430,7 @@ class SettingsDialog(QDialog):
 
     def _start_ollama_probe(self) -> None:
         """Ask the server what it has, without making anybody wait for it."""
-        if getattr(self, "_ollama_probe", None) is not None:
+        if self._ollama_probe is not None:
             return
         from workers import OnDeviceProbeWorker
 
@@ -1442,7 +1444,7 @@ class SettingsDialog(QDialog):
 
     @Slot(object)
     def _on_ollama_probed(self, state) -> None:
-        previous = getattr(self, "_ollama_state", None)
+        previous = self._ollama_state
         self._ollama_state = state
         # Only redraw when something changed, so a probe every few seconds
         # does not fight with somebody reading the panel.
@@ -1615,7 +1617,7 @@ class SettingsDialog(QDialog):
         )
 
     def _model_changed(self) -> None:
-        if getattr(self, "_loading_models", False):
+        if self._loading_models:
             return
         name = self.provider_combo.currentData() or providers.DEFAULT_PROVIDER
         spec = providers.provider_class(name)
@@ -1937,7 +1939,7 @@ class SettingsDialog(QDialog):
         if drafting:
             said.append(f"{drafting} write{'s' if drafting == 1 else ''} "
                         "a draft")
-        hidden = total - len(getattr(self, "_rule_rows", range(total)))
+        hidden = total - len(self._rule_rows)
         if hidden > 0:
             said.append(f"{hidden} hidden by the search")
         self.rules_summary.setText(", ".join(said) + ".")
@@ -2022,11 +2024,9 @@ class SettingsDialog(QDialog):
         """Folders a rule can file into: whatever this configuration creates.
         Editable, so the list is a shortcut, not a fence.
         """
-        root = (self.root_edit.text().strip() if hasattr(self, "root_edit")
-                else "") or self._settings.folder_root
+        root = self.root_edit.text().strip() or self._settings.folder_root
         other = (self.other_root_edit.text().strip()
-                 if hasattr(self, "other_root_edit")
-                 else "") or self._settings.other_folder_root
+                 or self._settings.other_folder_root)
         plan = FolderPlan(root=root, other_root=other)
         choices = list(plan.all_folders)
         choices += [plan.for_other_category(topic) for topic in OtherCategory
@@ -2070,7 +2070,7 @@ class SettingsDialog(QDialog):
 
     def _capture_rule(self) -> None:
         """Read the editor back into the rule it is showing."""
-        if getattr(self, "_loading_rule", False):
+        if self._loading_rule:
             return
         if not (0 <= self._rule_index < len(self._rules)):
             return
@@ -2091,7 +2091,7 @@ class SettingsDialog(QDialog):
         rule.actions = [row.value() for row in self._action_rows]
 
     def _rule_edited(self, *_args) -> None:
-        if getattr(self, "_loading_rule", False):
+        if self._loading_rule:
             return
         self._capture_rule()
         self._describe_rule()
@@ -2120,10 +2120,8 @@ class SettingsDialog(QDialog):
         self.rule_summary.style().polish(self.rule_summary)
 
     def _refresh_current_list_item(self) -> None:
-        rows = getattr(self, "_rule_rows", None)
-        listed = (rows.index(self._rule_index)
-                  if rows is not None and self._rule_index in rows
-                  else (self._rule_index if rows is None else -1))
+        rows = self._rule_rows
+        listed = rows.index(self._rule_index) if self._rule_index in rows else -1
         entry = self.rule_list.item(listed) if listed >= 0 else None
         if entry is None:
             return
@@ -2190,9 +2188,7 @@ class SettingsDialog(QDialog):
         a row number used as a rule index under a filter would silently edit
         the wrong rule.
         """
-        rows = getattr(self, "_rule_rows", None)
-        if rows is None:
-            return listed
+        rows = self._rule_rows
         return rows[listed] if 0 <= listed < len(rows) else -1
 
     def _rule_selected(self, listed: int) -> None:
@@ -2451,7 +2447,7 @@ class SettingsDialog(QDialog):
     def _toggle_help(self, on: bool) -> None:
         """Mirror the window's switch, and keep the checkbox in step."""
         helpmode.install(QApplication.instance(), on)
-        if hasattr(self, "help_check") and self.help_check.isChecked() != on:
+        if self.help_check.isChecked() != on:
             self.help_check.blockSignals(True)
             self.help_check.setChecked(on)
             self.help_check.blockSignals(False)
@@ -2630,7 +2626,7 @@ class SettingsDialog(QDialog):
         self.clear_cache_button.setEnabled(len(cache) > 0)
 
     def _clear_verdicts(self) -> None:
-        cache = getattr(self, "_verdicts", None)
+        cache = self._verdicts
         if cache is None or not len(cache):
             return
         confirmed = QMessageBox.question(
@@ -2647,7 +2643,7 @@ class SettingsDialog(QDialog):
 
     def _memory(self):
         """The corrections file, loaded once per dialog."""
-        if getattr(self, "_corrections", None) is None:
+        if self._corrections is None:
             try:
                 self._corrections = corrections.Memory.load()
             except Exception:  # noqa: BLE001 - a broken file is an empty one
@@ -2789,8 +2785,6 @@ class SettingsDialog(QDialog):
         self._update_folder_preview()
 
     def _sync_root_placeholders(self) -> None:
-        if not hasattr(self, "account_root_edit"):
-            return
         self.account_root_edit.setPlaceholderText(
             self.root_edit.text().strip() or "Job Search")
         self.account_other_root_edit.setPlaceholderText(
@@ -2980,13 +2974,13 @@ class SettingsDialog(QDialog):
         unpacking a cask should not be killed by Escape, so the person is
         asked first.
         """
-        for name in ("_ollama_probe", "_keychain_worker"):
-            spare = getattr(self, name, None)
-            setattr(self, name, None)
+        spares = (self._ollama_probe, self._keychain_worker)
+        self._ollama_probe = self._keychain_worker = None
+        for spare in spares:
             if spare is not None and spare.isRunning() and not spare.stop(2000):
                 _abandon(spare)
 
-        worker = getattr(self, "_ollama_worker", None)
+        worker = self._ollama_worker
         if worker is None or not worker.isRunning():
             return True
         what = ("Ollama is still installing." if worker.step == "install"

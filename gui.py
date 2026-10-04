@@ -2773,7 +2773,7 @@ class MainWindow(QMainWindow):
             self._set_status("Nothing is running.")
             return 0
 
-        names = ", ".join(sorted({getattr(w, "task_name", "task") for w in running}))
+        names = ", ".join(sorted({w.task_name for w in running}))
         self._append_log(f"Stopping {len(running)} task(s): {names}…")
 
         # Tell every worker to stop before waiting on any, and paint the

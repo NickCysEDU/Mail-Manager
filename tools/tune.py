@@ -84,10 +84,7 @@ def fetch(settings: Settings, store: CredentialStore, days: int, limit: int):
             out.extend(scan.messages)
             print(f"  {account.label}: {len(scan.messages)} message(s)")
         finally:
-            try:
-                engine.logout()
-            except Exception:  # pragma: no cover - best effort
-                pass
+            engine.logout()
     return out
 
 

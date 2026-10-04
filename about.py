@@ -170,7 +170,7 @@ class AboutDialog(QDialog):
         )
 
     def _where_your_data_goes(self) -> QLabel:
-        provider = getattr(self._settings, "provider_label", "")
+        provider = self._settings.provider_label
         on_device = self._on_device()
         if on_device:
             where = (f"<b>{provider}</b> runs on this Mac. No message text "

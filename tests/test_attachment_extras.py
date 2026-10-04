@@ -548,6 +548,48 @@ class TestOneConnectionMeansOneRequest:
             thread.join()
         assert not overlapping, f"requests overlapped: {overlapping}"
 
+    def test_every_connection_in_the_pool_opens_the_message_s_folder(
+            self, monkeypatch):
+        """The spare connections are opened by a thread the source starts as
+        it is made, so the folder has to be known by then."""
+        import threading
+        import time
+        from types import SimpleNamespace
+
+        import workers
+
+        selected = []
+        grown = threading.Event()
+
+        class Engine:
+            def __init__(self, host="", port=0):
+                pass
+
+            def connect(self, address, password):
+                pass
+
+            def select(self, mailbox, readonly=False):
+                selected.append(mailbox)
+                if len(selected) == workers.AttachmentSource.POOL - 1:
+                    grown.set()
+
+            def logout(self):
+                pass
+
+        monkeypatch.setattr(workers, "IMAPEngine", Engine)
+        account = SimpleNamespace(host="imap.example.com", port=993,
+                                  address="you@example.com")
+        source = workers.AttachmentSource(Engine(), "7", [], account=account,
+                                          password="secret",
+                                          mailbox="Job Search/Interviews")
+        try:
+            assert grown.wait(5.0), f"the pool opened {len(selected)} of " \
+                f"{workers.AttachmentSource.POOL - 1} spare connections"
+            time.sleep(0.05)
+            assert set(selected) == {"Job Search/Interviews"}, selected
+        finally:
+            source.close()
+
     def test_the_viewer_runs_one_worker_at_a_time(self, qtbot):
         import attachments
         from attachment_view import AttachmentViewer
@@ -6811,8 +6853,8 @@ class TestTheFullScreenControlsWork:
             pane._full._show_controls = lambda: woke.append(1)
             pane._full.mousePressEvent(QMouseEvent(
                 QMouseEvent.Type.MouseButtonPress, QPointF(10, 10),
-                _Qt.MouseButton.LeftButton, _Qt.MouseButton.LeftButton,
-                _Qt.KeyboardModifier.NoModifier))
+                QPointF(10, 10), _Qt.MouseButton.LeftButton,
+                _Qt.MouseButton.LeftButton, _Qt.KeyboardModifier.NoModifier))
             assert woke, "clicking did not bring the controls back"
         finally:
             pane._full.close()
@@ -9155,11 +9197,10 @@ class TestTheWaveformWidget:
         bar = self._made([0.5] * 200, span=200_000)
         seen = []
         bar.seeked.connect(seen.append)
+        at = QPointF(bar.width() * 0.25, bar.height() / 2)
         bar.mousePressEvent(QMouseEvent(
-            QEvent.Type.MouseButtonPress,
-            QPointF(bar.width() * 0.25, bar.height() / 2),
-            Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
-            Qt.KeyboardModifier.NoModifier))
+            QEvent.Type.MouseButtonPress, at, at, Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
         assert seen, "clicking the waveform seeked nowhere"
         assert seen[-1] == pytest.approx(50_000, abs=2_000), (
             f"a click a quarter of the way along a 200 s track seeked to "
@@ -9173,10 +9214,10 @@ class TestTheWaveformWidget:
         seen = []
         bar.seeked.connect(seen.append)
         for x in (-40.0, bar.width() + 80.0):
+            at = QPointF(x, 4.0)
             bar.mousePressEvent(QMouseEvent(
-                QEvent.Type.MouseButtonPress, QPointF(x, 4.0),
-                Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton,
-                Qt.KeyboardModifier.NoModifier))
+                QEvent.Type.MouseButtonPress, at, at, Qt.MouseButton.LeftButton,
+                Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
         assert seen == [0, 200_000], f"seeked to {seen}"
 
 

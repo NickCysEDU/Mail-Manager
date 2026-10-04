@@ -424,6 +424,13 @@ class AudioPane(QWidget):
         self._path: Optional[Path] = None
         #: Bumped per file, so a late analysis for an earlier one is dropped.
         self._analysis_token = 0
+        self._ducking = None
+        #: The full-screen view while it is up, and what it wired into this
+        #: pane.
+        self._full = None
+        self._full_card = None
+        self._full_links: list = []
+        self._by_hand_echo: tuple = ()
 
         self.art = QLabel()
         self.art.setFixedSize(44, 44)
@@ -1139,8 +1146,6 @@ class AudioPane(QWidget):
         took more had the transport drawn on top of the picture.
         """
         layout = self.layout()
-        if layout is None:
-            return self.HEIGHT if hasattr(self, "HEIGHT") else 240
         # Ask for a fresh answer: invalidate() only marks the layout dirty, and
         # minimumSize() keeps returning the old number, so a control row that
         # had just grown was measured at its old height.
@@ -1385,7 +1390,7 @@ class AudioPane(QWidget):
             return
         from PySide6.QtCore import QVariantAnimation
 
-        animation = getattr(self, "_ducking", None)
+        animation = self._ducking
         if animation is None:
             animation = self._ducking = QVariantAnimation(self)
             # Against the slider on every step, so moving it mid-duck is
@@ -1416,7 +1421,7 @@ class AudioPane(QWidget):
         holding a destroyed label raises on the next emission, every time
         the position moves.
         """
-        for signal, handle in getattr(self, "_full_links", []):
+        for signal, handle in self._full_links:
             try:
                 signal.disconnect(handle)
             except (RuntimeError, TypeError):      # already gone
@@ -1426,7 +1431,7 @@ class AudioPane(QWidget):
         self._full_play = None
         self._full_effects = ()
         self._by_hand_echo = []
-        card = getattr(self, "_full_card", None)
+        card = self._full_card
         if card is not None and shiboken6.isValid(card):
             card.setParent(None)
             card.deleteLater()
@@ -1540,7 +1545,7 @@ class AudioPane(QWidget):
 
     def _steering(self):
         """The scene that wants the arrow keys, if the current one does."""
-        scene = getattr(self.spectrum, "_scene", None)
+        scene = self.spectrum._scene
         return scene if callable(getattr(scene, "steer", None)) else None
 
     def _steer(self, way: int) -> bool:
@@ -1556,7 +1561,7 @@ class AudioPane(QWidget):
         """Leave the road, if the game on screen can. Returns False elsewhere,
         leaving the key to the list, which scrolls on the arrows.
         """
-        scene = getattr(self.spectrum, "_scene", None)
+        scene = self.spectrum._scene
         leap = getattr(scene, "jump", None)
         if not callable(leap) or not leap():
             return False
@@ -1590,7 +1595,7 @@ class AudioPane(QWidget):
                  *(self.HAND_SENSE_WORDS if wanted else self.SENSE_WORDS))
         _relabel(self.rate_box,
                  *(self.HAND_RATE_WORDS if wanted else self.RATE_WORDS))
-        for label in getattr(self, "_by_hand_echo", ()):
+        for label in self._by_hand_echo:
             try:
                 label.setVisible(wanted)
             except RuntimeError:      # the full screen window has gone
@@ -1865,7 +1870,7 @@ class AudioPane(QWidget):
         changed = playing != self._playing
         self._playing = playing
         _name_transport(self.play, playing)
-        twin = getattr(self, "_full_play", None)
+        twin = self._full_play
         if twin is not None and shiboken6.isValid(twin):
             _name_transport(twin, playing)
         self.spectrum.set_playing(playing and self.enable_box.isChecked())
@@ -1901,7 +1906,7 @@ class AudioPane(QWidget):
 
     def _raise_full_screen(self) -> None:
         """Put the full screen window back in front of everything."""
-        full = getattr(self, "_full", None)
+        full = self._full
         if full is None or not shiboken6.isValid(full):
             return
         full.showFullScreen()
@@ -1912,7 +1917,7 @@ class AudioPane(QWidget):
         self.clock.setText(f"{_mmss(position)} / {_mmss(self.position.maximum())}")
 
     def stop(self) -> None:
-        full = getattr(self, "_full", None)
+        full = self._full
         if full is not None:
             full.close()
             self._full = None
@@ -2323,7 +2328,7 @@ class AttachmentViewer(QDialog):
             return
         if not self.audio.full_button.isEnabled():
             return
-        full = getattr(self.audio, "_full", None)
+        full = self.audio._full
         if full is not None:
             full.close()
         else:
@@ -2340,7 +2345,7 @@ class AttachmentViewer(QDialog):
             return False
         if self.stack.currentWidget() is not self.audio:
             return False
-        if getattr(self.audio, "_full", None) is not None:
+        if self.audio._full is not None:
             return False      # the full screen window is handling them
         found = self.audio.vj_action(event.key())
         if found is None:

@@ -860,12 +860,12 @@ class RulesProvider(Provider):
                 "The local rules engine needs the parsed message, not a rendered prompt."
             )
         verdict = self.classifier().classify(
-            subject=getattr(message, "subject", "") or "",
-            body=getattr(message, "body_text", "") or "",
-            sender=getattr(message, "sender_display", "") or "",
-            links=getattr(message, "links", ()) or (),
-            list_unsubscribe=getattr(message, "list_unsubscribe", "") or "",
-            truncated=bool(getattr(message, "truncated", False)),
+            subject=message.subject,
+            body=message.body_text,
+            sender=message.sender_display,
+            links=message.links,
+            list_unsubscribe=message.list_unsubscribe,
+            truncated=message.truncated,
         )
         return Completion(
             text=_json.dumps(verdict.to_payload()),

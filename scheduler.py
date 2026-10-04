@@ -301,10 +301,7 @@ def run_once(settings=None, store=None, apply_moves: Optional[bool] = None) -> R
     except Exception as exc:  # noqa: BLE001 - a background job reports, never crashes
         record.error = f"{type(exc).__name__}: {exc}"
     finally:
-        try:
-            engine.logout()
-        except Exception:
-            pass
+        engine.logout()
         if classifier is not None:
             classifier.close()
 

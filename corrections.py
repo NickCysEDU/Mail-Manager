@@ -371,7 +371,7 @@ def apply_to(items: Iterable, memory: Memory) -> int:
     """
     changed = 0
     for item in items:
-        if getattr(item, "override_folder", None):
+        if item.override_folder:
             continue
         hit = memory.lookup(item.email.sender_email)
         if hit is None or hit.folder == item.suggested_folder:

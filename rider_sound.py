@@ -637,6 +637,8 @@ class SoundBoard:
         self._voices: Dict[str, list] = {}
         self._next: Dict[str, int] = {}
         self._seen: set = set()
+        self._late_failed = False
+        self._frames = 0
         self.enabled = True
         self._broken = False
         self._harmony: Optional[dict] = None
@@ -707,7 +709,7 @@ class SoundBoard:
         except Exception as exc:      # noqa: BLE001 - late rather than never
             # Played now rather than not at all, keeping the rest of the
             # sounds: a failure here once silenced the game for good.
-            if not getattr(self, "_late_failed", False):
+            if not self._late_failed:
                 self._late_failed = True
                 log.warning("The rider's timed sounds are played at once "
                             "(%s).", exc)
@@ -870,7 +872,7 @@ class SoundBoard:
     def listen(self, scene) -> List[str]:
         """What the scene did since last asked, played. Returns the names
         of what was played, for whoever wants to know."""
-        self._frames = getattr(self, "_frames", 0) + 1
+        self._frames += 1
         if self._frames % self.LOAD_EVERY == 0:
             self.tend()
         pops = list(getattr(scene, "_pops", ()) or ())

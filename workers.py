@@ -364,10 +364,7 @@ class ScanWorker(_BaseWorker):
                         "the server-side date search)."
                     )
                 finally:
-                    try:
-                        engine.logout()
-                    except Exception:  # pragma: no cover
-                        pass
+                    engine.logout()
 
             if self.cancel_event.is_set():
                 raise ScanCancelled("Cancelled.")
@@ -719,10 +716,7 @@ class ApplyWorker(_BaseWorker):
                 self._report_exception(f"Could not file your messages in {account.label}", exc)
                 return
             finally:
-                try:
-                    engine.logout()
-                except Exception:  # pragma: no cover
-                    pass
+                engine.logout()
 
         self._log(f"Apply finished: {combined.describe()}")
         self.finished_ok.emit(combined)
@@ -915,10 +909,7 @@ class ReplyWorker(_BaseWorker):
                         outcome.draft.error = outcome.draft.error or str(exc)
                 self._log(f"{account.label}: could not carry out the rules - {exc}")
             finally:
-                try:
-                    engine.logout()
-                except Exception:  # pragma: no cover
-                    pass
+                engine.logout()
 
     def _save_drafts(self, engine, account, group, result: "ReplyRun") -> None:
         import autoreply
@@ -1309,17 +1300,15 @@ class AttachmentWorker(_BaseWorker):
         try:
             engine = IMAPEngine(host=self.account.host, port=self.account.port)
             engine.connect(self.account.address, self.password)
-            engine.select(getattr(self.message, "source_folder", "") or "INBOX",
-                          readonly=True)
+            engine.select(self.message.source_folder or "INBOX", readonly=True)
             found = engine.describe_attachments(self.message.uid)
         except Exception as exc:      # noqa: BLE001 - reported to the window
             self.failed.emit(f"Could not list the attachments: {exc}")
             return
         keep = [a for a in found if not a.signature]
         source = AttachmentSource(engine, self.message.uid, keep,
-                                  account=self.account, password=self.password)
-        source.remember_mailbox(
-            getattr(self.message, "source_folder", "") or "INBOX")
+                                  account=self.account, password=self.password,
+                                  mailbox=self.message.source_folder)
         self.ready.emit(source)
 
 
@@ -1336,7 +1325,7 @@ class AttachmentSource:
     POOL = 3
 
     def __init__(self, engine, uid: str, found, account=None,
-                 password: str = "") -> None:
+                 password: str = "", mailbox: str = "INBOX") -> None:
         import queue
         import threading
 
@@ -1344,6 +1333,8 @@ class AttachmentSource:
         self.found = found
         self._account = account
         self._password = password
+        #: The message's folder, which every connection in the pool opens.
+        self._mailbox = mailbox or "INBOX"
         self._free = queue.Queue()
         self._free.put(engine)
         self._all = [engine]
@@ -1362,21 +1353,15 @@ class AttachmentSource:
                 engine = IMAPEngine(host=self._account.host,
                                     port=self._account.port)
                 engine.connect(self._account.address, self._password)
-                engine.select(getattr(self, "_mailbox", "INBOX"), readonly=True)
+                engine.select(self._mailbox, readonly=True)
             except Exception:      # noqa: BLE001 - one is enough to work
                 return
             with self._lock:
                 if self._closed:
-                    try:
-                        engine.logout()
-                    except Exception:      # noqa: BLE001
-                        pass
+                    engine.logout()
                     return
                 self._all.append(engine)
             self._free.put(engine)
-
-    def remember_mailbox(self, mailbox: str) -> None:
-        self._mailbox = mailbox or "INBOX"
 
     def fetch(self, item) -> bytes:
         engine = self._free.get()
@@ -1391,10 +1376,7 @@ class AttachmentSource:
             engines = list(self._all)
             self._all = []
         for engine in engines:
-            try:
-                engine.logout()
-            except Exception:      # noqa: BLE001 - closing is best effort
-                pass
+            engine.logout()
 
 
 class _FolderWorker(_BaseWorker):
@@ -1422,10 +1404,7 @@ class _FolderWorker(_BaseWorker):
             if not self.cancelled:
                 self.failed.emit(self.trouble, str(exc))
         finally:
-            try:
-                engine.logout()
-            except Exception:      # noqa: BLE001 - already gone
-                pass
+            engine.logout()
 
     def _work(self, engine) -> None:
         raise NotImplementedError

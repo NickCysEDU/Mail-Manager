@@ -103,6 +103,7 @@ class AccountsPage(QWizardPage):
         self._accounts: list = []
         self._passwords: dict = {}
         self._editing = -1
+        self._loading = False
         self.setTitle("Your mailboxes")
         self.setSubTitle(
             "Add as many as you like. Passwords go in the macOS Keychain, "
@@ -227,11 +228,10 @@ class AccountsPage(QWizardPage):
         if host.help_url:
             note += f' <a href="{_attr_url(host.help_url)}">Generate one</a>.'
         self.hint.setText(note + "</p>")
-        if not getattr(self, "_loading", False):
+        if not self._loading:
             # Switching provider while an address from the old one is still in
-            # the box is not a change of server, it is a different mailbox.
-            # Keeping it is how a Gmail password once got filed under an
-            # iCloud address.
+            # the box is not a change of server, it is a different mailbox,
+            # and keeping it would file the password under the wrong one.
             address = self.email.text().strip()
             belongs = accounts.host_for_address(address) if address else None
             if (address and belongs is not None and not belongs.is_custom
@@ -242,7 +242,7 @@ class AccountsPage(QWizardPage):
 
     def _capture(self) -> None:
         """Read the form back into the account being edited, on every keystroke."""
-        if getattr(self, "_loading", False):
+        if self._loading:
             return
         if not (0 <= self._editing < len(self._accounts)):
             return

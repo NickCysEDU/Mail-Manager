@@ -269,6 +269,9 @@ class Scene:
     #: False suits thin bright lines; arcs and lettering want True.
     stretch_smooth = False
 
+    #: The smoothed strobe; see bloom.
+    _bloom = 0.0
+
     def paint(self, painter: QPainter, rect, state) -> None:
         raise NotImplementedError
 
@@ -307,7 +310,7 @@ class Scene:
         step.
         """
         hit = self.flash(state)
-        was = getattr(self, "_bloom", 0.0)
+        was = self._bloom
         speed = self.BLOOM_RISE if hit > was else self.BLOOM_FALL
         now = was + (hit - was) * speed
         if now < 0.002:

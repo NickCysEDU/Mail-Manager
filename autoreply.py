@@ -599,7 +599,7 @@ def is_automated(message) -> bool:
     optional: answering a bounce produces another bounce, and for mail
     written to Drafts that means a Drafts folder four hundred deep.
     """
-    address = (getattr(message, "sender_email", "") or "").strip().lower()
+    address = message.sender_email.strip().lower()
     local = address.rpartition("@")[0] or address
     if local in ROBOT_NAMES:
         return True
@@ -770,7 +770,7 @@ class Rule:
                            f"{self.active_to:02d}:00")
         log = context.get("reply_log")
         if log is not None and self.once_per_sender_days:
-            address = getattr(message, "sender_email", "") or ""
+            address = message.sender_email
             if log.too_soon(address, self.name,
                             self.once_per_sender_days, now):
                 days = self.once_per_sender_days
@@ -1003,8 +1003,7 @@ def apply_rules(rules: Sequence[Rule], message, classification, me: str = "",
                         rule, message, classification, me,
                         engine if kind == "draft_ai" else None, action)
                     outcome.drafted_by = rule.name
-                    outcome.drafted_to = (
-                        getattr(message, "sender_email", "") or "")
+                    outcome.drafted_to = message.sender_email
             elif kind == "file_into":
                 outcome.file_into = action.value.strip()
                 outcome.leave = False

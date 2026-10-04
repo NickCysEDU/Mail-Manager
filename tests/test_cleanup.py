@@ -209,9 +209,6 @@ class TestWhatItOffersToDelete:
         assert criteria.older_than_days == 30
         assert criteria.is_armed
 
-    def test_rows_without_a_verdict_are_skipped_not_crashed_on(self):
-        assert suggest([object(), None, item(uid="1")]) == []
-
     def test_the_category_is_read_by_value_not_by_repr(self):
         """``str()`` on a str-mixin enum differs between Pythons, and a
         membership test against the wrong one silently offers nothing."""

@@ -269,16 +269,14 @@ def _kind_of(item) -> str:
     on a ``str``-mixin enum differs between Python versions, and every
     membership test silently stops matching.
     """
-    category = getattr(getattr(item, "classification", None),
-                       "other_category", None)
-    return str(getattr(category, "value", category) or "")
+    return item.classification.other_category.value
 
 
 def _address_of(email) -> str:
-    address = (getattr(email, "sender_email", "") or "").strip().lower()
+    address = email.sender_email.strip().lower()
     if address:
         return address
-    found = _ADDRESS.search(getattr(email, "sender_name", "") or "")
+    found = _ADDRESS.search(email.sender_name)
     return found.group(0).lower() if found else ""
 
 
@@ -297,23 +295,18 @@ def suggest(items: Sequence[object],
     costs scrolling, and a wrong suggestion costs a deleted interview
     invitation.
     """
-    protected = {p.strip().lower() for p in protected if (p or "").strip()}
+    protected = {p.strip().lower() for p in protected if p.strip()}
     by_sender: Dict[str, List[object]] = {}
     disqualified: set = set()
     kinds: Counter = Counter()
     kind_senders: Dict[str, set] = {}
 
-    for item in items or ():
-        email = getattr(item, "email", None)
-        classification = getattr(item, "classification", None)
-        if email is None or classification is None:
-            continue
-        address = _address_of(email)
+    for item in items:
+        address = _address_of(item.email)
         if not address or address in protected:
             continue
         kind = _kind_of(item)
-        job = bool(getattr(classification, "is_job_related", False))
-        if job or kind not in DISPOSABLE:
+        if item.classification.is_job_related or kind not in DISPOSABLE:
             disqualified.add(address)
             continue
         by_sender.setdefault(address, []).append(item)
@@ -324,8 +317,7 @@ def suggest(items: Sequence[object],
     for address, group in by_sender.items():
         if address in disqualified or len(group) < MIN_PILE:
             continue
-        bulk = all((getattr(i.email, "list_unsubscribe", "") or "").strip()
-                   for i in group)
+        bulk = all(i.email.list_unsubscribe.strip() for i in group)
         found.append(Suggestion(
             kind="sender", value=address, senders=(address,),
             label=address,
@@ -376,6 +368,5 @@ def _sender_reason(group: Sequence[object], bulk: bool) -> str:
 
 
 def _newest(group: Sequence[object]) -> Optional[datetime]:
-    dates = [getattr(i.email, "date", None) for i in group]
-    dates = [d for d in dates if d is not None]
+    dates = [i.email.date for i in group if i.email.date is not None]
     return max(dates) if dates else None
