@@ -1425,6 +1425,13 @@ class RiderWorld:
     PUNCH = 7.0
     #: How far the craft hovers.
     HOVER = 0.28
+    #: Through a tunnel the camera dives to the road and rides it: how far
+    #: behind and above the craft it sits there, how far ahead it looks, and
+    #: how much wider the view opens.
+    DIVE_BACK = 2.0
+    DIVE_UP = 0.52
+    DIVE_AHEAD = 9.0
+    DIVE_FOV = 9.0
 
     PARTICLES = 3000
 
@@ -1735,12 +1742,7 @@ class RiderWorld:
         # The camera on a spring, following the craft, placed as if the road
         # were not turning over and then turned with it below.
         ship_z = scene.RIDER_AT
-        eye = self._on_road(road, across * 0.35,
-                            self.CAM_UP + air * 0.4 + self._knock * 0.5,
-                            ship_z - self.CAM_BACK - self._knock * 0.8,
-                            plain=True)
-        look = self._on_road(road, across * 0.55, self.CAM_LOOK_UP + air * 0.3,
-                             ship_z + self.CAM_AHEAD, plain=True)
+        eye, look, dive = self._rig(road, scene, across, air)
         follow = 1.0 - math.exp(-self.CAM_FOLLOW * dt)
         if self._cam_eye is None:
             self._cam_eye, self._cam_look = eye, look
@@ -1767,11 +1769,21 @@ class RiderWorld:
                 + math.sin(float(getattr(scene, "_wobble", 0.0)) * 2.3)
                 * hurt * 0.10)
         fov = (self.FOV_CALM + (self.FOV_FAST - self.FOV_CALM) * rush
-               + self._kick_punch * 3.0 + self._punch * self.PUNCH)
+               + self._kick_punch * 3.0 + self._punch * self.PUNCH
+               + dive * self.DIVE_FOV)
         view = QMatrix4x4()
         view.perspective(fov / max(1.0, aspect / 1.6) ** 0.35, aspect,
                          0.05, 400.0)
         view.lookAt(QVector3D(*eye_at), QVector3D(*look_at),
+                    QVector3D(math.sin(roll), math.cos(roll), 0.0))
+        # Out of a tunnel the city whips round once on its own, about the
+        # line of sight; the road and the craft stay where they are.
+        whirl = scene._exit_spin(scene._heard) * math.tau
+        city = QMatrix4x4()
+        city.perspective(fov / max(1.0, aspect / 1.6) ** 0.35, aspect,
+                         0.05, 400.0)
+        city.rotate(math.degrees(whirl), 0.0, 0.0, 1.0)
+        city.lookAt(QVector3D(*eye_at), QVector3D(*look_at),
                     QVector3D(math.sin(roll), math.cos(roll), 0.0))
 
         def screen(point):
@@ -1824,7 +1836,26 @@ class RiderWorld:
             "half": scene.LANE_WIDE * scene.LANES / 2.0,
             "pixels": 1.0,
             "eye": eye_at,
+            "dive": dive, "whirl": whirl, "view_city": city,
         }
+
+    def _rig(self, road, scene, across: float, air: float) -> tuple:
+        """Where the camera rides and what it looks at, before the corkscrew
+        turns it: behind and above the craft on the open road, and down at
+        the road looking along the tube through a tunnel, so the ride goes
+        through it. Returns the eye, the aim and how far the dive is."""
+        ship_z = scene.RIDER_AT
+        dive = self.inside * self.inside
+        back = self.CAM_BACK + (self.DIVE_BACK - self.CAM_BACK) * dive
+        up = self.CAM_UP + (self.DIVE_UP - self.CAM_UP) * dive
+        ahead = self.CAM_AHEAD + (self.DIVE_AHEAD - self.CAM_AHEAD) * dive
+        eye = self._on_road(road, across * 0.35,
+                            up + air * 0.4 + self._knock * 0.5,
+                            ship_z - back - self._knock * 0.8, plain=True)
+        look = self._on_road(road, across * 0.55,
+                             self.CAM_LOOK_UP * (1.0 - dive) + air * 0.3,
+                             ship_z + ahead, plain=True)
+        return eye, look, dive
 
     @staticmethod
     def _beat_uniforms(program, frame) -> None:
@@ -1863,6 +1894,7 @@ class RiderWorld:
         p = self.towers
         p.bind()
         self._road_uniforms(p, frame)
+        p.set("uView", frame["view_city"])
         self._fog_uniforms(p, frame)
         p.set("uInside", float(self.inside))
         p.array("uLevels", frame["bands"], BANDS, 1)
@@ -1923,7 +1955,7 @@ class RiderWorld:
         p.set("uWaveLit", float(self._wave_lit))
         p.set("uFlashColour", QVector3D(*self._flash_colour))
         p.set("uFlashLane", float(self._flash_lane))
-        p.set("uFlash", float(self._flash))
+        p.set("uFlash", float(self._flash * (1.0 - 0.6 * frame["dive"])))
         p.set("uHurt", float(frame["hurt"]))
         p.set("uShipU", float(frame["across"]))
         self.road_mesh.draw(self.gl, p)
@@ -2476,8 +2508,13 @@ class RiderWorld:
         gl.glActiveTexture(GL_TEXTURE0 + 1)
         gl.glBindTexture(GL_TEXTURE_2D, self._bloom_texture)
         p.set("uBloom", 1)
-        p.set("uBloomAmount", float(0.55 + self._bloom_bump
-                                                 + frame["flash"] * 0.4))
+        # Louder passages bloom more, out in the open. A tunnel's walls are
+        # already alight, so inside one a prize's bloom and glow are held
+        # back, or the frame goes white.
+        inside = frame["dive"]
+        p.set("uBloomAmount", float(0.55 + self._bloom_bump * (1.0 - 0.6 * inside)
+                                    + frame["flash"] * 0.4
+                                    + frame["loud"] * 0.12 * (1.0 - inside)))
         p.set("uExposure", 1.0)
         p.set("uSplit", float(0.25 + self._split * 3.0
                                            + self._kick_punch * 0.5))
@@ -2488,7 +2525,7 @@ class RiderWorld:
         p.set("uShockHard", float(self._shock_hard))
         p.set("uAspect", float(frame["aspect"]))
         p.set("uHurt", float(frame["hurt"]))
-        p.set("uGlow", float(self._glow))
+        p.set("uGlow", float(self._glow * (1.0 - 0.6 * inside)))
         p.set("uGlowColour", QVector3D(*self._glow_colour))
         p.set("uFlash", float(frame["flash"]))
         p.set("uOpacity", float(opacity))

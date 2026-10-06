@@ -103,6 +103,13 @@ describes the app itself.
   (`_when(..., exact=True)`).
 - **A corkscrew's turn is in the road samples, not the camera;** towers stand
   on the road with the corkscrew's roll taken out unless inside the tunnel.
+- **Through the tunnel the camera dives to the road** (`RiderWorld._rig`,
+  `DIVE_*`), and as the tunnel closes the city alone whips round once
+  (`Rider._exit_spin`, drawn with `view_city`). The road and the craft stay
+  put either way; the corkscrew test checks that against the same tunnel
+  with its turn taken out.
+- **A plunge is a rush:** where the road falls away, `PACE_FALL` adds to the
+  beat's pace (`Rider._falling`), under the level's least warning as ever.
 - **A run's log** (`Rider._log`) records each block's outcome until the
   finish; the strip at the end draws it.
 - **Sounds:** bump `rider_sound.VERSION` when a sound changes, or the cached

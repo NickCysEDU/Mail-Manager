@@ -2996,6 +2996,7 @@ class Rider(Scene):
         self._wobble = 0.0
         #: How far through a whole turn the road is. See ``_find_twists``.
         self._rolled = 0.0
+        self._spun = 0.0
         #: How close to a beat the track is, held while it is stopped.
         self._beat_lit = 0.0
         #: How fast the craft is crossing lanes, for the bank.
@@ -3860,6 +3861,9 @@ class Rider(Scene):
     TUNNEL_ROOM = 1.7
     TUNNEL_MIDDLE = 0.9
     TWIST_APART = 25.0
+    #: How long the city takes to whip round once, on its own, after a
+    #: corkscrew's tunnel has closed behind the craft.
+    EXIT_SPIN_FOR = 0.6
 
     def _find_twists(self) -> tuple:
         """The moments the road turns over: into the drops, landing level on a
@@ -3937,6 +3941,19 @@ class Rider(Scene):
         ends, quickest in the middle, and exactly one turn.
         """
         return through * through * (3.0 - 2.0 * through)
+
+    def _exit_spin(self, when: float) -> float:
+        """How far round the city's own quick turn is, in whole turns, in the
+        moment after a corkscrew's tunnel has closed behind the craft: a
+        whole turn in EXIT_SPIN_FOR, and nothing at any other time. The road
+        and the craft stay where they are; only the world round them goes
+        round.
+        """
+        for start in self._twists or ():
+            since = when - (start + self.TWIST_FOR + self.TUNNEL_TAIL)
+            if 0.0 <= since < self.EXIT_SPIN_FOR:
+                return self._turned(since / self.EXIT_SPIN_FOR)
+        return 0.0
 
     def _eased(self, table) -> tuple:
         """The readings averaged over a second or so, so the road follows the
@@ -4338,6 +4355,7 @@ class Rider(Scene):
         # How far over the road is turned, if at all, worked out once a frame.
         through = self._twist_at(self._heard)
         self._rolled = 0.0 if through is None else self._turned(through)
+        self._spun = self._exit_spin(self._heard)
         #: How much of a sixtieth of a second this frame was, on the track's
         #: clock; the rig reads it. See ``_slide``.
         self._went = step
@@ -4754,6 +4772,9 @@ class Rider(Scene):
     PACE_BUILD = (-0.35, 0.15)
     #: How much of the way to its target each beat's pace goes.
     PACE_EASE = 0.3
+    #: What the road falling away adds to its pace, over what the music's
+    #: drive sets: the plunge into a drop is a rush.
+    PACE_FALL = 0.5
     #: The least warning a block gets however fast the road runs, in seconds,
     #: where the level does not say.
     LEAST_WARNING = 0.6
@@ -4784,8 +4805,18 @@ class Rider(Scene):
         pace = self.PACE_LEAST + (self.PACE_MOST - self.PACE_LEAST) * drive
         beat = self._clock.length(when)
         if beat > 0.0:
+            pace += self.PACE_FALL * self._falling(when, beat)
             pace = min(pace, self.LOOK_BEATS * beat / self._least_warning)
         return pace, drive
+
+    def _falling(self, when: float, beat: float) -> float:
+        """How steeply the road falls over the beat from ``when``, as a share
+        of a drop's plunge, 0 to 1; nothing where it climbs."""
+        if not self._hill:
+            return 0.0
+        fall = (self._read(self._hill, when + beat)
+                - self._read(self._hill, when)) / beat
+        return max(0.0, min(1.0, fall / self.DROP_PLUNGE))
 
     def _decide_lunges(self, now: int, bass: float) -> None:
         """Give every beat coming into view its lunge and its length of road,
@@ -5063,7 +5094,7 @@ class Rider(Scene):
         # first, so the road passes in front of it.
         painter.save()
         painter.translate(horizon)
-        painter.rotate(lean + self._rolled * 360.0)
+        painter.rotate(lean + (self._rolled + self._spun) * 360.0)
         painter.translate(-horizon)
         self._glow(painter, rect, horizon, hue, surge, bass, beat, flash)
         self._flat_tunnel(painter, rect, horizon, focal, hue, beat, flash)

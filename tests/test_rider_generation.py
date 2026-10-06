@@ -632,3 +632,35 @@ class TestTheRoadRunsWithTheMusic:
         calm = statistics.mean(bends["break"] + bends["intro"])
         drop = statistics.mean(bends["drop"])
         assert calm > 20.0 * drop, (calm, drop)
+
+
+class TestThePlungeIsARush:
+    """Where the road falls away into a drop the craft runs on down it, past
+    the pace the music alone sets, and settles over the bars after (see
+    Rider.PACE_FALL)."""
+
+    @staticmethod
+    def _bars(log, start, beat, first, last):
+        import statistics
+
+        bar = 4.0 * beat
+        found = [speed for at, speed in log.speeds
+                 if start + first * bar <= at < start + last * bar
+                 and speed > 0.0]
+        return statistics.mean(found)
+
+    def test_the_first_bar_of_a_drop_runs_faster_than_the_fifth(self):
+        _scene, log, truth, beat = ridekit.ride("house")
+        for kind, start, _end in truth:
+            if kind != "drop":
+                continue
+            plunge = self._bars(log, start, beat, 0, 1)
+            settled = self._bars(log, start, beat, 4, 6)
+            assert plunge > 1.07 * settled, (start, plunge, settled)
+
+    def test_a_climb_adds_nothing(self):
+        scene, _log, truth, beat = ridekit.ride("house", seconds=40.0)
+        build = [(a, b) for kind, a, b in truth if kind == "build"][0]
+        middle = (build[0] + build[1]) / 2.0
+        assert scene._falling(middle, beat) == 0.0
+        assert scene._falling(build[1] + beat * 0.5, beat) > 0.5
