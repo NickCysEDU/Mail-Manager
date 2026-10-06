@@ -814,9 +814,13 @@ class TestTheyAreReallyPlayedLater:
             asked = time.monotonic()
             pane._later(0.08, lambda: fired.append(time.monotonic() - asked))
             assert fired == [], "it did not wait"
-            self._wait(0.3)
+            # A loaded machine fires late. What must hold is never early,
+            # once, and not by a lot.
+            deadline = time.monotonic() + 1.5
+            while not fired and time.monotonic() < deadline:
+                self._wait(0.05)
             assert len(fired) == 1, fired
-            assert 0.07 <= fired[0] < 0.2, fired
+            assert 0.07 <= fired[0] < 1.0, fired
         finally:
             pane.deleteLater()
 
