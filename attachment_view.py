@@ -1148,9 +1148,14 @@ class AudioPane(QWidget):
         layout = self.layout()
         # Ask for a fresh answer: invalidate() only marks the layout dirty, and
         # minimumSize() keeps returning the old number, so a control row that
-        # had just grown was measured at its old height.
+        # had just grown was measured at its old height. This layout too: one
+        # that still counts itself activated does nothing on activate(), and
+        # a label that had just wrapped left its cached need behind and the
+        # difference in the stretch under the controls.
         if fresh:
             self.visual_row.invalidate()
+            self.visual_holder.layout().invalidate()
+            layout.invalidate()
             layout.activate()
         # At this width: the plain minimum measures a wrapping row at its last
         # width, which after a resize is the old one.
