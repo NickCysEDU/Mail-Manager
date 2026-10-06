@@ -75,6 +75,7 @@ def decoded(path, patience=PATIENCE):
     # A widgets application rather than a GUI one: the pane is a QWidget
     # and Qt refuses to make one without it.
     app = QApplication.instance() or QApplication([])
+    app.setApplicationName("Mail Manager")
     got = {}
 
     def done(result):
