@@ -116,12 +116,69 @@ TAIL = textwrap.dedent("""
 """)
 
 
+#: Whether the real platform here can run these at all, found out once per
+#: process: None where it can, otherwise why not. A hosted runner's window
+#: server never answered, and every script run there waited out its whole
+#: three minutes; one that drew a frame a second would have done the same.
+_real_platform: list = []
+
+#: The most the probe may take in all, and the most twenty frames of the
+#: rider may take within it, in seconds. Twenty frames are under a second on
+#: a Mac of the last few years; the scripts here draw hundreds.
+PROBE_FOR = 45.0
+FRAMES_FOR = 10.0
+
+
+def real_platform_or_skip() -> None:
+    """Skip, with the reason, where no script could run on the card here."""
+    if not _real_platform:
+        _real_platform.append(_probe_real_platform())
+    if _real_platform[0] is not None:
+        pytest.skip(_real_platform[0])
+
+
+def _probe_real_platform():
+    env = dict(os.environ)
+    env.pop("QT_QPA_PLATFORM", None)
+    env["MAIL_MANAGER_GPU"] = "1"
+    body = HEAD + textwrap.dedent("""
+        import time
+        made = pane(size=(320, 200))
+        made.show()
+        started = time.monotonic()
+        for i in range(20):
+            made.set_position(i * 50)
+            made._tick()
+            made._canvas.grabFramebuffer()
+        print(json.dumps({"frames": time.monotonic() - started}))
+    """) + TAIL
+    try:
+        done = subprocess.run([sys.executable, "-c", body],
+                              capture_output=True, text=True,
+                              timeout=PROBE_FOR, env=env, cwd=ROOT)
+    except subprocess.TimeoutExpired:
+        return f"the real platform did not answer within {PROBE_FOR:.0f}s"
+    lines = [line for line in done.stdout.splitlines()
+             if line.startswith("{")]
+    if not lines or done.returncode != 0:
+        return (f"no script runs on the real platform here (exit "
+                f"{done.returncode}): {done.stderr.strip()[-300:]}")
+    found = json.loads(lines[-1])
+    if "skip" in found:
+        return found["skip"]
+    if found["frames"] > FRAMES_FOR:
+        return (f"the card here draws too slowly for these: "
+                f"{found['frames']:.0f}s for twenty frames")
+    return None
+
+
 def on_the_card(body: str) -> dict:
     """Run ``body`` on the real platform and return what it printed.
 
     Fails if it did not finish cleanly: an exception that escaped into Qt,
     or a crash on the way out, is a fault even where the numbers printed
     look right."""
+    real_platform_or_skip()
     env = dict(os.environ)
     env.pop("QT_QPA_PLATFORM", None)
     env["MAIL_MANAGER_GPU"] = "1"

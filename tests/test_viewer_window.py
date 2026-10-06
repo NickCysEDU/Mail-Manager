@@ -523,6 +523,9 @@ class TestOnTheRealPlatform:
     def test_the_window_at_its_smallest(self):
         if sys.platform != "darwin":
             pytest.skip("the real platform here is macOS")
+        from test_gpu_canvas import real_platform_or_skip
+
+        real_platform_or_skip()
         env = dict(os.environ)
         env.pop("QT_QPA_PLATFORM", None)
         done = subprocess.run([sys.executable, "-c", REAL],

@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from test_gpu_canvas import real_platform_or_skip
+
 ROOT = Path(__file__).resolve().parents[1]
 
 pytestmark = pytest.mark.skipif(sys.platform != "darwin",
@@ -70,6 +72,7 @@ def _architectures():
 
 
 def _run(arch: str, *parts: str) -> dict:
+    real_platform_or_skip()
     script = HEAD.format(root=str(ROOT)) + "".join(
         textwrap.dedent(part) for part in parts) + "\nprint(json.dumps(out))\n"
     env = {key: value for key, value in os.environ.items()

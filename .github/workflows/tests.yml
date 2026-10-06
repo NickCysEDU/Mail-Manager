@@ -38,14 +38,14 @@ jobs:
       - name: Tests
         # Qt needs a platform plugin even with no screen attached. A step
         # timeout rather than only the job's, because a cancelled job throws
-        # its log away and a timed-out step keeps it. Each test is named as
-        # it runs, a worker stuck in one for three minutes prints every
-        # thread's stack, and the per-test limit allows for this runner
-        # being several times slower than a developer's Mac.
+        # its log away and a timed-out step keeps it. A worker stuck in one
+        # test for three minutes prints every thread's stack, and the
+        # per-test limit allows for this runner being several times slower
+        # than a developer's Mac.
         timeout-minutes: 30
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest -v -o faulthandler_timeout=180 --timeout=240
+        run: python -m pytest -o faulthandler_timeout=180 --timeout=240
 
       # The evaluation sets are built from a real mailbox and are not in the
       # repository, so a hosted runner has nothing to score. Anyone with sets
