@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import re
 
+import time
+
 import pytest
 
 
@@ -217,7 +219,7 @@ class TestTheRideAtTheEnd:
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
 
-        scene._pops = [["finish", age, 1.0, 0.0, 0.0, ""]]
+        scene._finished_at = time.monotonic() - age
         image = QImage(*size, QImage.Format.Format_ARGB32_Premultiplied)
         image.fill(QColor(0, 0, 0))
         painter = QPainter(image)
@@ -1044,3 +1046,133 @@ class TestAPauseIsAPause:
             painter.end()
             time.monotonic = was
             pane.deleteLater()
+
+
+class TestTheCardComesUpWhole:
+    """The track has stopped by the time the card is up, and with it every
+    clock of the game's own: on those the card never finished coming up."""
+
+    @staticmethod
+    def _drawn(scene, size=(640, 400)):
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        image = QImage(*size, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(0, 0, 0))
+        painter = QPainter(image)
+        scene._results(painter, QRectF(0, 0, *size))
+        painter.end()
+        return image
+
+    @staticmethod
+    def _light(image) -> float:
+        return sum(image.pixelColor(x, y).lightnessF()
+                   for y in range(0, image.height(), 8)
+                   for x in range(0, image.width(), 8))
+
+    def test_with_the_track_stopped_at_the_end(self, qapp, clock):
+        import visualizers
+
+        scene = visualizers.Rider()
+        _ride(scene, clock, 0.0, 10.2)
+        assert scene._finished
+        scene._log = [(9.5, "hit", 0.0)]
+        stopped = _state(10.2)
+        for _ in range(5):
+            scene._step(stopped)
+        early = self._drawn(scene)
+        clock[0] += 2.0
+        for _ in range(5):
+            scene._step(stopped)
+        late = self._drawn(scene)
+        assert self._light(late) > self._light(early) * 1.4, (
+            "the card did not finish coming up once the track stopped")
+        left, right = 640 * 0.07, 640 * 0.93
+        at = int(left + (right - left) * 0.95)
+        assert TestTheRideAtTheEnd._red_below(late, at) > 0, (
+            "the ride was not drawn all the way across")
+
+    def test_on_the_pane_once_the_player_has_stopped(self, qtbot, clock,
+                                                     monkeypatch):
+        """The pane's own picture, with the player stopped at the end as a
+        player is: the card is whole a moment later. On the painter's path,
+        which is what a grab of the pane draws through."""
+        from array import array
+
+        import visualizers
+        from attachment_widgets import Spectrum
+
+        monkeypatch.setenv("MAIL_MANAGER_GPU", "0")
+        strip = Spectrum()
+        qtbot.addWidget(strip)
+        strip.setMinimumSize(640, 400)
+        strip.resize(640, 400)
+        strip.set_unbounded(True)
+        strip.set_frames([array("f", [0.4] * 27)] * 100, 10)
+        strip.set_contour({"loud": [0.5] * 80, "lean": [0.0] * 80,
+                           "rate": 8.0})
+        strip.set_scene(type(visualizers.by_name("Music rider"))())
+        strip.set_playing(True)
+        strip._reveal_changed(1.0)
+        strip._fresh = 1.0
+        scene = strip._scene
+        for index in range(90):
+            clock[0] += 1.0 / 60.0
+            strip.set_position(int((8.8 + index / 60.0) * 1000))
+            strip._tick()
+            strip.grab()
+        assert scene._finished, "the run did not finish"
+        scene._log = [(9.5, "hit", 0.0)]
+        strip.set_playing(False)
+        strip._tick()
+        early = strip.grab().toImage()
+        clock[0] += 2.0
+        for _ in range(3):
+            strip._tick()
+            strip.grab()
+        late = strip.grab().toImage()
+        left, right = 640 * 0.07, 640 * 0.93
+        at = int(left + (right - left) * 0.95)
+        assert TestTheRideAtTheEnd._red_below(early, at) == 0
+        assert TestTheRideAtTheEnd._red_below(late, at) > 0, (
+            "the pane's card did not finish coming up")
+
+
+class TestASeekBackFromTheFinish:
+    KICKS = tuple(0.25 + 0.5 * n for n in range(20))
+
+    def _finished(self, clock):
+        import visualizers
+
+        scene = visualizers.Rider()
+        _ride(scene, clock, 0.0, 10.2, chart=self.KICKS)
+        assert scene._finished and scene._offered > 0
+        return scene
+
+    def test_into_the_track_takes_the_card_down_and_plays_on(self, qapp,
+                                                             clock):
+        scene = self._finished(clock)
+        scene._step(_state(4.0, chart=self.KICKS))
+        assert not scene._finished and scene._result is None
+        assert scene._offered == 0 and scene._score == 0
+        assert not scene._whole, "a run from the middle keeps no best"
+        _ride(scene, clock, 4.0, 2.0, chart=self.KICKS)
+        assert scene._blocks, "nothing was laid to play"
+        assert not scene._finished
+
+    def test_back_to_the_start_is_a_whole_run(self, qapp, clock):
+        scene = self._finished(clock)
+        scene._step(_state(0.5, chart=self.KICKS))
+        assert not scene._finished and scene._whole
+
+    def test_to_the_last_moment_stays_finished(self, qapp, clock):
+        scene = self._finished(clock)
+        scene._step(_state(9.85, chart=self.KICKS))
+        assert scene._finished and scene._result is not None
+
+    def test_and_it_can_finish_again(self, qapp, clock):
+        scene = self._finished(clock)
+        scene._step(_state(4.0, chart=self.KICKS))
+        _ride(scene, clock, 4.0, 6.2, chart=self.KICKS)
+        assert scene._finished and scene._result is not None
+        assert not scene._result["whole"]

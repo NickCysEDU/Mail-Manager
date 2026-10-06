@@ -781,13 +781,11 @@ class TestTheWorldOnTheCard:
         """Through a whole corkscrew the craft stays where the card is told to
         draw it, and half way round the foot of the frame is the same road
         while the top has gone round. Against the same tunnel with the turn
-        taken out, so the camera's dive through it is the same in both."""
+        taken out of the world's road, so only the turn differs."""
         got = on_the_card(RIDER + textwrap.dedent("""
             runs = {}
             for twisted in (False, True):
                 made, scene = rider_pane(size=(800, 500))
-                if not twisted:
-                    scene._turned = lambda through: 0.0
                 ships, rolled, shots = [], [], []
                 with Clock() as clock:
                     for i in range(int(3.6 * 60)):
@@ -796,6 +794,9 @@ class TestTheWorldOnTheCard:
                         scene._placed = scene._laid = 1e9
                         scene._blocks = []
                         scene._twists = (10.6,)
+                        world = made._canvas.world
+                        if not twisted and world is not None:
+                            world._twist = lambda scene, z: 0.0
                         made._tick()
                         shots.append(made._canvas.grabFramebuffer())
                         ships.append(made._canvas.world.seen["ship"])
@@ -1123,48 +1124,6 @@ class TestTheCorkscrewIsATunnel:
         assert got["was"] == 0.0 and got["seen_ahead"] > 0.0, (
             "the tunnel is not seen coming")
 
-    def test_the_city_whips_round_once_it_is_out(self):
-        """The road and the craft stay put; the world round them turns one
-        whole turn, quickly, in the moment after the tunnel closes."""
-        import visualizers
-
-        scene = visualizers.Rider()
-        scene._twists = [20.0]
-        leave = 20.0 + scene.TWIST_FOR + scene.TUNNEL_TAIL
-        assert scene._exit_spin(leave - 0.01) == 0.0
-        assert scene._exit_spin(20.0 + scene.TWIST_FOR / 2) == 0.0
-        assert scene._exit_spin(leave) == 0.0
-        assert scene._exit_spin(leave + scene.EXIT_SPIN_FOR / 2) == pytest.approx(0.5)
-        nearly = scene._exit_spin(leave + scene.EXIT_SPIN_FOR * 0.999)
-        assert 0.99 < nearly <= 1.0
-        # A whole turn is where it started, so the end is no jump.
-        assert scene._exit_spin(leave + scene.EXIT_SPIN_FOR) == 0.0
-        scene._twists = []
-        assert scene._exit_spin(leave + 0.1) == 0.0
-
-    def test_the_camera_dives_to_the_road_through_the_tunnel(self, qapp):
-        """Inside, the eye rides lower and closer behind the craft and looks
-        further along the tube; outside it is back up on its boom."""
-        world = _bare_world()
-        world._knock = 0.0
-        rigs = {}
-        for name, heard in (("out", 5.0), ("in", 11.0)):
-            scene = _rider()
-            scene._twists = (10.0,)
-            scene._heard = heard
-            scene._at = heard * scene.FREE_RUN
-            road = world._read_road(scene)
-            eye, look, dive = world._rig(road, scene, 0.0, 0.0)
-            craft = world._on_road(road, 0.0, 0.0, scene.RIDER_AT, plain=True)
-            rigs[name] = (eye, look, dive, craft)
-        eye_out, look_out, dive_out, craft = rigs["out"]
-        eye_in, look_in, dive_in, _ = rigs["in"]
-        assert dive_out == 0.0 and dive_in == 1.0
-        # Height above the road under the craft, and distance behind it.
-        assert eye_in[1] - craft[1] < (eye_out[1] - craft[1]) * 0.67
-        assert abs(eye_in[2] - craft[2]) < abs(eye_out[2] - craft[2])
-        assert abs(look_in[2] - craft[2]) > abs(look_out[2] - craft[2])
-
     def test_far_from_a_corkscrew_there_is_none(self):
         got = on_the_card(RIDER + textwrap.dedent("""
             visualizers.Rider._find_twists = lambda self, *a, **k: [200.0]
@@ -1204,11 +1163,11 @@ class TestTheCorkscrewIsATunnel:
 
 
 class TestTheCityThroughACorkscrew:
-    """Seen from outside, the towers ahead stand upright whatever the road
-    does; turned with it, they twisted in the distance as a corkscrew came.
-    Inside the tunnel the view turns with the road, and they with it."""
+    """The towers stand upright whatever the road does, outside a tunnel and
+    in it: turned with the road, they twisted in the distance as a corkscrew
+    came, and the skyline went round with it on the way out."""
 
-    def test_the_towers_ahead_stay_upright_until_the_tunnel(self):
+    def test_the_towers_stay_upright_whatever_the_road_does(self):
         got = on_the_card(RIDER + textwrap.dedent("""
             ONLY = ("_draw_road", "_draw_tunnel", "_draw_blocks",
                     "_draw_ship", "_draw_trim", "_draw_gates",
@@ -1252,8 +1211,8 @@ class TestTheCityThroughACorkscrew:
         assert got["city"] > 50.0, f"no city to see: {got}"
         assert got["outside"] < got["city"] * 0.01, (
             f"the towers ahead turned with the road: {got}")
-        assert got["inside"] > got["city"] * 0.05, (
-            f"inside the tunnel the towers no longer turn with it: {got}")
+        assert got["inside"] < got["city"] * 0.01, (
+            f"inside the tunnel the towers turned with the road: {got}")
 
 
 class TestEveryHitLandsAndRunsOfThemBuild:
@@ -1328,3 +1287,167 @@ class TestEveryHitLandsAndRunsOfThemBuild:
             print(json.dumps({"off": edges(0.0), "on": edges(1.5)}))
         """))
         assert got["on"][0] > got["off"][0] * 1.3, got
+
+
+class TestTheEyeStaysClearOfTheRoad:
+    """Behind and above the craft, the eye is above the road at every point
+    between the two: over a crest, and where a corkscrew has turned the road
+    behind the craft further than the craft, the road was through the
+    camera."""
+
+    @staticmethod
+    def _scene(crest: bool, twist=None):
+        scene = _rider()
+        rate = 8.0
+        scene._every = rate
+        count = int(40.0 * rate)
+        # Depth below the start: a sharp rise and fall at twenty seconds.
+        scene._hill = tuple(
+            -8.0 * max(0.0, 1.0 - abs(index / rate - 20.0) / 1.5)
+            if crest else 0.0 for index in range(count))
+        scene._curve = tuple(math.sin(index / rate * 0.7) * 3.0
+                             for index in range(count))
+        scene._twists = () if twist is None else (twist,)
+        return scene
+
+    @staticmethod
+    def _heights(world, road, eye, ship_z: float, half: float) -> list:
+        """The eye's height above the road, in each sample's own frame,
+        between it and the craft; None beside the road."""
+        out = []
+        for step in range(9):
+            z = -eye[2] + (ship_z + eye[2]) * step / 8.0
+            dx = eye[0] - world._sample(road, z, 0)
+            dy = eye[1] - world._sample(road, z, 1)
+            r = world._sample(road, z, 2)
+            if abs(dx * math.cos(r) + dy * math.sin(r)) > half + 1.0:
+                out.append(None)
+            else:
+                out.append(-dx * math.sin(r) + dy * math.cos(r))
+        return out
+
+    def _eyes(self, scene, heard: float) -> tuple:
+        world = _bare_world()
+        world._knock = 0.0
+        scene._heard = heard
+        scene._at = heard * scene.FREE_RUN
+        road = world._read_road(scene)
+        ship_z = scene.RIDER_AT
+        half = scene.LANE_WIDE * scene.LANES / 2.0
+        eye = world._on_road(road, 0.0, world.CAM_UP, ship_z - world.CAM_BACK,
+                             plain=True)
+        turn = world._turn_at(road, ship_z)
+        centre = world._on_road(road, 0.0, 0.0, ship_z)
+        turned = world._about(eye, centre, turn)
+        clear = world._clear_of_road(road, turned, ship_z, half)
+        return (self._heights(world, road, turned, ship_z, half),
+                self._heights(world, road, clear, ship_z, half), turned, clear)
+
+    def test_over_a_crest_it_is_lifted_clear(self, qapp):
+        import rider_gl
+
+        lifted = False
+        for heard in (19.4, 19.7, 20.0, 20.3, 20.6):
+            before, after, turned, clear = self._eyes(self._scene(True), heard)
+            assert all(h is None or h >= rider_gl.RiderWorld.CAM_CLEAR - 1e-3
+                       for h in after), (heard, after)
+            if any(h is not None and h < rider_gl.RiderWorld.CAM_CLEAR
+                   for h in before):
+                lifted = True
+                assert clear != turned
+        assert lifted, "the crest never came near the camera"
+
+    def test_through_a_corkscrew_on_a_crest(self, qapp):
+        import rider_gl
+
+        scene = self._scene(True, twist=18.6)
+        for heard in (18.8, 19.2, 19.6, 20.0, 20.4, 20.8, 21.1):
+            _before, after, _turned, _clear = self._eyes(scene, heard)
+            assert all(h is None or h >= rider_gl.RiderWorld.CAM_CLEAR - 1e-3
+                       for h in after), (heard, after)
+
+    def test_a_clear_eye_is_left_where_it_is(self, qapp):
+        for heard in (5.0, 12.0, 30.0):
+            _before, _after, turned, clear = self._eyes(self._scene(False),
+                                                        heard)
+            assert clear == turned
+
+
+class TestTheCraftIsOnePiece:
+    """A craft is placed in the road's frame where it stands, not point by
+    point along the road's line: set on the line, its nose and tail were on
+    different slopes and it bent over every crest."""
+
+    @staticmethod
+    def _road(crest: bool, heard: float = 20.0):
+        scene = TestTheEyeStaysClearOfTheRoad._scene(crest)
+        world = _bare_world()
+        scene._heard = heard
+        scene._at = heard * scene.FREE_RUN
+        return world, world._read_road(scene), scene
+
+    NOSE, TAIL, WING = (0.0, 0.0, -1.1), (0.0, 0.0, 0.9), (0.9, 0.0, 0.0)
+
+    def test_its_points_keep_their_distances_over_a_crest(self, qapp):
+        for heard in (19.4, 20.0, 20.6):
+            world, road, scene = self._road(True, heard)
+            place = (0.4, world.HOVER, scene.RIDER_AT)
+            nose, tail, wing = (world._rigid(road, place, local)
+                                for local in (self.NOSE, self.TAIL, self.WING))
+            assert math.dist(nose, tail) == pytest.approx(2.0, abs=1e-6)
+            assert math.dist(nose, wing) == pytest.approx(
+                math.dist(self.NOSE, self.WING), abs=1e-6)
+
+    def test_it_lies_along_the_slope(self, qapp):
+        """On the way up to the crest the nose is higher than the tail, and
+        on the way down lower."""
+        world, road, scene = self._road(True, 19.6)
+        place = (0.0, world.HOVER, scene.RIDER_AT)
+        nose = world._rigid(road, place, self.NOSE)
+        tail = world._rigid(road, place, self.TAIL)
+        assert nose[1] > tail[1] + 0.2
+        world, road, scene = self._road(True, 20.4)
+        nose = world._rigid(road, place, self.NOSE)
+        tail = world._rigid(road, place, self.TAIL)
+        assert nose[1] < tail[1] - 0.2
+
+    def test_on_the_flat_it_is_where_the_road_puts_it(self, qapp):
+        world, road, scene = self._road(False, 5.0)
+        scene._curve = tuple(0.0 for _ in scene._curve)
+        road = world._read_road(scene)
+        place = (0.7, 0.5, scene.RIDER_AT)
+        assert world._rigid(road, place, (0.0, 0.0, 0.0)) == pytest.approx(
+            world._on_road(road, 0.7, 0.5, scene.RIDER_AT), abs=1e-6)
+
+
+class TestTheCityIsTheSameAfterACorkscrew:
+    def test_once_the_tunnel_has_closed_nothing_has_moved(self):
+        """A whole turn is level: once the tunnel is gone the skyline is
+        exactly where it would have been with no corkscrew at all."""
+        got = on_the_card(RIDER + textwrap.dedent("""
+            shots = {}
+            for twisted in (False, True):
+                made, scene = rider_pane(size=(800, 500))
+                with Clock() as clock:
+                    for i in range(int(4.4 * 60)):
+                        clock.step(1 / 60)
+                        made.set_position(int((10 + i / 60) * 1000))
+                        scene._placed = scene._laid = 1e9
+                        scene._blocks = []
+                        scene._twists = (10.6,) if twisted else ()
+                        made._tick()
+                        shot = made._canvas.grabFramebuffer()
+                shots[twisted] = shot
+            a, b = shots[False], shots[True]
+            h, w = a.height(), a.width()
+            points = [(x, y) for y in range(0, int(h * 0.45), 3)
+                      for x in range(0, w, 3)]
+            print(json.dumps({"tunnel": scene._tunnel_at(scene._heard),
+                              "moved": sum(
+                1 for x, y in points
+                if abs(a.pixelColor(x, y).valueF()
+                       - b.pixelColor(x, y).valueF()) > 0.15) / len(points)}))
+        """))
+        assert got["tunnel"] == 0.0, got
+        assert got["moved"] < 0.02, (
+            f"{got['moved']:.0%} of the sky and city differ after a corkscrew")

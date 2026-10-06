@@ -2865,6 +2865,9 @@ class Rider(Scene):
         self._saves = 0
         self._finished = False
         self._result = None
+        #: When the run finished, on the wall clock: the track has stopped by
+        #: then, and the results card comes up on this.
+        self._finished_at = 0.0
         #: The run as it went, for the strip at the end, and the track's
         #: loudness and length, kept at the finish.
         self._log: list = []
@@ -2996,7 +2999,6 @@ class Rider(Scene):
         self._wobble = 0.0
         #: How far through a whole turn the road is. See ``_find_twists``.
         self._rolled = 0.0
-        self._spun = 0.0
         #: How close to a beat the track is, held while it is stopped.
         self._beat_lit = 0.0
         #: How fast the craft is crossing lanes, for the bank.
@@ -3861,9 +3863,6 @@ class Rider(Scene):
     TUNNEL_ROOM = 1.7
     TUNNEL_MIDDLE = 0.9
     TWIST_APART = 25.0
-    #: How long the city takes to whip round once, on its own, after a
-    #: corkscrew's tunnel has closed behind the craft.
-    EXIT_SPIN_FOR = 0.6
 
     def _find_twists(self) -> tuple:
         """The moments the road turns over: into the drops, landing level on a
@@ -3941,19 +3940,6 @@ class Rider(Scene):
         ends, quickest in the middle, and exactly one turn.
         """
         return through * through * (3.0 - 2.0 * through)
-
-    def _exit_spin(self, when: float) -> float:
-        """How far round the city's own quick turn is, in whole turns, in the
-        moment after a corkscrew's tunnel has closed behind the craft: a
-        whole turn in EXIT_SPIN_FOR, and nothing at any other time. The road
-        and the craft stay where they are; only the world round them goes
-        round.
-        """
-        for start in self._twists or ():
-            since = when - (start + self.TWIST_FOR + self.TUNNEL_TAIL)
-            if 0.0 <= since < self.EXIT_SPIN_FOR:
-                return self._turned(since / self.EXIT_SPIN_FOR)
-        return 0.0
 
     def _eased(self, table) -> tuple:
         """The readings averaged over a second or so, so the road follows the
@@ -4355,7 +4341,6 @@ class Rider(Scene):
         # How far over the road is turned, if at all, worked out once a frame.
         through = self._twist_at(self._heard)
         self._rolled = 0.0 if through is None else self._turned(through)
-        self._spun = self._exit_spin(self._heard)
         #: How much of a sixtieth of a second this frame was, on the track's
         #: clock; the rig reads it. See ``_slide``.
         self._went = step
@@ -4944,7 +4929,8 @@ class Rider(Scene):
     def _finish(self, state) -> None:
         """The end of the track ends the run, and going back to the start
         begins a new one. Any other seek, or starting part way in, makes a
-        run that is judged but keeps no best.
+        run that is judged but keeps no best; a seek back from the finish
+        is such a run from there, with the results card gone.
         """
         if self._jumped:
             if (self._heard < self.START_AGAIN
@@ -4961,9 +4947,13 @@ class Rider(Scene):
             if at < min(2.0, length * 0.5):
                 # Back to the start: a new run.
                 self.reset()
+            elif self._jumped and at < length - self.FINISH_BEFORE:
+                self.reset()
+                self._whole = at < self.START_AGAIN
             return
         if at >= length - self.FINISH_BEFORE:
             self._finished = True
+            self._finished_at = time.monotonic()
             self._result = self.result()
             shape = getattr(state, "contour", None) or {}
             self._ridden = (list(shape.get("loud") or ()),
@@ -5094,7 +5084,7 @@ class Rider(Scene):
         # first, so the road passes in front of it.
         painter.save()
         painter.translate(horizon)
-        painter.rotate(lean + (self._rolled + self._spun) * 360.0)
+        painter.rotate(lean + self._rolled * 360.0)
         painter.translate(-horizon)
         self._glow(painter, rect, horizon, hue, surge, bass, beat, flash)
         self._flat_tunnel(painter, rect, horizon, focal, hue, beat, flash)
@@ -6023,9 +6013,9 @@ class Rider(Scene):
         """
         if not self._finished or self._result is None:
             return
-        spec = self.POPS["finish"]
-        age = next((pop[1] for pop in self._pops if pop[0] == "finish"),
-                   spec[0])
+        # On the wall clock: the track has stopped, and with it every clock
+        # of the game's own.
+        age = max(0.0, time.monotonic() - self._finished_at)
         result = self._result
         tall, wide = rect.height(), rect.width()
         left = rect.left() + wide * 0.07

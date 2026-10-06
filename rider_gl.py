@@ -102,17 +102,29 @@ vec3 onRoad(float u, float h, float z) {
     return vec3(r.x + u * c - h * s, r.y + u * s + h * c, -z);
 }
 
-// The same for a thing that is one piece: every point of it follows the
-// road's line, but turned by the road's roll where the thing stands, not
-// where the point is. Through a corkscrew the roll changes by a turn in
-// a few dozen units, and a craft turned point by point was wrung along
-// its length like a cloth.
-vec3 onRoadAs(float u, float h, float z, float anchor) {
+// The road's frame at z: across it, up from it and along its line, in
+// the road's own space, where z runs ahead.
+mat3 roadFrame(float z) {
     vec4 r = roadAt(z);
-    float roll = roadAt(anchor).z;
-    float c = cos(roll);
-    float s = sin(roll);
-    return vec3(r.x + u * c - h * s, r.y + u * s + h * c, -z);
+    vec4 on = roadAt(z + 0.5);
+    vec4 back = roadAt(z - 0.5);
+    vec3 along = normalize(vec3(on.x - back.x, on.y - back.y, 1.0));
+    vec3 across = vec3(cos(r.z), sin(r.z), 0.0);
+    across = normalize(across - dot(across, along) * along);
+    return mat3(across, cross(along, across), along);
+}
+
+// A thing that is one piece: every point of it placed from where the
+// thing stands, in the road's frame there, so it is rigid. Through a
+// corkscrew the roll changes by a turn in a few dozen units, and a craft
+// turned point by point was wrung along its length like a cloth; set
+// point by point on the road's line, it bent over every crest. ``local``
+// is in the thing's own space, where z runs back.
+vec3 onRoadAs(vec3 local, vec3 place) {
+    vec4 r = roadAt(place.z);
+    vec3 p = vec3(r.x, r.y, place.z) + roadFrame(place.z)
+             * vec3(place.x + local.x, place.y + local.y, -local.z);
+    return vec3(p.x, p.y, -p.z);
 }
 """ % {"samples": ROAD_SAMPLES, "last": ROAD_SAMPLES - 1}
 
@@ -466,12 +478,9 @@ mat3 turned(vec3 a) {
 void main() {
     mat3 uTurn = turned(uAngles);
     vec3 local = uTurn * (aPos * uScale);
-    vec3 p = onRoadAs(uPlace.x + local.x, uPlace.y + local.y,
-                      uPlace.z - local.z, uPlace.z);
-    vec4 r = roadAt(uPlace.z);
-    float c = cos(r.z), s = sin(r.z);
-    vec3 n = uTurn * aNormal;
-    vNormal = vec3(n.x * c - n.y * s, n.x * s + n.y * c, n.z);
+    vec3 p = onRoadAs(local, uPlace);
+    vec3 n = roadFrame(uPlace.z) * (uTurn * aNormal * vec3(1.0, 1.0, -1.0));
+    vNormal = vec3(n.x, n.y, -n.z);
     vLocal = aPos;
     vLocalNormal = aNormal;
     vec4 eye = uView * vec4(p, 1.0);
@@ -602,23 +611,16 @@ void main() {
 """
 
 TOWER_GLSL = """
-uniform float uInside;      // how far the craft is inside a tunnel, 0 to 1
 float towerTall(float level, float reach, float kick) {
     return (1.8 + level * 8.0 + kick * level * 2.5)
            * (0.55 + clamp(reach / 18.0, 0.0, 0.9));
 }
-// On the road's line, turned by the road's roll where it stands - but
-// without a corkscrew's turn (the road sample's w) until the craft is in
-// its tunnel. Seen from outside, a tower turned with the road ahead was a
-// building twisting in the distance; from inside, the view turns with the
-// road and the towers turn with it, as they always have.
-vec3 onRoadUpright(float u, float h, float z, float anchor) {
+// Beside the road's line and upright: a tower takes neither the road's
+// bank nor a corkscrew's turn. Turned with the road, the city twisted
+// whenever the road did; inside a tunnel it is hidden anyway.
+vec3 onRoadUpright(float u, float h, float z) {
     vec4 r = roadAt(z);
-    vec4 a = roadAt(anchor);
-    float roll = a.z - a.w * (1.0 - uInside);
-    float c = cos(roll);
-    float s = sin(roll);
-    return vec3(r.x + u * c - h * s, r.y + u * s + h * c, -z);
+    return vec3(r.x + u, r.y + h, -z);
 }
 """
 
@@ -644,7 +646,7 @@ void main() {
     vec3 local = vec3(aCorner.x * aTower.z, aCorner.y * tall,
                       aCorner.z * aTower.z);
     vec3 p = onRoadUpright(aTower.x + local.x, local.y - 1.2,
-                           along + local.z, along);
+                           along + local.z);
     vec4 eye = uView * vec4(p, 1.0);
     vDepth = eye.w;
     vCorner = aCorner;
@@ -715,7 +717,7 @@ void main() {
     float level = uLevels[int(aTower.w)];
     float along = mod(aTower.y - uTravel, uLoop) + uFrom;
     float tall = towerTall(level, abs(aTower.x), uKick);
-    vec3 p = onRoadUpright(aTower.x, tall - 1.2 + 0.25, along, along);
+    vec3 p = onRoadUpright(aTower.x, tall - 1.2 + 0.25, along);
     vec4 eye = uView * vec4(p, 1.0);
     vDepth = eye.w;
     // One tower in three carries a beacon, and they flash on the beat.
@@ -1400,6 +1402,11 @@ def streak_floats(half: float, count=420, loop=70.0, seed=5) -> list:
     return out
 
 
+def _unit(vector: tuple) -> tuple:
+    length = math.sqrt(sum(part * part for part in vector)) or 1.0
+    return tuple(part / length for part in vector)
+
+
 class RiderWorld:
     """Everything the rider draws on the card, for one GL context: made on the
     first frame in a context and dropped with it (a move into full screen
@@ -1425,13 +1432,11 @@ class RiderWorld:
     PUNCH = 7.0
     #: How far the craft hovers.
     HOVER = 0.28
-    #: Through a tunnel the camera dives to the road and rides it: how far
-    #: behind and above the craft it sits there, how far ahead it looks, and
-    #: how much wider the view opens.
-    DIVE_BACK = 2.0
-    DIVE_UP = 0.52
-    DIVE_AHEAD = 9.0
-    DIVE_FOV = 9.0
+    #: The least the eye may be above the road at any point between it and
+    #: the craft: over a crest, or where a corkscrew has turned the road
+    #: behind the craft further than the craft, the road was through the
+    #: camera.
+    CAM_CLEAR = 0.45
 
     PARTICLES = 3000
 
@@ -1742,7 +1747,13 @@ class RiderWorld:
         # The camera on a spring, following the craft, placed as if the road
         # were not turning over and then turned with it below.
         ship_z = scene.RIDER_AT
-        eye, look, dive = self._rig(road, scene, across, air)
+        half = scene.LANE_WIDE * scene.LANES / 2.0
+        eye = self._on_road(road, across * 0.35,
+                            self.CAM_UP + air * 0.4 + self._knock * 0.5,
+                            ship_z - self.CAM_BACK - self._knock * 0.8,
+                            plain=True)
+        look = self._on_road(road, across * 0.55, self.CAM_LOOK_UP + air * 0.3,
+                             ship_z + self.CAM_AHEAD, plain=True)
         follow = 1.0 - math.exp(-self.CAM_FOLLOW * dt)
         if self._cam_eye is None:
             self._cam_eye, self._cam_look = eye, look
@@ -1762,6 +1773,7 @@ class RiderWorld:
         turn = self._turn_at(road, ship_z)
         centre = self._on_road(road, 0.0, 0.0, ship_z)
         eye_at = self._about(eye_at, centre, turn)
+        eye_at = self._clear_of_road(road, eye_at, ship_z, half)
         look_at = self._about(self._cam_look, centre, turn)
         index = int((ship_z - ROAD_FROM) / ROAD_STEP) * 4
         bank = road[index + 2] - road[index + 3]
@@ -1769,28 +1781,19 @@ class RiderWorld:
                 + math.sin(float(getattr(scene, "_wobble", 0.0)) * 2.3)
                 * hurt * 0.10)
         fov = (self.FOV_CALM + (self.FOV_FAST - self.FOV_CALM) * rush
-               + self._kick_punch * 3.0 + self._punch * self.PUNCH
-               + dive * self.DIVE_FOV)
+               + self._kick_punch * 3.0 + self._punch * self.PUNCH)
         view = QMatrix4x4()
         view.perspective(fov / max(1.0, aspect / 1.6) ** 0.35, aspect,
                          0.05, 400.0)
         view.lookAt(QVector3D(*eye_at), QVector3D(*look_at),
-                    QVector3D(math.sin(roll), math.cos(roll), 0.0))
-        # Out of a tunnel the city whips round once on its own, about the
-        # line of sight; the road and the craft stay where they are.
-        whirl = scene._exit_spin(scene._heard) * math.tau
-        city = QMatrix4x4()
-        city.perspective(fov / max(1.0, aspect / 1.6) ** 0.35, aspect,
-                         0.05, 400.0)
-        city.rotate(math.degrees(whirl), 0.0, 0.0, 1.0)
-        city.lookAt(QVector3D(*eye_at), QVector3D(*look_at),
                     QVector3D(math.sin(roll), math.cos(roll), 0.0))
 
         def screen(point):
             v = view.map(QVector3D(*point))
             return (v.x() * 0.5 + 0.5, v.y() * 0.5 + 0.5)
 
-        ship_at = self._on_road(road, across, self.HOVER + air, ship_z)
+        ship_at = self._rigid(road, (across, self.HOVER + air, ship_z),
+                              (0.0, 0.0, 0.0))
         self._screen_ship = screen(ship_at)
         horizon = screen(self._on_road(road, 0.0, 0.0, ROAD_TO - 2.0))
         # Where the sky is, not the road: it stays put as the road turns over
@@ -1833,29 +1836,65 @@ class RiderWorld:
             "marks": marks, "marks_first": marks_first,
             "flash": float(scene.flash(state)) if hasattr(scene, "flash")
             else 0.0,
-            "half": scene.LANE_WIDE * scene.LANES / 2.0,
+            "half": half,
             "pixels": 1.0,
             "eye": eye_at,
-            "dive": dive, "whirl": whirl, "view_city": city,
         }
 
-    def _rig(self, road, scene, across: float, air: float) -> tuple:
-        """Where the camera rides and what it looks at, before the corkscrew
-        turns it: behind and above the craft on the open road, and down at
-        the road looking along the tube through a tunnel, so the ride goes
-        through it. Returns the eye, the aim and how far the dive is."""
-        ship_z = scene.RIDER_AT
-        dive = self.inside * self.inside
-        back = self.CAM_BACK + (self.DIVE_BACK - self.CAM_BACK) * dive
-        up = self.CAM_UP + (self.DIVE_UP - self.CAM_UP) * dive
-        ahead = self.CAM_AHEAD + (self.DIVE_AHEAD - self.CAM_AHEAD) * dive
-        eye = self._on_road(road, across * 0.35,
-                            up + air * 0.4 + self._knock * 0.5,
-                            ship_z - back - self._knock * 0.8, plain=True)
-        look = self._on_road(road, across * 0.55,
-                             self.CAM_LOOK_UP * (1.0 - dive) + air * 0.3,
-                             ship_z + ahead, plain=True)
-        return eye, look, dive
+    @classmethod
+    def _clear_of_road(cls, road, eye, ship_z: float, half: float) -> tuple:
+        """``eye`` lifted, along the road's up at the craft, until it is
+        CAM_CLEAR above the road's surface at every sample between it and
+        the craft. Beside the road there is nothing under it to clear."""
+        z_eye = -eye[2]
+        up = cls._sample(road, ship_z, 2)
+        # Twice: the samples' frames differ from the craft's by a little
+        # through a corkscrew, so one lift along the craft's up leaves a
+        # hair.
+        for _ in range(2):
+            short = 0.0
+            for step in range(9):
+                z = z_eye + (ship_z - z_eye) * step / 8.0
+                dx = eye[0] - cls._sample(road, z, 0)
+                dy = eye[1] - cls._sample(road, z, 1)
+                r = cls._sample(road, z, 2)
+                if abs(dx * math.cos(r) + dy * math.sin(r)) > half + 1.0:
+                    continue
+                short = max(short, cls.CAM_CLEAR + dx * math.sin(r)
+                            - dy * math.cos(r))
+            if short <= 0.0:
+                break
+            eye = (eye[0] - math.sin(up) * short,
+                   eye[1] + math.cos(up) * short, eye[2])
+        return eye
+
+    @classmethod
+    def _road_frame(cls, road, z: float) -> tuple:
+        """The shader's roadFrame in Python: across, up and along at ``z``,
+        in the road's own space."""
+        on = (cls._sample(road, z + 0.5, 0), cls._sample(road, z + 0.5, 1))
+        back = (cls._sample(road, z - 0.5, 0), cls._sample(road, z - 0.5, 1))
+        along = _unit((on[0] - back[0], on[1] - back[1], 1.0))
+        r = cls._sample(road, z, 2)
+        across = (math.cos(r), math.sin(r), 0.0)
+        lean = sum(a * b for a, b in zip(across, along))
+        across = _unit(tuple(a - lean * b for a, b in zip(across, along)))
+        up = (along[1] * across[2] - along[2] * across[1],
+              along[2] * across[0] - along[0] * across[2],
+              along[0] * across[1] - along[1] * across[0])
+        return across, up, along
+
+    @classmethod
+    def _rigid(cls, road, place, local) -> tuple:
+        """The shader's onRoadAs in Python: a point ``local`` of a rigid thing
+        standing at ``place`` (across, up, along), in the world."""
+        across, up, along = cls._road_frame(road, place[2])
+        centre = (cls._sample(road, place[2], 0),
+                  cls._sample(road, place[2], 1), place[2])
+        u, h, a = place[0] + local[0], place[1] + local[1], -local[2]
+        x, y, z = (c + u * i + h * j + a * k
+                   for c, i, j, k in zip(centre, across, up, along))
+        return (x, y, -z)
 
     @staticmethod
     def _beat_uniforms(program, frame) -> None:
@@ -1894,9 +1933,7 @@ class RiderWorld:
         p = self.towers
         p.bind()
         self._road_uniforms(p, frame)
-        p.set("uView", frame["view_city"])
         self._fog_uniforms(p, frame)
-        p.set("uInside", float(self.inside))
         p.array("uLevels", frame["bands"], BANDS, 1)
         p.set("uTravel", float(frame["travel"]))
         p.set("uLoop", 80.0)
@@ -1955,7 +1992,7 @@ class RiderWorld:
         p.set("uWaveLit", float(self._wave_lit))
         p.set("uFlashColour", QVector3D(*self._flash_colour))
         p.set("uFlashLane", float(self._flash_lane))
-        p.set("uFlash", float(self._flash * (1.0 - 0.6 * frame["dive"])))
+        p.set("uFlash", float(self._flash))
         p.set("uHurt", float(frame["hurt"]))
         p.set("uShipU", float(frame["across"]))
         self.road_mesh.draw(self.gl, p)
@@ -2268,7 +2305,6 @@ class RiderWorld:
         p.bind()
         self._road_uniforms(p, frame)
         self._fog_uniforms(p, frame)
-        p.set("uInside", float(self.inside))
         p.array("uLevels", frame["bands"], BANDS, 1)
         p.set("uTravel", float(frame["travel"]))
         p.set("uLoop", 80.0)
@@ -2508,13 +2544,12 @@ class RiderWorld:
         gl.glActiveTexture(GL_TEXTURE0 + 1)
         gl.glBindTexture(GL_TEXTURE_2D, self._bloom_texture)
         p.set("uBloom", 1)
-        # Louder passages bloom more, out in the open. A tunnel's walls are
-        # already alight, so inside one a prize's bloom and glow are held
-        # back, or the frame goes white.
-        inside = frame["dive"]
-        p.set("uBloomAmount", float(0.55 + self._bloom_bump * (1.0 - 0.6 * inside)
+        # Louder passages bloom more, out in the open; a tunnel's walls are
+        # already alight.
+        p.set("uBloomAmount", float(0.55 + self._bloom_bump
                                     + frame["flash"] * 0.4
-                                    + frame["loud"] * 0.12 * (1.0 - inside)))
+                                    + frame["loud"] * 0.12
+                                    * (1.0 - self.inside)))
         p.set("uExposure", 1.0)
         p.set("uSplit", float(0.25 + self._split * 3.0
                                            + self._kick_punch * 0.5))
@@ -2525,7 +2560,7 @@ class RiderWorld:
         p.set("uShockHard", float(self._shock_hard))
         p.set("uAspect", float(frame["aspect"]))
         p.set("uHurt", float(frame["hurt"]))
-        p.set("uGlow", float(self._glow * (1.0 - 0.6 * inside)))
+        p.set("uGlow", float(self._glow))
         p.set("uGlowColour", QVector3D(*self._glow_colour))
         p.set("uFlash", float(frame["flash"]))
         p.set("uOpacity", float(opacity))
