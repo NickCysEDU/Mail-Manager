@@ -103,11 +103,18 @@ describes the app itself.
   (`_when(..., exact=True)`).
 - **A corkscrew's turn is in the road samples, not the camera;** towers stand
   on the road with the corkscrew's roll taken out unless inside the tunnel.
-- **Through the tunnel the camera dives to the road** (`RiderWorld._rig`,
-  `DIVE_*`), and as the tunnel closes the city alone whips round once
-  (`Rider._exit_spin`, drawn with `view_city`). The road and the craft stay
-  put either way; the corkscrew test checks that against the same tunnel
-  with its turn taken out.
+- **The city stands upright** (`onRoadUpright`): a tower takes neither the
+  road's bank nor a corkscrew's turn, or the skyline twists whenever the
+  road does. **The eye is kept clear of the road** between it and the craft
+  (`RiderWorld._clear_of_road`), or a crest, or the road behind the craft
+  turned further than the craft, put the road through the camera. **A
+  craft is one rigid piece** (`onRoadAs`, mirrored by `RiderWorld._rigid`):
+  placed in the road's frame where it stands, not point by point along the
+  road's line, which bent it over a crest.
+- **The results card runs on the wall clock** (`Rider._finished_at`): the
+  track has stopped by then, so on the track's clock it never finished
+  coming up. A seek back from the finish is a new run from there, with the
+  card gone; only a run from the start can keep a best.
 - **A plunge is a rush:** where the road falls away, `PACE_FALL` adds to the
   beat's pace (`Rider._falling`), under the level's least warning as ever.
 - **A run's log** (`Rider._log`) records each block's outcome until the
@@ -146,7 +153,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 4,695 tests
+./dev test                     # 4,706 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus
