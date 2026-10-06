@@ -1764,6 +1764,10 @@ class AudioPane(QWidget):
         import touchbar
 
         on = self.enable_box.isChecked
+        shown = lambda: on() or full is not None
+        scene = lambda name: lambda: (shown() and
+                                      self.scene_box.currentText() == name)
+        scenes = [self.enable_box.toggled, self.scene_box.currentIndexChanged]
         caption = lambda holder: holder.layout().itemAt(0).widget().text()
         items = [
             touchbar.Button("back", "Back ten seconds",
@@ -1772,6 +1776,7 @@ class AudioPane(QWidget):
             touchbar.Button("play", "Play", self.play, title="",
                             image=lambda: ("pause.fill" if self._playing
                                            else "play.fill"),
+                            role="primary",
                             watch=[self.playingChanged], priority="high"),
             touchbar.Button("forward", "Forward ten seconds",
                             lambda: self.transport("forward"), title="",
@@ -1785,39 +1790,42 @@ class AudioPane(QWidget):
                                 watch=[self.position.moved,
                                        self.enable_box.toggled]),
                 touchbar.Toggle("visualiser", "Visualiser", self.enable_box,
-                                when=lambda: not on()),
+                                image="waveform", when=lambda: not on()),
             ]
+        # What a scene brings with it is there while it is the scene, as the
+        # window's own row of controls does.
         items += [
             touchbar.Choice("scene", "Scene", self.scene_box, style="list",
-                            width=300, priority="high",
-                            when=lambda: on() or full is not None,
+                            width=300, priority="high", when=shown,
                             watch=[self.enable_box.toggled]),
             touchbar.Toggle("strobe", "Strobe", self.strobe_box,
-                            when=lambda: on() or full is not None,
+                            image="bolt.fill", when=shown,
                             watch=[self.enable_box.toggled]),
             touchbar.Button("flash", "Flash", self._flash_once,
-                            priority="low",
-                            when=self.strobe_box.isChecked),
+                            image="bolt.badge.clock", priority="low",
+                            when=lambda: shown() and self.strobe_box.isChecked()),
             touchbar.Popover("game", "Game", [
                 touchbar.Choice("game-mode", "Game", self.game_box),
                 touchbar.Choice("level", "Level", self.level_box),
-                touchbar.Toggle("sounds", "Sounds", self.sound_box),
+                touchbar.Toggle("sounds", "Sounds", self.sound_box,
+                                image="speaker.wave.2"),
                 touchbar.Slider("effects", "Effects", self.effects,
                                 width=110),
             ], title=lambda: self.game_box.currentText(),
-                when=lambda: on() or full is not None,
-                watch=[self.enable_box.toggled]),
+                image="gamecontroller", when=scene("Music rider"),
+                watch=scenes),
             touchbar.Popover("beam", "Beam", [
                 touchbar.Choice("beam-mode", "Beam", self.mode_box),
                 touchbar.Slider("glow", "Glow", self.decay, width=140),
             ], title=lambda: self.mode_box.currentText(),
-                when=lambda: on() or full is not None,
-                watch=[self.enable_box.toggled]),
+                image="waveform.path", when=scene("Oscilloscope"),
+                watch=scenes),
             touchbar.Button("colours", "Colours", self.colour_button,
-                            when=lambda: on() or full is not None,
-                            watch=[self.enable_box.toggled]),
+                            image="paintpalette", when=scene("VU meters"),
+                            watch=scenes),
             touchbar.Popover("picture", "Picture", [
-                touchbar.Toggle("picture-on", "Visualiser", self.enable_box),
+                touchbar.Toggle("picture-on", "Visualiser", self.enable_box,
+                                image="waveform"),
                 touchbar.Choice("shape", "Shape", self.shape_box,
                                 style="list", width=190),
                 touchbar.Choice("change", "Scene change", self.change_box),
@@ -1829,8 +1837,7 @@ class AudioPane(QWidget):
                 touchbar.Slider("rate", "Rate", self.flash, width=100,
                                 priority="low",
                                 title=lambda: caption(self.rate_box)),
-            ], when=lambda: on() or full is not None,
-                watch=[self.enable_box.toggled]),
+            ], image="photo", when=shown, watch=[self.enable_box.toggled]),
         ]
         if full is None:
             items += [

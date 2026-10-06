@@ -32,7 +32,7 @@ HELD_FOR = 0.6
 
 #: How often an active window's bar is checked against its controls, for
 #: changes no signal reports, such as a button's text.
-POLL_MS = 1000
+POLL_MS = 400
 
 #: What draws the bars, once install() has found AppKit.
 _renderer = None
@@ -244,7 +244,7 @@ class Toggle(Item):
 
     def state(self) -> dict:
         return {"title": self.label, "on": self.source.isChecked(),
-                "enabled": _enabled(self.source)}
+                "image": _read(self.image), "enabled": _enabled(self.source)}
 
     def act(self, value=None) -> None:
         source = self.source

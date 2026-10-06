@@ -90,10 +90,10 @@ NEEDED = {
     "+NSSegmentedControl": (
         "segmentedControlWithLabels:trackingMode:target:action:",),
     "NSSegmentedControl": ("setSegmentCount:", "segmentCount",
-                           "setLabel:forSegment:", "setSelectedSegment:",
-                           "selectedSegment", "setSelected:forSegment:",
-                           "isSelectedForSegment:", "setEnabled:",
-                           "setTarget:"),
+                           "setLabel:forSegment:", "setImage:forSegment:",
+                           "setSelectedSegment:", "selectedSegment",
+                           "setSelected:forSegment:", "isSelectedForSegment:",
+                           "setEnabled:", "setTarget:"),
     "NSPopoverTouchBarItem": ("initWithIdentifier:",
                               "setCollapsedRepresentationLabel:",
                               "setCollapsedRepresentationImage:",
@@ -609,6 +609,9 @@ class Renderer:
                 control = handle.controls[key]
                 rt.send(control, "setLabel:forSegment:",
                         rt.string(state.get("title") or ""), 0,
+                        argtypes=[_id, _long])
+                rt.send(control, "setImage:forSegment:",
+                        self._symbol(state.get("image")), 0,
                         argtypes=[_id, _long])
                 rt.send(control, "setSelected:forSegment:",
                         bool(state.get("on")), 0, argtypes=[_bool, _long])
