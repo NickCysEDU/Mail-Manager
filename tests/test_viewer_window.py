@@ -268,11 +268,12 @@ class TestThePictureTakesTheRoomThereIs:
         for words in ("Short.", " ".join(["A longer line of words."] * 9),
                       "Short again."):
             pane.game_about.setText(words)
-            # Passes of the event loop rather than time: a wait in
-            # milliseconds was too short on a loaded machine, and long
-            # enough for a timer to tidy up what the layout should have.
-            for _ in range(8):
-                qapp.processEvents()
+            # Until the layout is quiet, not a count of passes: a timer left
+            # by an earlier test can land in the middle and cost one more.
+            for _ in range(300):
+                if not (_crowding(pane) or self._gap(pane) > 12):
+                    break
+                qtbot.wait(10)
             problems += _crowding(pane)
             if self._gap(pane) > 12:
                 problems.append(f"{self._gap(pane)} pixels left empty")
