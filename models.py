@@ -468,6 +468,8 @@ class EmailMessage:
     sender_email: str = ""
     date: Optional[datetime] = None
     body_text: str = ""
+    #: The HTML part as sent, for the preview; empty for plain mail.
+    body_html: str = ""
     message_id: str = ""
     #: What this message is answering. Kept because threading is exact when
     #: these are present and guesswork when they are not.

@@ -88,7 +88,34 @@ def _one_of(names: Sequence[str]) -> str:
     return ", ".join(names[:-1]) + " and " + names[-1]
 
 
-class AdaptiveLineEdit(QLineEdit):
+class ClearingLineEdit(QLineEdit):
+    """A line edit whose clear button sits level with its text. Qt places
+    the button from the field's padded content rectangle, so under the
+    theme's padding it hung below the middle."""
+
+    def __init__(self, *args) -> None:
+        super().__init__(*args)
+        self.setClearButtonEnabled(True)
+
+    def resizeEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        super().resizeEvent(event)
+        self._centre_buttons()
+
+    def event(self, event) -> bool:
+        handled = super().event(event)
+        if event.type() in (QEvent.Type.Show, QEvent.Type.StyleChange,
+                            QEvent.Type.LayoutRequest):
+            self._centre_buttons()
+        return handled
+
+    def _centre_buttons(self) -> None:
+        for button in self.findChildren(QToolButton):
+            middle = (self.height() - button.height()) // 2
+            if button.y() != middle:
+                button.move(button.x(), middle)
+
+
+class AdaptiveLineEdit(ClearingLineEdit):
     """A line edit whose hint text shrinks to fit its width.
 
     Several phrasings are supplied and the longest that fits is shown: an

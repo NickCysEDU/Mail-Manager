@@ -50,6 +50,8 @@ class DemoMessage:
     confidence: float = 0.97
     links: Tuple[str, ...] = ()
     list_unsubscribe: str = ""
+    #: The message as sent, where the sample has a formatted version.
+    html: str = ""
     attachments: Tuple[str, ...] = ()
 
     @property
@@ -80,6 +82,24 @@ DEMO_MESSAGES: Tuple[DemoMessage, ...] = (
             "this week. Please pick whichever slot works best for you:\n\n"
             "    Pick a time\n\n"
             "Looking forward to speaking,\nDana"
+        ),
+        html=(
+            '<html><body style="font-family:Helvetica,Arial,sans-serif;color:#222">'
+            '<table width="100%" cellpadding="0" cellspacing="0"><tr>'
+            '<td style="background:#1f4e79;padding:14px 18px;color:#fff;font-size:18px">'
+            "<b>Northwind Systems</b></td></tr></table>"
+            "<p>Hi Alex,</p>"
+            "<p>Thanks for your interest in the <b>Senior Platform Engineer</b> role at "
+            "Northwind Systems. I really enjoyed reading through your background - the "
+            "work on the ingestion pipeline stood out.</p>"
+            "<p>I'd love to set up a 45-minute technical interview with two of our "
+            "engineers this week. Please pick whichever slot works best for you:</p>"
+            '<p style="text-align:center"><a href="https://calendly.com/northwind/tech-interview" '
+            'style="background:#2d7d46;color:#fff;padding:10px 22px;border-radius:6px;'
+            'text-decoration:none">Pick a time</a></p>'
+            "<p>Looking forward to speaking,<br>Dana</p>"
+            '<p style="color:#888;font-size:11px">Dana Reyes · Talent, Northwind Systems</p>'
+            "</body></html>"
         ),
         hours_ago=2,
         category=Category.INTERVIEW,
@@ -310,6 +330,23 @@ DEMO_MESSAGES: Tuple[DemoMessage, ...] = (
             "Northwind, Vela Labs and eleven other companies. View them all in one place.\n\n"
             "You are receiving this because you saved a job alert."
         ),
+        html=(
+            '<html><body style="font-family:Helvetica,Arial,sans-serif;color:#333">'
+            '<img src="https://careersdigest.example/open.gif" width="1" height="1">'
+            '<h2 style="color:#5b2d8e">23 new jobs matching \'Staff Engineer\'</h2>'
+            "<p>Your saved search has 23 new results this week, including roles at "
+            "Northwind, Vela Labs and eleven other companies.</p>"
+            '<table cellpadding="6" cellspacing="0" style="border-collapse:collapse">'
+            '<tr style="background:#f1ecf7"><th align="left">Role</th><th align="left">Company</th></tr>'
+            "<tr><td>Staff Engineer, Platform</td><td>Northwind Systems</td></tr>"
+            "<tr><td>Staff Backend Engineer</td><td>Vela Labs</td></tr>"
+            "<tr><td>Principal Engineer</td><td>Meridian</td></tr>"
+            "</table>"
+            '<p><a href="https://careersdigest.example/saved-search">View them all in one place</a>.</p>'
+            '<p style="color:#999;font-size:11px">You are receiving this because you saved '
+            'a job alert. <a href="https://careersdigest.example/unsubscribe">Unsubscribe</a></p>'
+            "</body></html>"
+        ),
         hours_ago=26,
         is_job_related=False,
         other_category=OtherCategory.PROMOTION,
@@ -463,6 +500,7 @@ def demo_emails(now: Optional[datetime] = None) -> List[EmailMessage]:
             sender_email=message.sender_email,
             date=now - timedelta(hours=message.hours_ago),
             body_text=message.body,
+            body_html=message.html,
             message_id=f"<{message.uid}@demo.local>",
             to="you@icloud.example",
             list_unsubscribe=message.list_unsubscribe,

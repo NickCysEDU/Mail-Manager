@@ -220,11 +220,22 @@ class TestParseMessage:
 
 
 class TestExtractBody:
+    def test_the_html_comes_along_for_the_preview(self):
+        message = parse_message(build_mime(
+            plain="Hi there, this is the plain alternative, long enough to win.",
+            html="<p>Hi <b>there</b></p>"), uid="7")
+        assert "Hi there" in message.body_text
+        assert "<b>there</b>" in message.body_html
+
+    def test_plain_mail_has_no_html(self):
+        message = parse_message(build_mime(plain="Just text, nothing else at all here."), uid="8")
+        assert message.body_html == ""
+
     def test_returns_text_and_attachments(self):
         import email
 
         message = email.message_from_bytes(build_mime(attachment=("cv.pdf", b"x")))
-        extracted, attachments = extract_body(message)
+        extracted, attachments, _html = extract_body(message)
         assert extracted.text
         assert attachments == ("cv.pdf",)
 

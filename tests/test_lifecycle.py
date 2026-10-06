@@ -639,6 +639,36 @@ class TestQuittingWithSettingsOpen:
             dialog.deleteLater()
 
 
+class TestQuitWithAnalysedMail:
+    @pytest.fixture
+    def window(self, qapp, tmp_path, monkeypatch):
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        from config import InMemoryCredentialStore, Settings
+        from gui import MainWindow
+
+        window = MainWindow(Settings(icloud_email="you@icloud.example"),
+                            InMemoryCredentialStore())
+        window._load_demo_data()
+        yield window
+        window.close()
+        window.deleteLater()
+
+    def test_the_quit_action_leaves_after_the_question(self, window, monkeypatch):
+        """The action's own checked flag reached quit_app as ``before`` and
+        was called: a TypeError instead of quitting, only once there was
+        a scan to ask about."""
+        monkeypatch.setattr(QMessageBox, "question",
+                            lambda *a, **k: QMessageBox.StandardButton.Discard)
+        quit_called = []
+        monkeypatch.setattr(QApplication, "quit",
+                            lambda *a: quit_called.append(True))
+        assert window.model.rowCount() > 0
+        action = next(a for a in window.findChildren(QAction)
+                      if a.text() == "&Quit")
+        action.trigger()
+        assert quit_called, "Quit did not get as far as leaving"
+
+
 class TestADeletedSettingsDialogDoesNotTakeTheAppWithIt:
     """Qt calls qFatal when a running QThread is destroyed.
 

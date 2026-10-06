@@ -433,6 +433,141 @@ def defuse_stray_brackets(html: str) -> str:
     return "".join(out)
 
 
+#: Elements dropped with everything inside them: nothing that runs, embeds
+#: or takes input belongs in a preview.
+_DROP_WHOLE = frozenset(
+    "script iframe object applet svg math video audio template noscript "
+    "frameset canvas map select textarea".split())
+#: Void elements dropped on their own.
+_DROP_TAG = frozenset("input link meta base embed source track area param "
+                      "frame".split())
+#: Elements whose tags go and whose text stays.
+_UNWRAP = frozenset("form button label fieldset".split())
+_VOID = frozenset("area base br col embed hr img input link meta param "
+                  "source track wbr".split())
+_SCHEME = re.compile(r"^\s*([a-z][a-z0-9+.-]*):", re.I)
+_SAFE_SCHEMES = ("http", "https", "mailto", "tel")
+_CSS_URL = re.compile(r"url\s*\([^)]*\)|expression\s*\(", re.I)
+
+
+def _safe_link(value: str) -> bool:
+    """A link a click may open: a web, mail or phone address, or a fragment."""
+    found = _SCHEME.match(value.replace("\n", "").replace("\r", "")
+                          .replace("\t", ""))
+    return found is None or found.group(1).lower() in _SAFE_SCHEMES
+
+
+class _Cleaner(HTMLParser):
+    """Writes the document back out with the dangerous parts left out."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=False)
+        self.out: List[str] = []
+        self._skipping = 0
+        self._in_style = False
+
+    def handle_startendtag(self, tag, attrs):
+        self._start(tag, attrs, True)
+
+    def handle_starttag(self, tag, attrs):
+        self._start(tag, attrs, False)
+
+    def _start(self, tag, attrs, closing: bool) -> None:
+        tag = tag.lower()
+        void = closing or tag in _VOID
+        if self._skipping:
+            if not void:
+                self._skipping += 1
+            return
+        if tag in _DROP_WHOLE:
+            if not void:
+                self._skipping = 1
+            return
+        if tag in _DROP_TAG or tag in _UNWRAP:
+            return
+        if tag == "img":
+            self.out.append(_image(attrs))
+            return
+        if tag == "style":
+            self._in_style = True
+        kept = []
+        for name, value in attrs:
+            name = name.lower()
+            value = value or ""
+            if name.startswith("on") or name in (
+                    "background", "formaction", "ping", "srcset", "poster",
+                    "usemap", "src", "action", "cite", "data", "xlink:href"):
+                continue
+            if name == "href" and not _safe_link(value):
+                continue
+            if name == "style":
+                value = _CSS_URL.sub("none", value)
+            kept.append(f' {name}="{_attr(value)}"')
+        self.out.append(f"<{tag}{''.join(kept)}{' /' if void else ''}>")
+
+    def handle_endtag(self, tag):
+        tag = tag.lower()
+        if tag in _VOID:
+            return
+        if self._skipping:
+            self._skipping -= 1
+            return
+        if tag in _DROP_WHOLE or tag in _DROP_TAG or tag in _UNWRAP:
+            return
+        if tag == "style":
+            self._in_style = False
+        self.out.append(f"</{tag}>")
+
+    def handle_data(self, data):
+        if self._skipping:
+            return
+        if self._in_style:
+            data = _CSS_URL.sub("none", data)
+        self.out.append(data)
+
+    def handle_entityref(self, name):
+        if not self._skipping:
+            self.out.append(f"&{name};")
+
+    def handle_charref(self, name):
+        if not self._skipping:
+            self.out.append(f"&#{name};")
+
+
+def _attr(value: str) -> str:
+    return (value.replace("&", "&amp;").replace('"', "&quot;")
+            .replace("<", "&lt;").replace(">", "&gt;"))
+
+
+def _image(attrs) -> str:
+    """An embedded image stays; a remote one is a placeholder, or nothing for
+    the pixels mail uses to tell its sender it was opened."""
+    found = {name.lower(): (value or "") for name, value in attrs}
+    source = found.get("src", "").strip()
+    alt = found.get("alt", "").strip()
+    if source.lower().startswith("data:image/"):
+        return f'<img src="{_attr(source)}" alt="{_attr(alt)}" />'
+    try:
+        wide = float(re.sub(r"[^0-9.]", "", found.get("width", "")) or 0)
+    except ValueError:
+        wide = 0.0
+    if alt:
+        return f"<span style=\"color:#8a8a8a\">[image: {_attr(alt)}]</span>"
+    if wide >= 40.0:
+        return "<span style=\"color:#8a8a8a\">[image]</span>"
+    return ""
+
+
+def sanitise_for_view(html: str) -> str:
+    """The message's HTML with scripts, embeds, forms and every remote
+    reference taken out, for Qt's document engine to draw. Whatever is
+    left can still not fetch anything: the view refuses every resource."""
+    cleaner = _Cleaner()
+    cleaner.feed(defuse_stray_brackets(html or ""))
+    cleaner.close()
+    return "".join(cleaner.out)
+
+
 def html_to_text(html: str) -> ExtractedText:
     """Reduce an HTML email part to readable text plus its links."""
     if not html:

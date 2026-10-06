@@ -1234,7 +1234,6 @@ class MainWindow(QMainWindow):
             "Filter messages…",
             "Filter…",
         )
-        self.search_edit.setClearButtonEnabled(True)
         self.search_edit.textChanged.connect(self.proxy.set_text_filter)
         self.search_edit.setMinimumWidth(220)
         self.search_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -1430,13 +1429,22 @@ class MainWindow(QMainWindow):
     def _refresh_view_button(self) -> None:
         linked = self._linked_mailboxes()
         showing = self._showing_accounts()
+        with_mail = [label for account, label, count in linked
+                     if count and account in showing]
         if self._view_all:
-            name = "All mailboxes" if len(linked) > 1 else "Mailbox"
+            # Named when only one mailbox was scanned, so the button says
+            # whose mail this is rather than "all".
+            if len(linked) == 1:
+                name = _mailbox_short(linked[0][1])
+            elif len(with_mail) == 1:
+                name = _mailbox_short(with_mail[0])
+            else:
+                name = "All mailboxes"
         elif not showing:
             name = "No mailboxes"
         elif len(showing) == 1:
             only = next((l for a, l, _n in linked if a in showing), "One mailbox")
-            name = only.split(" · ")[-1] if " · " in only else only
+            name = _mailbox_short(only)
         else:
             name = f"{len(showing)} of {len(linked)} mailboxes"
         self.view_button.setText(menu_text(f"Show: {name}"))
@@ -1629,7 +1637,7 @@ class MainWindow(QMainWindow):
         quit_action.setMenuRole(QAction.MenuRole.QuitRole)
         # Not QApplication.quit, which skips asking about an unapplied scan and
         # an open Settings.
-        quit_action.triggered.connect(self.quit_app)
+        quit_action.triggered.connect(lambda: self.quit_app())
         file_menu.addAction(quit_action)
 
         edit_menu = menubar.addMenu("&Edit")
@@ -3711,6 +3719,12 @@ def _metrics_html(metrics: dict) -> str:
         parts.append(_chip("model", _html(str(metrics["model"]))))
     separator = "&nbsp;&nbsp;<span style='opacity:0.35'>|</span>&nbsp;&nbsp;"
     return "<div style='font-size:12px'>" + separator.join(parts) + "</div>"
+
+
+def _mailbox_short(label: str) -> str:
+    """The address out of ``Account.describe()``, which is what tells one
+    mailbox from another."""
+    return label.split(" · ")[-1] if " · " in label else label
 
 
 def _export_row(item: TriageItem) -> dict:

@@ -9131,6 +9131,18 @@ class TestTheWaveformWidget:
         bar.set_position(at)
         return bar
 
+    def test_a_players_small_steps_add_up_to_a_repaint(self, qapp):
+        """A player reports every 50 ms, each step less than a column of the
+        bar; measured from the last report rather than the last paint, no
+        step was ever enough and the played part sat at the start."""
+        bar = self._made([0.5] * 200, span=200_000)
+        painted = []
+        bar.update = lambda: painted.append(bar._at)
+        for ms in range(50, 3_050, 50):
+            bar.set_position(ms)
+        assert painted, "three seconds of reports never repainted the bar"
+        assert painted[0] <= 2_100, painted[:3]
+
     @staticmethod
     def _drawn(bar):
         from PySide6.QtCore import QPoint, QRect

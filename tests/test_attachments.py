@@ -744,3 +744,38 @@ class TestNothingOutlivesTheWindow:
             "the handle is released while its thread may still be running")
         assert "_LIVE.discard" in inspect.getsource(
             attachment_audio._Analysis._thread_done)
+
+
+class TestTheKeysFollowWhatIsShown:
+    @staticmethod
+    def _viewer(qtbot):
+        import attachments
+        from attachment_view import AttachmentViewer
+
+        png = (b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+        found = [
+            attachments.Attachment(part="1", name="photo.png",
+                                   content_type="image/png", size=72, data=png),
+            attachments.Attachment(part="2", name="notes.txt",
+                                   content_type="text/plain", size=5,
+                                   data=b"hello"),
+        ]
+        viewer = AttachmentViewer(found, fetch=lambda item: item.data)
+        qtbot.addWidget(viewer)
+        return viewer
+
+    def test_an_image_offers_copying_and_no_transport(self, qtbot):
+        viewer = self._viewer(qtbot)
+        viewer.list.setCurrentRow(0)
+        keys = viewer.hint.text()
+        assert "copy the image" in keys
+        assert "play or pause" not in keys and "scrub" not in keys
+
+    def test_a_text_file_offers_neither(self, qtbot):
+        viewer = self._viewer(qtbot)
+        viewer.list.setCurrentRow(1)
+        keys = viewer.hint.text()
+        assert "move between attachments" in keys
+        assert "save a copy" in keys
+        assert "copy the image" not in keys and "play or pause" not in keys
+

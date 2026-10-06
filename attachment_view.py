@@ -1959,7 +1959,35 @@ class AudioPane(QWidget):
             spectrum = getattr(self, "spectrum", None)
             if spectrum is not None and shiboken6.isValid(spectrum):
                 self._apply_budget(fresh=False)
+                if self._controls_squeezed():
+                    QTimer.singleShot(0, self, self._budget_settled)
         return handled
+
+    def _controls_squeezed(self) -> bool:
+        """Whether the row of controls has less than it asks for, or the
+        picture has left a gap under it."""
+        holder = self.visual_holder
+        if not holder.isVisible():
+            return False
+        wanted = holder.heightForWidth(holder.width())
+        if wanted < 0:
+            wanted = holder.minimumSizeHint().height()
+        bottom = holder.geometry().bottom() + 1
+        spare = self.height() - self.layout().contentsMargins().bottom() - bottom
+        return holder.height() < wanted or spare > 12
+
+    def _budget_settled(self) -> None:
+        """A fresh reading once the layout is quiet. The layout's cached
+        numbers can lag a label that has just wrapped, and a budget read from
+        them left the controls cut short with room to spare under them. Acts
+        only when the answer differs, so nothing loops."""
+        import shiboken6
+
+        if not shiboken6.isValid(self.spectrum):
+            return
+        budget = max(80, self._spectrum_budget(fresh=True))
+        if budget != self.spectrum._budget:
+            self.spectrum.set_budget(budget)
 
     def closeEvent(self, incoming) -> None:      # noqa: N802 - Qt's name
         self._cancel_analysis()
@@ -2095,32 +2123,10 @@ class AttachmentViewer(QDialog):
             self.list.addItem(entry)
 
         # Not the dim style: this is the only place the keys are written down.
-        opening = ("Add a track, then click it to watch. Nothing is sent "
-                   "anywhere and nothing is kept."
-                   if library else
-                   "Click an attachment to open it. Nothing here is ever "
-                   "run, and nothing is saved unless you say so.")
-        keys = [("K / Space", "play or pause"),
-                ("J&nbsp;&nbsp;L", "back or on ten seconds"),
-                ("← →", "scrub"),
-                ("↑ ↓", "move between tracks" if library
-                 else "move between attachments"),
-                ("F", "full screen"),
-                ("⌘I", "show details")]
-        if not library:
-            keys.append(("⌘S", "save a copy"))
-        self.hint = QLabel(
-            f"<p style='margin:0 0 6px 0'>{opening}</p>"
-            "<table cellspacing='0' cellpadding='0'>"
-            + "".join(
-                "<tr>"
-                f"<td style='padding:1px 8px 1px 0'><b>{key}</b></td>"
-                f"<td style='padding:1px 0'>{what}</td>"
-                "</tr>"
-                for key, what in keys)
-            + "</table>")
+        self.hint = QLabel("")
         self.hint.setTextFormat(Qt.TextFormat.RichText)
         self.hint.setWordWrap(True)
+        self._say_keys("")
 
         self.image = ImagePane()
         self.audio = AudioPane()
@@ -2229,6 +2235,39 @@ class AttachmentViewer(QDialog):
             for button in (self.save_button, self.save_all, self.info_button):
                 button.setEnabled(False)
         self._give_touch_bar()
+
+    def _say_keys(self, kind: str) -> None:
+        """The keys that do something for what is on screen: the transport
+        for a sound file, nothing of the sort for a PDF."""
+        opening = ("Add a track, then click it to watch. Nothing is sent "
+                   "anywhere and nothing is kept."
+                   if self.library else
+                   "Click an attachment to open it. Nothing here is ever "
+                   "run, and nothing is saved unless you say so.")
+        between = [("↑ ↓", "move between tracks" if self.library
+                    else "move between attachments")]
+        if kind == "audio":
+            keys = [("K / Space", "play or pause"),
+                    ("J&nbsp;&nbsp;L", "back or on ten seconds"),
+                    ("← →", "scrub"), *between,
+                    ("F", "full screen"), ("?", "the picture's own keys")]
+        elif kind == "image":
+            keys = [*between, ("⌘C", "copy the image")]
+        else:
+            keys = between
+        keys.append(("⌘I", "show details"))
+        if not self.library:
+            keys.append(("⌘S", "save a copy"))
+        self.hint.setText(
+            f"<p style='margin:0 0 6px 0'>{opening}</p>"
+            "<table cellspacing='0' cellpadding='0'>"
+            + "".join(
+                "<tr>"
+                f"<td style='padding:1px 8px 1px 0'><b>{key}</b></td>"
+                f"<td style='padding:1px 0'>{what}</td>"
+                "</tr>"
+                for key, what in keys)
+            + "</table>")
 
     def _give_touch_bar(self) -> None:
         """Moving through the list, the pane's own controls, and saving."""
@@ -2483,6 +2522,7 @@ class AttachmentViewer(QDialog):
         self.heading.show()
 
         if item.data is None:
+            self._say_keys("")
             if self._fetch is None:
                 self.blank_label.setText("Not downloaded.")
                 self.stack.setCurrentWidget(self.blank)
@@ -2523,6 +2563,8 @@ class AttachmentViewer(QDialog):
 
         data = item.data or b""
         kind, _mime = attachments.sniff(data[:32], item.content_type, item.name)
+        self._say_keys("image" if kind == "image" and item.ext != "svg"
+                       else kind)
         if kind == "image" and item.ext != "svg":
             self.stack.setCurrentWidget(self.image)
             self.status.setText(self.image.show_bytes(data))

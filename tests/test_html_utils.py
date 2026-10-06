@@ -446,3 +446,75 @@ class TestZeroFontSizeIsALayoutIdiom:
                 '<div style="font-size:0px">two<p style="font-size:11px">Three')
         result = html_to_text(html).text
         assert "One" in result and "Three" in result and "two" not in result
+
+
+class TestTheMessageAsSent:
+    """What the preview may draw of a message's own HTML."""
+
+    def test_nothing_that_runs_or_embeds_survives(self):
+        from html_utils import sanitise_for_view
+
+        html = ("<p>Hello</p><script>alert(1)</script><iframe src='x'></iframe>"
+                "<object data='x'><p>inside</p></object><p onclick='x()' "
+                "style='color:red'>there</p><form action='/f'><p>in a form</p>"
+                "<input name='q'><button>Go</button></form>")
+        out = sanitise_for_view(html)
+        assert "<script" not in out and "alert" not in out
+        assert "<iframe" not in out and "<object" not in out and "inside" not in out
+        assert "onclick" not in out
+        assert 'style="color:red"' in out and ">there<" in out
+        assert "<form" not in out and "<input" not in out
+        assert "in a form" in out and "Go" in out
+
+    def test_links_keep_only_addresses_a_click_may_open(self):
+        from html_utils import sanitise_for_view
+
+        out = sanitise_for_view(
+            "<a href='https://x.example/a'>web</a>"
+            "<a href='mailto:a@x.example'>mail</a>"
+            "<a href='javascript:alert(1)'>bad</a>"
+            "<a href='JAVA\nSCRIPT:alert(1)'>sly</a>"
+            "<a href='data:text/html,x'>data</a>")
+        assert 'href="https://x.example/a"' in out
+        assert 'href="mailto:a@x.example"' in out
+        assert "javascript" not in out.lower() and "data:text" not in out
+        assert ">bad<" in out and ">sly<" in out
+
+    def test_remote_images_are_never_referenced(self):
+        from html_utils import sanitise_for_view
+
+        out = sanitise_for_view(
+            "<img src='https://t.example/open.gif' width='1' height='1'>"
+            "<img src='https://t.example/hero.png' width='600' alt='Our office'>"
+            "<img src='https://t.example/spacer.gif'>"
+            "<img src='data:image/png;base64,iVBORw0KGgo=' alt='embedded'>"
+            "<p style=\"background:url(https://t.example/bg.png)\">x</p>")
+        assert "t.example" not in out
+        assert "[image: Our office]" in out
+        assert 'src="data:image/png;base64,iVBORw0KGgo="' in out
+        assert "url(" not in out
+
+    def test_a_stylesheet_cannot_reach_out_either(self):
+        from html_utils import sanitise_for_view
+
+        out = sanitise_for_view(
+            "<style>body{background:url(https://t.example/bg.png)} "
+            "p{color:#333}</style><p>x</p>")
+        assert "t.example" not in out and "url(" not in out
+        assert "color:#333" in out
+
+    def test_text_and_entities_come_through_as_written(self):
+        from html_utils import sanitise_for_view
+
+        out = sanitise_for_view("<p>Fish &amp; chips &#163;5 <b>today</b></p>")
+        assert "Fish &amp; chips &#163;5 <b>today</b>" in out
+
+    def test_unclosed_brackets_do_not_make_it_quadratic(self):
+        import time
+
+        from html_utils import sanitise_for_view
+
+        started = time.perf_counter()
+        sanitise_for_view("<" * 40_000 + "<p>end</p>")
+        assert time.perf_counter() - started < 2.0
+

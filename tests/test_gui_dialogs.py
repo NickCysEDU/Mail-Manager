@@ -651,6 +651,208 @@ class TestNoHardcodedBackend:
                             InMemoryCredentialStore())
         try:
             assert "Gemini" in window.preview.analysis_label.text()
-            assert "Gemini" in window.preview.body_mode.itemText(1)
+            assert "Gemini" in window.preview.body_mode.itemText(2)
         finally:
             window.close()
+
+
+class TestTheMessageIsShownAsSent:
+    """The preview draws the HTML a message came with, fetching nothing, and
+    keeps the plain text a click away."""
+
+    @staticmethod
+    def _items():
+        import demo_data
+        from config import Settings
+
+        items = demo_data.demo_items(folders=Settings().folder_plan())
+        return {item.email.uid: item for item in items}
+
+    @staticmethod
+    def _pane(qtbot, width=900, height=600):
+        from triage_table import PreviewPane
+
+        pane = PreviewPane()
+        qtbot.addWidget(pane)
+        pane.resize(width, height)
+        pane.show()
+        return pane
+
+    def test_formatted_mail_is_drawn_by_default(self, qtbot):
+        pane = self._pane(qtbot)
+        item = self._items()["1001"]
+        assert item.email.body_html
+        pane.show_item(0, item)
+        assert pane.body_mode.currentIndex() == 0
+        assert pane.body_stack.currentWidget() is pane.rich_view
+        shown = pane.rich_view.toPlainText()
+        assert "Senior Platform Engineer" in shown and "Pick a time" in shown
+        assert "<" not in shown
+
+    def test_plain_mail_shows_its_text(self, qtbot):
+        pane = self._pane(qtbot)
+        item = self._items()["1008"]
+        assert not item.email.body_html
+        pane.show_item(0, item)
+        assert pane.body_stack.currentWidget() is pane.body_view
+        assert item.email.body_text[:30] in pane.body_view.toPlainText()
+
+    def test_the_plain_text_is_a_click_away(self, qtbot):
+        pane = self._pane(qtbot)
+        pane.show_item(0, self._items()["1001"])
+        pane.body_mode.setCurrentIndex(1)
+        assert pane.body_stack.currentWidget() is pane.body_view
+        assert "Pick a time" in pane.body_view.toPlainText()
+        pane.body_mode.setCurrentIndex(0)
+        assert pane.body_stack.currentWidget() is pane.rich_view
+
+    def test_the_view_fetches_nothing(self, qtbot):
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QTextDocument
+        from triage_table import MailView
+
+        view = MailView()
+        qtbot.addWidget(view)
+        kind = QTextDocument.ResourceType.ImageResource
+        assert view.loadResource(kind, QUrl("file:///etc/hosts")) is None
+        assert view.loadResource(kind, QUrl("https://t.example/pixel.gif")) is None
+        view.setHtml('<p>x</p><img src="file:///etc/hosts" width="200">')
+        view.document().documentLayout().documentSize()
+        # The document itself reads a local file when the view declines, so
+        # it is asked directly.
+        assert view.document().resource(kind, QUrl("file:///etc/hosts")) is None
+        assert view.document().resource(kind, QUrl("https://t.example/a.png")) is None
+
+    def test_an_embedded_image_still_draws(self, qtbot):
+        import base64
+
+        from PySide6.QtCore import QBuffer, QByteArray, QUrl
+        from PySide6.QtGui import QColor, QImage, QTextDocument
+        from triage_table import MailView
+
+        image = QImage(4, 4, QImage.Format.Format_RGB32)
+        image.fill(QColor("red"))
+        raw = QByteArray()
+        buffer = QBuffer(raw)
+        buffer.open(QBuffer.OpenModeFlag.WriteOnly)
+        image.save(buffer, "PNG")
+        url = "data:image/png;base64," + base64.b64encode(bytes(raw)).decode()
+        view = MailView()
+        qtbot.addWidget(view)
+        got = view.document().resource(QTextDocument.ResourceType.ImageResource,
+                                       QUrl(url))
+        assert got is not None and not getattr(got, "isNull", lambda: False)()
+
+    def test_a_tracking_pixel_leaves_no_trace(self, qtbot):
+        pane = self._pane(qtbot)
+        pane.show_item(0, self._items()["1007"])
+        assert "careersdigest.example/open.gif" not in pane.rich_view.toHtml()
+        assert "[image" not in pane.rich_view.toPlainText()
+
+
+class TestTheWholeSubjectIsShown:
+    @staticmethod
+    def _item(subject):
+        from dataclasses import replace
+
+        import demo_data
+        from config import Settings
+
+        item = demo_data.demo_items(folders=Settings().folder_plan())[0]
+        item.email = replace(item.email, subject=subject)
+        return item
+
+    def test_a_long_subject_gets_the_room_a_tall_pane_has(self, qtbot, qapp):
+        from triage_table import PreviewPane
+
+        pane = PreviewPane()
+        qtbot.addWidget(pane)
+        pane.resize(700, 640)
+        pane.show()
+        qapp.processEvents()
+        pane.show_item(0, self._item("Re: Fwd: " + "a very long subject line " * 14))
+        qapp.processEvents()
+        needed = pane.header.heightForWidth(pane.header.width())
+        assert needed > pane._header_lines(3), "the subject did not wrap enough to test"
+        assert pane.header.maximumHeight() >= needed
+        assert pane.header.height() >= needed - 1, (
+            f"header {pane.header.height()} px for {needed} px of text")
+
+    def test_a_short_pane_still_keeps_three_lines(self, qtbot, qapp):
+        from triage_table import PreviewPane
+
+        pane = PreviewPane()
+        qtbot.addWidget(pane)
+        pane.resize(700, pane.MIN_TALL)
+        pane.show()
+        qapp.processEvents()
+        pane.show_item(0, self._item("a very long subject line " * 14))
+        assert pane.header.maximumHeight() == pane._header_lines(3)
+
+
+class TestFileIntoIsAList:
+    """A folder is picked from the list, or named on request; the box is not
+    a text field."""
+
+    @staticmethod
+    def _pane(qtbot):
+        import demo_data
+        from config import Settings
+        from triage_table import PreviewPane
+
+        pane = PreviewPane()
+        qtbot.addWidget(pane)
+        plan = Settings().folder_plan()
+        pane.set_folder_choices(list(plan.all_folders))
+        item = demo_data.demo_items(folders=plan)[0]
+        pane.show_item(0, item)
+        return pane, item
+
+    def test_the_box_is_not_editable_and_ends_with_other(self, qtbot):
+        pane, _item = self._pane(qtbot)
+        assert not pane.folder_combo.isEditable()
+        assert pane.folder_combo.itemText(pane.folder_combo.count() - 1) == pane.OTHER_FOLDER
+
+    def test_other_asks_for_a_name_and_files_there(self, qtbot, monkeypatch):
+        from PySide6.QtWidgets import QInputDialog
+
+        pane, item = self._pane(qtbot)
+        monkeypatch.setattr(QInputDialog, "getText",
+                            staticmethod(lambda *a, **k: ("Sorted Mail/Receipts", True)))
+        heard = []
+        pane.overrideChanged.connect(lambda row, folder: heard.append(folder))
+        pane.folder_combo.setCurrentIndex(pane.folder_combo.count() - 1)
+        assert pane.folder_combo.currentText() == "Sorted Mail/Receipts"
+        assert heard == ["Sorted Mail/Receipts"]
+
+    def test_cancelling_goes_back_to_what_was_chosen(self, qtbot, monkeypatch):
+        from PySide6.QtWidgets import QInputDialog
+
+        pane, item = self._pane(qtbot)
+        was = pane.folder_combo.currentText()
+        monkeypatch.setattr(QInputDialog, "getText",
+                            staticmethod(lambda *a, **k: ("", False)))
+        heard = []
+        pane.overrideChanged.connect(lambda row, folder: heard.append(folder))
+        pane.folder_combo.setCurrentIndex(pane.folder_combo.count() - 1)
+        assert pane.folder_combo.currentText() == was
+        assert not heard
+
+    def test_a_rule_picks_its_folder_the_same_way(self, qtbot, monkeypatch):
+        from PySide6.QtWidgets import QComboBox, QInputDialog
+
+        import autoreply
+        from settings_dialog import OTHER_FOLDER, ActionRow
+
+        row = ActionRow(autoreply.Action("file_into", "Sorted Mail/Custom"),
+                        folders=["Job Search/Interviews"])
+        qtbot.addWidget(row)
+        box = row._value_widget
+        assert isinstance(box, QComboBox) and not box.isEditable()
+        assert row._value_text() == "Sorted Mail/Custom"
+        assert box.itemText(box.count() - 1) == OTHER_FOLDER
+        monkeypatch.setattr(QInputDialog, "getText",
+                            staticmethod(lambda *a, **k: ("Archive/2026", True)))
+        box.setCurrentIndex(box.count() - 1)
+        assert row._value_text() == "Archive/2026"
+

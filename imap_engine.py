@@ -312,8 +312,9 @@ def _part_text(part: Message) -> str:
     return payload.decode("utf-8", "replace")
 
 
-def extract_body(message: Message) -> Tuple[html_utils.ExtractedText, Tuple[str, ...]]:
-    """Reduce a parsed message to plain text plus attachment filenames.
+def extract_body(message: Message) -> Tuple[html_utils.ExtractedText, Tuple[str, ...], str]:
+    """Reduce a parsed message to plain text, attachment filenames, and the
+    HTML body as sent (empty for plain mail).
 
     ``text/plain`` wins unless it is essentially empty (a very common pattern:
     a one-line "view this email in your browser" fallback next to the real
@@ -365,7 +366,7 @@ def extract_body(message: Message) -> Tuple[html_utils.ExtractedText, Tuple[str,
     else:
         extracted = html_utils.plain_to_text(plain)
 
-    return extracted, tuple(dict.fromkeys(attachments))
+    return extracted, tuple(dict.fromkeys(attachments)), html
 
 
 def parse_message(
@@ -410,7 +411,7 @@ def parse_message(
         except (TypeError, ValueError):
             date = None
 
-    extracted, attachments = extract_body(message)
+    extracted, attachments, html = extract_body(message)
 
     return EmailMessage(
         uid=uid,
@@ -419,6 +420,7 @@ def parse_message(
         sender_email=sender_email,
         date=date,
         body_text=extracted.text,
+        body_html=html,
         message_id=_decode_header_value(message.get("Message-ID")),
         in_reply_to=_decode_header_value(message.get("In-Reply-To")),
         references=_decode_header_value(message.get("References")),

@@ -535,7 +535,7 @@ class TestMainWindow:
         window._refresh_folder_choices()
         window.table.selectRow(0)
         window._selection_changed()
-        window.preview.body_mode.setCurrentIndex(1)
+        window.preview.body_mode.setCurrentIndex(2)
         text = window.preview.body_view.toPlainText()
         assert text.startswith("<email>")
         assert "<subject>" in text

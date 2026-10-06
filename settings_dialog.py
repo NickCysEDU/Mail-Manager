@@ -16,7 +16,8 @@ from PySide6.QtWidgets import (
     QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
     QSizePolicy, QSlider, QSpinBox, QTabWidget, QToolButton, QVBoxLayout,
-    QWidget)
+    QWidget,
+    QInputDialog)
 
 import accounts
 import autoreply
@@ -33,12 +34,17 @@ from config import (EFFORT_LEVELS, CredentialError, CredentialStore, Settings)
 from imap_engine import clean_secret
 from models import (Category, FolderPlan, NonJobRouting, OtherCategory,
                     TriageItem)
-from widgets import (ACCENT_GREEN, ACCENT_RED, AdaptiveLineEdit, RoomyCombo,
+from widgets import (ACCENT_GREEN, ACCENT_RED, AdaptiveLineEdit, ClearingLineEdit, RoomyCombo,
                      WrappingList,
                      _abandon, _attr_url, _compact_button, _html,
                      _paint_button, _scrollable, _separator, menu_text,
                      selectable)
 from workers import ConnectionTestWorker
+
+
+#: The folder list's last entry, and what it carries.
+OTHER_FOLDER = "Other folder…"
+_OTHER = "\x00other"
 
 
 class _RuleRow(QWidget):
@@ -94,20 +100,24 @@ class _RuleRow(QWidget):
             return spacer
         if kind in ("category", "topic", "mailbox", "folder_pick"):
             combo = RoomyCombo()
-            combo.setEditable(kind == "folder_pick")
             combo.setSizePolicy(QSizePolicy.Policy.Ignored,
                                 QSizePolicy.Policy.Fixed)
             combo.setMinimumWidth(84)
             for item_value, label in self._choices(kind):
                 combo.addItem(label, item_value)
+            if kind == "folder_pick":
+                # A folder the configuration does not make is still allowed:
+                # the rule's own stays listed, and the last entry asks for one.
+                if value and combo.findData(value) < 0:
+                    combo.insertItem(0, value, value)
+                combo.addItem(OTHER_FOLDER, _OTHER)
+                combo.currentIndexChanged.connect(
+                    lambda index, c=combo: self._other_folder(c, index))
             found = combo.findData(value)
             if found >= 0:
                 combo.setCurrentIndex(found)
-            elif combo.isEditable():
-                combo.setEditText(value)
+            combo.setProperty("was", combo.currentIndex())
             combo.currentIndexChanged.connect(self._touched)
-            if combo.isEditable():
-                combo.editTextChanged.connect(self._touched)
             return combo
         if kind in ("template", "guidance"):
             box = QPlainTextEdit()
@@ -131,6 +141,23 @@ class _RuleRow(QWidget):
         edit.setText(value)
         edit.textChanged.connect(self._touched)
         return edit
+
+    def _other_folder(self, combo, index: int) -> None:
+        """"Other folder…" asks for a name and lists it; nothing typed goes
+        back to what was chosen before."""
+        if combo.itemData(index) != _OTHER:
+            combo.setProperty("was", index)
+            return
+        name, ok = QInputDialog.getText(self, "File into", "Folder:")
+        name = name.strip() if ok else ""
+        if name:
+            found = combo.findData(name)
+            if found < 0:
+                found = combo.count() - 1
+                combo.insertItem(found, name, name)
+            combo.setCurrentIndex(found)
+        else:
+            combo.setCurrentIndex(combo.property("was") or 0)
 
     def _choices(self, kind: str) -> List[Tuple[str, str]]:
         if kind == "category":
@@ -1686,9 +1713,8 @@ class SettingsDialog(QDialog):
 
         # A box to narrow the list by: twenty rules is normal, and twenty names
         # in a narrow column go unread.
-        self.rule_search = QLineEdit()
+        self.rule_search = ClearingLineEdit()
         self.rule_search.setPlaceholderText("Find a rule…")
-        self.rule_search.setClearButtonEnabled(True)
         self.rule_search.setToolTip(
             "Matches a rule's name and what it does.")
         self.rule_search.textChanged.connect(self._refresh_rule_list)

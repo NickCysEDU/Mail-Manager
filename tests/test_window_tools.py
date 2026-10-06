@@ -51,6 +51,79 @@ def two_mailbox_window(qapp, tmp_path, monkeypatch):
     subject.deleteLater()
 
 
+class TestTheClearButtonSitsLevel:
+    """Qt places a line edit's clear button from the padded content
+    rectangle, so under the theme it hung below the text."""
+
+    @pytest.mark.parametrize("density", ["comfortable", "compact", "dense"])
+    def test_the_icon_is_centred_under_every_density(self, qapp, density):
+        import theme
+        from PySide6.QtWidgets import QToolButton, QVBoxLayout, QWidget
+        from widgets import ClearingLineEdit
+
+        was = (qapp.font(), qapp.palette(), qapp.styleSheet())
+        holder = QWidget()
+        try:
+            theme.apply(qapp, "light", "normal", False, density)
+            edit = ClearingLineEdit("something typed")
+            QVBoxLayout(holder).addWidget(edit)
+            holder.resize(320, 80)
+            holder.show()
+            qapp.processEvents()
+            button = edit.findChildren(QToolButton)[0]
+            icon_middle = button.y() + button.height() / 2
+            assert abs(icon_middle - edit.height() / 2) <= 0.5, (
+                f"the clear button's middle is at {icon_middle} in a field "
+                f"{edit.height()} tall")
+        finally:
+            holder.close()
+            holder.deleteLater()
+            qapp.setStyleSheet(was[2])
+            qapp.setPalette(was[1])
+            qapp.setFont(was[0])
+
+    def test_the_search_box_is_one(self, window):
+        from widgets import ClearingLineEdit
+
+        assert isinstance(window.search_edit, ClearingLineEdit)
+        assert window.search_edit.isClearButtonEnabled()
+
+
+class TestTheShowButtonNamesTheMailboxScanned:
+    def test_one_mailbox_with_mail_is_named(self, two_mailbox_window):
+        from dataclasses import replace
+
+        import demo_data
+
+        window = two_mailbox_window
+        personal = window.settings.mailboxes[0]
+        items = demo_data.demo_items(folders=window.settings.folder_plan())
+        for item in items:
+            item.email = replace(item.email, account_id=personal.id,
+                                 account_label=personal.label)
+        window.model.set_items(items)
+        window._rebuild_view_menu()
+        shown = window.view_button.text()
+        assert "you@icloud.example" in shown, shown
+        assert "All" not in shown
+
+    def test_mail_from_both_is_all_mailboxes(self, two_mailbox_window):
+        from dataclasses import replace
+
+        import demo_data
+
+        window = two_mailbox_window
+        first, second = window.settings.mailboxes
+        items = demo_data.demo_items(folders=window.settings.folder_plan())
+        for index, item in enumerate(items):
+            account = first if index % 2 else second
+            item.email = replace(item.email, account_id=account.id,
+                                 account_label=account.label)
+        window.model.set_items(items)
+        window._rebuild_view_menu()
+        assert "All mailboxes" in window.view_button.text()
+
+
 class TestColumnsCanBeTurnedOff:
     def test_every_column_but_the_tick_box_is_offered(self, window):
         offered = [a.text() for a in window.columns_menu.actions() if a.text()]

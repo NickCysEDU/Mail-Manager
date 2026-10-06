@@ -3563,6 +3563,8 @@ class Waveform(QWidget):
         self._shape: List[float] = []
         self._span = 0
         self._at = 0
+        #: The position the bar was last painted at.
+        self._drawn = 0
         self.setFixedHeight(self.TALL)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         policy = self.sizePolicy()
@@ -3582,13 +3584,14 @@ class Waveform(QWidget):
         self.update()
 
     def set_position(self, milliseconds: int) -> None:
-        was = self._at
         self._at = max(0, int(milliseconds))
-        # Only when it would move a column; otherwise it redraws sixty times a
-        # second for nothing.
+        # Only when it would move a column past the one last painted;
+        # otherwise it redraws sixty times a second for nothing. Measured
+        # from the last report, the fifty-millisecond steps a player makes
+        # never added up to a column, and the played part never moved.
         if self._span > 0 and self.width() > 0:
             step = max(1, self._span * int(self.STEP) // max(1, self.width()))
-            if abs(self._at - was) < step:
+            if abs(self._at - self._drawn) < step:
                 return
         self.update()
 
@@ -3603,7 +3606,7 @@ class Waveform(QWidget):
     def forget_track(self) -> None:
         """Everything, for a track that is going away."""
         self.set_shape(())
-        self._span = self._at = 0
+        self._span = self._at = self._drawn = 0
         self.update()
 
     def _seek_to(self, x: float) -> None:
@@ -3634,6 +3637,7 @@ class Waveform(QWidget):
             self._paint(painter)
         finally:
             painter.end()
+        self._drawn = self._at
 
     def _paint(self, painter) -> None:
         width, tall = self.width(), self.height()

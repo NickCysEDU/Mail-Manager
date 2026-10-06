@@ -11,12 +11,15 @@ from typing import List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import (QAbstractTableModel, QModelIndex, QSize,
                             QSortFilterProxyModel, Qt, Signal, Slot)
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPalette
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPalette, QTextDocument
 from PySide6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QLabel,
                                QPlainTextEdit, QPushButton, QSplitter, QStyle,
                                QStyledItemDelegate, QStyleOptionViewItem,
-                               QTextBrowser, QToolButton, QVBoxLayout, QWidget)
+                               QTextBrowser, QToolButton, QVBoxLayout, QWidget,
+    QInputDialog,
+    QStackedWidget)
 
+import html_utils
 import conversations
 from flowlayout import FlowHolder, FlowLayout
 import theme
@@ -619,6 +622,32 @@ class CategoryDelegate(QStyledItemDelegate):
         return QSize(140, 34)
 
 
+class _SealedDocument(QTextDocument):
+    """A document that reads nothing from disk or the network. QTextDocument
+    itself opens a local file when the view declines to, so the view's own
+    refusal is not enough. Embedded ``data:`` images still draw."""
+
+    def loadResource(self, kind, name):      # noqa: N802 - Qt's name
+        if name.scheme().lower() == "data":
+            return super().loadResource(kind, name)
+        return None
+
+
+class MailView(QTextBrowser):
+    """The message as sent, drawn by Qt's own document engine. Nothing the
+    message refers to is ever fetched: no image, no stylesheet, no file."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setDocument(_SealedDocument(self))
+        self.setOpenExternalLinks(False)
+        self.setOpenLinks(False)
+        self.setSearchPaths([])
+
+    def loadResource(self, kind, name):      # noqa: N802 - Qt's name
+        return None
+
+
 class PreviewPane(QWidget):
     """Side-by-side message text and the backend's reasoning."""
 
@@ -687,12 +716,16 @@ class PreviewPane(QWidget):
         # Short enough to sit on one line beside the Attachments button, in a
         # half as small as 306 by 70 px. The caption said what the entries
         # already say, and the longer wording is in the tooltip.
-        self.body_mode.addItems(["Message text", "What was sent"])
+        self.body_mode.addItems(["Message", "Plain text", "What was sent"])
         self.body_mode.currentIndexChanged.connect(self._render_body)
         self.body_mode.setToolTip(
-            "Switch between the readable message and exactly what was "
-            "sent to the model.")
+            "The message as it was sent, its plain text, or exactly what "
+            "was sent to the model.")
 
+        self.rich_view = MailView()
+        self.rich_view.setMinimumHeight(24)
+        self.rich_view.anchorClicked.connect(
+            lambda url: self.linkRequested.emit(url.toString()))
         self.body_view = QPlainTextEdit()
         # Smaller than Qt's default text box (ninety pixels square): this half
         # can be about ninety pixels tall in all, and a text view scrolls.
@@ -700,6 +733,10 @@ class PreviewPane(QWidget):
         self.body_view.setReadOnly(True)
         self.body_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self.body_view.setFont(_mono_font())
+        self.body_stack = QStackedWidget()
+        self.body_stack.addWidget(self.rich_view)
+        self.body_stack.addWidget(self.body_view)
+        self.body_stack.setMinimumHeight(24)
 
         self.reasoning_view = QTextBrowser()
         self.reasoning_view.setMinimumHeight(24)
@@ -714,10 +751,9 @@ class PreviewPane(QWidget):
         self.folder_combo.setToolTip(
             "Where this message goes when you press Apply. Change it and "
             "the next one from this sender follows.")
-        self.folder_combo.setEditable(True)
-        self.folder_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.folder_combo.setMinimumWidth(280)
-        self.folder_combo.currentTextChanged.connect(self._folder_changed)
+        self._folder_was = 0
+        self.folder_combo.currentIndexChanged.connect(self._folder_picked)
 
         self.reset_button = QToolButton()
         self.reset_button.setText("Use AI suggestion")
@@ -760,7 +796,7 @@ class PreviewPane(QWidget):
         self.mode_row = QWidget()
         self.mode_row.setLayout(mode_row)
         left_layout.addWidget(self.mode_row)
-        left_layout.addWidget(self.body_view, 1)
+        left_layout.addWidget(self.body_stack, 1)
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
@@ -815,6 +851,7 @@ class PreviewPane(QWidget):
 
     def resizeEvent(self, event) -> None:      # noqa: N802 - Qt's name
         super().resizeEvent(event)
+        self._fit_header()
         self._arrange(self.width())
 
     def _arrange(self, width: int) -> None:
@@ -850,12 +887,25 @@ class PreviewPane(QWidget):
         # 150 per cent, which is what the markup asks for.
         return int(metrics.lineSpacing() * 1.5 * lines) + 6
 
+    def _fit_header(self) -> None:
+        """The whole subject when the pane has the room for it, and never
+        less than three lines: the two halves under it keep their minimum,
+        and the rest is the header's."""
+        spare = (self.height() - self.MIN_STACK - 40
+                 - self.folder_row.sizeHint().height()
+                 - (self.inert_row.sizeHint().height()
+                    if self.inert_row.isVisible() else 0))
+        self.header.setMaximumHeight(max(self._header_lines(3), spare))
+
     def set_backend_label(self, label: str) -> None:
         """Name the backend that produced the reasoning shown on the right."""
         self.analysis_label.setText(f"{label} analysis" if label else "Analysis")
         self.body_mode.setItemText(
-            1, f"Exactly what {label} was sent" if label else "Exactly what the model was sent"
+            2, f"Exactly what {label} was sent" if label else "Exactly what the model was sent"
         )
+
+    #: The last entry of the folder list, which asks for a folder by name.
+    OTHER_FOLDER = "Other folder…"
 
     def set_folder_choices(self, folders: Sequence[str]) -> None:
         current = self.folder_combo.currentText()
@@ -864,13 +914,39 @@ class PreviewPane(QWidget):
         self.folder_combo.addItem(LEAVE_IN_PLACE)
         for folder in folders:
             self.folder_combo.addItem(folder)
-        if current:
-            index = self.folder_combo.findText(current)
-            if index >= 0:
-                self.folder_combo.setCurrentIndex(index)
-            else:
-                self.folder_combo.setEditText(current)
+        self.folder_combo.addItem(self.OTHER_FOLDER, "other")
+        if current and current != self.OTHER_FOLDER:
+            self._pick_folder(current)
+        self._folder_was = self.folder_combo.currentIndex()
         self._updating = False
+
+    def _pick_folder(self, name: str) -> None:
+        """Select ``name``, listing it before "Other folder…" if it is not
+        offered."""
+        index = self.folder_combo.findText(name)
+        if index < 0:
+            index = self.folder_combo.count() - 1
+            self.folder_combo.insertItem(index, name)
+        self.folder_combo.setCurrentIndex(index)
+
+    @Slot(int)
+    def _folder_picked(self, index: int) -> None:
+        if self._updating or index < 0:
+            return
+        if self.folder_combo.itemData(index) == "other":
+            name, ok = QInputDialog.getText(self, "File into",
+                                            "Folder:")
+            self._updating = True
+            if ok and name.strip():
+                self._pick_folder(name.strip())
+            else:
+                self.folder_combo.setCurrentIndex(self._folder_was)
+            self._updating = False
+            if not (ok and name.strip()):
+                return
+            index = self.folder_combo.currentIndex()
+        self._folder_was = index
+        self._folder_changed(self.folder_combo.itemText(index))
 
     def clear(self) -> None:
         self._row = None
@@ -881,6 +957,8 @@ class PreviewPane(QWidget):
             "<i>Select a message above to compare its text against the analysis.</i>"
         )
         self.body_view.setPlainText("")
+        self.rich_view.clear()
+        self.body_stack.setCurrentWidget(self.body_view)
         self.reasoning_view.setHtml("")
         self.folder_combo.setEnabled(False)
         self.reset_button.setEnabled(False)
@@ -912,22 +990,16 @@ class PreviewPane(QWidget):
             f"{_html(message.date_display('%a %d %b %Y, %H:%M'))}<br>"
             f"{badge}</div>"
         )
-        # Three lines as written; a longer subject wraps further, and the whole
-        # of it is in the table row and the tooltip.
         self.header.setToolTip(
             f"{message.subject_display}\n{message.sender_display}\n"
             f"{message.date_display('%A %d %B %Y, %H:%M')}")
-        self.header.setMaximumHeight(self._header_lines(3))
+        self._fit_header()
 
         self._updating = True
         self.folder_combo.setEnabled(not item.moved)
         self.reset_button.setEnabled(not item.moved and item.override_folder is not None)
-        target = item.target_folder or LEAVE_IN_PLACE
-        index = self.folder_combo.findText(target)
-        if index >= 0:
-            self.folder_combo.setCurrentIndex(index)
-        else:
-            self.folder_combo.setEditText(target)
+        self._pick_folder(item.target_folder or LEAVE_IN_PLACE)
+        self._folder_was = self.folder_combo.currentIndex()
         self._updating = False
 
         self._render_body()
@@ -937,17 +1009,26 @@ class PreviewPane(QWidget):
     def _render_body(self) -> None:
         if self._item is None:
             return
-        if self.body_mode.currentIndex() == 1 and self._prompt_text:
+        mode = self.body_mode.currentIndex()
+        if mode == 2 and self._prompt_text:
             self.body_view.setPlainText(self._prompt_text)
+            self.body_stack.setCurrentWidget(self.body_view)
+            return
+        message = self._item.email
+        text = message.body_text or "(this message had no readable text body)"
+        if message.links:
+            text += "\n\n--- LINKS ---\n" + "\n".join(f"• {link}" for link in message.links)
+        if message.attachments:
+            text += "\n\n--- ATTACHMENTS ---\n" + "\n".join(
+                f"• {_attachment_line(a)}" for a in message.attachments)
+        self.body_view.setPlainText(text)
+        # The message as sent where there is HTML to draw; plain mail is its
+        # text either way.
+        if mode == 0 and message.body_html:
+            self.rich_view.setHtml(html_utils.sanitise_for_view(message.body_html))
+            self.body_stack.setCurrentWidget(self.rich_view)
         else:
-            message = self._item.email
-            text = message.body_text or "(this message had no readable text body)"
-            if message.links:
-                text += "\n\n--- LINKS ---\n" + "\n".join(f"• {link}" for link in message.links)
-            if message.attachments:
-                text += "\n\n--- ATTACHMENTS ---\n" + "\n".join(
-                    f"• {_attachment_line(a)}" for a in message.attachments)
-            self.body_view.setPlainText(text)
+            self.body_stack.setCurrentWidget(self.body_view)
 
     def _sync_attachments(self, item) -> None:
         """The button says how many, because "Attachments" alone is a guess."""
