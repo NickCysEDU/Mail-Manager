@@ -7,6 +7,7 @@ import io
 import json
 import plistlib
 import subprocess
+import time
 import sys
 from pathlib import Path
 
@@ -110,10 +111,18 @@ def _app(folder: Path, version: str, ident: str = "com.example.updatetest",
 
 
 def _image(app: Path, out: Path) -> bytes:
-    subprocess.run(["hdiutil", "create", "-srcfolder", str(app.parent),
-                    "-format", "UDZO", "-ov", "-volname", "Test", str(out)],
-                   check=True, capture_output=True)
-    return out.read_bytes()
+    # A hosted runner's hdiutil refuses now and then, "Resource busy", and
+    # is fine a moment later.
+    for _ in range(5):
+        done = subprocess.run(
+            ["hdiutil", "create", "-srcfolder", str(app.parent), "-format",
+             "UDZO", "-ov", "-volname", "Test", str(out)],
+            capture_output=True, text=True)
+        if done.returncode == 0:
+            return out.read_bytes()
+        time.sleep(2.0)
+    raise AssertionError(f"hdiutil would not make the image: "
+                         f"{done.stderr.strip()[-500:]}")
 
 
 class _Served(io.BytesIO):
