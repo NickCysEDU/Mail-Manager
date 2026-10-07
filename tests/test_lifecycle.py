@@ -743,3 +743,45 @@ class TestADeletedSettingsDialogDoesNotTakeTheAppWithIt:
         assert done.wait(5.0), "closing Settings left a worker running"
         assert not worker.isRunning()
         dialog.deleteLater()
+
+
+
+class TestQuitAsksOnce:
+    """Quit with a scan ready to file asked twice: quit_app asked, and the
+    close it then made asked again."""
+
+    @pytest.fixture
+    def window(self, qapp, tmp_path, monkeypatch):
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        window = MainWindow(Settings(icloud_email="you@icloud.example"),
+                            InMemoryCredentialStore())
+        monkeypatch.setattr(window, "_unfinished_work",
+                            lambda: "3 messages ticked and ready to file")
+        yield window
+        window._quitting = window._quit_confirmed = True
+        window.close()
+
+    def test_discarding_asks_once_and_leaves(self, window, monkeypatch):
+        asked = []
+        monkeypatch.setattr(
+            QMessageBox, "question",
+            lambda *a, **k: (asked.append(a[1]),
+                             QMessageBox.StandardButton.Discard)[1])
+        monkeypatch.setattr(QApplication, "quit", lambda *a: None)
+        window.show()
+        window.quit_app()
+        assert asked == ["Quit Mail Manager?"]
+        assert not window.isVisible()
+
+    def test_cancel_asks_once_and_stays(self, window, monkeypatch):
+        asked = []
+        monkeypatch.setattr(
+            QMessageBox, "question",
+            lambda *a, **k: (asked.append(a[1]),
+                             QMessageBox.StandardButton.Cancel)[1])
+        left = []
+        monkeypatch.setattr(QApplication, "quit", lambda *a: left.append(True))
+        window.show()
+        window.quit_app()
+        assert asked == ["Quit Mail Manager?"] and not left
+        assert window.isVisible()

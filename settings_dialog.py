@@ -36,8 +36,9 @@ from models import (Category, FolderPlan, NonJobRouting, OtherCategory,
                     TriageItem)
 from flowlayout import FlowHolder, FlowLayout
 from widgets import (ACCENT_AMBER, ACCENT_BLUE, ACCENT_GREEN, ACCENT_RED, ASIDE,
+                     STATUS, TONE,
                      AdaptiveLineEdit, AsideDelegate, ClearingLineEdit,
-                     RoomyCombo, _swatch,
+                     RoomyCombo, StatusList, _swatch,
                      WrappingList,
                      _abandon, _attr_url, _compact_button, _html,
                      _paint_button, _scrollable, _separator, menu_text,
@@ -199,7 +200,7 @@ class ConditionRow(_RuleRow):
         super().__init__(mailboxes=mailboxes, parent=parent)
         self._quiet = True
 
-        self.field_combo = RoomyCombo()
+        self.field_combo = RoomyCombo(every=True)
         for name, label, _kind in autoreply.FIELDS:
             self.field_combo.addItem(label, name)
         self.field_combo.setCurrentIndex(
@@ -211,7 +212,7 @@ class ConditionRow(_RuleRow):
         self.row.addWidget(self.field_combo, 3)
         self._explain_field()
 
-        self.operator_combo = RoomyCombo()
+        self.operator_combo = RoomyCombo(every=True)
         self.operator_combo.setMinimumWidth(88)
         self.operator_combo.setSizePolicy(QSizePolicy.Policy.Ignored,
                                           QSizePolicy.Policy.Fixed)
@@ -271,7 +272,7 @@ class ActionRow(_RuleRow):
         super().__init__(folders=folders, parent=parent)
         self._quiet = True
 
-        self.kind_combo = RoomyCombo()
+        self.kind_combo = RoomyCombo(every=True)
         for name, label, _needs in autoreply.ACTION_KINDS:
             self.kind_combo.addItem(label, name)
         self.kind_combo.setCurrentIndex(max(0, self.kind_combo.findData(action.kind)))
@@ -578,6 +579,7 @@ class SettingsDialog(QDialog):
                 (self._build_ai_tab(), "Analysis", "#7A5BD6"),
                 (self._build_folders_tab(), "Folders", ACCENT_GREEN),
                 (self._build_reply_tab(), "Rules", ACCENT_AMBER),
+                (self._build_signature_tab(), "Signature", "#C2558C"),
                 (self._build_appearance_tab(), "Appearance", "#2B9DA8")):
             self.tabs.addTab(_scrollable(page), _swatch(colour, 10), title)
 
@@ -624,8 +626,9 @@ class SettingsDialog(QDialog):
         """The page, the main choices on it, Cancel and Save."""
         import touchbar
 
-        def on_page(index):
-            return lambda: self.tabs.currentIndex() == index
+        def on_page(title):
+            # By name, not number: a page added in the middle moved the rest.
+            return lambda: self.tabs.tabText(self.tabs.currentIndex()) == title
 
         pages = [self.tabs.currentChanged]
         short = self.TOUCH_SHORT
@@ -637,11 +640,11 @@ class SettingsDialog(QDialog):
                                 style="menu", short=short),
                 touchbar.Choice("effort", "Effort", self.effort_combo,
                                 style="menu", named=True),
-            ], on_page(1), pages),
+            ], on_page("Analysis"), pages),
             *touchbar.only_when([
                 touchbar.Choice("routing", "Other mail", self.routing_combo,
                                 style="menu", named=True, short=short),
-            ], on_page(2), pages),
+            ], on_page("Folders"), pages),
             *touchbar.only_when([
                 touchbar.Choice("mode", "Appearance", self.mode_combo,
                                 short=short),
@@ -651,7 +654,7 @@ class SettingsDialog(QDialog):
                                 style="menu", named=True),
                 touchbar.Toggle("hover", "Hover help", self.help_check,
                                 priority="low"),
-            ], on_page(4), pages),
+            ], on_page("Appearance"), pages),
             *touchbar.button_items(self),
         ], "settings")
 
@@ -1716,12 +1719,6 @@ class SettingsDialog(QDialog):
             "ever sent.")
         top.addWidget(self.auto_reply_check)
         top.addStretch(1)
-        top.addWidget(QLabel("Sign as"))
-        self.signature_edit = AdaptiveLineEdit(
-            "the name to sign off with", "your name", "name")
-        self.signature_edit.setMinimumWidth(120)
-        self.signature_edit.setMaximumWidth(200)
-        top.addWidget(self.signature_edit)
         outer.addLayout(top)
         outer.addWidget(_separator())
 
@@ -1748,7 +1745,7 @@ class SettingsDialog(QDialog):
         self.rule_search.textChanged.connect(self._refresh_rule_list)
         left.addWidget(self.rule_search)
 
-        self.rule_list = WrappingList()
+        self.rule_list = StatusList()
         self.rule_list.setMinimumWidth(150)
         self.rule_list.setMaximumWidth(230)
         self.rule_list.setSizePolicy(QSizePolicy.Policy.Preferred,
@@ -1948,6 +1945,9 @@ class SettingsDialog(QDialog):
         self.auto_reply_check.setChecked(settings.auto_reply)
         self.sorting_rules_check.setChecked(settings.apply_sorting_rules)
         self.signature_edit.setText(settings.reply_signature)
+        self.signature_editor.setHtml(settings.signature_html)
+        self.signature_new_check.setChecked(settings.signature_in_new)
+        self.signature_replies_check.setChecked(settings.signature_in_replies)
         self._refresh_rule_list()
 
     def _rule_matches_search(self, rule) -> bool:
@@ -1964,12 +1964,11 @@ class SettingsDialog(QDialog):
         for index, rule in enumerate(self._rules):
             if not self._rule_matches_search(rule):
                 continue
-            entry = QListWidgetItem(
-                f"{self._rule_label(rule)}\n{self._rule_status(rule)}")
+            entry = QListWidgetItem()
+            self._mark_entry(entry, rule)
             entry.setFlags(entry.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             entry.setCheckState(Qt.CheckState.Checked if rule.enabled
                                 else Qt.CheckState.Unchecked)
-            entry.setToolTip(self._rule_tooltip(rule))
             self.rule_list.addItem(entry)
             self._rule_rows.append(index)
         self._rule_index = max(0, min(self._rule_index, len(self._rules) - 1))
@@ -2181,13 +2180,20 @@ class SettingsDialog(QDialog):
             return
         rule = self._rules[self._rule_index]
         self.rule_list.blockSignals(True)
-        entry.setText(f"{self._rule_label(rule)}\n{self._rule_status(rule)}")
+        self._mark_entry(entry, rule)
         self.rule_list.measure()
         entry.setCheckState(Qt.CheckState.Checked if rule.enabled
                             else Qt.CheckState.Unchecked)
-        entry.setToolTip(self._rule_tooltip(rule))
         self.rule_list.blockSignals(False)
         self._describe_rules()
+
+    def _mark_entry(self, entry, rule) -> None:
+        """The name, and under it the state in its own tone (see
+        StatusDelegate), with the whole of both in the tooltip."""
+        entry.setText(self._rule_label(rule))
+        entry.setData(STATUS, self._rule_status(rule))
+        entry.setData(TONE, self._rule_tone(rule))
+        entry.setToolTip(self._rule_tooltip(rule))
 
     def _rule_status(self, rule) -> str:
         """What this rule is doing, or what it still needs, in a few words:
@@ -2199,12 +2205,20 @@ class SettingsDialog(QDialog):
             first = problems[0].rstrip(".")
             return first[0].lower() + first[1:] if first else "not ready"
         if not rule.enabled:
-            return "off"
+            return "Off"
         if rule.drafts_a_reply:
             return "drafts a reply"
         if rule.sorts_only:
             return "sorts"
         return "ready"
+
+    @staticmethod
+    def _rule_tone(rule) -> str:
+        """The colour the state is shown in: a problem red, off amber, a
+        rule that runs green."""
+        if rule.problems():
+            return "warn"
+        return "off" if not rule.enabled else "ok"
 
     def _rule_label(self, rule) -> str:
         """The name, marked when it cannot run; what it is doing goes on the
@@ -2232,6 +2246,11 @@ class SettingsDialog(QDialog):
         if not (0 <= index < len(self._rules)):
             return
         self._rules[index].enabled = entry.checkState() == Qt.CheckState.Checked
+        # The badge under the name says so at once, whichever rule it was.
+        self.rule_list.blockSignals(True)
+        self._mark_entry(entry, self._rules[index])
+        self.rule_list.blockSignals(False)
+        self._describe_rules()
         if index == self._rule_index:
             self._loading_rule = True
             self.rule_enabled.setChecked(self._rules[index].enabled)
@@ -2324,6 +2343,69 @@ class SettingsDialog(QDialog):
         if len(hits) > 4:
             lines.append(f"…and {len(hits) - 4} more.")
         self.try_rule_result.setText("<br>".join(lines))
+
+    def _build_signature_tab(self) -> QWidget:
+        """The name on what goes out, and the sign-off at the foot of every
+        message written here: as many lines as it needs, with formatting,
+        links and pictures, written in the same editor a message is."""
+        from format_bar import FormatBar
+        from mail_window import RichEditor
+
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        headline = QLabel(
+            "<b>Your sign-off goes at the foot of everything you write "
+            "here.</b> As many lines as you like, with formatting, links "
+            "and pictures; it is put in before you start, so you can "
+            "always change it on the day."
+        )
+        headline.setWordWrap(True)
+        outer.addWidget(headline)
+
+        form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        self.signature_edit = AdaptiveLineEdit(
+            "the name to sign off with", "your name", "name")
+        self.signature_edit.setToolTip(
+            "The name on the From line of what you send, and what {me} "
+            "stands for in a drafted reply.")
+        form.addRow("Name", self.signature_edit)
+        outer.addLayout(form)
+
+        self.signature_editor = RichEditor()
+        self.signature_editor.setMinimumHeight(180)
+        self.signature_editor.setPlaceholderText(
+            "Best wishes,\nYour Name\nWhat you do, where")
+        self.signature_editor.setToolTip(
+            "What goes at the foot of a message. Use the bar above it as "
+            "you would in a message.")
+        self.signature_bar = FormatBar(self.signature_editor)
+        outer.addWidget(self.signature_bar)
+        outer.addWidget(self.signature_editor, 1)
+
+        switches = QHBoxLayout()
+        self.signature_new_check = QCheckBox("On new messages")
+        self.signature_replies_check = QCheckBox("On replies and forwards")
+        switches.addWidget(self.signature_new_check)
+        switches.addWidget(self.signature_replies_check)
+        switches.addStretch(1)
+        clear = QPushButton("Clear")
+        clear.setToolTip("Take the whole sign-off out.")
+        clear.clicked.connect(self.signature_editor.clear)
+        switches.addWidget(clear)
+        outer.addLayout(switches)
+        note = QLabel(
+            "A picture travels inside each message, so keep it small: a "
+            "logo a few hundred pixels across is plenty. With nothing "
+            "written here, messages are signed with the name alone.")
+        note.setWordWrap(True)
+        note.setProperty("dim", "true")
+        outer.addWidget(note)
+        return page
+
+    def _signature_html(self) -> str:
+        """The sign-off as it is kept: what is inside the editor's page."""
+        return self.signature_editor.fragment()
 
     def _build_appearance_tab(self) -> QWidget:
         page = QWidget()
@@ -2890,6 +2972,9 @@ class SettingsDialog(QDialog):
             auto_reply=self.auto_reply_check.isChecked(),
             apply_sorting_rules=self.sorting_rules_check.isChecked(),
             reply_signature=self.signature_edit.text().strip(),
+            signature_html=self._signature_html(),
+            signature_in_new=self.signature_new_check.isChecked(),
+            signature_in_replies=self.signature_replies_check.isChecked(),
             reply_rules=[r.to_dict() for r in self._rules],
             confidence_threshold=self.threshold_slider.value() / 100.0,
             concurrency=self.concurrency_spin.value(),

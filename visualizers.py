@@ -331,15 +331,26 @@ class Scene:
 class Plasma:
     """The morphing coloured field: sums of sines on a coarse grid, stretched
     up smooth.
+
+    Stretched straight from the grid, the stretch's own interpolation showed
+    as diamonds the size of a cell, which read as a low-resolution picture.
+    The grid is doubled a few times first (DOUBLINGS): each doubling's
+    smoothing compounds, so the field that reaches the frame has no creases
+    left in it.
     """
 
     COLUMNS = 36
     ROWS = 22
     #: Frames between recomputes; the field moves over seconds.
     EVERY = 2
+    #: How many times the grid is doubled before it is stretched: three
+    #: takes 36 by 22 to 288 by 176, which costs a fraction of a millisecond.
+    DOUBLINGS = 3
 
     def __init__(self) -> None:
         self._image = None
+        #: The grid doubled up; see DOUBLINGS.
+        self._smooth = None
         self._countdown = 0
         self._drift_a = 0.0
         self._drift_b = 0.0
@@ -357,10 +368,10 @@ class Plasma:
                                  QImage.Format.Format_RGB32)
             self._countdown = 0
         self._countdown -= 1
-        if self._countdown > 0:
+        if self._countdown > 0 and self._smooth is not None:
             painter.setRenderHint(
                 QPainter.RenderHint.SmoothPixmapTransform, True)
-            painter.drawImage(rect, self._image)
+            painter.drawImage(rect, self._smooth)
             return
         self._countdown = self.EVERY
         # Three clocks at different rates, turning waves in different
@@ -388,8 +399,18 @@ class Plasma:
                 level = 0.10 + 0.5 * swell * (0.5 + value / 6.0)
                 image.setPixelColor(column, row, QColor.fromHsvF(
                     shade, 0.85, max(0.0, min(1.0, level * strength))))
+        self._smooth = self.doubled(image)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        painter.drawImage(rect, image)
+        painter.drawImage(rect, self._smooth)
+
+    @classmethod
+    def doubled(cls, image):
+        """The grid doubled DOUBLINGS times, smoothly each time."""
+        for _ in range(cls.DOUBLINGS):
+            image = image.scaled(image.width() * 2, image.height() * 2,
+                                 Qt.AspectRatioMode.IgnoreAspectRatio,
+                                 Qt.TransformationMode.SmoothTransformation)
+        return image
 
     @staticmethod
     def flash_of(state) -> float:
@@ -521,8 +542,15 @@ class Vaporwave(Scene):
         colour = QColor.fromHsvF((state.hue + 0.6) % 1.0, 0.7, 0.9, 0.16)
         painter.fillPath(path, colour)
 
+    #: Under a held strobe the windows flicker on and off, block by block,
+    #: this many times a second (a building losing and finding its lights),
+    #: and this share of them are lit at any moment.
+    FLICKER_HZ = 14.0
+    FLICKER_LIT = 3
+
     def _skyline(self, painter, width, horizon, state) -> None:
-        """Towers, each one a band. A city that is also the equaliser."""
+        """Towers, each one a band. A city that is also the equaliser. Under
+        a held strobe the windows strobe too: see FLICKER_HZ."""
         levels = state.levels
         count = len(levels)
         if not count:
@@ -531,6 +559,9 @@ class Vaporwave(Scene):
         windows = QPainterPath()
         mirrored = QPainterPath()
         roofs = QPainterPath()
+        held = self.flash(state) >= 0.9
+        tick = int(time.monotonic() * self.FLICKER_HZ) if held else 0
+        flickering = QPainterPath()
         for index, value in enumerate(levels):
             tall = horizon * (0.10 + value * 0.42)
             x = index * block
@@ -550,8 +581,14 @@ class Vaporwave(Scene):
                     if (index + row) % 3 == 0:
                         top = horizon - tall + row * spacing + 3
                         deep = max(2.0, spacing * 0.3)
-                        windows.addRect(QRectF(x + block * 0.22, top,
-                                               block * 0.2, deep))
+                        pane = QRectF(x + block * 0.22, top, block * 0.2, deep)
+                        # Held: this window is on or off by a hash of where
+                        # it is and the moment, so the city flickers in
+                        # patches rather than all at once.
+                        if held and (index * 7 + row * 13 + tick * 31) % 5 < self.FLICKER_LIT:
+                            flickering.addRect(pane)
+                        else:
+                            windows.addRect(pane)
                         # The window's reflection in the floor, collected in
                         # the same loop and filled once.
                         mirrored.addRect(QRectF(
@@ -570,6 +607,8 @@ class Vaporwave(Scene):
         painter.fillPath(windows, QColor.fromHsvF(
             (state.hue + 0.6) % 1.0, 0.30 - self.flash(state) * 0.25, 1.0,
             0.42 + self.flash(state) * 0.45))
+        if held:
+            painter.fillPath(flickering, QColor(255, 255, 255, 245))
 
     #: How far the floor squashes what it reflects, and how much of a window's
     #: light survives; the same squash as the towers' reflection.
@@ -643,12 +682,27 @@ class Vaporwave(Scene):
 
 
 class Tunnel(Scene):
-    """Rings receding down a corridor, each one a moment of the music."""
+    """Rings receding down a corridor, each one a moment of the music. A
+    strobe hit throws a bright ring out of the middle; a held strobe throws
+    one after another, fast."""
 
     name = "Neon tunnel"
     blurb = "rings falling away, wide when the bass hits"
 
     RINGS = 14
+
+    #: How long a thrown ring takes to leave the frame, and under a held
+    #: strobe how often another is thrown.
+    SHOT_TIME = 0.38
+    HOLD_EVERY = 0.07
+    #: How hard the strobe has to be to count as held.
+    HELD = 0.9
+
+    def __init__(self) -> None:
+        #: When each thrown ring left the middle.
+        self._shots: list = []
+        self._was_lit = False
+        self._hold_at = 0.0
 
     def paint(self, painter, rect, state) -> None:
         width, height = rect.width(), rect.height()
@@ -656,8 +710,9 @@ class Tunnel(Scene):
         painter.fillRect(rect, QColor(6, 4, 14))
 
         # A hit fires one bright ring outwards, drawn after the corridor,
-        # rather than moving every ring at once.
+        # rather than moving every ring at once; see _throw.
         flash = self.flash(state)
+        self._throw(flash)
         rush = 0.0
         for index in range(self.RINGS, 0, -1):
             t = ((index + state.scroll + rush) % self.RINGS) / self.RINGS
@@ -675,22 +730,42 @@ class Tunnel(Scene):
             painter.drawEllipse(centre, radius, radius)
 
         self._spokes(painter, centre, min(width, height) * 0.5, state)
-        self._shockwave(painter, centre, width, height, flash)
+        self._shockwaves(painter, centre, width, height)
         self._sparks(painter, state)
 
-    def _shockwave(self, painter, centre, width, height, flash) -> None:
-        """One ring thrown out of the middle on a hit, fading as it goes."""
-        if flash <= 0.02:
+    def _throw(self, flash: float) -> None:
+        """A ring on each hit, and one every HOLD_EVERY while the light is
+        held up (the hand strobe's hold key), so a held strobe is a stream
+        of rings leaving fast rather than one ring standing still."""
+        now = time.monotonic()
+        lit = flash >= 0.5
+        if lit and not self._was_lit:
+            self._shots.append(now)
+            self._hold_at = now
+        elif flash >= self.HELD and now - self._hold_at >= self.HOLD_EVERY:
+            self._shots.append(now)
+            self._hold_at = now
+        self._was_lit = lit
+        self._shots = [born for born in self._shots
+                       if now - born < self.SHOT_TIME]
+
+    def _shockwaves(self, painter, centre, width, height) -> None:
+        """Every thrown ring, out of the middle and fading as it goes."""
+        if not self._shots:
             return
-        # A new hit's ring is small and bright, and fainter as it travels out.
-        travel = 1.0 - flash
-        radius = 20.0 + travel * max(width, height) * 0.75
+        now = time.monotonic()
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        for step, (width_scale, alpha) in enumerate(((3.0, 0.9), (7.0, 0.35))):
-            painter.setPen(QPen(
-                QColor.fromHsvF(0.12, 0.25, 1.0, alpha * flash),
-                width_scale * (0.4 + flash)))
-            painter.drawEllipse(centre, radius + step * 4, radius + step * 4)
+        for born in self._shots:
+            travel = max(0.0, min(1.0, (now - born) / self.SHOT_TIME))
+            left = 1.0 - travel
+            radius = 20.0 + travel * max(width, height) * 0.75
+            for step, (width_scale, alpha) in enumerate(((3.0, 0.9),
+                                                         (7.0, 0.35))):
+                painter.setPen(QPen(
+                    QColor.fromHsvF(0.12, 0.25, 1.0, alpha * left),
+                    width_scale * (0.4 + left)))
+                painter.drawEllipse(centre, radius + step * 4,
+                                    radius + step * 4)
 
     def _spokes(self, painter, centre, reach, state) -> None:
         """The bands as rays out of the middle, which suit the perspective
@@ -787,7 +862,6 @@ class Oscilloscope(Scene):
     def __init__(self) -> None:
         self._decay = 0.28
         self._mode = "Sweep"
-        self._plasma = Plasma()
         #: The screen itself: what the beam has drawn and not yet lost.
         self._screen = None
         #: When it was last dimmed, so the decay is in seconds whatever the
@@ -816,14 +890,9 @@ class Oscilloscope(Scene):
         self._decay = max(self.MIN_DECAY, min(self.MAX_DECAY, float(seconds)))
 
     def paint(self, painter, rect, state) -> None:
+        # A black screen, as a scope's is: nothing lit behind the graticule.
         painter.fillRect(rect, QColor(2, 8, 4))
         flash = self.flash(state)
-        # A faint field behind the graticule, so the screen looks lit from
-        # within.
-        painter.save()
-        painter.setOpacity(0.32 + flash * 0.25)
-        self._plasma.paint(painter, rect, state, strength=0.45)
-        painter.restore()
         self._grid(painter, rect, flash)
 
         vector = getattr(state, "vector", None)
@@ -1953,6 +2022,36 @@ class Rave(Scene):
     #: Seconds of listening before the first ring can fire.
     RING_SETTLE = 1.5
 
+    #: A big ring crosses the room in this many beats, or in RING_SECONDS
+    #: without a tempo; it used to close on the eye at a fraction of its
+    #: distance a second, which took nearly two seconds and read as slow.
+    RING_BEATS = 2.0
+    RING_SECONDS = 1.0
+    #: A pulse (one snare) crosses it in one beat; at most this many at once.
+    PULSE_BEATS = 1.0
+    PULSES_MOST = 10
+    #: How hard the snare has to hit to send a pulse, and how far it has to
+    #: fall before the next one counts.
+    SNARE_HIT = 0.85
+    SNARE_REARM = 0.45
+    #: Under a held strobe (the hand strobe's hold key), a pulse every this
+    #: many seconds.
+    HOLD_EVERY = 0.09
+    HELD = 0.9
+
+    #: The rig's sweep is on the beat: this many beats for one sweep across
+    #: and back at rest, and this many in a drop.
+    SWEEP_REST = 8.0
+    SWEEP_DROP = 1.0
+    #: What a snare does to the rig: a jolt to the sweep, and a widening of
+    #: the fan that fades over a beat or so.
+    SNAP_JOLT = 0.55
+    SNAP_FADE = 4.0
+    #: How hard the rig runs by the part of the track the room is in (see
+    #: trackstyle), over and above what the level says.
+    SECTION_DRIVE = {"drop": 1.0, "groove": 0.55, "build": 0.40,
+                     "break": 0.12, "intro": 0.08, "outro": 0.08}
+
     THUMP_RISE, THUMP_FALL = 0.34, 0.075
     CRACK_RISE, CRACK_FALL = 0.85, 0.22
     WASH_RISE, WASH_FALL = 0.30, 0.030
@@ -1996,6 +2095,18 @@ class Rave(Scene):
         self._loud = 0.0
         self._ring_wait = 0.0
         self._heard_for = 0.0
+        #: The pulses on the way (see PULSE_BEATS), and the snare that sends
+        #: them.
+        self._pulses: list = []
+        self._snare_armed = True
+        self._snared = False
+        self._snap = 0.0
+        self._beats_was = None
+        self._d_beats = 0.0
+        self._hold_at = 0.0
+        #: The track's sections (see trackstyle), read once per track.
+        self._style = None
+        self._styled_from = None
 
     def _beats_done(self, state) -> float:
         """How many beats have gone by, counting fractions: a running total,
@@ -2052,6 +2163,19 @@ class Rave(Scene):
         self._said = getattr(state, "at", 0.0) or 0.0
         self._per_beat = 60.0 / tempo if tempo > 0.0 else 0.0
         self._beats_now = self._beats_done(state) if tempo > 0.0 else 0.0
+        # How much of a beat went by this frame, for the rig's sweep.
+        self._d_beats = (0.0 if self._beats_was is None
+                         else max(0.0, self._beats_now - self._beats_was))
+        self._beats_was = self._beats_now
+        # A snare: once per hit, however many frames it stays loud.
+        self._snared = snare >= self.SNARE_HIT and self._snare_armed
+        if self._snared:
+            self._snare_armed = False
+            self._snap = 1.0
+        elif snare < self.SNARE_REARM:
+            self._snare_armed = True
+        self._snap = max(0.0, self._snap - step * self.SNAP_FADE)
+        self._read_style(state)
         self._coming.clear()
         if tempo > 0.0:
             # One truss passes every beat, exactly. The bass changes how the
@@ -2096,6 +2220,48 @@ class Rave(Scene):
         self._heard_for += step
         return step
 
+    def _read_style(self, state) -> None:
+        """The track's sections, from the same reading the rider uses, once
+        per track (and again when the drums' pattern lands)."""
+        chart = getattr(state, "chart", None)
+        contour = getattr(state, "contour", None)
+        rhythm = getattr(state, "rhythm", None)
+        tempo = getattr(state, "tempo", 0.0) or 0.0
+        key = (id(chart), id(contour), id(rhythm), round(tempo, 2))
+        if key == self._styled_from:
+            return
+        self._styled_from = key
+        if not contour and not chart:
+            self._style = None
+            return
+        import trackstyle
+
+        beat = 60.0 / tempo if tempo > 0.0 else 0.0
+        try:
+            self._style = trackstyle.read(
+                chart, beat, None, contour, getattr(state, "harmony", None),
+                flux=getattr(state, "flux", None), rhythm_found=rhythm,
+                light=rhythm is None)
+        except Exception:      # noqa: BLE001 - a picture, not the mail
+            log.exception("The rave could not read the track's sections.")
+            self._style = None
+
+    def _drive(self):
+        """How hard the room is going by the part of the track it is in, 0
+        to 1 (see SECTION_DRIVE), climbing through a build; None where no
+        sections are known."""
+        style = self._style
+        if style is None or not style.sections:
+            return None
+        section = style.section_at(self._said)
+        if section is None:
+            return None
+        drive = self.SECTION_DRIVE.get(section.kind, 0.5)
+        if section.kind == "build" and section.length > 0.0:
+            through = (self._said - section.start) / section.length
+            drive += 0.55 * max(0.0, min(1.0, through))
+        return min(1.0, drive)
+
     def _big_moment(self) -> float:
         """How much of a moment this frame is, 0 to 1: zero unless the room is
         louder than it has been, and for RING_WAIT seconds after a ring.
@@ -2133,6 +2299,8 @@ class Rave(Scene):
         self._grid(painter, rect, horizon, focal, hue, bass, kick, flash)
         self._rings_now(painter, rect, horizon, focal, self._big_moment(),
                         step, hue, flash)
+        self._pulses_now(painter, rect, horizon, focal, step, hue,
+                         self.flash(state))
         self._beams_now(painter, rect, horizon, focal, hats, step, hue,
                         bass, flash)
         self._core(painter, horizon, span, hue, bass, kick, synth, flash,
@@ -2493,25 +2661,34 @@ class Rave(Scene):
     RING_ECHOES = 3
     RING_APART = 1.7
 
+    def _crossing(self, beats: float, seconds: float) -> float:
+        """The rate at which a ring closes on the eye, as a share of its own
+        distance a second, to cross the room in ``beats``, or in ``seconds``
+        where there is no tempo. By a share of its distance, so it is seen
+        growing evenly rather than arriving all at once."""
+        take = beats * self._per_beat if self._per_beat > 0.0 else seconds
+        return math.log(self.FAR * 0.9 / self.RING_GONE) / max(0.1, take)
+
     def _rings_now(self, painter, rect, horizon, focal, moment, step, hue,
                    flash):
         """Rings from a big moment (see RING_OVER), leaving the far end and
-        sweeping past.
+        sweeping past at a steady pace, across the room in RING_BEATS.
         """
         if moment > 0.0:
+            speed = self._crossing(self.RING_BEATS, self.RING_SECONDS)
             for echo in range(self.RING_ECHOES):
                 self._rings.append([self.FAR * 0.9 + echo * self.RING_APART,
-                                    moment * (1.0 - echo * 0.22)])
+                                    moment * (1.0 - echo * 0.22), speed])
         alive = []
         painter.setBrush(Qt.BrushStyle.NoBrush)
         weight = self._weight(rect)
         for ring in self._rings:
-            ring[0] -= step * self.RING_CLOSE * ring[0]
+            ring[0] -= step * ring[2] * ring[0]
             # Past the eye, so the ring leaves through the edges of the frame.
             if ring[0] <= self.RING_GONE:
                 continue
             alive.append(ring)
-            z, force = ring
+            z, force, _speed = ring
             fade = max(0.0, min(1.0, (z - self.NEAR) / (self.FAR - self.NEAR)))
             radius = focal * (1.9 * force + 0.6) / z
             # Brightest mid-travel, fading as it arrives and as it goes.
@@ -2534,6 +2711,45 @@ class Rave(Scene):
                                     radius * grow * 0.62)
         # Never more than a bar's worth on screen at once.
         self._rings = alive[-8:]
+
+    def _pulses_now(self, painter, rect, horizon, focal, step, hue,
+                    hit) -> None:
+        """A thin ring from the far end on every snare, crossing the room in
+        a beat so it lands on the next; and one every HOLD_EVERY while the
+        strobe is held by hand. Brighter the harder the room is going.
+        """
+        lit = self._lasers_lit()
+        if self._snared and self._heard_for >= self.RING_SETTLE:
+            self._pulses.append([self.FAR * 0.9, 0.45 + 0.55 * lit,
+                                 self._crossing(self.PULSE_BEATS, 0.5)])
+        if hit >= self.HELD:
+            now = time.monotonic()
+            if now - self._hold_at >= self.HOLD_EVERY:
+                self._hold_at = now
+                self._pulses.append([self.FAR * 0.9, 1.0,
+                                     self._crossing(self.PULSE_BEATS, 0.5)
+                                     * 1.5])
+        if not self._pulses:
+            return
+        alive = []
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        weight = self._weight(rect)
+        for pulse in self._pulses:
+            pulse[0] -= step * pulse[2] * pulse[0]
+            if pulse[0] <= self.RING_GONE:
+                continue
+            alive.append(pulse)
+            z, force, _speed = pulse
+            fade = max(0.0, min(1.0, (z - self.NEAR) / (self.FAR - self.NEAR)))
+            going = max(0.0, min(1.0, (z - self.RING_GONE) / 0.9))
+            radius = focal * 0.95 / z
+            alpha = min(1.0, (0.18 + 0.7 * force) * (1.0 - fade * 0.6) * going)
+            colour = QColor.fromHsvF((hue + 0.5) % 1.0, 0.35, 1.0, alpha)
+            pen = QPen(colour, max(0.8, (0.8 + (1.0 - fade) * 2.2) * weight))
+            pen.setCosmetic(True)
+            painter.setPen(pen)
+            painter.drawEllipse(horizon, radius, radius * 0.62)
+        self._pulses = alive[-self.PULSES_MOST:]
 
     #: The laser rig: a lamp either side, deep down the room, each sweeping a
     #: fan of beams onto the floor in front of you. Deep lamps and near feet
@@ -2572,32 +2788,51 @@ class Rave(Scene):
 
     def _lasers_lit(self) -> float:
         """How hard the rig is running, 0 to 1: held for as long as the passage
-        is loud (see PEAK_FALL), with the hats adding to it in proportion.
+        is loud (see PEAK_FALL), with the hats adding to it in proportion,
+        and the part of the track the room is in having its say (see
+        SECTION_DRIVE): a drop runs it full, a break pulls it down.
         """
-        quiet = self._quiet
-        if (quiet is None or self._peak < self.RING_QUIET
-                or self._heard_for < self.FAN_SETTLE):
+        if self._heard_for < self.FAN_SETTLE:
             return 0.0
-        span = self._peak - quiet
-        if span < self.PEAK_SPAN:
-            return 0.0      # nothing to drop from
-        level = max(0.0, min(1.0, (self._quick - quiet) / span))
-        return max(0.0, min(1.0, level * 0.85 + self._fizz * 0.5 * level))
+        quiet = self._quiet
+        level = 0.0
+        if quiet is not None and self._peak >= self.RING_QUIET:
+            span = self._peak - quiet
+            if span >= self.PEAK_SPAN:
+                level = max(0.0, min(1.0, (self._quick - quiet) / span))
+        lit = min(1.0, level * 0.85 + self._fizz * 0.5 * level)
+        drive = self._drive()
+        if drive is not None:
+            if drive >= 0.4:
+                lit = max(lit, drive)
+            else:
+                lit = min(lit, drive + 0.2)
+        return max(0.0, min(1.0, lit))
 
     def _beams_now(self, painter, rect, horizon, focal, hats, step, hue,
                    bass, flash=0.0):
         """The laser rig: two fans sweeping across the floor, each beam from a
-        lamp deep down the room to a foot in front of you. See
-        ``_lasers_lit``.
+        lamp deep down the room to a foot in front of you. The sweep is on
+        the beat, slow at rest and a sweep a beat in a drop; a snare jolts
+        it and opens the fan; a kick brightens it; the hats make it
+        flicker. See ``_lasers_lit``.
         """
         lit = self._lasers_lit()
         if lit + flash * self.FAN_STROBE < self.FAN_FAINT:
             return
         lift = self._lift(bass)
         span = self.ACROSS * 0.5
-        self._fan += step * (self.FAN_SWEEP + self._fizz * self.FAN_HURRY)
+        if self._per_beat > 0.0:
+            beats = self.SWEEP_REST + (self.SWEEP_DROP - self.SWEEP_REST) * lit
+            self._fan += (self._d_beats * math.tau / max(0.5, beats)
+                          * (1.0 + self._fizz * 0.3))
+        else:
+            self._fan += step * (self.FAN_SWEEP + self._fizz * self.FAN_HURRY)
+        if self._snared:
+            self._fan += self.SNAP_JOLT
         # Back and forth, the way a rig sweeps.
         phase = math.sin(self._fan) * 0.8
+        opening = self.FAN_OPEN * (1.0 + self._snap * 0.35)
 
         pairs = []
         for side in (-1.0, 1.0):
@@ -2606,27 +2841,31 @@ class Rave(Scene):
                                  self.FAN_AT)
             for index in range(self.FAN):
                 spread = (index / (self.FAN - 1.0)) * 2.0 - 1.0
-                angle = phase + spread * self.FAN_OPEN
+                angle = phase + spread * opening
                 # Mirrored exactly, so the two fans are one rig.
                 foot = self._project(
                     horizon, focal,
                     side * math.sin(angle) * span * self.FAN_REACH, lift,
                     self.FAN_NEAR + (math.cos(angle) * 0.5 + 0.5)
                     * (self.FAN_FAR - self.FAN_NEAR))
-                pairs.append((lamp, foot))
+                pairs.append((lamp, foot, index))
 
         # A strobe hit takes the whole rig with it and bleaches it towards
-        # white.
-        lit = min(1.0, lit + flash * self.FAN_STROBE)
+        # white; a kick brightens it for a moment.
+        lit = min(1.0, lit + flash * self.FAN_STROBE + self._crack * 0.25)
         shade = (hue + 0.18) % 1.0
         deep = max(0.0, 0.42 - flash * self.FAN_BLEACH)
         wide = (0.9 + lit * 1.8) * self._weight(rect)
-        for lamp, foot in pairs:
+        for lamp, foot, index in pairs:
+            # The hats: each beam flickers on its own.
+            flicker = 1.0 - self._fizz * 0.45 * (
+                0.5 + 0.5 * math.sin(self._spin * 53.0 + index * 2.1))
             shine = QLinearGradient(lamp, foot)
             shine.setColorAt(0.0, QColor.fromHsvF(
-                shade, deep, 1.0, min(1.0, lit * 0.8 * self.FAN_FADE)))
+                shade, deep, 1.0,
+                min(1.0, lit * 0.8 * self.FAN_FADE * flicker)))
             shine.setColorAt(1.0, QColor.fromHsvF(
-                shade, deep, 1.0, min(1.0, lit * 0.8)))
+                shade, deep, 1.0, min(1.0, lit * 0.8 * flicker)))
             pen = QPen(QBrush(shine), wide)
             pen.setCosmetic(True)
             painter.setPen(pen)

@@ -57,6 +57,21 @@ HEAD = textwrap.dedent("""
 """)
 
 
+#: What AppKit logs, once a process, when its own NSSliderTouchBarItem builds
+#: its slider: a width constraint with a constant past its own limit, which
+#: it then substitutes. Seen with a bare item and nothing of ours set on it,
+#: so it is AppKit's, and the press-and-hold bar needs that item (AppKit
+#: hands the held finger to it; a slider in a custom item gets nothing).
+#: Every other layout complaint is still ours.
+APPKITS_OWN = "_NSLayoutConstraintNumberExceedsLimit"
+
+
+def layout_complaints(stderr: str) -> list:
+    """AppKit's complaints about a layout, bar the one that is its own."""
+    return [line for line in stderr.splitlines()
+            if "NSLayoutConstraint" in line and APPKITS_OWN not in line]
+
+
 def _architectures():
     found = [os.uname().machine]
     if found[0] == "arm64" and shutil.which("arch"):
@@ -132,7 +147,8 @@ BAR = """
         touchbar.Space("flexible"),
         touchbar.Popover("more", "More", [
             touchbar.Slider("volume", "Volume", slider,
-                            ends=("speaker.fill", "speaker.wave.3.fill"))]),
+                            ends=("speaker.fill", "speaker.wave.3.fill"))],
+            hold=touchbar.Slider("volume-held", "Volume", slider)),
     ], "probe")
     window.show()
     spin(400)
@@ -163,7 +179,7 @@ def test_a_bar_is_put_on_its_window(arch):
     assert result["title"] == "Scan"
     assert result["show"] == ["All", "Job", "Other", "Ticked"]
     assert result["strip"] == 12
-    assert "NSLayoutConstraint" not in result["stderr"], \
+    assert not layout_complaints(result["stderr"]), \
         "AppKit complained about an item's layout"
 
 
@@ -211,6 +227,41 @@ def test_each_kind_of_press_arrives_as_appkit_sends_it(arch):
     assert (result["category"], result["label"]) == (5, "Category 5")
     assert result["volume"] == 30
     assert result["disabled"] == 1, "a disabled button was pressed"
+
+
+def test_a_held_popover_opens_onto_its_own_slider(arch):
+    """The press-and-hold bar is AppKit's slider item, bound both ways."""
+    result = _run(arch, BAR, """
+        popover = handle.items["more"]
+        held = rt.send(popover, "pressAndHoldTouchBar")
+        out["has_bar"] = bool(held)
+        out["idents"] = renderer.identifiers(held) if held else []
+        out["popover_idents"] = renderer.identifiers(handle.nested["more"])
+        knob = handle.controls["volume-held"]
+        out["knob_was"] = rt.send(knob, "doubleValue", restype=ctypes.c_double)
+        rt.send(knob, "setDoubleValue:", 25.0, argtypes=[ctypes.c_double])
+        send_action(knob)
+        spin(300)
+        out["value"] = slider.value()
+        # And the way the item itself reports, as AppKit may: the item is
+        # not a control, so its action is sent to the handler by hand.
+        item = handle.items["volume-held"]
+        rt.send(knob, "setDoubleValue:", 40.0, argtypes=[ctypes.c_double])
+        rt.send(rt.send(item, "target"), "act:", item, argtypes=[_id])
+        spin(300)
+        out["value_from_item"] = slider.value()
+        slider.setValue(55)
+        spin(400)
+        out["knob"] = rt.send(knob, "doubleValue", restype=ctypes.c_double)
+    """)
+    assert result["has_bar"], "no press-and-hold bar on the popover"
+    assert result["idents"] == ["com.mailmanager.probe.volume-held"]
+    assert result["popover_idents"] == ["com.mailmanager.probe.volume"]
+    assert result["knob_was"] == 70.0
+    assert result["value"] == 25
+    assert result["value_from_item"] == 40
+    assert result["knob"] == 55.0
+    assert not layout_complaints(result["stderr"])
 
 
 def test_the_bar_follows_the_window(arch):
@@ -293,4 +344,4 @@ def test_the_apps_own_windows(arch):
     assert {"com.mailmanager.main.more", "com.mailmanager.main.options",
             "NSTouchBarItemIdentifierFlexibleSpace"} <= set(result["allowed"])
     assert result["scan"] == "Reload"
-    assert "NSLayoutConstraint" not in result["stderr"]
+    assert not layout_complaints(result["stderr"])

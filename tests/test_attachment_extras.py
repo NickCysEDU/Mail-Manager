@@ -3349,6 +3349,25 @@ class TestTheKeysThatPlayIt:
         assert not pane.strobe_box.isChecked()
         assert not pane.spectrum._state.strobe
 
+    def test_the_brackets_change_how_scenes_give_way(self, qtbot):
+        """Full screen has no menu, so the length of a scene change is on
+        the keys too, wrapping round."""
+        from PySide6.QtCore import Qt as _Qt
+
+        from attachment_widgets import Spectrum
+
+        pane, window = self._full(qtbot)
+        names = [name for name, _seconds in Spectrum.CHANGES]
+        pane.change_box.setCurrentText(names[0])
+        self._press(window, _Qt.Key.Key_BracketRight)
+        assert pane.change_box.currentText() == names[1]
+        assert pane.spectrum._change == dict(Spectrum.CHANGES)[names[1]]
+        self._press(window, _Qt.Key.Key_BracketLeft)
+        assert pane.change_box.currentText() == names[0]
+        self._press(window, _Qt.Key.Key_BracketLeft)
+        assert pane.change_box.currentText() == names[-1], "wraps round"
+        assert pane.spectrum._change == dict(Spectrum.CHANGES)[names[-1]]
+
     def test_a_and_d_walk_through_what_the_strobe_listens_to(self, qtbot):
         from PySide6.QtCore import Qt as _Qt
         from attachment_widgets import Spectrum
@@ -5596,7 +5615,7 @@ class TestTheRingSweepsPastYou:
                 if tracked is not None:
                     if not any(ring is tracked for ring in scene._rings):
                         break
-                    z, force = tracked
+                    z, force = tracked[:2]
                     seen.append(focal * (1.9 * force + 0.6) / z)
         finally:
             painter.end()

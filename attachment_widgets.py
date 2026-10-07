@@ -1406,9 +1406,21 @@ class Spectrum(QWidget):
             # The same analysis again: starting over would zero every level
             # mid-song.
             return
+        had = bool(self._frames)
         self._frames = frames or []
         self._contour_whole = False
         self._rate = max(1, rate)
+        if self._frames and not had:
+            # The picture starts here. Its eased clock fell behind the player
+            # while the analysis landed (the frames that land it are slow),
+            # and the first frame of a scene read the stale moment; the next
+            # caught up by more than a seek's worth and was counted as one,
+            # so the rider laid its road and then snapped it to where the
+            # track really was. Read the player afresh instead, as a jump
+            # nobody made.
+            self._heard_now = None
+            self._said_was = None
+            self._said_at = None
         width = len(self._frames[0]) if self._frames else 0
         self._level = [0.0] * width
         self._peak = [0.0] * width
@@ -2443,6 +2455,7 @@ class _KeysCard(QWidget):
     #: The keys, in the order they are worth learning.
     KEYS = (
         ("1 – 9", "the scenes, in the order the menu lists them"),
+        ("[ / ]", "a quicker or a slower change between scenes"),
         ("← →", "change lane, in Music rider"),
         ("X", "the game's sounds on or off"),
         ("S", "strobe on or off"),

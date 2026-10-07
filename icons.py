@@ -1,7 +1,8 @@
 """The small pictures on the mail buttons: an arrow back for a reply, two
-for everyone, one forward, a flag, a box, a bin, and so on. Drawn here with
-a pen rather than shipped as files, in the colour of the text they sit
-beside, so they follow the theme and every size of screen.
+for everyone, one forward, a flag, a box, a bin, and so on; and on the
+formatting bar, the letters and marks a word processor uses. Drawn here
+with a pen rather than shipped as files, in the colour of the text they
+sit beside, so they follow the theme and every size of screen.
 
 Each is drawn once per colour and size and kept; a button asks for its
 icon by name.
@@ -12,33 +13,43 @@ from __future__ import annotations
 from typing import Dict, Tuple
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import (QColor, QFont, QIcon, QPainter, QPainterPath, QPen,
+                           QPixmap)
 
 #: The names a button can ask for.
 NAMES = ("reply", "reply-all", "forward", "flag", "archive", "junk", "trash",
          "previous", "next", "attach", "send", "draft", "open", "compose",
-         "read", "unread", "move")
+         "read", "unread", "move",
+         "bold", "italic", "underline", "strikethrough", "text-colour",
+         "bullets", "numbers", "outdent", "indent", "align-left",
+         "align-centre", "align-right", "align-justify", "link", "picture",
+         "clear-format", "grow", "shrink", "cc")
 
 _made: Dict[Tuple[str, str, int], QIcon] = {}
 
 
-def icon(name: str, colour: str = "#d6d6d6", size: int = 18) -> QIcon:
-    """The icon by name, in a colour, ``size`` points square."""
-    key = (name, colour, size)
+def icon(name: str, colour: str = "#d6d6d6", size: int = 18,
+         second: str = "") -> QIcon:
+    """The icon by name, in a colour, ``size`` points square. ``second`` is
+    the one other colour an icon can carry: the bar under the text-colour
+    A."""
+    key = (name, colour, size, second)
     found = _made.get(key)
     if found is None:
-        found = _draw(name, QColor(colour), size)
+        found = _draw(name, QColor(colour), size,
+                      QColor(second) if second else None)
         _made[key] = found
     return found
 
 
-def _draw(name: str, colour: QColor, size: int) -> QIcon:
+def _draw(name: str, colour: QColor, size: int, second=None) -> QIcon:
     scale = 2
     pixmap = QPixmap(size * scale, size * scale)
     pixmap.setDevicePixelRatio(scale)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
     pen = QPen(colour)
     pen.setWidthF(size / 11.0)
     pen.setCapStyle(Qt.PenCapStyle.RoundCap)
@@ -47,7 +58,10 @@ def _draw(name: str, colour: QColor, size: int) -> QIcon:
     painter.setBrush(Qt.BrushStyle.NoBrush)
     drawer = _DRAWERS.get(name)
     if drawer is not None:
-        drawer(painter, size, colour)
+        if name == "text-colour":
+            drawer(painter, size, colour, second)
+        else:
+            drawer(painter, size, colour)
     painter.end()
     return QIcon(pixmap)
 
@@ -253,10 +267,198 @@ def _move(painter, s, colour):
     painter.drawPath(head)
 
 
+# -- The formatting bar's ------------------------------------------------
+
+def _letter(painter: QPainter, s: float, text: str, bold: bool = True,
+            italic: bool = False, underline: bool = False,
+            strike: bool = False, share: float = 0.74, box=None) -> None:
+    """One letter filling the box, in the pen's colour, as a word processor
+    draws its B, I, U and S."""
+    font = QFont(painter.font())
+    font.setPointSizeF(s * share)
+    font.setBold(bold)
+    font.setItalic(italic)
+    font.setUnderline(underline)
+    font.setStrikeOut(strike)
+    painter.setFont(font)
+    painter.drawText(box or QRectF(0, 0, s, s), Qt.AlignmentFlag.AlignCenter,
+                     text)
+
+
+def _bold(painter, s, colour):
+    _letter(painter, s, "B")
+
+
+def _italic(painter, s, colour):
+    _letter(painter, s, "I", bold=False, italic=True, share=0.80)
+
+
+def _underline(painter, s, colour):
+    _letter(painter, s, "U", bold=False, underline=True)
+
+
+def _strikethrough(painter, s, colour):
+    _letter(painter, s, "S", bold=False, strike=True)
+
+
+def _text_colour(painter, s, colour, second=None):
+    """An A over a bar of the colour it would apply."""
+    _letter(painter, s, "A", share=0.66, box=QRectF(0, -s * 0.06, s, s * 0.84))
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(second if second is not None else colour)
+    painter.drawRoundedRect(QRectF(s * 0.14, s * 0.80, s * 0.72, s * 0.14),
+                            s * 0.04, s * 0.04)
+
+
+def _lines(painter, s, rows=(0.28, 0.50, 0.72), left=0.40, right=0.86):
+    for y in rows:
+        painter.drawLine(QPointF(s * left, s * y), QPointF(s * right, s * y))
+
+
+def _bullets(painter, s, colour):
+    _lines(painter, s)
+    painter.setBrush(colour)
+    painter.setPen(Qt.PenStyle.NoPen)
+    for y in (0.28, 0.50, 0.72):
+        painter.drawEllipse(QPointF(s * 0.22, s * y), s * 0.055, s * 0.055)
+
+
+def _numbers(painter, s, colour):
+    _lines(painter, s, left=0.44)
+    font = QFont(painter.font())
+    font.setPointSizeF(s * 0.30)
+    font.setBold(True)
+    painter.setFont(font)
+    for number, y in enumerate((0.28, 0.50, 0.72), start=1):
+        painter.drawText(QRectF(s * 0.08, s * (y - 0.14), s * 0.26, s * 0.28),
+                         Qt.AlignmentFlag.AlignCenter, str(number))
+
+
+def _indent_lines(painter, s):
+    painter.drawLine(QPointF(s * 0.14, s * 0.22), QPointF(s * 0.86, s * 0.22))
+    painter.drawLine(QPointF(s * 0.50, s * 0.42), QPointF(s * 0.86, s * 0.42))
+    painter.drawLine(QPointF(s * 0.50, s * 0.60), QPointF(s * 0.86, s * 0.60))
+    painter.drawLine(QPointF(s * 0.14, s * 0.80), QPointF(s * 0.86, s * 0.80))
+
+
+def _indent(painter, s, colour):
+    _indent_lines(painter, s)
+    head = QPainterPath()
+    head.moveTo(s * 0.16, s * 0.38)
+    head.lineTo(s * 0.34, s * 0.51)
+    head.lineTo(s * 0.16, s * 0.64)
+    painter.drawPath(head)
+
+
+def _outdent(painter, s, colour):
+    _indent_lines(painter, s)
+    head = QPainterPath()
+    head.moveTo(s * 0.34, s * 0.38)
+    head.lineTo(s * 0.16, s * 0.51)
+    head.lineTo(s * 0.34, s * 0.64)
+    painter.drawPath(head)
+
+
+def _aligned(painter, s, how: str):
+    rows = ((0.22, 1.0), (0.41, 0.62), (0.60, 1.0), (0.79, 0.62))
+    for y, share in rows:
+        full = s * 0.72
+        wide = full * (1.0 if how == "justify" else share)
+        if how == "left" or how == "justify":
+            left = s * 0.14
+        elif how == "right":
+            left = s * 0.86 - wide
+        else:
+            left = s * 0.50 - wide / 2.0
+        painter.drawLine(QPointF(left, s * y), QPointF(left + wide, s * y))
+
+
+def _align_left(painter, s, colour):
+    _aligned(painter, s, "left")
+
+
+def _align_centre(painter, s, colour):
+    _aligned(painter, s, "centre")
+
+
+def _align_right(painter, s, colour):
+    _aligned(painter, s, "right")
+
+
+def _align_justify(painter, s, colour):
+    _aligned(painter, s, "justify")
+
+
+def _link(painter, s, colour):
+    """Two links of a chain."""
+    for dx, dy in ((-1, -1), (1, 1)):
+        path = QPainterPath()
+        cx, cy = s * 0.5 + dx * s * 0.11, s * 0.5 + dy * s * 0.11
+        path.addRoundedRect(QRectF(cx - s * 0.26, cy - s * 0.11, s * 0.40,
+                                   s * 0.22), s * 0.11, s * 0.11)
+        painter.save()
+        painter.translate(cx, cy)
+        painter.rotate(-45)
+        painter.translate(-cx, -cy)
+        painter.drawPath(path)
+        painter.restore()
+
+
+def _picture(painter, s, colour):
+    m = s * 0.16
+    painter.drawRoundedRect(QRectF(m, m + s * 0.04, s - 2 * m, s - 2 * m - s * 0.08),
+                            s * 0.06, s * 0.06)
+    hills = QPainterPath()
+    hills.moveTo(m + s * 0.04, s - m - s * 0.12)
+    hills.lineTo(s * 0.40, s * 0.52)
+    hills.lineTo(s * 0.54, s * 0.66)
+    hills.lineTo(s * 0.64, s * 0.56)
+    hills.lineTo(s - m - s * 0.04, s - m - s * 0.12)
+    painter.drawPath(hills)
+    painter.setBrush(colour)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.drawEllipse(QPointF(s * 0.64, s * 0.36), s * 0.06, s * 0.06)
+
+
+def _clear_format(painter, s, colour):
+    """An eraser over a small A."""
+    _letter(painter, s, "A", share=0.52, box=QRectF(0, s * 0.30, s * 0.62, s * 0.62))
+    rubber = QPainterPath()
+    rubber.moveTo(s * 0.50, s * 0.46)
+    rubber.lineTo(s * 0.72, s * 0.24)
+    rubber.lineTo(s * 0.90, s * 0.42)
+    rubber.lineTo(s * 0.68, s * 0.64)
+    rubber.closeSubpath()
+    painter.drawPath(rubber)
+    painter.drawLine(QPointF(s * 0.60, s * 0.36), QPointF(s * 0.78, s * 0.54))
+
+
+def _grow(painter, s, colour):
+    _letter(painter, s, "A", share=0.70, box=QRectF(0, s * 0.10, s * 0.66, s * 0.84))
+    painter.drawLine(QPointF(s * 0.80, s * 0.14), QPointF(s * 0.80, s * 0.42))
+    painter.drawLine(QPointF(s * 0.66, s * 0.28), QPointF(s * 0.94, s * 0.28))
+
+
+def _shrink(painter, s, colour):
+    _letter(painter, s, "A", share=0.52, box=QRectF(0, s * 0.22, s * 0.62, s * 0.72))
+    painter.drawLine(QPointF(s * 0.66, s * 0.28), QPointF(s * 0.94, s * 0.28))
+
+
+def _cc(painter, s, colour):
+    _letter(painter, s, "Cc", bold=False, share=0.56)
+
+
 _DRAWERS = {
     "reply": _reply, "reply-all": _reply_all, "forward": _forward, "flag": _flag,
     "archive": _archive, "junk": _junk, "trash": _trash, "previous": _previous,
     "next": _next, "attach": _attach, "send": _send, "draft": _draft,
     "open": _open, "compose": _compose, "read": _read, "unread": _unread,
     "move": _move,
+    "bold": _bold, "italic": _italic, "underline": _underline,
+    "strikethrough": _strikethrough, "text-colour": _text_colour,
+    "bullets": _bullets, "numbers": _numbers, "outdent": _outdent,
+    "indent": _indent, "align-left": _align_left, "align-centre": _align_centre,
+    "align-right": _align_right, "align-justify": _align_justify,
+    "link": _link, "picture": _picture, "clear-format": _clear_format,
+    "grow": _grow, "shrink": _shrink, "cc": _cc,
 }

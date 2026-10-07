@@ -35,7 +35,6 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QStackedWidget,
     QApplication,
-    QDateEdit,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -84,8 +83,8 @@ from models import (
 )
 from flowlayout import FlowLayout, Spacer
 from widgets import (
-    ACCENT_AMBER, ACCENT_BLUE, ACCENT_GREEN, AdaptiveLineEdit, ElidingLabel,
-    RoomyCombo, VersionLabel, _abandon, _chip, _format_duration, _html,
+    ACCENT_AMBER, ACCENT_BLUE, ACCENT_GREEN, AdaptiveLineEdit, DateField,
+    ElidingLabel, RoomyCombo, VersionLabel, _abandon, _chip, _format_duration, _html,
     _mono_font,
     _paint_button, _stored_date, _swatch, describe, menu_text, selectable,
     EMPTY_STATE, NOTHING_FOUND, SHOW_ALL, SHOW_JOB_ONLY, SHOW_OTHER_ONLY,
@@ -186,6 +185,9 @@ class MainWindow(QMainWindow):
         #: Set only by an explicit Quit, so closeEvent can tell hiding from
         #: quitting.
         self._quitting = False
+        #: Whether confirm_quit has been answered for this leaving: quit_app
+        #: asks, and the close it then makes must not ask again.
+        self._quit_confirmed = False
         #: The Settings window while it is open, so Quit can deal with it.
         self._settings_dialog = None
         #: What the primary button currently does, so it can be rewired
@@ -602,10 +604,10 @@ class MainWindow(QMainWindow):
         # The calendar popup is not built here: setCalendarPopup constructs a
         # QCalendarWidget, about a tenth of a second per field.
         # _sync_range_visibility turns it on when the fields first show.
-        self.start_date = QDateEdit()
+        self.start_date = DateField()
         self.start_date.setDisplayFormat("d MMM yy")
         self.start_date.setToolTip("The first day to read, included.")
-        self.end_date = QDateEdit()
+        self.end_date = DateField()
         self.end_date.setDisplayFormat("d MMM yy")
         self.end_date.setToolTip("The last day to read, included.")
         today = QDate.currentDate()
@@ -2021,7 +2023,8 @@ class MainWindow(QMainWindow):
         return answer == QMessageBox.StandardButton.Discard
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        if self._quitting and not self.confirm_quit():
+        if (self._quitting and not self._quit_confirmed
+                and not self.confirm_quit()):
             self._quitting = False
             event.ignore()
             return
@@ -2216,6 +2219,9 @@ class MainWindow(QMainWindow):
         if before is not None:
             before()
         self._quitting = True
+        # Answered. Closing the window below asked the same question again
+        # when a scan was ready to file.
+        self._quit_confirmed = True
         if self.isFullScreen():
             self.setWindowState(
                 self.windowState() & ~Qt.WindowState.WindowFullScreen)
@@ -3927,7 +3933,18 @@ class MainWindow(QMainWindow):
         """The name on what goes out: the one replies are signed with."""
         return (self.settings.reply_signature or "").strip()
 
-    def signature_html(self) -> str:
+    def signature_html(self, replying: bool = False) -> str:
+        """The sign-off a new message, or a reply or forward, opens with:
+        the one written on the Signature page, else the name alone, or
+        nothing where the page says not to."""
+        settings = self.settings
+        wanted = (settings.signature_in_replies if replying
+                  else settings.signature_in_new)
+        if not wanted:
+            return ""
+        rich = (settings.signature_html or "").strip()
+        if rich:
+            return rich
         name = self.sender_name()
         return f"<p>{_html(name)}</p>" if name else ""
 

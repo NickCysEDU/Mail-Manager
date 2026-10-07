@@ -232,6 +232,36 @@ class TestItemsMirrorTheirControls:
         button.hide()
         assert not item.present()
 
+    def test_a_popover_held_opens_onto_a_slider_that_follows_the_finger(
+            self, qtbot, recorder):
+        """Hold and drag, as the brightness control: the held slider is an
+        item of its own, mirrored to the same control, kept out of the
+        popover's own bar."""
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QSlider
+
+        import touchbar
+
+        window = _window(qtbot)
+        slider = _add(window, QSlider(Qt.Orientation.Horizontal))
+        slider.setRange(0, 100)
+        held = touchbar.Slider("glow-held", "Glow", slider)
+        item = touchbar.Popover("beam", "Beam", [
+            touchbar.Slider("glow", "Glow", slider, width=140)], hold=held)
+        bar = touchbar.give(window, [item], "beam-test")
+        window.show()
+        assert item.hold is held and held in item.children()
+        assert bar.arrangement()["beam"] == ["glow"], "the held one has its own bar"
+        described = bar.describe()[0]
+        assert described["hold"]["key"] == "glow-held"
+        assert [entry["key"] for entry in described["items"]] == ["glow"]
+        assert bar.press("glow-held", 42.4)
+        assert slider.value() == 42
+        slider.setValue(70)
+        qtbot.waitUntil(lambda: bool(recorder.updates("glow-held"))
+                        and recorder.updates("glow-held")[-1]["value"] == 70,
+                        timeout=2000)
+
     def test_only_when_adds_to_an_items_own_condition(self, qapp):
         import touchbar
 
@@ -625,7 +655,7 @@ class TestDialogs:
         qtbot.addWidget(dialog)
         bar = touchbar.of(dialog)
         keys = lambda: {entry["key"] for entry in bar.describe()}
-        dialog.tabs.setCurrentIndex(4)
+        dialog.tabs.setCurrentIndex(5)
         assert {"pages", "mode", "contrast", "density"} <= keys()
         assert "provider" not in keys()
         bar.press("mode", 2)

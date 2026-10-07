@@ -395,6 +395,21 @@ def stylesheet(colours: Palette, readable: bool = False,
     QToolButton[menu="true"] {{
         padding-right: {drop_width + 6}px;
     }}
+    /* A split button: the left for the usual, the right for the choice. The
+       menu segment sits in the padding, which is made for it: Qt does not
+       grow the button for a styled segment. */
+    QToolButton[split="true"], QToolButton[segment="true"][split="true"] {{
+        padding-right: {drop_width + 6}px;
+    }}
+    QToolButton[split="true"]::menu-button {{
+        subcontrol-origin: padding; subcontrol-position: center right;
+        border: none; border-left: {border}px solid {colours.border};
+        width: {drop_width + 2}px;
+    }}
+    QToolButton[split="true"]::menu-arrow {{
+        image: url("{down_arrow}");
+        width: {arrow_px - 2}px; height: {arrow_px - 2}px;
+    }}
 
     QAbstractItemView {{
         alternate-background-color: {colours.surface_alt};

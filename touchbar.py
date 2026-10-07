@@ -436,18 +436,27 @@ class Slider(Item):
 
 
 class Popover(Item):
-    """A button that opens onto more items."""
+    """A button that opens onto more items.
+
+    ``hold`` is a Slider that a finger held on the button opens onto
+    instead, and that follows the finger as it drags, the way the
+    brightness control on a Mac's own bar does: faster than a tap to open
+    and a second touch to adjust. It mirrors the same control as a slider
+    inside the popover would, under a key of its own.
+    """
 
     kind = "popover"
 
     def __init__(self, key: str, label: str, items: Sequence[Item], *,
-                 title=None, **kwargs) -> None:
+                 title=None, hold: Optional["Slider"] = None,
+                 **kwargs) -> None:
         super().__init__(key, label, **kwargs)
         self.items = list(items)
         self.title = title
+        self.hold = hold
 
     def children(self) -> List[Item]:
-        return self.items
+        return self.items + ([self.hold] if self.hold is not None else [])
 
     def present(self) -> bool:
         return super().present() and any(item.present()
@@ -556,7 +565,8 @@ class Bar(QObject):
         out = {"": keys(self.items, True)}
         for item in self.flat.values():
             if item.kind == "popover":
-                out[item.key] = keys(item.children(), False)
+                # The held slider has a bar of its own; see Popover.hold.
+                out[item.key] = keys(item.items, False)
         return out
 
     def describe(self) -> List[dict]:
@@ -565,8 +575,10 @@ class Bar(QObject):
             entry = {"key": item.key, "kind": item.kind,
                      "default": item.default, **item.state()}
             if item.kind == "popover":
-                entry["items"] = [one(child) for child in item.children()
+                entry["items"] = [one(child) for child in item.items
                                   if child.present()]
+                entry["hold"] = (one(item.hold) if item.hold is not None
+                                 and item.hold.present() else None)
             return entry
 
         return [one(item) for item in self.items if item.present()]

@@ -75,8 +75,9 @@ OpenAI-compatible service with your own key, in **Settings → Analysis**.
 
 - **Read and write** like any mail app: double-click a message for its own
   window, then reply, reply all, forward, flag, archive, delete or move it.
-  Replies and new messages are written with formatting and attachments, go
-  out through your own mailbox, and a copy lands in Sent.
+  Replies and new messages are written with formatting, pictures and
+  attachments under a sign-off of your own, go out through your own mailbox,
+  and a copy lands in Sent.
 - **Rules** file, tick, flag, mark as read, or draft a reply into Drafts.
   A rule never sends anything; only you do.
 - **Schedule** scans on a timer, and can keep scanning after you quit.
@@ -89,7 +90,7 @@ OpenAI-compatible service with your own key, in **Settings → Analysis**.
 - **Links** in a message are listed by where they really go, and the address
   is shown before anything opens.
 - **Touch Bar**: each window's controls are on it, on a MacBook Pro that has
-  one.
+  one; a button that opens onto a slider can be held and dragged instead.
 
 ## Privacy
 
@@ -102,7 +103,7 @@ turns that off. See [SECURITY.md](SECURITY.md).
 
 ```bash
 ./dev demo     # the app with sample mail, no setup
-./dev test     # 4,899 tests, about five minutes on four workers
+./dev test     # 4,915 tests, about five minutes on four workers
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 

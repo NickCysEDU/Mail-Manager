@@ -403,6 +403,55 @@ class TestMainWindow:
         assert window.start_date.calendarPopup() is True
         assert window.end_date.calendarPopup() is True
 
+    def test_a_click_beside_the_date_leaves_it_alone(self, window):
+        """With the calendar popup on, Qt reads a click on the field's own
+        frame as its up button, and a click in the open space stepped the
+        day. The arrow still opens the calendar."""
+        from PySide6.QtCore import QDate, QPoint
+        from PySide6.QtTest import QTest
+        from PySide6.QtWidgets import QDateEdit
+
+        def click(field, spot):
+            QTest.mouseClick(field, Qt.MouseButton.LeftButton,
+                             Qt.KeyboardModifier.NoModifier, spot)
+            QApplication.processEvents()
+            popup = QApplication.activePopupWidget()
+            if popup is not None:
+                popup.hide()
+            return popup
+
+        window._window_selected(TimeWindow.CUSTOM)
+        window.show()
+        QApplication.processEvents()
+        field = window.start_date
+        field.setDate(QDate(2026, 10, 1))
+        middle = field.height() // 2
+        edit = field.lineEdit().geometry()
+        spots = [QPoint(1, 1), QPoint(1, middle), QPoint(edit.right() + 1, middle)]
+        spots = [spot for spot in spots if not field.on_arrow(spot)]
+        assert len(spots) >= 2
+        for spot in spots:
+            assert field.childAt(spot) is None, f"{spot} is on the text"
+            assert click(field, spot) is None, f"{spot} opened the calendar"
+        assert field.date() == QDate(2026, 10, 1)
+        arrow = QPoint(field.width() - 4, middle)
+        assert field.on_arrow(arrow)
+        assert click(field, arrow) is not None, "the arrow no longer opens the calendar"
+
+        # The stock field steps, which is what this guards against: if Qt
+        # stops doing that, DateField can go.
+        plain = QDateEdit(window)
+        plain.setDisplayFormat("d MMM yy")
+        plain.setCalendarPopup(True)
+        plain.setDate(QDate(2026, 10, 1))
+        plain.resize(field.size())
+        plain.show()
+        QApplication.processEvents()
+        click(plain, QPoint(1, plain.height() // 2))
+        assert plain.date() != QDate(2026, 10, 1), (
+            "Qt no longer steps the date on a click in the frame")
+        plain.deleteLater()
+
     def test_the_scan_window_is_spelled_out_with_am_and_pm(self, window):
         """It reads "covering 4 Sep, 7:12 AM to 5 Sep, 7:12 AM" before a scan."""
         import re

@@ -1176,3 +1176,81 @@ class TestASeekBackFromTheFinish:
         _ride(scene, clock, 4.0, 6.2, chart=self.KICKS)
         assert scene._finished and scene._result is not None
         assert not scene._result["whole"]
+
+
+
+class TestTheStartIsNotASeek:
+    """The picture starts at the moment the track is at. Its eased clock fell
+    behind the player over the long frame in which the analysis landed, so
+    a scene's first frame read a stale moment and the catch-up on the next
+    was counted as a seek: the rider laid its road and snapped it to where
+    the track was.
+    """
+
+    def _pane(self, qapp, monkeypatch):
+        from attachment_widgets import Spectrum
+
+        now = [1000.0]
+        # The pane reads the clock through the time module itself.
+        monkeypatch.setattr(time, "monotonic", lambda: now[0])
+        pane = Spectrum()
+        player = [0]
+        pane.follow(lambda: player[0])
+        pane._wanted = True
+        for frame in range(30):
+            now[0] += 1 / 60.0
+            player[0] = int(frame * 1000 / 60)
+            pane._tick()
+        return pane, player, now
+
+    @staticmethod
+    def _frames(level=0.4):
+        from array import array
+
+        return [array("f", [level] * 27)] * 900
+
+    def test_frames_landing_after_a_long_frame_read_the_player_afresh(
+            self, qapp, monkeypatch):
+        pane, player, now = self._pane(qapp, monkeypatch)
+        jumps = pane._jumps
+        # The frame that lands the analysis is a long one, and the player
+        # runs on through it.
+        now[0] += 0.6
+        player[0] += 600
+        pane.set_frames(self._frames(), 15)
+        pane._tick()
+        assert abs(pane._now - player[0] / 1000.0) < 0.05, (
+            f"the first frame is at {pane._now:.2f}s with the player at "
+            f"{player[0] / 1000.0:.2f}s")
+        assert pane._jumps == jumps, "catching up was counted as a seek"
+        assert pane._state.jumps == jumps
+        now[0] += 1 / 60.0
+        player[0] += 16
+        pane._tick()
+        assert pane._jumps == jumps
+
+    def test_a_long_frame_without_the_landing_still_counts(self, qapp, monkeypatch):
+        """What the fix is for: without the frames landing, the same long
+        frame is a jump. If this stops holding, the test above proves
+        nothing."""
+        pane, player, now = self._pane(qapp, monkeypatch)
+        pane.set_frames(self._frames(), 15)
+        pane._tick()
+        jumps = pane._jumps
+        now[0] += 0.6
+        player[0] += 600
+        pane._tick()
+        assert pane._jumps == jumps + 1
+
+    def test_a_second_set_of_frames_does_not_restart_the_clock(self, qapp, monkeypatch):
+        """Only the landing, not every later set: a seek mid-track must still
+        count."""
+        pane, player, now = self._pane(qapp, monkeypatch)
+        pane.set_frames(self._frames(), 15)
+        pane._tick()
+        jumps = pane._jumps
+        pane.set_frames(self._frames(0.5), 15)
+        now[0] += 1 / 60.0
+        player[0] += 5000
+        pane._tick()
+        assert pane._jumps == jumps + 1, "a real jump went uncounted"

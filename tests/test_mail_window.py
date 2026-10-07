@@ -93,7 +93,7 @@ class _Owner:
     def known_addresses(self):
         return ["dana@northwind.example", "Sam <sam@acme.example>"]
 
-    def signature_html(self):
+    def signature_html(self, replying=False):
         return "<p>-- <br>You</p>"
 
     def sender_name(self):
@@ -330,8 +330,9 @@ class TestTheComposeWindow:
         window.editor.selectAll()
         sizes = next(a.menu() for a in window.format_menu.actions()
                      if a.menu() is not None and a.text() == "Size")
-        sizes.actions()[3].trigger()
-        assert window.size_box.currentIndex() == 3
+        twenty_two = next(a for a in sizes.actions() if a.text() == "22")
+        twenty_two.trigger()
+        assert window.size_box.currentText() == "22"
         assert "22pt" in window.editor.html()
         window.note("Fetching 2 attachments…")
         assert window.statusBar().currentMessage() == "Fetching 2 attachments…"
@@ -402,17 +403,22 @@ class TestNothingIsCutOff:
         window = ComposeWindow(owner, outgoing.Draft(from_address="you@icloud.example"),
                                owner.accounts, owner.accounts[0])
         windows.append(window)
-        window.resize(640, 600)
+        holder = window.formatting
+        # Narrower than the row wants, then wider: measured, so the test
+        # holds whatever the buttons weigh on this platform.
+        row = holder.holder.layout()
+        wanted = (sum(row.itemAt(i).sizeHint().width() for i in range(row.count()))
+                  + row.spacing() * (row.count() - 1))
+        window.resize(int(wanted * 0.6), 600)
         window.show()
         QApplication.processEvents()
-        holder = window.formatting
         buttons = [window.format_button(a) for a in (
-            window.bold_action, window.left_action, window.plain_action)]
+            window.bold_action, window.bullets_action, window.plain_action)]
         assert all(b is not None and b.isVisibleTo(window) for b in buttons)
         for button in buttons:
             assert button.geometry().right() <= holder.width(), "nothing past the edge"
         assert holder.height() >= 2 * buttons[0].height(), "two rows when narrow"
-        window.resize(1300, 600)
+        window.resize(wanted + 240, 600)
         QApplication.processEvents()
         assert holder.height() < 2 * buttons[0].height(), "one row when wide"
         assert window.format_button(window.plain_action).geometry().right() <= holder.width()
@@ -451,7 +457,7 @@ class TestNothingIsCutOff:
         assert "You" in "\n".join(lines[2:4]), "then the signature"
         assert window.editor.textCursor().position() == 0
         unsigned = _Owner()
-        unsigned.signature_html = lambda: ""
+        unsigned.signature_html = lambda replying=False: ""
         blank = ComposeWindow(unsigned, outgoing.Draft(from_address="you@icloud.example"),
                               unsigned.accounts, unsigned.accounts[0])
         windows.append(blank)

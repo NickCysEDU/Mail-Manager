@@ -244,8 +244,14 @@ class Settings:
     # Auto reply. Nothing is ever sent; drafts are saved for review.
     auto_reply: bool = False
     reply_rules: List[dict] = field(default_factory=list)
-    #: The name signed at the bottom of a drafted reply.
+    #: The name signed at the bottom of a drafted reply, and on the From line.
     reply_signature: str = ""
+    #: The sign-off at the foot of a message written here, as rich text (the
+    #: Signature page in Settings), and whether it goes on new messages and
+    #: on replies and forwards.
+    signature_html: str = ""
+    signature_in_new: bool = True
+    signature_in_replies: bool = True
 
     # Unattended scanning
     schedule_minutes: int = 0            # 0 means off
@@ -320,6 +326,9 @@ class Settings:
             for r in raw_rules if isinstance(r, (dict, Mapping))
         ]
         data["reply_signature"] = str(data.get("reply_signature", "")).strip()
+        data["signature_html"] = str(data.get("signature_html") or "").strip()
+        data["signature_in_new"] = bool(data.get("signature_in_new", True))
+        data["signature_in_replies"] = bool(data.get("signature_in_replies", True))
         data["hidden_columns"] = sorted({
             int(c) for c in (data.get("hidden_columns") or [])
             if isinstance(c, (int, float)) and 1 <= int(c) <= 32

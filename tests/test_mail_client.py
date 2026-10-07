@@ -376,6 +376,17 @@ class TestWritingBack:
         assert window.sender_name() == "Sam & Co"
         assert window.signature_html() == "<p>Sam &amp; Co</p>"
 
+    def test_the_sign_off_from_the_signature_page_wins(self, window):
+        window.settings.reply_signature = "Sam"
+        window.settings.signature_html = "<p><b>Sam Rivera</b><br>Acme</p>"
+        assert window.signature_html() == "<p><b>Sam Rivera</b><br>Acme</p>"
+        assert window.signature_html(replying=True) == window.signature_html()
+        window.settings.signature_in_replies = False
+        assert window.signature_html(replying=True) == ""
+        assert window.signature_html() != "", "new messages still get it"
+        window.settings.signature_in_new = False
+        assert window.signature_html() == ""
+
 
 class TestQuickActions:
     def test_marking_changes_the_table_at_once(self, window):

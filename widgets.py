@@ -9,11 +9,11 @@ import html as html_module
 import textwrap
 from typing import List, Sequence
 
-from PySide6.QtCore import QDate, QEvent, QObject, QRect, QSize, Qt
+from PySide6.QtCore import QDate, QEvent, QObject, QRect, QRectF, QSize, Qt
 from PySide6.QtGui import (QColor, QFont, QFontDatabase, QFontMetrics, QIcon,
                            QPainter, QPalette, QPixmap)
-from PySide6.QtWidgets import (QApplication, QComboBox, QFrame, QLabel,
-                               QLineEdit,
+from PySide6.QtWidgets import (QApplication, QComboBox, QDateEdit, QFrame,
+                               QLabel, QLineEdit,
                                QListWidget, QMessageBox, QScrollArea,
                                QSizePolicy, QStyle, QStyleOptionComboBox,
                                QStyleOptionViewItem, QStyledItemDelegate,
@@ -294,6 +294,99 @@ class AsideDelegate(QStyledItemDelegate):
         painter.restore()
 
 
+#: A second line under a list item's name: what it is doing, and in what
+#: tone - "off", "warn", "ok", or nothing for quiet dim type. See
+#: StatusDelegate.
+STATUS = Qt.ItemDataRole.UserRole + 8
+TONE = Qt.ItemDataRole.UserRole + 9
+
+#: The colour each tone's badge is drawn in.
+TONES = {"off": ACCENT_AMBER, "warn": ACCENT_RED, "ok": ACCENT_GREEN}
+
+
+class StatusDelegate(QStyledItemDelegate):
+    """A list item with its name on top and, under it, a few words on its
+    state in a small rounded badge: Off in amber, a problem in red, what it
+    does in green, anything else in dim type. The state on a second line in
+    the same type as the name read as more name, and "off" went unseen.
+    """
+
+    #: Between the name and the badge, and inside the badge.
+    GAP = 3
+    PAD_X = 7
+    PAD_Y = 1
+
+    @staticmethod
+    def badge_font(base: QFont) -> QFont:
+        font = QFont(base)
+        font.setPointSizeF(max(8.0, base.pointSizeF() * 0.82))
+        font.setBold(True)
+        return font
+
+    @classmethod
+    def badge_height(cls, base: QFont) -> int:
+        return QFontMetrics(cls.badge_font(base)).height() + cls.PAD_Y * 2
+
+    @classmethod
+    def extra_height(cls, base: QFont) -> int:
+        """What the badge adds under the wrapped name."""
+        return cls.badge_height(base) + cls.GAP
+
+    def paint(self, painter, option, index) -> None:
+        status = index.data(STATUS)
+        if not status:
+            super().paint(painter, option, index)
+            return
+        painter.save()
+        self.initStyleOption(option, index)
+        style = option.widget.style() if option.widget else QApplication.style()
+        text = option.text
+        option.text = ""
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, option,
+                          painter, option.widget)
+        rect = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText,
+                                    option, option.widget)
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        ink = (option.palette.highlightedText().color() if selected
+               else option.palette.text().color())
+        tall = self.badge_height(option.font)
+        name = QRect(rect.left(), rect.top(), rect.width(),
+                     max(0, rect.height() - tall - self.GAP))
+        painter.setFont(option.font)
+        painter.setPen(ink)
+        painter.drawText(name, int(Qt.TextFlag.TextWordWrap)
+                         | int(Qt.AlignmentFlag.AlignLeft)
+                         | int(Qt.AlignmentFlag.AlignTop), text)
+
+        font = self.badge_font(option.font)
+        metrics = QFontMetrics(font)
+        tone = TONES.get(str(index.data(TONE) or ""))
+        inset = self.PAD_X if tone else 0
+        words = metrics.elidedText(str(status), Qt.TextElideMode.ElideRight,
+                                   max(10, rect.width() - inset * 2))
+        badge = QRect(rect.left(), rect.bottom() - tall + 1,
+                      metrics.horizontalAdvance(words) + inset * 2, tall)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setFont(font)
+        flags = (int(Qt.AlignmentFlag.AlignVCenter)
+                 | int(Qt.AlignmentFlag.AlignLeft))
+        if tone:
+            colour = QColor(tone)
+            fill = QColor(colour)
+            fill.setAlphaF(0.32 if selected else 0.20)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(fill)
+            painter.drawRoundedRect(QRectF(badge), tall / 2.0, tall / 2.0)
+            painter.setPen(ink if selected else colour)
+            painter.drawText(badge.adjusted(inset, 0, -inset, 0), flags, words)
+        else:
+            dim = QColor(ink)
+            dim.setAlphaF(0.6)
+            painter.setPen(dim)
+            painter.drawText(badge, flags, words)
+        painter.restore()
+
+
 class RoomyCombo(QComboBox):
     """A dropdown wide enough for its options, with a menu as wide as the
     longest of them.
@@ -357,6 +450,37 @@ class RoomyCombo(QComboBox):
                  if self._every else [self.currentText()])
         wanted = max((self.room_for(text) for text in texts), default=0)
         super().setMinimumWidth(max(self._floor, min(self.MOST, wanted)))
+
+
+class DateField(QDateEdit):
+    """A date field whose open space does nothing.
+
+    With the calendar popup on, Qt hit-tests a click as a combo box and then
+    reads the answer as a spin box, and the combo's frame is the same number
+    as the spin box's up button: a click beside the text stepped the date by
+    a day. Here the arrow opens the calendar and a click anywhere else only
+    puts the cursor in the field.
+    """
+
+    def mousePressEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        if (self.calendarPopup()
+                and event.button() == Qt.MouseButton.LeftButton
+                and not self.on_arrow(event.position().toPoint())):
+            self.lineEdit().setFocus(Qt.FocusReason.MouseFocusReason)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def on_arrow(self, at) -> bool:
+        """Whether ``at`` is on the arrow that opens the calendar, asked the
+        way the field itself asks."""
+        option = QStyleOptionComboBox()
+        option.initFrom(self)
+        option.editable = True
+        option.subControls = QStyle.SubControl.SC_All
+        hit = self.style().hitTestComplexControl(
+            QStyle.ComplexControl.CC_ComboBox, option, at, self)
+        return hit == QStyle.SubControl.SC_ComboBoxArrow
 
 
 class VersionLabel(QLabel):
@@ -432,7 +556,26 @@ class WrappingList(QListWidget):
                 int(Qt.TextFlag.TextWordWrap) | int(Qt.AlignmentFlag.AlignLeft),
                 item.text())
             item.setSizeHint(QSize(
-                width, max(metrics.height(), bounds.height()) + chrome + 2))
+                width, max(metrics.height(), bounds.height()) + chrome + 2
+                + self.extra_height(item)))
+
+    def extra_height(self, item) -> int:
+        """Room an item needs under its wrapped text; none here."""
+        return 0
+
+
+class StatusList(WrappingList):
+    """A wrapping list whose items carry a badge under the name (see
+    StatusDelegate), with the room for it."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setItemDelegate(StatusDelegate(self))
+
+    def extra_height(self, item) -> int:
+        if not item.data(STATUS):
+            return 0
+        return StatusDelegate.extra_height(self.font())
 
 
 def _compact_button(text: str, tip: str, slot) -> QToolButton:

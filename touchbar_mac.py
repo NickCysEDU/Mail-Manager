@@ -98,7 +98,10 @@ NEEDED = {
                               "setCollapsedRepresentationLabel:",
                               "setCollapsedRepresentationImage:",
                               "setPopoverTouchBar:", "setShowsCloseButton:",
+                              "setPressAndHoldTouchBar:",
                               "dismissPopover:", "setCustomizationLabel:"),
+    "NSSliderTouchBarItem": ("initWithIdentifier:", "slider", "setTarget:",
+                             "setAction:"),
     "NSScrubber": ("initWithFrame:", "registerClass:forItemIdentifier:",
                    "setScrubberLayout:", "setDataSource:", "setDelegate:",
                    "setMode:", "setSelectionBackgroundStyle:",
@@ -353,6 +356,9 @@ class Renderer:
             raise RuntimeError("AppKit here lacks " + ", ".join(gaps[:6]))
         self.handler = _handler(self.rt)
         self._act = self.rt.sel("act:")
+        #: A held popover's slider item -> its slider, for a press that
+        #: arrives from the item rather than the slider. See _hold.
+        self._held: Dict[int, int] = {}
         #: sender -> (handle, key, kind, popover to close); one for lists.
         self._targets: Dict[int, tuple] = {}
         self._lists: Dict[int, list] = {}
@@ -565,16 +571,52 @@ class Renderer:
             handle.labels[item.key] = self._keep(handle, name)
             self._targets[slider] = (handle, item.key, kind, 0)
         elif kind == "popover":
-            inside = [self._make(handle, child) for child in item.children()
+            inside = [self._make(handle, child) for child in item.items
                       if child.kind != "space"]
             nested = self._new_bar(handle, inside)
             handle.nested[item.key] = nested
             made = self._popover(handle, ident, nested, item.label)
+            if getattr(item, "hold", None) is not None:
+                self._hold(handle, made, item.hold)
         else:
             raise ValueError(f"no such kind of item: {kind}")
         self._label(made, item)
         handle.items[item.key] = made
         return made
+
+    def _hold(self, handle: _Handle, popover: int, hold) -> None:
+        """A bar of one slider that opens under a finger held on the popover
+        and follows it as it drags, as the brightness control does. AppKit's
+        own slider item, which it can hand the touch to; a plain slider in a
+        custom item cannot take it.
+        """
+        rt = self.rt
+        ident = self._ident(handle, hold.key)
+        made = self._keep(handle, rt.send(
+            rt.send(rt.cls("NSSliderTouchBarItem"), "alloc"),
+            "initWithIdentifier:", ident, argtypes=[_id]), retain=False)
+        slider = rt.send(made, "slider")
+        rt.send(slider, "setContinuous:", True, argtypes=[_bool])
+        # Both the item and its slider report here: whichever AppKit uses.
+        rt.send(made, "setTarget:", self.handler, argtypes=[_id])
+        rt.send(made, "setAction:", self._act, argtypes=[_id])
+        rt.send(slider, "setTarget:", self.handler, argtypes=[_id])
+        rt.send(slider, "setAction:", self._act, argtypes=[_id])
+        bar = self._new_bar(handle, [made])
+        rt.send(bar, "setDefaultItemIdentifiers:", rt.array([ident]),
+                argtypes=[_id])
+        rt.send(popover, "setPressAndHoldTouchBar:", bar, argtypes=[_id])
+        handle.kinds[hold.key] = ("slider", "")
+        handle.items[hold.key] = made
+        handle.controls[hold.key] = slider
+        # A label nothing shows: the slider item is the slider alone, and
+        # an update writes the words it would have.
+        handle.labels[hold.key] = self._keep(handle, rt.send(
+            rt.cls("NSTextField"), "labelWithString:", rt.string(hold.label),
+            argtypes=[_id]))
+        self._held[made] = slider
+        self._targets[made] = (handle, hold.key, "slider", 0)
+        self._targets[slider] = (handle, hold.key, "slider", 0)
 
     def arrange(self, handle: _Handle, arranged) -> None:
         if handle.released:
@@ -699,6 +741,7 @@ class Renderer:
                 if entry[0] is handle:
                     rt.send(pointer, "setTarget:", None, argtypes=[_id])
                     del self._targets[pointer]
+                    self._held.pop(pointer, None)
             for pointer, entry in list(self._lists.items()):
                 if entry[0] is handle:
                     rt.send(pointer, "setDataSource:", None, argtypes=[_id])
@@ -727,6 +770,8 @@ class Renderer:
             return
         handle, key, kind, popover = entry
         rt = self.rt
+        # A held popover's slider item reports as itself; read its slider.
+        sender = self._held.get(sender, sender)
         if kind == "toggle":
             value = bool(rt.send(sender, "isSelectedForSegment:", 0,
                                  restype=_bool, argtypes=[_long]))

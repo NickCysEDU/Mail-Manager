@@ -8,7 +8,11 @@ describes the app itself.
 
 - **Mail:** `imap_engine.py` (IMAP), `rules_engine.py` and `rulesets.py` (the
   built-in sorter), `llm_engine.py` and `providers.py` (models), `models.py`
-  (routing, no Qt), `gui.py`, `triage_table.py`, `settings_dialog.py`.
+  (routing, no Qt), `gui.py`, `triage_table.py`, `settings_dialog.py`,
+  `mail_window.py` (a message's window and the compose window),
+  `format_bar.py` (the formatting bar over a rich editor, shared by the
+  compose window and Settings' Signature page), `outgoing.py` (SMTP and the
+  message as bytes), `icons.py` (every drawn icon).
 - **Links and updates:** `link_open.py`; `updates.py` (no Qt) and
   `update_dialog.py`.
 - **Touch Bar:** `touchbar.py` (items bound to Qt controls, one bar per
@@ -29,6 +33,17 @@ describes the app itself.
 
 - **Every shortcut is unique.** Qt fires neither of two actions bound to the
   same keys. `test_no_two_actions_share_a_shortcut` checks the main window.
+- **A `QDateEdit` with its calendar popup on steps on a click in its own
+  frame:** Qt hit-tests the click as a combo box and reads the answer as a
+  spin box, and the combo's frame is the spin box's up button. Use
+  `widgets.DateField`, which only opens the calendar from the arrow.
+- **Quit asks once.** `quit_app` answers `confirm_quit` and sets
+  `_quit_confirmed`; the close it then makes must not ask again.
+- **The settings Touch Bar maps pages by title,** never by index: a page
+  added in the middle moved the rest.
+- **The rule list is a `StatusList`:** the name is the item's text and the
+  state goes in the STATUS and TONE roles, drawn as a badge by
+  `StatusDelegate`; the measuring in `WrappingList` adds the badge's room.
 - **A self-test line that reports a problem must raise.** `check()` only fails
   on an exception, and `build_app.sh` only refuses to ship on a failure.
 - **Never assert on a menu by calling `exec`.** It enters a native modal loop
@@ -92,7 +107,22 @@ describes the app itself.
   (`html_utils.has_dark_background`) and leaves a dark design alone.
 - **The mail buttons' icons are drawn** (`icons.py`), in the text colour,
   once per name and colour; the Touch Bar's picture names map to them in
-  `mail_window._ICONS`.
+  `mail_window._ICONS`. Both windows' bars are icons alone; every action
+  carries its name and key in its tooltip (`format_bar.tip`).
+- **The formatting bar is `format_bar.FormatBar`:** the actions are public
+  and the window puts them in its menus and on its Touch Bar. The lists and
+  the colour are split buttons (`QToolButton[split="true"]` in the theme);
+  Qt does not grow a tool button for a styled menu segment, so the rule's
+  padding makes the room, and it has to outrank the segment rule. The size
+  box is changed by index from the Touch Bar, so `currentIndexChanged`
+  applies a size as well as `activated`.
+- **The sign-off is kept as a fragment** (`RichEditor.fragment`: the body of
+  Qt's document, in `Settings.signature_html`). The compose window asks
+  `signature_html(replying=...)`, which honours the two switches and falls
+  back to the name alone; nothing ships a name as a default.
+- **A picture in a message goes as a related part** (`outgoing.inline_pictures`
+  turns each `data:` picture into a `cid:` part under the HTML half): Gmail
+  shows nothing for a `data:` picture.
 - **A real inbox is the dev set that matters.** Three weeks of it, judged by
   hand, live outside the repository at `~/.mail-manager-eval/inbox/` on the
   machine that has them (`real_dev.json` scores with `tools/evaluate.py
@@ -138,7 +168,21 @@ describes the app itself.
 - **One moment a frame.** Everything drawn reads `Spectrum._now`. The pane's
   clock (`_heard`) holds at a seek target until the player moves past it,
   is exact while paused, and closes on the first report after a resume at a
-  capped rate.
+  capped rate. When a track's frames first land (`set_frames`) the clock is
+  read afresh: it had fallen behind the player over the long frame that
+  landed them, and the catch-up a frame later was counted as a seek, which
+  made the rider lay its road and then snap it to where the track was.
+- **The plasma is doubled three times before it is stretched**
+  (`Plasma.doubled`): stretched from the grid itself, the interpolation
+  showed as diamonds a cell wide, which read as a low-resolution picture.
+  The scope has no field behind it; its screen is black.
+- **The rave reads the track's sections** (`Rave._read_style`, the same
+  `trackstyle.read` as the rider) and sweeps its rig on the beat
+  (`SWEEP_REST` beats a sweep at rest, one in a drop); a snare jolts the
+  sweep and sends a pulse that crosses the room in a beat; big rings close
+  by a share of their distance in `RING_BEATS`, so they are seen growing
+  evenly. A held hand strobe streams pulses there, rings in the tunnel
+  (`Tunnel._throw`) and flickers the city's windows.
 - **Scene changes** fade over the last frame on the GPU (`_GpuCanvas.hold`,
   `cover`); a change during a change folds the two frames first. The CPU path
   fades from the background.
@@ -224,9 +268,15 @@ describes the app itself.
 - **Every AppKit message sent is listed in `touchbar_mac.NEEDED`,** checked
   before anything is drawn; a message a class does not answer ends the
   process. A test fails if the list and what is sent differ.
-- **No `NSPickerTouchBarItem`, and no `NSSliderTouchBarItem` with a label or
-  width:** both log an AppKit layout complaint. Segmented controls and a
-  plain `NSSlider` beside a label do the same jobs.
+- **No `NSPickerTouchBarItem`, and no `NSSliderTouchBarItem` on the bar
+  itself:** both log an AppKit layout complaint. Segmented controls and a
+  plain `NSSlider` beside a label do the same jobs. The one place AppKit's
+  slider item is used is a popover's press-and-hold bar (`Popover(hold=...)`,
+  `Renderer._hold`): AppKit hands a held finger only to its own item. It
+  logs one line of its own when it builds its slider
+  (`_NSLayoutConstraintNumberExceedsLimit`, seen with a bare item and
+  nothing of ours set); the native tests set that line aside and fail on
+  any other.
 - **ctypes callbacks cannot return structs,** so a scrubber's entries share
   one width (`_fit`). A scrubber keeps its count until `reloadData`.
 - **The suite cannot see the bar.** `tests/test_touchbar_mac.py` runs on the
@@ -246,7 +296,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 4,899 tests
+./dev test                     # 4,915 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus
@@ -318,5 +368,11 @@ About's security link is a 404 for everyone but the owner.
   on the grid first.
 - **Gatekeeper:** without a paid Developer ID, the first launch needs
   right-click, Open.
-- **The Touch Bar has not been checked by eye,** and macOS's customise
-  palette for the main window's bar is untested.
+- **The Touch Bar has not been checked by eye,** nor the press-and-hold
+  bars, and macOS's customise palette for the main window's bar is
+  untested.
+- **The rules page's dropdowns could not be made to cut an option short** on
+  this Mac, at 760 or 980 wide, in light or dark, at the normal or the
+  larger type; every combo now asks room for all of its options
+  (`RoomyCombo(every=True)`). If a cut-off is seen again, note the page's
+  size and the appearance settings.

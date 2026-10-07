@@ -145,7 +145,11 @@ works), **Apply**, **Undo**, **Show**, the category and the tick shortcuts.
 commands; the sliders icon has the time window, the model, hover help and
 Settings. Every window has its own: the visualiser's has play, the scenes,
 the strobe, the game's and the scope's settings and the picture's; Settings
-has its pages and their main choices; dialogs have their buttons.
+has its pages and their main choices; dialogs have their buttons. A button
+that opens onto a slider - the scope's glow, the game's effects, the
+strobe's sensitivity, and the seek bar and the volume while the picture is
+on - can be held instead: keep a finger on it and drag, as the brightness
+control does, and the slider follows without opening.
 
 ## Rules
 
@@ -189,13 +193,22 @@ are in the **Message** menu and on a right-click in the table, where
 **Archive now** and **Delete now** act at once; **File in…** still waits for
 Apply. A quick move is undoable like any filing.
 
-A reply opens addressed, with the message quoted under your signature (the
-name in **Settings → Rules → Sign as**), and goes out through the mailbox it
-arrived in - any of yours, from the From list. Write with bold, italic,
-lists, links and pictures; attach files with ⌘⇧A or by dropping them. ⌘↩
-sends, ⌘S saves to Drafts, and closing a half-written message asks. A copy of
-what you sent lands in Sent, except on Gmail, which files its own. Forwarding
-carries the attachments along, up to 25 MB.
+A reply opens addressed, with the message quoted under your sign-off, and
+goes out through the mailbox it arrived in - any of yours, from the From
+list. The sign-off is written on **Settings → Signature**: as many lines as
+you like, with formatting, links and a picture, and a switch each for new
+messages and for replies; with nothing written there, the name alone is
+signed. The bar above the message is laid out as a word processor's: a size
+in points (pick one or type one), bigger and smaller, bold, italic,
+underline, strikethrough and colour; bullets and numbering (press for the
+usual, open for the kind), indents and alignment; a link, a picture, and an
+eraser that takes the formatting off. Every button names itself and its key
+when rested on, as the message window's do. Attach files with ⌘⇧A or by
+dropping them. ⌘↩ sends, ⌘S saves to Drafts, and closing a half-written
+message asks. A copy of what you sent lands in Sent, except on Gmail, which
+files its own. Forwarding carries the attachments along, up to 25 MB. A
+picture in a message travels as a part of its own, which every mail reader
+shows.
 
 Mail goes out with the same app password as reading it, to the provider's
 own server. A server of your own goes under **Settings → Mailboxes → Server**.
@@ -240,7 +253,12 @@ Audio files can be played with a music visualiser, including a game. Its
 strobe is off by default; at its fastest it can trigger photosensitive
 epilepsy. The strobe set to Bass follows the drums' own beat once the
 track has been read, and the game's road is a curve that winds more in the
-quiet parts; kicks are told from bass notes by how they arrive.
+quiet parts; kicks are told from bass notes by how they arrive. The rave's
+lasers sweep on the beat, slow in a break and a sweep a beat in a drop, and
+its rings cross the room in two beats; a held strobe (the hand strobe's hold
+key) streams rings out of the Neon tunnel and the rave and flickers the
+city's windows. In full screen, [ and ] set how long one scene takes to
+give way to the next.
 
 **Links** lists every link in a message by the site it really goes to, to open
 or copy. Opening one, from there or from the analysis, first shows the site and
@@ -300,7 +318,7 @@ See [SECURITY.md](../SECURITY.md) for reporting a problem.
 ./dev dry      # scan for real, with moves disabled
 ./dev fake     # the pipeline in the terminal, offline
 ./dev scan     # the pipeline on real mail, read-only
-./dev test     # 4,899 tests (with the evaluation sets present)
+./dev test     # 4,915 tests (with the evaluation sets present)
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 

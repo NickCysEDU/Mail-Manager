@@ -61,6 +61,29 @@ class TestBuilding:
         assert len(found) == 1 and found[0].get_filename() == "cv.pdf"
         assert found[0].get_content() == b"%PDF-1.4 x"
 
+    def test_a_picture_in_the_message_travels_as_a_part_of_its_own(self):
+        """Gmail shows nothing for a picture written into the page as data;
+        a related part with a content id is shown everywhere."""
+        import base64
+
+        png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + bytes(24)).decode()
+        draft = outgoing.Draft(
+            from_address="you@icloud.example", to=["a@b.example"], subject="Logo",
+            html=f'<p>Hi</p><p><img src="data:image/png;base64,{png}" width="40"></p>')
+        parsed = self._parsed(draft)
+        page = parsed.get_body(("html",))
+        html = page.get_content()
+        assert "data:image" not in html and 'src="cid:' in html
+        assert 'width="40"' in html, "the rest of the tag is kept"
+        related = next(part for part in parsed.walk()
+                       if part.get_content_type() == "multipart/related")
+        picture = next(part for part in related.walk()
+                       if part.get_content_type() == "image/png")
+        cid = picture["Content-ID"].strip("<>")
+        assert f"cid:{cid}" in html
+        assert picture.get_content().startswith(b"\x89PNG")
+        assert not list(parsed.iter_attachments()), "not an attachment"
+
     def test_html_alone_still_has_a_plain_half(self):
         draft = outgoing.Draft(from_address="you@icloud.example", to=["a@b.example"],
                                subject="hi", html="<p>Hello <b>there</b></p>")

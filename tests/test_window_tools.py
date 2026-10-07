@@ -1623,3 +1623,49 @@ class TestTheWindowComesBack:
         window.showMinimized()
         DockReopen(window).eventFilter(qapp, QEvent(QEvent.Type.ApplicationActivate))
         assert window.isVisible()
+
+
+class TestTheSignaturePage:
+    """The sign-off has a page of its own, written in the message editor,
+    and ships empty: nobody's name is anybody's default."""
+
+    def test_it_is_its_own_page_and_not_under_rules(self, window):
+        dialog = SettingsDialog(Settings(), InMemoryCredentialStore(), window)
+        try:
+            titles = [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())]
+            assert "Signature" in titles
+            page = dialog.tabs.widget(titles.index("Signature"))
+            assert page.isAncestorOf(dialog.signature_edit)
+            assert page.isAncestorOf(dialog.signature_editor)
+            assert page.isAncestorOf(dialog.signature_bar)
+            rules = dialog.tabs.widget(titles.index("Rules"))
+            assert not rules.isAncestorOf(dialog.signature_edit)
+        finally:
+            dialog.deleteLater()
+
+    def test_what_is_written_round_trips_with_its_formatting(self, window):
+        from PySide6.QtGui import QTextCursor
+
+        settings = Settings(reply_signature="Sam",
+                            signature_html="<p>Best,</p><p><b>Sam</b></p>",
+                            signature_in_replies=False)
+        dialog = SettingsDialog(settings, InMemoryCredentialStore(), window)
+        try:
+            assert dialog.signature_editor.toPlainText().split("\n") == ["Best,", "Sam"]
+            assert not dialog.signature_replies_check.isChecked()
+            assert dialog.signature_new_check.isChecked()
+            dialog.signature_editor.moveCursor(QTextCursor.MoveOperation.End)
+            dialog.signature_editor.insertPlainText("\nAcme")
+            got = dialog.collect()
+            assert got.reply_signature == "Sam"
+            assert "font-weight" in got.signature_html and "Acme" in got.signature_html
+            assert "<html" not in got.signature_html.lower(), "a fragment, not a document"
+            assert got.signature_in_replies is False and got.signature_in_new is True
+            dialog.signature_editor.clear()
+            assert dialog.collect().signature_html == ""
+        finally:
+            dialog.deleteLater()
+
+    def test_nobody_is_the_default(self):
+        fresh = Settings().normalized()
+        assert fresh.reply_signature == "" and fresh.signature_html == ""

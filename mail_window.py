@@ -15,15 +15,15 @@ from typing import Optional
 from PySide6.QtCore import QEvent, QSize, Qt, QUrl, Signal
 from PySide6.QtGui import (QAction, QColor, QFont, QKeySequence,
                            QTextCharFormat, QTextCursor, QTextListFormat)
-from PySide6.QtWidgets import (QColorDialog, QComboBox, QCompleter,
-                               QFileDialog, QFormLayout, QHBoxLayout,
-                               QInputDialog, QLabel, QMainWindow, QMenu,
-                               QMessageBox, QPushButton, QSizePolicy,
+from PySide6.QtWidgets import (QComboBox, QCompleter, QFileDialog,
+                               QFormLayout, QHBoxLayout, QLabel, QMainWindow,
+                               QMenu, QMessageBox, QPushButton, QSizePolicy,
                                QTextEdit, QToolBar, QToolButton, QVBoxLayout,
                                QWidget)
 
 import icons
 import outgoing
+from format_bar import DEFAULT_SIZE, FormatBar, tip
 from widgets import _html, _paint_button
 
 #: The Touch Bar's picture names, as the buttons' own icons.
@@ -41,11 +41,6 @@ def _ink(widget) -> str:
     from PySide6.QtGui import QPalette
 
     return widget.palette().color(QPalette.ColorRole.WindowText).name()
-
-#: The sizes the editor offers, in points: three steps, which is what a
-#: letter needs.
-SIZES = ((11.0, "Small"), (13.0, "Normal"), (16.0, "Large"), (22.0, "Huge"))
-
 
 def _nothing_to_read(attachments) -> str:
     """What to show for a message with no text: what it carries."""
@@ -207,19 +202,20 @@ class MessageWindow(QMainWindow):
         bar = QToolBar("Message")
         bar.setMovable(False)
         bar.setIconSize(QSize(18, 18))
-        bar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        bar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.move_button.setIcon(icons.icon("move", _ink(self)))
-        self.move_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.move_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         for action in (self.reply_action, self.reply_all_action,
                        self.forward_action):
             bar.addAction(action)
         bar.addSeparator()
-        for action in (self.read_action, self.flag_action):
-            bar.addAction(action)
-        bar.addWidget(self.move_button)
         bar.addAction(self.archive_action)
+        bar.addWidget(self.move_button)
         bar.addAction(self.junk_action)
         bar.addAction(self.delete_action)
+        bar.addSeparator()
+        for action in (self.read_action, self.flag_action):
+            bar.addAction(action)
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding,
                              QSizePolicy.Policy.Preferred)
@@ -230,10 +226,22 @@ class MessageWindow(QMainWindow):
         self.toolbar = bar
         for action in (self.close_action,):
             self.addAction(action)
-        self.reply_action.setToolTip("Answer the sender.")
-        self.reply_all_action.setToolTip("Answer everyone on the message.")
-        self.forward_action.setToolTip("Send this message on to somebody else.")
-        self.junk_action.setToolTip("Move it to the Junk folder.")
+        # Icons alone on the bar, so each says its name and its key when
+        # rested on.
+        for action, keys, what in (
+                (self.reply_action, "Ctrl+R", "Answers the sender."),
+                (self.reply_all_action, "Ctrl+Shift+R",
+                 "Answers everyone on the message."),
+                (self.forward_action, "Ctrl+Shift+F",
+                 "Sends it on to somebody else."),
+                (self.archive_action, "Ctrl+E", "Files it in Archive."),
+                (self.junk_action, "Ctrl+Shift+J", "Moves it to Junk."),
+                (self.delete_action, "Ctrl+Backspace", "Moves it to the Bin."),
+                (self.flag_action, "Ctrl+Shift+L", "Marks it to come back to."),
+                (self.previous_action, "Ctrl+Up", ""),
+                (self.next_action, "Ctrl+Down", "")):
+            action.setToolTip(tip(action.text(), keys, what))
+        self.move_button.setToolTip(tip("Move to", "", "A folder to file it in."))
         self._build_menus()
         self._give_touch_bar()
 
@@ -351,6 +359,7 @@ class MessageWindow(QMainWindow):
         flags = {f.lower() for f in (message.flags or ())}
         self.read_action.setText("Mark as Unread" if "\\seen" in flags
                                  else "Mark as Read")
+        self.read_action.setToolTip(tip(self.read_action.text(), "Ctrl+Shift+U"))
         self.read_action.setIcon(icons.icon(
             "unread" if "\\seen" in flags else "read", _ink(self)))
         self.flag_action.blockSignals(True)
@@ -423,7 +432,7 @@ class RichEditor(QTextEdit):
         self.setAcceptRichText(True)
         self.setTabChangesFocus(False)
         font = QFont(self.font())
-        font.setPointSizeF(SIZES[1][0])
+        font.setPointSizeF(DEFAULT_SIZE)
         self.setFont(font)
         self.document().setDefaultFont(font)
 
@@ -464,20 +473,44 @@ class RichEditor(QTextEdit):
         fmt.setForeground(colour)
         self._merge(fmt)
 
-    def make_list(self, numbered: bool) -> None:
+    def clear_colour(self) -> None:
+        """Back to the colour the page gives the text, which is also no
+        colour at all in what is sent: a reader's own dark page keeps its
+        own text colour."""
+        from PySide6.QtGui import QBrush
+
+        fmt = QTextCharFormat()
+        fmt.setForeground(QBrush(Qt.BrushStyle.NoBrush))
+        self._merge(fmt)
+
+    def current_size(self) -> float:
+        return self.currentCharFormat().fontPointSize() or self.default_size()
+
+    def default_size(self) -> float:
+        return self.document().defaultFont().pointSizeF() or DEFAULT_SIZE
+
+    def set_list(self, style) -> None:
+        """A list of ``style`` on the current paragraph: the same kind again
+        takes the list off, another kind changes it."""
         cursor = self.textCursor()
         current = cursor.currentList()
-        style = (QTextListFormat.Style.ListDecimal if numbered
-                 else QTextListFormat.Style.ListDisc)
         if current is not None and current.format().style() == style:
-            # The same kind again takes the list off.
             block = cursor.block()
             current.remove(block)
             fmt = block.blockFormat()
             fmt.setIndent(0)
             cursor.setBlockFormat(fmt)
             return
+        if current is not None:
+            fmt = current.format()
+            fmt.setStyle(style)
+            current.setFormat(fmt)
+            return
         cursor.createList(style)
+
+    def make_list(self, numbered: bool) -> None:
+        self.set_list(QTextListFormat.Style.ListDecimal if numbered
+                      else QTextListFormat.Style.ListDisc)
 
     def indent(self, by: int) -> None:
         cursor = self.textCursor()
@@ -528,6 +561,18 @@ class RichEditor(QTextEdit):
 
     def html(self) -> str:
         return self.toHtml()
+
+    def fragment(self) -> str:
+        """What is written, as HTML to put inside another document: the body
+        of Qt's, without the document around it. Empty when nothing is
+        written and no picture is placed."""
+        import re
+
+        if not self.toPlainText().strip() and "<img" not in self.toHtml():
+            return ""
+        whole = self.toHtml()
+        found = re.search(r"<body[^>]*>(.*)</body>", whole, re.S | re.I)
+        return (found.group(1) if found else whole).strip()
 
     def text(self) -> str:
         return self.toPlainText()
@@ -603,7 +648,8 @@ class ComposeWindow(QMainWindow):
         self.editor = RichEditor()
         opening = draft.html or _html(draft.text).replace("\n", "<br>")
         quote = quoted_html or _html(quoted_text).replace("\n", "<br>")
-        signature = owner.signature_html() if hasattr(owner, "signature_html") else ""
+        signature = (owner.signature_html(replying=bool(quote))
+                     if hasattr(owner, "signature_html") else "")
         self.editor.setHtml(opening + signature + (f"<br>{quote}" if quote else ""))
         cursor = self.editor.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.Start)
@@ -639,137 +685,28 @@ class ComposeWindow(QMainWindow):
 
     # -- The bar of formatting ----------------------------------------------
 
+    #: The formatting actions, which the window's menus and Touch Bar share
+    #: with the bar.
+    FORMAT_ACTIONS = ("bold_action", "italic_action", "underline_action",
+                      "strike_action", "colour_action", "bullets_action",
+                      "numbers_action", "outdent_action", "indent_action",
+                      "left_action", "centre_action", "right_action",
+                      "justify_action", "link_action", "picture_action",
+                      "plain_action", "grow_action", "shrink_action")
+
     def _formatting_bar(self) -> QWidget:
-        """The formatting controls in a row that wraps, so a narrow window
-        keeps every one of them rather than hiding the end of the row."""
-        from flowlayout import FlowHolder, FlowLayout
-
-        editor = self.editor
-        self.bold_action = _action(self, "B", "Ctrl+B", editor.set_bold,
-                                   checkable=True, icon="bold")
-        self.italic_action = _action(self, "I", "Ctrl+I", editor.set_italic,
-                                     checkable=True, icon="italic")
-        self.underline_action = _action(self, "U", "Ctrl+U",
-                                        editor.set_underline, checkable=True,
-                                        icon="underline")
-        self.strike_action = _action(self, "S", "", editor.set_strike,
-                                     checkable=True, icon="strikethrough")
-        for action, weight in ((self.bold_action, "bold"),
-                               (self.italic_action, "italic"),
-                               (self.underline_action, "underline")):
-            font = action.font()
-            if weight == "bold":
-                font.setBold(True)
-            elif weight == "italic":
-                font.setItalic(True)
-            else:
-                font.setUnderline(True)
-            action.setFont(font)
-        strike_font = self.strike_action.font()
-        strike_font.setStrikeOut(True)
-        self.strike_action.setFont(strike_font)
-        self.size_box = QComboBox()
-        for points, label in SIZES:
-            self.size_box.addItem(label, points)
-        self.size_box.setCurrentIndex(1)
-        self.size_box.setToolTip("Text size")
-        self.size_box.activated.connect(
-            lambda index: editor.set_size(float(self.size_box.itemData(index))))
-        self.colour_action = _action(self, "Colour", "", self._pick_colour,
-                                     icon="paintpalette")
-        self.bullets_action = _action(self, "• List", "Ctrl+Shift+8",
-                                      lambda: editor.make_list(False),
-                                      icon="list.bullet")
-        self.numbers_action = _action(self, "1. List", "Ctrl+Shift+7",
-                                      lambda: editor.make_list(True),
-                                      icon="list.number")
-        self.outdent_action = _action(self, "⇤", "Ctrl+[",
-                                      lambda: editor.indent(-1),
-                                      icon="decrease.indent")
-        self.indent_action = _action(self, "⇥", "Ctrl+]",
-                                     lambda: editor.indent(1),
-                                     icon="increase.indent")
-        self.left_action = _action(self, "Left", "Ctrl+{",
-                                   lambda: editor.align(Qt.AlignmentFlag.AlignLeft),
-                                   icon="text.alignleft")
-        self.centre_action = _action(self, "Centre", "Ctrl+|",
-                                     lambda: editor.align(Qt.AlignmentFlag.AlignCenter),
-                                     icon="text.aligncenter")
-        self.right_action = _action(self, "Right", "Ctrl+}",
-                                    lambda: editor.align(Qt.AlignmentFlag.AlignRight),
-                                    icon="text.alignright")
-        self.link_action = _action(self, "Link", "Ctrl+K", self._add_link,
-                                   icon="link")
-        self.picture_action = _action(self, "Picture", "", self._add_picture,
-                                      icon="photo")
-        self.plain_action = _action(self, "Clear", "Ctrl+\\",
-                                    editor.clear_formatting,
-                                    icon="textformat")
-        row = FlowLayout(margin=0, spacing=4, vertical_spacing=4)
-        self._format_buttons = {}
-
-        def add(action) -> None:
-            button = QToolButton()
-            button.setDefaultAction(action)
-            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-            button.setProperty("segment", "true")
-            row.addWidget(button)
-            self._format_buttons[action] = button
-
-        for action in (self.bold_action, self.italic_action,
-                       self.underline_action, self.strike_action):
-            add(action)
-        row.addWidget(self.size_box)
-        add(self.colour_action)
-        for action in (self.bullets_action, self.numbers_action,
-                       self.outdent_action, self.indent_action):
-            add(action)
-        for action in (self.left_action, self.centre_action, self.right_action):
-            add(action)
-        for action in (self.link_action, self.picture_action, self.plain_action):
-            add(action)
-        editor.currentCharFormatChanged.connect(self._format_changed)
-        editor.cursorPositionChanged.connect(self._cursor_moved)
-        self.formatting = FlowHolder(row)
+        """The formatting controls, laid out as a word processor's (see
+        format_bar), in a row that wraps so a narrow window keeps every one
+        of them rather than hiding the end of the row."""
+        self.formatting = FormatBar(self.editor, self)
+        for name in self.FORMAT_ACTIONS:
+            setattr(self, name, getattr(self.formatting, name))
+        self.size_box = self.formatting.size_box
         return self.formatting
 
     def format_button(self, action) -> Optional[QToolButton]:
         """The button on the formatting row for one of its actions."""
-        return self._format_buttons.get(action)
-
-    def _format_changed(self, fmt: QTextCharFormat) -> None:
-        for action, on in ((self.bold_action, fmt.fontWeight() >= QFont.Weight.Bold),
-                           (self.italic_action, fmt.fontItalic()),
-                           (self.underline_action, fmt.fontUnderline()),
-                           (self.strike_action, fmt.fontStrikeOut())):
-            action.blockSignals(True)
-            action.setChecked(bool(on))
-            action.blockSignals(False)
-        points = fmt.fontPointSize() or SIZES[1][0]
-        nearest = min(range(len(SIZES)), key=lambda i: abs(SIZES[i][0] - points))
-        self.size_box.blockSignals(True)
-        self.size_box.setCurrentIndex(nearest)
-        self.size_box.blockSignals(False)
-
-    def _cursor_moved(self) -> None:
-        self._format_changed(self.editor.currentCharFormat())
-
-    def _pick_colour(self) -> None:
-        colour = QColorDialog.getColor(self.editor.textColor(), self, "Text colour")
-        if colour.isValid():
-            self.editor.set_colour(colour)
-
-    def _add_link(self) -> None:
-        url, ok = QInputDialog.getText(self, "Link", "Address:", text="https://")
-        if ok and url.strip() and url.strip() != "https://":
-            self.editor.insert_link(url.strip())
-
-    def _add_picture(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Choose a picture", "", "Pictures (*.png *.jpg *.jpeg *.gif *.webp)")
-        if path and not self.editor.insert_picture(path):
-            QMessageBox.information(self, "Picture",
-                                    "That picture could not be read, or is over 5 MB.")
+        return self.formatting.button(action)
 
     # -- Sending and keeping ------------------------------------------------
 
@@ -780,10 +717,16 @@ class ComposeWindow(QMainWindow):
                                        QKeySequence("Ctrl+Shift+D")])
         self.draft_action = _action(self, "Save Draft", "Ctrl+S", self.save_draft,
                                     icon="tray.and.arrow.down")
+        self.draft_action.setToolTip(tip("Save Draft", "Ctrl+S",
+                                         "Keeps it in Drafts to finish later."))
         self.attach_action = _action(self, "Attach", "Ctrl+Shift+A", self.attach,
                                      icon="paperclip")
+        self.attach_action.setToolTip(tip("Attach Files", "Ctrl+Shift+A"))
         self.copies_action = _action(self, "Cc/Bcc", "", self._toggle_copies,
                                      checkable=True)
+        self.copies_action.setIcon(icons.icon("cc", _ink(self)))
+        self.copies_action.setToolTip(tip("Cc/Bcc", "",
+                                          "Shows the Cc and Bcc lines."))
         self.copies_action.setChecked(not self.cc_label.isHidden())
         self.close_action = _action(self, "Close", "Ctrl+W", self.close)
         self.addAction(self.close_action)
@@ -791,7 +734,7 @@ class ComposeWindow(QMainWindow):
         bar = QToolBar("Message")
         bar.setMovable(False)
         bar.setIconSize(QSize(18, 18))
-        bar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        bar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         # Send is a proper button, painted as the one thing to press.
         self.send_button = QPushButton("Send")
         self.send_button.setIcon(icons.icon("send", "#ffffff"))
@@ -831,18 +774,18 @@ class ComposeWindow(QMainWindow):
             fmt.addAction(action)
         fmt.addSeparator()
         sizes = fmt.addMenu("Size")
-        for index, (points, label) in enumerate(SIZES):
-            sizes.addAction(_action(
-                self, label, "",
-                lambda checked=False, i=index: (self.size_box.setCurrentIndex(i),
-                                                self.size_box.activated.emit(i))))
+        for action in self.formatting.size_actions():
+            sizes.addAction(action)
+        fmt.addAction(self.grow_action)
+        fmt.addAction(self.shrink_action)
         fmt.addAction(self.colour_action)
         fmt.addSeparator()
         for action in (self.bullets_action, self.numbers_action, self.outdent_action,
                        self.indent_action):
             fmt.addAction(action)
         fmt.addSeparator()
-        for action in (self.left_action, self.centre_action, self.right_action):
+        for action in (self.left_action, self.centre_action, self.right_action,
+                       self.justify_action):
             fmt.addAction(action)
         fmt.addSeparator()
         for action in (self.link_action, self.picture_action, self.plain_action):

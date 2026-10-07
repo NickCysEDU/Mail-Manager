@@ -10,6 +10,8 @@ the engine's business (see IMAPEngine.save_sent), since SMTP keeps none.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import html as _html
 import re
 import smtplib
@@ -167,6 +169,33 @@ def parse_addresses(text: str) -> List[str]:
     return found
 
 
+#: A picture written into the message as data, which the editor makes of a
+#: picture put in.
+_INLINE_PICTURE = re.compile(
+    r"""<img\b([^>]*?)\bsrc=(["'])data:(image/[a-z0-9.+-]+);base64,"""
+    r"""([A-Za-z0-9+/=\s]+)\2""", re.I)
+
+
+def inline_pictures(html: str) -> Tuple[str, List[Tuple[str, str, bytes]]]:
+    """The HTML with every embedded picture pointed at a part of its own, and
+    those parts as (content id, image subtype, bytes). Gmail and others
+    show nothing for a picture written into the page as data; one sent as
+    a related part is shown everywhere."""
+    parts: List[Tuple[str, str, bytes]] = []
+
+    def swap(match) -> str:
+        try:
+            data = base64.b64decode(match.group(4))
+        except (binascii.Error, ValueError):
+            return match.group(0)
+        cid = make_msgid()[1:-1]
+        parts.append((cid, match.group(3).split("/", 1)[1].lower(), data))
+        quote = match.group(2)
+        return f"<img{match.group(1)}src={quote}cid:{cid}{quote}"
+
+    return _INLINE_PICTURE.sub(swap, html or ""), parts
+
+
 def build(draft: Draft) -> bytes:
     """The message as bytes, the way the server and the Sent folder get it."""
     mime = _Mime()
@@ -188,7 +217,15 @@ def build(draft: Draft) -> bytes:
     text = draft.text if draft.text.strip() else html_to_plain(draft.html)
     mime.set_content(text + ("\n" if not text.endswith("\n") else ""))
     if draft.html.strip():
-        mime.add_alternative(draft.html, subtype="html")
+        html, pictures = inline_pictures(draft.html)
+        mime.add_alternative(html, subtype="html")
+        if pictures:
+            # The pictures ride with the HTML half, related to it, so a
+            # reader shows them in place rather than as attachments.
+            page = mime.get_payload()[-1]
+            for cid, subtype, data in pictures:
+                page.add_related(data, maintype="image", subtype=subtype,
+                                 cid=f"<{cid}>")
     for item in draft.attachments:
         main, _, sub = (item.mime or "application/octet-stream").partition("/")
         mime.add_attachment(item.data, maintype=main or "application",

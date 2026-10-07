@@ -1486,6 +1486,11 @@ class AudioPane(QWidget):
         Qt.Key.Key_Up: ("jump", 1),
         # The game's sounds, on and off.
         Qt.Key.Key_X: ("sounds", 0),
+        # How one scene gives way to the next, quicker or slower (see
+        # Spectrum.CHANGES): chosen here too, since the number keys change
+        # scenes from full screen where the menu is out of reach.
+        Qt.Key.Key_BracketLeft: ("change", -1),
+        Qt.Key.Key_BracketRight: ("change", 1),
     }
 
     @staticmethod
@@ -1510,6 +1515,13 @@ class AudioPane(QWidget):
             if not 0 <= value < len(visualizers.SCENES):
                 return False
             self.scene_box.setCurrentText(visualizers.SCENES[value].name)
+            return True
+        if action == "change":
+            count = self.change_box.count()
+            if not count:
+                return False
+            self.change_box.setCurrentIndex(
+                (self.change_box.currentIndex() + value) % count)
             return True
         if action == "lane":
             return self._steer(value)
@@ -1818,13 +1830,15 @@ class AudioPane(QWidget):
                                 width=110),
             ], title=lambda: self.game_box.currentText(),
                 image="gamecontroller", when=scene("Music rider"),
-                watch=scenes),
+                watch=scenes,
+                hold=touchbar.Slider("effects-held", "Effects", self.effects)),
             touchbar.Popover("beam", "Beam", [
                 touchbar.Choice("beam-mode", "Beam", self.mode_box),
                 touchbar.Slider("glow", "Glow", self.decay, width=140),
             ], title=lambda: self.mode_box.currentText(),
                 image="waveform.path", when=scene("Oscilloscope"),
-                watch=scenes),
+                watch=scenes,
+                hold=touchbar.Slider("glow-held", "Glow", self.decay)),
             touchbar.Button("colours", "Colours", self.colour_button,
                             image="paintpalette", when=scene("VU meters"),
                             watch=scenes),
@@ -1842,7 +1856,27 @@ class AudioPane(QWidget):
                 touchbar.Slider("rate", "Rate", self.flash, width=100,
                                 priority="low",
                                 title=lambda: caption(self.rate_box)),
-            ], image="photo", when=shown, watch=[self.enable_box.toggled]),
+            ], image="photo", when=shown, watch=[self.enable_box.toggled],
+                hold=touchbar.Slider("sense-held", "Sensitivity", self.sense,
+                                     title=lambda: caption(self.sense_box))),
+            # With the picture on, the seek bar and the volume leave the bar
+            # for the scene's controls; these bring them back under a
+            # finger: tap to open, or hold and drag.
+            touchbar.Popover("where", "Seek", [
+                touchbar.Slider("seek-in", "", self.position, settle=150,
+                                change=self._seek_to, width=260,
+                                watch=[self.position.moved]),
+            ], image="slider.horizontal.3", when=on,
+                watch=[self.enable_box.toggled],
+                hold=touchbar.Slider("seek-held", "", self.position,
+                                     settle=150, change=self._seek_to,
+                                     watch=[self.position.moved])),
+            touchbar.Popover("sound", "Volume", [
+                touchbar.Slider("volume-in", "", self.volume, width=200,
+                                ends=("speaker.fill", "speaker.wave.3.fill")),
+            ], image="speaker.wave.2", when=on,
+                watch=[self.enable_box.toggled],
+                hold=touchbar.Slider("volume-held", "", self.volume)),
         ]
         if full is None:
             items += [
