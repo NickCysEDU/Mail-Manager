@@ -755,7 +755,7 @@ class TestNoEvaluationDataIsTracked:
 
         assert set(private_fixtures.PRIVATE) == {
             "labelled.json", "acknowledgements.json", "adversarial.json",
-            "holdout.json", "meetings.json"}
+            "holdout.json", "meetings.json", "oblique.json"}
 
 
 class TestNobodyElsesMediaIsPublished:

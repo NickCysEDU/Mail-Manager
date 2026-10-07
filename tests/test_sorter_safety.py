@@ -97,6 +97,13 @@ def test_the_held_out_set_is_never_used_to_tune(rules):
     If the held-out set ever starts scoring like the dev set, either the engine
     genuinely generalised or somebody quietly fitted to it. Both are worth
     stopping to look at, and the second is the likely one.
+
+    It has fired once. The first held-out set was tuned against while the
+    sorter learnt to read shapes, so it was retired to ``oblique.json`` (a
+    dev set now) and a fresh set of 34 was written and measured once, on
+    7 October 2026: 79.4% exact, 91.2% job against not, everything it filed
+    filed right. Nothing in the engine has been changed to suit it since,
+    and nothing should be: look at its misses only to write the next set.
     """
     holdout = load("holdout.json")
     correct = sum(

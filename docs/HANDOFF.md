@@ -39,6 +39,14 @@ describes the app itself.
   `$IDENTITY”`.
 - **Before adding a phrase to the sorter, ablate it.** Most phrases written
   for one adversarial set changed nothing; the general ones did the work.
+- **The sorter reads shapes, not only phrases** (`rules_engine.py`, "Reading,
+  not matching"): families of moves a message makes - an offer's terms, a
+  rejection's consolations, a second interview's days, a step asked for -
+  where two families together are the message and one is coincidence. Each
+  reader is gated on who wrote it (a person, a hiring mailbox) and most on
+  working context, or a friend arranging a drink reads as an interview.
+  Every reader and pattern was ablated on all five sets; two that changed
+  nothing were removed. Do the same for anything added.
 - **Anonymising is checked by re-scoring.** If a score moves, a signal was
   keyed on somebody's name. `tests/test_privacy.py` fails on any address that
   could be a real person's.
@@ -195,7 +203,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 4,848 tests
+./dev test                     # 4,875 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus
@@ -242,7 +250,15 @@ About's security link is a 404 for everyone but the owner.
 
 ## Open
 
-- **Held-out accuracy is 37.5%.** `./dev tune --corrections` lists real gaps.
+- **The sorter's scores** (exact category): labelled 96.1%, meetings 93.3%,
+  acknowledgements 100%, adversarial 97.4%, oblique 100% - all dev sets now,
+  tuned against. The held-out set (`holdout.json`, 34 messages, written
+  fresh on 7 October 2026 and never tuned against): 79.4% exact, 91.2% job
+  against not, and everything it filed above the threshold was right. That
+  is the number to quote for how it does on mail it has not seen. What is
+  left on the dev sets is mislabelled or an artefact of anonymising (a
+  social network's mail from an `example` domain reads as impersonation).
+  `./dev tune --corrections` lists real gaps.
 - **Nothing learns from a whole conversation;** each message is read alone.
 - **Corrections only learn folders,** not that a sender is job-related.
 - **`workers._grouped()` opens one connection per account and folder.**

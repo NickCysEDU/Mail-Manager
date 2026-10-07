@@ -55,7 +55,7 @@ rules finish the scan; a rejected key is reported instead.
 
 ### The built-in rules
 
-`rules_engine.py` scores 1,071 weighted signals: phrases, senders, links and
+`rules_engine.py` scores 1,082 weighted signals: phrases, senders, links and
 the shape of a message. It copes with messy text (mojibake, accents, smart
 quotes, zero-width characters, look-alike letters, spaced-out words) and has
 phrases in Spanish, French, German and Portuguese for the commonest verdicts.
@@ -71,7 +71,7 @@ their own, and anything resting mainly on them stays below the filing
 threshold.
 
 On 102 real messages it agreed with a language model on job versus not job
-99% of the time and on the exact category 87%. Its confidence is capped, and a
+99% of the time and on the exact category 96%. Its confidence is capped, and a
 message that fits two categories lands in Needs Review.
 
 ### Confidence and Needs Review
@@ -296,7 +296,7 @@ See [SECURITY.md](../SECURITY.md) for reporting a problem.
 ./dev dry      # scan for real, with moves disabled
 ./dev fake     # the pipeline in the terminal, offline
 ./dev scan     # the pipeline on real mail, read-only
-./dev test     # 4,848 tests (with the evaluation sets present)
+./dev test     # 4,875 tests (with the evaluation sets present)
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 

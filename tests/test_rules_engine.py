@@ -458,3 +458,176 @@ class TestSignalTables:
         for table in rules_engine.TOPIC_SIGNALS.values():
             for signal in table:
                 assert normalize(signal.phrase) == signal.phrase
+
+
+class TestReading:
+    """What the sorter reads from a message's shape when no phrase says
+    what it is: the terms of an offer, a gentle no, a second interview, a
+    step asked for, a stranger sounding you out, and the worlds where an
+    "interview" is somebody else's."""
+
+    def test_an_offer_is_known_by_its_terms(self, rules):
+        found = verdict(
+            rules, "Papers", "Contract attached: 52k, 00 xxxx xxxx xxxx xxxxxxxx, "
+            "xxxxx xxxx flexible xxxxx xxx xxx xx xxx xxxxx. Xxxx xxxx you are ready "
+            "and shout with questions.", "Xx Xxxxxxxxx <jo@xxxxxxxxx.example>")
+        assert found.category is Category.OFFER
+        assert any("read as" in m for m in found.matched)
+
+    def test_a_gentle_no_is_still_a_no(self, rules):
+        found = verdict(
+            rules, "Where we got to", "Xxxxxx xxx xxxxxx xx xx Xxxxxx, xxx xxxx "
+            "xxxxxxx xx. We have decided to go with someone who has xxxx xxxx xx xxx "
+            "xxxxx-xx xxxx. Do keep in touch; another role opens in the spring.",
+            "Xxxx Xxxxx <x.xxxxx@xxxxxxxxxx.xxxxxxx>")
+        assert found.category is Category.NOT_INTERESTED
+
+    def test_thanks_and_an_open_door_alone_are_not_a_no(self):
+        score, _why = rules_engine.let_down_score(
+            normalize("Thanks"), normalize("Thanks for your time today. Keep in touch!"))
+        assert score == 0.0
+
+    def test_a_second_interview_is_arranged_in_plain_words(self, rules):
+        found = verdict(
+            rules, "Following our chat", "Xx xxx xxxx xx xxxx xx Xxxxxxx. Xxx xxxxx "
+            "xxxxx xxxx xx xxx xxx xxxxx, xxxx xxxx xxxx the head of platform. Xxx xxx "
+            "xxxxxx Xxxxxxxx xx Xxxxxx xxxxxxxxx?",
+            "Xxxxxx Xxxxx <x.xxxxx@xxxxxx-xxxx.xxxxxxx>")
+        assert found.category is Category.INTERVIEW
+
+    def test_a_next_step_is_not_a_meeting(self, rules):
+        found = verdict(rules, "Your application",
+                        "The next step is a short questionnaire; please fill out the form.",
+                        "ta@acme.example")
+        assert found.category is Category.NEXT_STEPS
+
+    def test_a_step_asked_for_before_the_last_stage(self, rules):
+        found = verdict(
+            rules, "One more thing before Friday", "Xxxxx xxx xxxx xxx xxxxxxxxxx, x "
+            "xxxxxxx xxx xxxxxxx xxx xxxxxx xxxxxxxxx? Xxxx xxxxx xxx xx xx xxx xxxx "
+            "xx xxx xxxx xxxxx.", "People Ops <people@xxxxxxxxx.example>")
+        assert found.category is Category.NEXT_STEPS
+
+    def test_please_note_asks_for_nothing(self, rules):
+        found = verdict(
+            rules, "Application Received for Xxxxxxx Xxxxxxx", "Thank xxx xxx xxxxxxxx "
+            "xxx xxx xxxx xx Xxxxxxx Xxxxxxx. We are xxxxxxxxxx xxxx xxxxxxxxxxx xxx "
+            "xxxx xx xx xxxxxxx xx xxx xxxxxx. Xxxxxx xxxx xxxx xx xxxx xxxxxx xxxx "
+            "xxxxxxx xx xxxx xxx xxxxxx xxxxxxxxx.", "careers@xxxx.xxxxxxx")
+        assert found.category is Category.APPLICATION_RECEIVED
+
+    def test_an_acknowledgement_that_never_says_application(self, rules):
+        found = verdict(
+            rules, "Received", "Xx xxxx xxxx XX. Xxxxxxx xx xxx xxxxxx xx xxxx xxxxxxx "
+            "xxxxxx xx xxxx xx xxxx xxxxxxx, xxxxxxx xxxxxx xxxxx xxxxx.",
+            "no-reply <careers@xxxxxxxxx.example>")
+        assert found.category is Category.APPLICATION_RECEIVED
+
+    def test_a_stranger_sounding_you_out(self, rules):
+        found = verdict(
+            rules, "Xxx xxx xxxx xx x xxxx?", "Not a role I am xxxxxxx xxxxx xxx, xxx "
+            "X xxxx x xxxxx xxxx xxx xxxxxxxx xxxx xxx xxxxxxxx xxxxxxx xx xxx xxx.",
+            "Dee <dee@xxxxxxxxxxxxx.example>")
+        assert found.category is Category.UNSOLICITED
+
+    def test_a_hiring_event_is_an_invitation_to_talk(self, rules):
+        found = verdict(
+            rules, "You're Invited! Virtual Hiring Event", "I would xxxx xx xxxxxxxxxx "
+            "xxxxxx xxx xx our virtual hiring event on the 5th. Chat with our leaders "
+            "xxx xxxxxxx xxxxx xxxx xxxxx xxxx xxxxxxxxxx.",
+            "Xxxxxxx Xxxxxx Xxxxxxxxxxx <talent@marlowe.example>")
+        assert found.category is Category.INTERVIEW
+
+    def test_a_subject_with_nothing_under_it_is_read_as_the_formula(self, rules):
+        received = verdict(rules, "Xxxxx Xxx xxx Xxxx Xxxxxxxxxxx - Xxxxxxx X", "",
+                           "Workday <noreply@workday.example>")
+        assert received.category is Category.APPLICATION_RECEIVED
+        assert received.confidence < 0.95, "filed as what it is, and still looked at"
+        verify = verdict(rules, "Candidate Experience Account Verification", "",
+                         "noreply@ats.example")
+        assert verify.category is Category.NEXT_STEPS
+
+    def test_a_courts_interview_is_not_a_job_interview(self, rules):
+        found = verdict(
+            rules, "Interview slot - jury service", "Xxx xxx xxxxx xx xxxxxx xxx xx "
+            "xxxxxxxxx xxxxxxxxx xxxx xxxxxxxx xxxxxxx xx xxx 00xx xx 00:00.",
+            "HMCTS <no-reply@hmcts.example>")
+        assert not found.is_job_related
+        assert found.other_category is OtherCategory.OTHER
+
+    def test_a_careers_office_at_a_university_still_hires(self):
+        found = RuleClassifier().classify(
+            subject="Your application", body="Thank you for applying. We have received "
+            "your application xxx xxxx xx xx xxxxx xx xxxx background is a match.",
+            sender="Careers <careers@university.example>")
+        assert found.is_job_related
+
+    def test_family_congratulating_you_is_family(self, rules):
+        found = verdict(
+            rules, "Congratulations on your new role", "Xxx xxxx xx xxx xxxx! Xxxx "
+            "xxxxx xx xxx. Xxx xxx xxxxx xx xx xx xxx xxxx xxx?",
+            "Xxxx Xxx <bev@talktalk.example>")
+        assert not found.is_job_related
+        assert found.other_category is OtherCategory.PERSONAL
+
+    def test_a_talent_network_keeping_its_list_is_a_list(self, rules):
+        found = verdict(
+            rules, "Time to rejoin our Careers Community", "Confirm you would like to "
+            "continue receiving xxxxxx xxxxxxxxxxxxx, xxxxxxxxxx xxxxxx xxx xxxxxx "
+            "xxxxxxxx. Xx xxxxxx xxxxxx xx xxx xxxxxx, we ask that you review your "
+            "preferences.", "Careers <careers@ashgrove.example>",
+            list_unsubscribe="<mailto:leave@ashgrove.example>")
+        assert not found.is_job_related
+
+    def test_a_scam_in_a_couriers_words_is_a_scam(self, rules):
+        found = verdict(
+            rules, "URGENT - parcel held at customs", "Xxx xxxxxx xx xxxx xx xxxxxxx. "
+            "X xxx xx 0.00 XXX xx xxxxxxx xxxxxx 00 xxxxx xx xxxx xxxx xx xxxxxx xx "
+            "xxxxxx. Xxxxx xxxx xx xxx xxx.",
+            "XXX Xxxxxxxx <xxxxxxx@xxx-xxxxxx-xxxxxxxxx.xxxxxxx>")
+        assert found.other_category is OtherCategory.SPAM
+
+    def test_a_fortune_from_a_stranger_is_not_personal(self, rules):
+        found = verdict(
+            rules, "Re: our conversation", "Xxxx xxx. X xxxxx xx xxx xx xxxxxxxxxx "
+            "xxxxxxxxx x xxx xx xxxxxx xxxxxxx xxxxxxx xxxx xx xx xxxx xxxxxxx. X "
+            "xxxxxxx xxxx x xxxxxxxxxxx xxxxxxx. Reply for details.",
+            "Mrs Grace <xxxxx000@fastmail.example>")
+        assert found.other_category is OtherCategory.SPAM
+
+    def test_the_systems_of_a_workplace(self, rules):
+        found = verdict(
+            rules, "[XXXX] xxxxxxxx-xxx x00 xxxxx xxxxxxxxx", "Xxxxxxx xxxxxxx 000xx "
+            "xx 00:00 xxx has not xxxxxxxxx. Xxxxxxx xx xxxxxx. Xxx xx xx xxxx xxxxxxx.",
+            "Chartline <alerts@grafana.example>")
+        assert found.other_category is OtherCategory.WORK
+        sync = verdict(rules, "Xxxxx xxxx xx xxx X0 xxxxxxx", "Xxx xx xxxx 00 xxxxxxx "
+                       "xxxxxxxx xx xx xxxxxxx xxx X0 xxxxxxxx xxxxxx xxx xxxxx xxxx "
+                       "xxxx xxx?", "Xxxx Xxxxxxxxx <dana@currentemployer.example>")
+        assert sync.other_category is OtherCategory.WORK
+
+    def test_a_social_networks_notification(self, rules):
+        found = verdict(
+            rules, "Xxx xxxxxxxx xx 0 xxxxxxxx", "Xxxxxx xxxxxxxxxx xx xxxxxxxxx. "
+            "Xxxxx xxxxxx xxxxxx xx xxxx xxxxxxx xxxxx.",
+            "LinkedIn <notify@linkedin.example>",
+            list_unsubscribe="<https://linkedin.example/leave>")
+        assert found.other_category is OtherCategory.SOCIAL
+
+    def test_a_group_writing_to_its_members(self, rules):
+        found = verdict(
+            rules, "Thanks for Saturday", "Xxxxxx-xxx xxxxxx xxxxxx xx xxx xxx xxxxx "
+            "xxx xxxx xx xxxx. Xxxx xxxx xxx xx xxx 00xx, xxxx xxxx, xxxxx xxxxxx.",
+            "Xxxx Xxxx Xxxxxxxxxx <xxx@xxxxxxxx.xxxxxxx>")
+        assert found.other_category is OtherCategory.PERSONAL
+
+    def test_money_without_a_sign_is_still_money(self, rules):
+        found = verdict(rules, "We've refunded you", "Xxx 00:00 xxx xxxxxxxxx xx we "
+                        "have xxxx 00.00 xxxx xx xxx xxxx xxx xxxx xxxx.",
+                        "Railhop <no-reply@xxxxxxxxx.xxxxxxx>")
+        assert found.other_category is OtherCategory.RECEIPT
+
+    def test_a_note_with_nothing_in_it_from_a_person(self, rules):
+        found = verdict(rules, "Test here", "", "Elena Vasquez <elena.vasquez@fastmail.example>")
+        assert found.other_category is OtherCategory.PERSONAL
+        assert found.confidence < 0.95

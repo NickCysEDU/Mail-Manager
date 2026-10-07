@@ -91,7 +91,6 @@ class MessageWindow(QMainWindow):
         #: (a scan, a sort) is searched for it rather than trusted.
         self._key = None
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-        self.resize(980, 720)
 
         self.heading = QLabel()
         self.heading.setWordWrap(True)
@@ -125,6 +124,10 @@ class MessageWindow(QMainWindow):
         layout.addLayout(foot)
         self.setCentralWidget(body)
         self._build_actions()
+        # Wide enough for its own bar, whatever the font: a larger text
+        # setting, or another platform's metrics, would otherwise push the
+        # last buttons into the overflow menu.
+        self.resize(max(980, self.toolbar.sizeHint().width() + 24), 720)
         self.show_row(row)
 
     # -- What can be done -------------------------------------------------

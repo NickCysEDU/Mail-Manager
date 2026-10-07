@@ -26,6 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import certs  # noqa: E402
 from config import CredentialStore, Settings  # noqa: E402
 from imap_engine import IMAPEngine  # noqa: E402
 from llm_engine import LLMAuthError, LLMEngine  # noqa: E402
@@ -203,6 +204,9 @@ def main(argv=None) -> int:
         code = RED if error else (DIM if dim else "")
         print(colour(message, code, use_colour) if code else message, file=stream)
 
+    # The same certificate bundle the app uses, or a toolchain Python
+    # without one cannot open a TLS connection at all.
+    certs.ensure()
     settings = Settings.load()
     if args.provider:
         settings.provider = args.provider
