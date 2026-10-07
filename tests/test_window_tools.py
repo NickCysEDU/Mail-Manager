@@ -1487,3 +1487,95 @@ class TestTheLibraryOpensItsPanelOnceItIsUp:
             assert len(calls) == 1
         finally:
             viewer.close()
+
+
+class TestThePreviewKeepsItsSize:
+    """A preview dragged bigger was the density's small share again on every
+    launch: the saved split is restored and then overwritten on show."""
+
+    @staticmethod
+    def _window(settings, tmp_path, monkeypatch):
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        made = MainWindow(settings, InMemoryCredentialStore())
+        made.resize(1200, 900)
+        made.show()
+        QApplication.processEvents()
+        QApplication.processEvents()
+        return made
+
+    def test_a_saved_split_stands(self, qapp, tmp_path, monkeypatch):
+        settings = Settings(icloud_email="you@icloud.example").normalized()
+        first = self._window(settings, tmp_path, monkeypatch)
+        try:
+            first.splitter.setSizes([250, 550])
+            first._save_layout()
+            saved = first.settings.splitter_state
+        finally:
+            first.close()
+            first.deleteLater()
+        assert saved
+        again = Settings(icloud_email="you@icloud.example",
+                         splitter_state=saved).normalized()
+        second = self._window(again, tmp_path, monkeypatch)
+        try:
+            sizes = second.splitter.sizes()
+            assert sizes[1] >= sizes[0] * 1.8, sizes
+        finally:
+            second.close()
+            second.deleteLater()
+
+    def test_without_one_the_preview_starts_roomy(self, qapp, tmp_path,
+                                                  monkeypatch):
+        import theme
+
+        settings = Settings(icloud_email="you@icloud.example").normalized()
+        window = self._window(settings, tmp_path, monkeypatch)
+        try:
+            sizes = window.splitter.sizes()
+            share = sizes[1] / max(1, sum(sizes))
+            assert abs(share - theme.density("comfortable").preview_share) < 0.03
+            assert share >= 0.4, share
+        finally:
+            window.close()
+            window.deleteLater()
+
+    def test_a_resize_keeps_a_dragged_preview(self, qapp, tmp_path,
+                                              monkeypatch):
+        settings = Settings(icloud_email="you@icloud.example").normalized()
+        window = self._window(settings, tmp_path, monkeypatch)
+        try:
+            window.splitter.setSizes([250, 550])
+            qapp.processEvents()
+            window.resize(1300, 980)
+            qapp.processEvents()
+            qapp.processEvents()
+            sizes = window.splitter.sizes()
+            assert sizes[1] >= sizes[0] * 1.8, sizes
+        finally:
+            window.close()
+            window.deleteLater()
+
+    def test_a_change_of_density_gives_the_new_share(self, qapp, tmp_path,
+                                                     monkeypatch):
+        import theme
+
+        settings = Settings(icloud_email="you@icloud.example").normalized()
+        window = self._window(settings, tmp_path, monkeypatch)
+        try:
+            window.splitter.setSizes([250, 550])
+            window.settings.density = "compact"
+            window._apply_spacing()
+            qapp.processEvents()
+            sizes = window.splitter.sizes()
+            share = sizes[1] / max(1, sum(sizes))
+            assert abs(share - theme.density("compact").preview_share) < 0.03
+            # The same density again, as every save of the settings brings,
+            # leaves the split alone.
+            window.splitter.setSizes([250, 550])
+            window._apply_spacing()
+            qapp.processEvents()
+            sizes = window.splitter.sizes()
+            assert sizes[1] >= sizes[0] * 1.8, sizes
+        finally:
+            window.close()
+            window.deleteLater()

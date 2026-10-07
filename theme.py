@@ -68,11 +68,11 @@ class Density:
 
 _DENSITIES: Dict[str, Density] = {
     "comfortable": Density("comfortable", control_pad=7, margin=10, spacing=8,
-                           row_lines=3, cell_pad=6, preview_share=0.32),
+                           row_lines=3, cell_pad=6, preview_share=0.45),
     "compact": Density("compact", control_pad=4, margin=6, spacing=5,
-                       row_lines=2, cell_pad=3, preview_share=0.26),
+                       row_lines=2, cell_pad=3, preview_share=0.40),
     "dense": Density("dense", control_pad=2, margin=3, spacing=3,
-                     row_lines=1, cell_pad=1, preview_share=0.22,
+                     row_lines=1, cell_pad=1, preview_share=0.34,
                      preview_open=False),
 }
 

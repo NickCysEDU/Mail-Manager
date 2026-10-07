@@ -174,6 +174,10 @@ class MainWindow(QMainWindow):
         #: Whether the preview was opened deliberately: the densest setting
         #: starts it closed, but should not keep closing it.
         self._preview_opened = False
+        #: Whether the preview has been given its share of the window yet,
+        #: and the density that share last followed.
+        self._preview_split = False
+        self._density_shown = None
         #: Mailboxes shown, and whether "all" is in force. Kept apart so
         #: unticking the last mailbox empties the table rather than meaning
         #: every mailbox.
@@ -1073,6 +1077,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_model_button(self) -> None:
         self.preview.set_backend_label(self.settings.provider_label.split(" (")[0])
+        self.preview.set_pictures(self.settings.show_images)
         spec = self.settings.provider_class
         pretty = next(
             (c.label for c in spec.models if c.value == self.settings.model),
@@ -1121,7 +1126,15 @@ class MainWindow(QMainWindow):
         # Row height follows the density unless the user has said otherwise.
         self.settings.row_lines = self.settings.effective_row_lines
         self._apply_density(self.settings.row_lines)
-        self._apply_preview_share(room)
+        # The preview's share follows a change of density, and a first window
+        # with no split saved; given on every save of the settings, as it
+        # was, a preview dragged bigger was back at the density's share.
+        before, self._density_shown = self._density_shown, room.name
+        if before is None:
+            if not self.settings.splitter_state:
+                self._apply_preview_share(room)
+        elif before != room.name:
+            self._apply_preview_share(room)
 
     def _apply_preview_share(self, room) -> None:
         """Give the table everything the preview is not using. Skipped while
@@ -1815,8 +1828,12 @@ class MainWindow(QMainWindow):
         """
         super().showEvent(event)
         # The splitter only has a height once the window has been laid out.
-        QTimer.singleShot(0, self, lambda: self._apply_preview_share(
-            theme.density(self.settings.density)))
+        # A split that was saved stands; the density's share is for a window
+        # that has none yet, and given every time it made the preview small
+        # again on every launch.
+        if not self.settings.splitter_state:
+            QTimer.singleShot(0, self, lambda: self._apply_preview_share(
+                theme.density(self.settings.density)))
         QTimer.singleShot(0, self, self._heal_column_widths)
         if not self._first_run_checked:
             self._first_run_checked = True
@@ -3256,13 +3273,19 @@ class MainWindow(QMainWindow):
         cannot use the width.
         """
         beside = position == "right" and self.width() >= self.BESIDE_NEEDS
-        self.splitter.setOrientation(
-            Qt.Orientation.Horizontal if beside else Qt.Orientation.Vertical)
+        wanted = Qt.Orientation.Horizontal if beside else Qt.Orientation.Vertical
+        turned = self.splitter.orientation() != wanted
+        self.splitter.setOrientation(wanted)
         span = self.splitter.width() if beside else self.splitter.height()
-        if span > 1:
+        # A fresh share when the preview changes sides, or has had none yet
+        # and none was saved. Given on every resize, as it was, a preview
+        # dragged bigger was back at this share a moment later.
+        if span > 1 and (turned or not (self._preview_split
+                                        or self.settings.splitter_state)):
             share = 0.42 if beside else 0.40
             self.splitter.setSizes(
                 [int(span * (1 - share)), int(span * share)])
+            self._preview_split = True
         for value, action in self.preview_actions.items():
             # The choice, not where it ended up: a narrow window puts the
             # preview below whatever was chosen.
