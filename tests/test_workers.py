@@ -106,3 +106,62 @@ class TestRequiredFolders:
 
     def test_no_plan_means_no_folders(self):
         assert required_folders([item("1")], None) == []
+
+
+class TestReadingWithTheThread:
+    """Within a conversation the sorter is sure about, its weak readings of
+    the other messages take the conversation's category."""
+
+    def _item(self, uid, subject, job=True, category=Category.INTERVIEW, confidence=0.9,
+              other=OtherCategory.NOT_APPLICABLE, error=None, thread="t1"):
+        from models import EmailMessage, TriageItem
+
+        found = TriageItem(
+            email=EmailMessage(uid=uid, subject=subject, sender_email="j@acme.example"),
+            classification=Classification(
+                summary="s", is_job_related=job, category=category, other_category=other,
+                confidence_score=confidence, reasoning="r", model="rules", error=error),
+            folders=FolderPlan())
+        found.thread_key = thread
+        return found
+
+    def test_weak_readings_take_the_conversations_category(self):
+        from workers import read_with_the_thread
+
+        lead = self._item("1", "Teams call", confidence=0.96)
+        unsure = self._item("2", "Re: Teams call", category=Category.UNCLASSIFIED_OTHER,
+                            confidence=0.38)
+        elsewhere = self._item("3", "Teams call", job=False, category=Category.UNCLASSIFIED_OTHER,
+                               other=OtherCategory.EVENT, confidence=0.89)
+        assert read_with_the_thread([lead, unsure, elsewhere]) == 2
+        for item in (unsure, elsewhere):
+            assert item.classification.is_job_related
+            assert item.classification.category is Category.INTERVIEW
+            assert item.classification.confidence_score == 0.78
+            assert "conversation" in item.classification.adjustments
+            assert "Read with the rest of its conversation" in item.classification.reasoning
+        assert lead.classification.confidence_score == 0.96
+
+    def test_sure_readings_and_lone_messages_are_left_alone(self):
+        from workers import read_with_the_thread
+
+        lead = self._item("1", "Offer", category=Category.OFFER, confidence=0.95)
+        sure_other = self._item("2", "Re: Offer", category=Category.NEXT_STEPS, confidence=0.9)
+        sure_not = self._item("3", "Re: Offer", job=False,
+                              category=Category.UNCLASSIFIED_OTHER,
+                              other=OtherCategory.PERSONAL, confidence=0.95)
+        broken = self._item("4", "Re: Offer", category=Category.UNCLASSIFIED_OTHER,
+                            confidence=0.0, error="no model")
+        alone = self._item("5", "Hello", category=Category.UNCLASSIFIED_OTHER,
+                           confidence=0.3, thread="t2")
+        assert read_with_the_thread([lead, sure_other, sure_not, broken, alone]) == 0
+        assert sure_other.classification.category is Category.NEXT_STEPS
+        assert not sure_not.classification.is_job_related
+        assert alone.classification.category is Category.UNCLASSIFIED_OTHER
+
+    def test_a_conversation_nobody_is_sure_about_carries_nothing(self):
+        from workers import read_with_the_thread
+
+        items = [self._item("1", "x", category=Category.UNCLASSIFIED_OTHER, confidence=0.5),
+                 self._item("2", "x", category=Category.INTERVIEW, confidence=0.7)]
+        assert read_with_the_thread(items) == 0

@@ -631,3 +631,88 @@ class TestReading:
         found = verdict(rules, "Test here", "", "Elena Vasquez <elena.vasquez@fastmail.example>")
         assert found.other_category is OtherCategory.PERSONAL
         assert found.confidence < 0.95
+
+
+class TestReadingRealShapes:
+    """Xxxxxx x xxxx xxxxx xxx that the readers missed: a recruiter's
+    calendar call, a job board passing a recruiter on, and an
+    acknowledgement with one incidental instruction in it."""
+
+    def test_a_recruiters_calendar_call_is_an_interview(self, rules):
+        invite = verdict(
+            rules, "Xxxxxx - XX Xxxxxxx - Xxxxx Xxxx (xxxxxxxxxxx)",
+            "Xxxxxxxxx Xxxxx xxxxxxx. Xxxx: xxxxx://teams.example/meet/1 Meeting ID: "
+            "000 000 Xxxxxxxx: xX0 Dial in by phone.",
+            "Xxxxxx Xxxxx <xxxxxx.xxxxx@xxxxxxxxxx.example>")
+        assert invite.category is Category.INTERVIEW
+        bare = rules.classify(subject="Xxxxxx - XX Xxxxxxx - Teams Call (rescheduled)",
+                              body="", sender="Xxxxxx Xxxxx <xxxxxx.xxxxx@xxxxxxxxxx.example>",
+                              attachments=("invite.ics",))
+        assert bare.category is Category.INTERVIEW
+        moved = verdict(
+            rules, "RE: Event accepted: Xxxxxx - XX Xxxxxxx - Teams Call",
+            "Xx xxxxx xxxx xxxx xxx xxxxxx xxxxxx xxx xxxx xxxx xxxx xx X xxxxxx xxxx "
+            "xxxx xxx 00 xxxxxxx, X xxxx xxxx xx xx. Xxxxxx Xxxxx, Recruiter",
+            "Xxxxxx Xxxxx <xxxxxx.xxxxx@xxxxxxxxxx.example>")
+        assert moved.category is Category.INTERVIEW
+
+    def test_a_teams_link_from_a_dentist_is_not_an_interview(self, rules):
+        found = verdict(
+            rules, "Your appointment", "Microsoft Teams meeting. Join: https://teams.example/x "
+            "Meeting ID: 1 Passcode: 2. Your hygienist appointment is confirmed.",
+            "Reception <reception@bellwooddental.example>")
+        assert not found.is_job_related
+
+    def test_a_job_board_passing_a_recruiter_on(self, rules):
+        found = verdict(
+            rules, "Rowan at Xxxxxx Xxxxxxxxx is interested in talking to you",
+            "Xxx xxxx x xxx xxxxxxx xx xxxx Xxxxxxx xxxxx xxxx Rowan at Xxxxxx Xxxxxxxxx: "
+            "\"xx xxx xxxxxxxxxx xx xxxx xxxxxx xxx xxxxx xxxx xx xxxxx x Xxxxxxxxx "
+            "Xxxxxxx Xxxxxxxxxx...\" Xxx xxx xxxxxxxxx Xxxxxxx xxxxxxxxxxxx xxxxxx.",
+            "no-reply@messages.monster.example",
+            list_unsubscribe="<mailto:leave@monster.example>")
+        assert found.category is Category.UNSOLICITED
+
+    def test_an_acknowledgement_with_one_instruction_stays_one(self, rules):
+        found = verdict(
+            rules, "You have successfully submitted your job application - Analyst",
+            "Thank xxx xxx xxxxxxxx xx xxx xxxx xx Analyst at Acme. Xxxx xx xxxxxx xxxx: "
+            "xxxxxxxxx xx xxx xxxx, xxx xxx xx xxxxxxxx xxx xxxxx xx xxx xxxx 0 xxxx xx "
+            "xxxxxxxx 0-0 xxxxxxxxxxx. Xxxxxxxx xxxxxxxxxx xxxx xxxx xxxxxxx xx xxx "
+            "xxxxxxxxx xxxxx. Visit our careers page for tips on acing your interview.",
+            "Acme Talent Acquisition <talent@acme.example>")
+        assert found.category is Category.APPLICATION_RECEIVED
+        reviewing = verdict(
+            rules, "Xxxxxx XX Xxxxxxxx - Acme Books",
+            "Thank xxx xxx xxxxxxxx xxx xxx xxxxxxxx xx Xxxxxx XX Xxxxxxxx. Xx xxxxxxxxxx "
+            "xxx xxxx xxx xxxx xx xxxxxx xxxx xxxxxxxxxxx. Xx xxx xxxxxxxxx xxxxxxxxx "
+            "xxxxxxxxxxxx xxx xxxx xx xx xxxxx xx xxxx xxxxxxx xx xxxxxxxx xxx xxx xxxx "
+            "xxxxx xx xxx xxxxxxx.", "notification@recruitersuite.example")
+        assert reviewing.category is Category.APPLICATION_RECEIVED
+
+    def test_a_name_with_a_role_word_inside_it_is_still_a_person(self):
+        from rules_engine import looks_like_a_person
+
+        assert looks_like_a_person("Mika Tanashi <mika.tanashi@icloud.example>")
+        assert looks_like_a_person("chris.hindley@acme.example")
+        assert not looks_like_a_person("hi@acme.example")
+        assert not looks_like_a_person("notifications@acme.example")
+        assert not looks_like_a_person("no-reply@acme.example")
+        assert not looks_like_a_person("chris.hr@acme.example")
+
+    def test_a_job_description_mailed_to_yourself_is_not_a_step(self, rules):
+        found = verdict(
+            rules, "Xxx xxx xxxxxx", "Job description. Acme is a xxxxxxx xxxxxxxx "
+            "xxxxxxxx. Xxx Xxxx Xxxx Xxxxxxxxxx xxxxxxxx xxxxx xxxx xxxxxxx by telephone "
+            "and email. Xxxxxx xxx Xxxxxxxxxxxxxxxx: xxxxxxx xxxxx xxxxxxxx xxx xxxxxxx "
+            "calls; create tickets. Qualifications: 1+ years of experience. Apply by "
+            "Friday.", "Me <me.myself@icloud.example>")
+        assert found.is_job_related
+        assert found.category is not Category.NEXT_STEPS
+
+    def test_a_primary_email_change_is_about_the_account(self, rules):
+        found = verdict(
+            rules, "Your email has been updated", "To help you stay connected, we've made "
+            "you@icloud.example xxxx xxxxxxx xxxxx. Xxx xxx xxxxxx xx xxxxxxx xx xxxx "
+            "xxxxxxx xxxxxxxx.", "Meetboard <notice@m.meetboard.example>")
+        assert found.other_category is OtherCategory.SECURITY

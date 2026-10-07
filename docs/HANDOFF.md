@@ -85,6 +85,25 @@ describes the app itself.
   flag after it is a note on the status line, never a second attempt.
 - **Opening a message marks it read,** on the server through `FlagWorker`
   once there is a password, in the table either way.
+- **The message view paints its own light page** (`MailView` sets a
+  stylesheet on itself): the palette alone lost to the app's stylesheet in
+  the dark look, and dark text sat on a dark ground. The sanitiser darkens
+  pale text in a message with no dark background of its own
+  (`html_utils.has_dark_background`) and leaves a dark design alone.
+- **The mail buttons' icons are drawn** (`icons.py`), in the text colour,
+  once per name and colour; the Touch Bar's picture names map to them in
+  `mail_window._ICONS`.
+- **A real inbox is the dev set that matters.** Three weeks of it, judged by
+  hand, live outside the repository at `~/.mail-manager-eval/inbox/` on the
+  machine that has them (`real_dev.json` scores with `tools/evaluate.py
+  --file`); the readers of real shapes in `rules_engine.py` (a calendar
+  call, a job board's relay, precedence in leagues) came from its misses.
+  Nothing from it may enter the tree: no name, address, subject or number,
+  even in a test. Invent the test's people.
+- **After the sorter, the conversation** (`workers.read_with_the_thread`):
+  within a thread it is sure about, weak readings take the thread's
+  category at a confidence below the filing threshold. It never touches a
+  reading the sorter was sure of.
 
 ### Heavy jobs
 
@@ -171,6 +190,30 @@ describes the app itself.
   finish; the strip at the end draws it.
 - **Sounds:** bump `rider_sound.VERSION` when a sound changes, or the cached
   file is played. Notes are put off with the pane's own timers.
+- **The road is read on a curve** (Catmull-Rom through four samples, in
+  `roadAt` and its Python mirror `_sample`); the samples are nearly a unit
+  apart and straight pieces between them had a corner at every one. The
+  shaders are the old GLSL dialect: no `min`/`max` on ints, use a ternary.
+  Quiet sections turn twice as often (`Rider.CALM_PHRASE`).
+- **A kick arrives like one** (`beatmap.attack`, the Kick profile's
+  `attack` bar of 2.0): measured on real records, kicks on the drums' beat
+  rose 2.3 to 30 times over the fifty milliseconds before them and bass
+  notes between beats 1.2 to 1.6. The click across the rest of the spectrum
+  told them apart not at all. A smaller rise is kept only where it lands
+  with the sure kicks (`beatmap.on_the_beat`): on the drums' own beat from
+  `trackstyle.rhythm_of`, which was right on every kit and record where a
+  fold of the hard kicks alone was not, at the division the sure kicks
+  keep to. Nine recordings: four-on-the-floor kicks on the beat 70 to 95
+  per cent at a count near the tempo, from 44 to 65 at half as many again.
+  The written trap kit lost most of its kicks to this - short, soft hits on
+  the sixteenths, which no real record tried has - and its floor in
+  `tests/test_beatmap.py` was lowered with the figures. Test songs are
+  never in the tree; the analysis scripts and their output live under
+  `~/.mail-manager-eval/songs/`.
+- **The Bass strobe follows the drums' beat** (`Spectrum._grid_the_bass`)
+  where the coarse map never locked a tempo, lit as hard as the nearest
+  kick; a locked map is left alone. The flash falls as a lamp cools, not in
+  a straight line.
 
 ### The Touch Bar
 
@@ -203,7 +246,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 4,875 tests
+./dev test                     # 4,899 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus

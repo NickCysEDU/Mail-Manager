@@ -87,11 +87,22 @@ uniform vec4 uRoad[%(samples)d];
 uniform float uRoadFrom;
 uniform float uRoadStep;
 
+// On a Catmull-Rom curve through the four samples around z, not a line
+// between two: the samples are nearly a unit apart, and a bend read in
+// straight pieces had a corner at every one.
 vec4 roadAt(float z) {
     float f = clamp((z - uRoadFrom) / uRoadStep, 0.0, %(last)d.0 - 0.001);
     int i = int(floor(f));
     float t = f - float(i);
-    return mix(uRoad[i], uRoad[i + 1], t);
+    int i0 = (i > 0) ? i - 1 : 0;
+    int i3 = (i + 2 <= %(last)d) ? i + 2 : %(last)d;
+    vec4 p0 = uRoad[i0];
+    vec4 p1 = uRoad[i];
+    vec4 p2 = uRoad[i + 1];
+    vec4 p3 = uRoad[i3];
+    return 0.5 * ((2.0 * p1) + (p2 - p0) * t
+                  + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t * t
+                  + (3.0 * p1 - p0 - 3.0 * p2 + p3) * t * t * t);
 }
 
 // u across, h up, z along: to the world, where the road runs to -z.
@@ -1614,11 +1625,18 @@ class RiderWorld:
 
     @staticmethod
     def _sample(road, z: float, part: int) -> float:
+        """The shader's roadAt in Python, on the same curve through the same
+        four samples, so the camera and the picture agree."""
         f = max(0.0, min((z - ROAD_FROM) / ROAD_STEP, ROAD_SAMPLES - 1.001))
         i = int(f)
         t = f - i
-        a, b = road[i * 4 + part], road[i * 4 + 4 + part]
-        return a + (b - a) * t
+        p0 = road[max(i - 1, 0) * 4 + part]
+        p1 = road[i * 4 + part]
+        p2 = road[(i + 1) * 4 + part]
+        p3 = road[min(i + 2, ROAD_SAMPLES - 1) * 4 + part]
+        return 0.5 * ((2.0 * p1) + (p2 - p0) * t
+                      + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t * t
+                      + (3.0 * p1 - p0 - 3.0 * p2 + p3) * t * t * t)
 
     @classmethod
     def _turn_at(cls, road, z: float) -> float:

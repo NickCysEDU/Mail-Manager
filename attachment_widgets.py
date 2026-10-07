@@ -1330,6 +1330,52 @@ class Spectrum(QWidget):
         not be."""
         self._rhythm = rhythm
         self._rhythm_due = False
+        self._grid_the_bass(rhythm)
+
+    def _grid_the_bass(self, rhythm) -> None:
+        """The drums' own beat as the Bass source's grid, where the coarse
+        map could not lock one. On a tech-house record the bassline's
+        off-beat notes kept the coarse map from agreeing on a period, and
+        the strobe fired on every note; the drums' beat, folded over the
+        whole track at sixty readings a second, is what the road and the
+        arches already follow. A grid line is lit as hard as the nearest
+        kick, and floored, so every line fires at the middle sensitivity.
+        """
+        import beatmap
+
+        found = self._beats.get("Bass")
+        if not rhythm or getattr(found, "locked", False):
+            return
+        tempo = float(rhythm.get("tempo") or 0.0)
+        if tempo <= 0.0:
+            return
+        period = 60.0 / tempo
+        kicks = list(getattr(self._elements.get("Kick"), "beats", ()))
+        coarse = list(getattr(found, "beats", ()))
+        last = max([beat.at for beat in coarse] + [beat.at for beat in kicks] + [0.0])
+        times = list(rhythm.get("beats") or ())
+        if len(times) < 4:
+            phase = float(rhythm.get("phase") or 0.0) % period
+            times, at = [], phase
+            while at <= last + period:
+                times.append(at)
+                at += period
+        grid = []
+        index = 0
+        for at in times:
+            nearest = 0.0
+            while index < len(kicks) and kicks[index].at < at - period * 0.5:
+                index += 1
+            look = index
+            while look < len(kicks) and kicks[look].at <= at + period * 0.5:
+                nearest = max(nearest, kicks[look].strength)
+                look += 1
+            grid.append(beatmap.Beat(at=float(at), strength=max(0.55, nearest)))
+        if len(grid) < 4:
+            return
+        self._beats["Bass"] = beatmap.BeatMap(beats=tuple(grid), bpm=tempo, locked=True)
+        self._beat_at = 0
+        self._beat_seen = -1.0
 
     def expect_rhythm(self) -> None:
         """The drums' beat is still being worked out: a scene that needs it can
@@ -1717,7 +1763,9 @@ class Spectrum(QWidget):
         self._last_high = high
         hand = self._strobe_source == self.BY_HAND
         if not hand:
-            state.hit = max(0.0, state.hit - self.HIT_FALL)
+            # Quick off the top and soft at the tail, as a lamp cools: a
+            # straight drop read as a stutter.
+            state.hit = max(0.0, state.hit - self.HIT_FALL * (0.4 + state.hit))
         # Sensitivity decides what counts as a hit; rate decides how soon
         # another may follow. At one end the strobe waits for the unmistakable
         # and fires at most twice a bar; at the other it takes almost anything.

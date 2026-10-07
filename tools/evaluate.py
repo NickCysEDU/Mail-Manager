@@ -61,6 +61,7 @@ def score(rows: list, ruleset: str = "general") -> tuple:
             subject=row.get("subject", ""), body=row.get("body", ""),
             sender=row.get("sender", ""), links=row.get("links", ()),
             list_unsubscribe=row.get("unsub", ""),
+            attachments=row.get("attachments", ()),
         )
         got = v.category.value if v.is_job_related else f"other/{v.other_category.value}"
         want = verdict_of(row)

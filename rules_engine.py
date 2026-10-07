@@ -41,6 +41,9 @@ QUALIFY_SCORE = 2.5
 #: UNSOLICITED comes first in precedence, so it must clear a higher bar, or one
 #: eager phrase would outrank a real interview invitation.
 QUALIFY_SCORE_UNSOLICITED = 3.5
+#: The share of the strongest category's score a category needs for the
+#: precedence order to apply between them.
+DWARFED = 0.4
 #: Multiplier applied when a phrase matched only with words inserted into it.
 GAPPED_PENALTY = 0.75
 
@@ -531,6 +534,12 @@ NEXT_STEPS_SIGNALS: Tuple[Signal, ...] = (
     Signal("activate your account", 2.4),
     Signal("your application is incomplete", 3.0),
     Signal("incomplete application", 2.8),
+    Signal("partially completed application", 2.8),
+    Signal("return to the job application", 2.6),
+    Signal("return to your application", 2.6),
+    Signal("resume your application", 2.6),
+    Signal("complete your application", 2.4),
+    Signal("started your application", 1.6),
     Signal("additional information is needed", 2.8),
     Signal("please respond by", 2.4),
 )
@@ -1758,6 +1767,72 @@ def headhunt_score(subject: str, body: str) -> Tuple[float, List[str]]:
                          {0: 0.0, 1: 0.0, 2: 3.6, 3: 3.8})
 
 
+#: A call being arranged: the subject names a role and a call, or the body
+#: is the boilerplate of a meeting link. Together with a person or a hiring
+#: mailbox writing, an interview.
+_TITLE_WORDS = re.compile(
+    r"\b(?:analyst|engineer|developer|technician|specialist|manager|consultant|"
+    r"intern|internship|associate|coordinator|administrator|architect|designer|"
+    r"scientist|representative|assistant|director|officer|apprentice|graduate|"
+    r"trainee|programmer|support|operations|it)\b")
+_CALL_SUBJECT = re.compile(
+    r"\b(?:teams call|zoom call|phone call|video call|call\s*\(|phone screen|"
+    r"interview|screening call|intro call|meeting|conversation with)\b")
+_MEETING_LINK = re.compile(
+    r"\b(?:teams\.microsoft\.com|zoom\.us/j|meet\.google\.com|webex\.com|"
+    r"meeting id|passcode|dial in by phone|join the meeting|join microsoft teams|"
+    r"microsoft teams meeting|google meet|zoom meeting)\b")
+_CALENDAR_PART = re.compile(r"\.ics$|^invite|calendar", re.I)
+
+
+def call_score(subject: str, body: str, attachments: Sequence[str] = ()) -> Tuple[float, List[str]]:
+    """How strongly a call about a role is being arranged: a role and a call
+    in the subject, a meeting link or a calendar part, a reschedule."""
+    reasons = []
+    if _TITLE_WORDS.search(subject) and _CALL_SUBJECT.search(subject):
+        reasons.append("a role and a call in the subject")
+    if _MEETING_LINK.search(body):
+        reasons.append("a meeting link")
+    if any(_CALENDAR_PART.search(name or "") for name in attachments):
+        reasons.append("a calendar invitation attached")
+    if re.search(r"\b(?:rescheduled|reschedule|pushed your time|moved your|time slot|"
+                 r"double booked|event accepted|accepted your invitation)\b",
+                 f"{subject} {body}"):
+        reasons.append("a time being moved or accepted")
+    if not reasons or "a role and a call in the subject" not in reasons and len(reasons) < 2:
+        return 0.0, []
+    return {1: 2.6, 2: 3.2}.get(len(reasons), 3.6), reasons
+
+
+#: A job board passing a recruiter's message on: the board's own mailbox, a
+#: subject saying somebody is interested, and the message inside.
+_RELAY_SUBJECT = re.compile(
+    r"\b(?:is interested in (?:talking to you|you|your profile|your resume|your "
+    r"background)|wants to (?:connect|talk|chat)|sent you a message|"
+    r"new message from|has a job for you|invited you to apply)\b")
+_RELAY_BODY = re.compile(
+    r"\b(?:new message in your \w+ inbox|interested in your (?:resume|profile|"
+    r"background)|would like to offer|is interested in|message from \w+ at)\b")
+_RELAY_SENDER = re.compile(
+    r"\b(?:monster|indeed|linkedin|ziprecruiter|glassdoor|dice|handshake|"
+    r"wellfound|hired|otta|reed|totaljobs|cwjobs|seek|stepstone)\b")
+
+
+def relay_score(subject: str, body: str, sender: str) -> Tuple[float, List[str]]:
+    """How strongly this is a recruiter's approach passed on by a job board:
+    the board's mailbox, and the subject or the body saying so."""
+    if not _RELAY_SENDER.search(sender or ""):
+        return 0.0, []
+    reasons = []
+    if _RELAY_SUBJECT.search(subject):
+        reasons.append("a board saying somebody is interested")
+    if _RELAY_BODY.search(body):
+        reasons.append("a recruiter's message passed on")
+    if not reasons:
+        return 0.0, []
+    return 3.6 if len(reasons) == 2 else 2.8, reasons
+
+
 #: Senders whose "application", "interview" and "offer" are somebody else's:
 #: a university, a court, a surgery, a letting agent, a newsroom.
 _OTHER_WORLD_SENDER = re.compile(
@@ -1829,6 +1904,8 @@ _ROLE_WORDS = re.compile(
     r"reception|bookings?|appointments?|clinic|surgery|practice|admissions|"
     r"registry|lettings|sales|enquiries|office|careers|jobs|recruit\w*|talent|"
     r"people|hr|payroll|billing|accounts?|orders?|sec|secretary|committee", re.I)
+#: A whole piece of an address that is a role, plural or not.
+_ROLE_PIECE = re.compile(rf"(?:{_ROLE_WORDS.pattern})s?", re.I)
 
 
 def sender_sector(sender: str) -> Tuple[Dict["OtherCategory", float], List[str]]:
@@ -1938,9 +2015,14 @@ def church_sender(sender: str) -> str:
 
 
 def looks_like_a_person(sender: str) -> bool:
-    """Whether the address belongs to a person rather than a department."""
+    """Whether the address belongs to a person rather than a department. A
+    role word has to be a whole piece of the address: "hi" is a mailbox,
+    and also two letters of a surname."""
     local = (sender or "").split("@")[0].split("<")[-1].strip().lower()
-    if not local or _ROLE_WORDS.search(local):
+    if not local:
+        return False
+    pieces = [local] + re.split(r"[._-]", local)
+    if any(_ROLE_PIECE.fullmatch(piece) for piece in pieces if piece):
         return False
     return bool(_PERSON_LOCAL.match(local))
 
@@ -2347,6 +2429,13 @@ def structural_topic_scores(
         add(OtherCategory.SECURITY, 3.0 if expiring else 1.6,
             "a short code in a short message")
 
+    # An account changed: a new primary email, a password, a sign-in method.
+    if re.search(r"\b(?:your (?:email|email address|address|password|details|phone number) "
+                 r"(?:has been|have been|was|were) (?:updated|changed)|primary email|"
+                 r"new sign-?in method|recovery (?:email|phone)|security settings|"
+                 r"made [^.!?]{0,60}? your primary)\b", blob):
+        add(OtherCategory.SECURITY, 2.0, "a change to the account")
+
     # Account safety, without the word security
     if re.search(r"\b(?:password|sign(?:ed|ing)? in|signin|log(?:ged|ging)? in|"
                  r"account was|recovery|two[\W_]?factor|device we (?:don[\W_]?t )?recognise|"
@@ -2447,6 +2536,7 @@ _NOT_A_REQUEST = re.compile(
     r"(?:\bif\b|\bin case\b|\bshould you\b|\bunless\b|\bwhen you\b|"
     r"\bmay have been\b|\bin the event\b|\bwhenever\b|"
     r"\bthank(?:s| you) for\b|\btaking the time to\b|\byou have already\b|"
+    r"\bthe time you (?:took|spent)\b|\byou took the time\b|"
     r"\bwe have received\b)[^.!?]{0,70}$"
 )
 
@@ -2688,6 +2778,7 @@ class RuleClassifier:
         links: Sequence[str] = (),
         list_unsubscribe: str = "",
         truncated: bool = False,
+        attachments: Sequence[str] = (),
     ) -> RuleVerdict:
         subject = (subject or "")[:2000]
         body = (body or "")[:MAX_SCANNED_CHARS]
@@ -2741,8 +2832,11 @@ class RuleClassifier:
         read: List[Tuple[Category, float, List[str], float]] = []
         terms, terms_why = offer_terms_score(subject_n, body_n)
         # A letting agent's "paperwork attached, starting the 1st" has two of
-        # these moves; without working context it takes three to be a job.
-        if terms and (from_hiring or working or (person and len(terms_why) >= 3)):
+        # these moves, and an applicant-tracking system's footer mentions
+        # salary and benefits under anything: a person writing with working
+        # context may have two, anybody else needs three.
+        if terms and ((person and working and len(terms_why) >= 2)
+                      or len(terms_why) >= 3):
             read.append((Category.OFFER, terms, terms_why, 2.0))
         let_down, let_down_why = let_down_score(subject_n, body_n)
         if let_down and (person or from_hiring or working):
@@ -2759,6 +2853,12 @@ class RuleClassifier:
         headhunt, headhunt_why = headhunt_score(subject_n, body_n)
         if headhunt and (person or agency_sender(sender_n)) and not list_unsubscribe.strip():
             read.append((Category.UNSOLICITED, headhunt, headhunt_why, 2.0))
+        relayed, relayed_why = relay_score(subject_n, body_n, sender_n)
+        if relayed:
+            read.append((Category.UNSOLICITED, relayed, relayed_why, 2.4))
+        call, call_why = call_score(subject_n, body_n, attachments)
+        if call and (person or from_hiring):
+            read.append((Category.INTERVIEW, call, call_why, 2.4))
         read_context = 0.0
         read_notes: List[str] = []
         for category, weight, why, carries in read:
@@ -2911,8 +3011,10 @@ class RuleClassifier:
             job_matches.append("an applicant-tracking-system address")
 
         # Only once the message is established as job mail: "please confirm
-        # your email address" is a request in any inbox.
-        if job_score >= 2.0 or scores[Category.APPLICATION_RECEIVED] >= 2.5:
+        # your email address" is a request in any inbox. And not in a job
+        # description, whose "apply by Friday" is the posting's, not a step
+        # of any application.
+        if (job_score >= 2.0 or scores[Category.APPLICATION_RECEIVED] >= 2.5) and posting < 2.6:
             action_score = 0.0
             action_notes: List[str] = []
             peak_action = 0.0
@@ -2955,7 +3057,14 @@ class RuleClassifier:
             )
             return scores[category] >= bar
 
-        qualified = [category for category in _PRECEDENCE if qualifies(category)]
+        # The order settles it among categories in the same league. One
+        # dwarfed by another - an acknowledgement fourteen points strong with
+        # one incidental instruction in it - is not what the message is.
+        top = max(scores.values(), default=0.0)
+        qualified = [category for category in _PRECEDENCE
+                     if qualifies(category)
+                     and (scores[category] >= top * DWARFED
+                          or strongest[category] >= DECISIVE_WEIGHT)]
         if qualified:
             best_category = qualified[0]
         else:
@@ -3030,6 +3139,8 @@ class RuleClassifier:
             looks_job_related = False
             non_job_matches.append("a mailing list talking about hiring, with no step in it")
 
+        if call and looks_job_related:
+            pass
         if not looks_job_related:
             return self._non_job_verdict(
                 subject_n, subject_t, body_n, body_t, sender_n,

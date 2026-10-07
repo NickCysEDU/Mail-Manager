@@ -555,3 +555,43 @@ class TestFontsAMessageAsksFor:
     def test_without_a_list_nothing_changes(self):
         page = '<p style="font-family: Graphik">a</p>'
         assert "Graphik" in html_utils.sanitise_for_view(page)
+
+
+class TestTheMessageReadsOnALightPage:
+    """A message is shown on a light page. One designed dark keeps its
+    design; one that merely writes in pale text would vanish, so its text
+    is darkened."""
+
+    def test_colours_are_read(self):
+        assert html_utils.luminance("#ffffff") == 1.0
+        assert html_utils.luminance("#000") == 0.0
+        assert html_utils.luminance("rgb(255, 255, 255)") == 1.0
+        assert html_utils.luminance("white") == 1.0
+        assert html_utils.luminance("transparent") is None
+        assert html_utils.luminance("") is None
+
+    def test_a_dark_design_is_recognised(self):
+        assert html_utils.has_dark_background('<table bgcolor="#1C1F26"><tr><td>x</td></tr></table>')
+        assert html_utils.has_dark_background('<div style="background-color: #13151A">x</div>')
+        assert not html_utils.has_dark_background('<div style="background: #ffffff">x</div>')
+        assert not html_utils.has_dark_background("<p>plain</p>")
+
+    def test_pale_text_is_darkened_on_a_light_page(self):
+        shown = html_utils.sanitise_for_view(
+            '<p style="color: #ffffff; font-size: 14px">Hello</p>'
+            '<font color="#fafafa">there</font>'
+            '<style>.x { color: #eee; background-color: #fff }</style>')
+        assert "#ffffff" not in shown.split("<style>")[0].lower().replace("background", "")
+        assert 'style="color: #333333; font-size: 14px"' in shown
+        assert 'color="#333333"' in shown
+        assert ".x { color: #333333; background-color: #fff }" in shown
+
+    def test_a_dark_design_keeps_its_pale_text(self):
+        shown = html_utils.sanitise_for_view(
+            '<table bgcolor="#262626"><tr><td style="color: #ffffff">Hello</td></tr></table>')
+        assert 'style="color: #ffffff"' in shown
+        assert 'bgcolor="#262626"' in shown
+
+    def test_dark_text_is_left_alone(self):
+        shown = html_utils.sanitise_for_view('<p style="color: #222222">Hello</p>')
+        assert 'style="color: #222222"' in shown

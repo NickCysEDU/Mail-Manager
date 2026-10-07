@@ -602,12 +602,74 @@ class ScanWorker(_BaseWorker):
             if in_threads:
                 self._log(f"{in_threads} message(s) are part of a conversation "
                           "with others in this scan.")
+            carried = read_with_the_thread(outcome.items)
+            if carried:
+                self._log(f"{carried} message(s) read with the rest of their "
+                          "conversation.")
 
         # Last, so a rule overrides both the sorter and the memory: it is the
         # most explicit statement of intent.
         self._apply_sorting_rules(outcome.items)
         self._log(f"Analysis complete. {outcome.usage_text}")
         self.finished_ok.emit(outcome)
+
+
+#: How sure the sorter must be of one message for the others in its
+#: conversation to be read with it, and how sure the carried reading is.
+THREAD_LEAD = 0.80
+THREAD_CARRIED = 0.78
+
+
+def read_with_the_thread(items) -> int:
+    """A person reads a reschedule, a bare calendar invitation and an "are
+    you still interested?" as parts of the interview they belong to; the
+    sorter reads each alone and loses the thread. So within a conversation
+    the sorter is sure about, its weak readings - no category, or a non-job
+    topic held with little conviction - take the conversation's category,
+    held below the filing threshold so somebody still looks. Returns how
+    many were carried. Never touches a message the sorter was sure about,
+    and never a conversation it was sure about nothing in.
+    """
+    from dataclasses import replace
+
+    by_thread: Dict[str, list] = {}
+    for item in items:
+        key = getattr(item, "thread_key", "")
+        if key:
+            by_thread.setdefault(key, []).append(item)
+    carried = 0
+    for group in by_thread.values():
+        if len(group) < 2:
+            continue
+        leads = [item for item in group
+                 if item.classification.error is None
+                 and item.classification.is_job_related
+                 and item.classification.category is not Category.UNCLASSIFIED_OTHER
+                 and item.classification.confidence_score >= THREAD_LEAD]
+        if not leads:
+            continue
+        lead = max(leads, key=lambda item: item.classification.confidence_score)
+        category = lead.classification.category
+        for item in group:
+            found = item.classification
+            if found.error is not None or item is lead:
+                continue
+            weak = ((found.is_job_related
+                     and (found.category is Category.UNCLASSIFIED_OTHER
+                          or found.confidence_score < 0.60))
+                    or (not found.is_job_related and found.confidence_score < 0.92))
+            if not weak or (found.is_job_related and found.category is category):
+                continue
+            item.classification = replace(
+                found, is_job_related=True, category=category,
+                other_category=OtherCategory.NOT_APPLICABLE,
+                confidence_score=min(THREAD_CARRIED, lead.classification.confidence_score),
+                reasoning=(found.reasoning + " Read with the rest of its conversation, "
+                           f"which is about {category.label.lower()}: "
+                           f"\u201c{lead.email.subject_display[:60]}\u201d."),
+                adjustments=tuple(found.adjustments) + ("conversation",))
+            carried += 1
+    return carried
 
 
 class ApplyWorker(_BaseWorker):

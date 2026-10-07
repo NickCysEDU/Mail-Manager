@@ -312,6 +312,60 @@ def _part_text(part: Message) -> str:
     return payload.decode("utf-8", "replace")
 
 
+#: The lines of a calendar invitation worth reading, in the order a person
+#: reads them.
+_CALENDAR_LINES = (("SUMMARY", ""), ("DTSTART", "When"), ("DTEND", "Until"),
+                   ("LOCATION", "Where"), ("ORGANIZER", "From"),
+                   ("DESCRIPTION", ""))
+
+
+def _calendar_text(raw: str) -> str:
+    """A calendar invitation as a person would read it: what, when, where,
+    who, and the description. Without this an invitation whose only text is
+    its calendar part showed as an empty message, and sorted as one."""
+    if "BEGIN:VEVENT" not in raw:
+        return ""
+    event = raw.split("BEGIN:VEVENT", 1)[1].split("END:VEVENT", 1)[0]
+    # Folded lines: a continuation starts with a space or a tab.
+    unfolded = re.sub(r"\r?\n[ \t]", "", event)
+    found: Dict[str, str] = {}
+    for line in unfolded.splitlines():
+        name, _, value = line.partition(":")
+        key = name.split(";", 1)[0].strip().upper()
+        if key in dict(_CALENDAR_LINES) and key not in found:
+            value = value.strip().replace("\\n", "\n").replace("\\,", ",")
+            if key == "ORGANIZER":
+                value = re.sub(r"^mailto:", "", value, flags=re.I)
+            if key in ("DTSTART", "DTEND"):
+                value = _calendar_when(value)
+            found[key] = value
+    lines = []
+    for key, label in _CALENDAR_LINES:
+        value = found.get(key, "")
+        if not value:
+            continue
+        if key == "SUMMARY":
+            lines.append(f"Calendar invitation: {value}")
+        elif key == "DESCRIPTION":
+            lines.append("")
+            lines.append(value)
+        else:
+            lines.append(f"{label}: {value}")
+    return "\n".join(lines).strip()
+
+
+def _calendar_when(value: str) -> str:
+    """20261005T150000Z and the like, as a date and time a person reads."""
+    found = re.match(r"^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})?(Z?))?", value)
+    if not found:
+        return value
+    year, month, day, hour, minute, _second, zulu = found.groups()
+    when = f"{year}-{month}-{day}"
+    if hour:
+        when += f" {hour}:{minute}" + (" UTC" if zulu else "")
+    return when
+
+
 def extract_body(message: Message) -> Tuple[html_utils.ExtractedText, Tuple[str, ...], str]:
     """Reduce a parsed message to plain text, attachment filenames, and the
     HTML body as sent (empty for plain mail).
@@ -343,6 +397,10 @@ def extract_body(message: Message) -> Tuple[html_utils.ExtractedText, Tuple[str,
                 plain_parts.append(text)
         elif content_type == "text/html":
             html_parts.append(_part_text(part))
+        elif content_type == "text/calendar":
+            invitation = _calendar_text(_part_text(part))
+            if invitation:
+                plain_parts.append(invitation)
 
     plain = "\n\n".join(p for p in plain_parts if p).strip()
     html = "\n\n".join(p for p in html_parts if p).strip()

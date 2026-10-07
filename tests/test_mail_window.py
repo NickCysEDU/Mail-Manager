@@ -456,3 +456,31 @@ class TestNothingIsCutOff:
                               unsigned.accounts, unsigned.accounts[0])
         windows.append(blank)
         assert blank.editor.text() == "", "nothing to write above, so no blank lines"
+
+
+class TestAMessageWithNothingToRead:
+    def test_the_window_says_what_it_carries(self, windows):
+        from mail_window import MessageWindow
+
+        owner = _Owner()
+        owner.model.items[0].email.body_html = "<html><body><div><br></div></body></html>"
+        owner.model.items[0].email.body_text = ""
+        owner.model.items[0].email.attachments = ("notes.md", "cv.pdf")
+        window = MessageWindow(owner, 0)
+        windows.append(window)
+        shown = window.view.toPlainText()
+        assert shown.startswith("This message has no text.")
+        assert "2 attachments" in shown and "notes.md" in shown and "cv.pdf" in shown
+        owner.model.items[0].email.attachments = ()
+        window.refresh()
+        assert window.view.toPlainText() == "This message has no text."
+
+    def test_pictures_alone_are_still_drawn(self, windows):
+        from mail_window import MessageWindow
+
+        owner = _Owner()
+        owner.model.items[0].email.body_html = '<p><img src="data:image/png;base64,iVBORw0KGgo=" alt="logo"></p>'
+        owner.model.items[0].email.body_text = ""
+        window = MessageWindow(owner, 0)
+        windows.append(window)
+        assert "no text" not in window.view.toPlainText()

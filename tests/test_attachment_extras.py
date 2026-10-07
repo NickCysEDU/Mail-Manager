@@ -14345,3 +14345,58 @@ class TestAddingTracks:
         qtbot.addWidget(plain)
         assert "Nothing is attached" in plain.heading.text()
         assert not plain.acceptDrops()
+
+
+class TestTheBassStrobeFollowsTheDrums:
+    """Where the coarse map never locked a tempo, the Bass source's grid is
+    the drums' own beat, lit as hard as the nearest kick."""
+
+    def _spectrum(self, qtbot, locked: bool):
+        from array import array
+
+        import attachment_audio
+        import beatmap
+        from attachment_widgets import Spectrum
+
+        spectrum = Spectrum()
+        qtbot.addWidget(spectrum)
+        spectrum.set_frames(
+            [array("f", [0.4] * attachment_audio.BANDS) for _ in range(300)],
+            attachment_audio.RATE)
+        onsets = tuple(beatmap.Beat(at=0.25 + n * 0.25, strength=0.5) for n in range(60))
+        spectrum.set_beats({"Bass": beatmap.BeatMap(beats=onsets, bpm=126.0, locked=locked)})
+        kicks = tuple(beatmap.Beat(at=0.1 + n * 0.5, strength=0.9 if n % 2 else 0.7)
+                      for n in range(30))
+        spectrum.set_elements({"Kick": beatmap.BeatMap(beats=kicks)})
+        return spectrum
+
+    def test_an_unlocked_bass_map_takes_the_drums_grid(self, qtbot):
+        spectrum = self._spectrum(qtbot, locked=False)
+        spectrum.set_rhythm({"tempo": 120.0, "phase": 0.1, "faster": 1, "beats": None})
+        found = spectrum._beats["Bass"]
+        assert found.locked and abs(found.bpm - 120.0) < 1e-6
+        gaps = {round(b.at - a.at, 3) for a, b in zip(found.beats, found.beats[1:])}
+        assert gaps == {0.5}, "one line a beat, nothing between"
+        assert abs(found.beats[0].at - 0.1) < 1e-6, "phased from the drums"
+        assert found.beats[-1].at >= 14.5, "to the end of the track"
+        strengths = {round(b.strength, 2) for b in found.beats[:30]}
+        assert strengths == {0.7, 0.9}, "lit as hard as the nearest kick"
+        assert all(b.strength >= 0.55 for b in found.beats)
+
+    def test_a_locked_map_and_no_tempo_are_left_alone(self, qtbot):
+        spectrum = self._spectrum(qtbot, locked=True)
+        before = spectrum._beats["Bass"]
+        spectrum.set_rhythm({"tempo": 120.0, "phase": 0.1, "faster": 1, "beats": None})
+        assert spectrum._beats["Bass"] is before
+        loose = self._spectrum(qtbot, locked=False)
+        first = loose._beats["Bass"]
+        loose.set_rhythm({"tempo": 0.0, "phase": 0.0, "faster": 1, "beats": None})
+        loose.set_rhythm(None)
+        assert loose._beats["Bass"] is first
+
+    def test_a_moving_tempo_uses_the_drums_own_beats(self, qtbot):
+        spectrum = self._spectrum(qtbot, locked=False)
+        times = [0.1 + n * 0.5 for n in range(10)] + [5.1 + n * 0.6 for n in range(10)]
+        spectrum.set_rhythm({"tempo": 110.0, "phase": 0.1, "faster": 1, "beats": times})
+        found = spectrum._beats["Bass"]
+        assert [round(b.at, 3) for b in found.beats] == [round(t, 3) for t in times]

@@ -490,13 +490,80 @@ def pictures_in(html: str) -> list:
     return found
 
 
+_COLOUR_DECL = re.compile(r"(?<![\w-])(color)\s*:\s*([^;}\"']+)", re.I)
+_BACKGROUND_DECL = re.compile(r"background(?:-color)?\s*:\s*([^;}\"']+)", re.I)
+_HEX = re.compile(r"^#([0-9a-f]{3}|[0-9a-f]{6})$", re.I)
+_RGB = re.compile(r"^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)", re.I)
+_NAMED = {"white": 1.0, "black": 0.0, "snow": 0.99, "ivory": 0.99, "whitesmoke": 0.96,
+          "ghostwhite": 0.97, "silver": 0.75, "gray": 0.5, "grey": 0.5, "lightgray": 0.83,
+          "lightgrey": 0.83, "darkgray": 0.66, "darkgrey": 0.66, "dimgray": 0.41,
+          "navy": 0.06, "midnightblue": 0.1, "maroon": 0.15, "darkslategray": 0.17,
+          "darkslategrey": 0.17, "indigo": 0.12, "purple": 0.2, "darkblue": 0.07,
+          "darkgreen": 0.19, "darkred": 0.16, "brown": 0.23}
+
+
+def luminance(colour: str) -> Optional[float]:
+    """How light a CSS colour is, 0 to 1, or None for one this cannot read."""
+    text = re.sub(r"\s*!\s*important\s*$", "", (colour or "").strip().lower())
+    if text in _NAMED:
+        return _NAMED[text]
+    found = _HEX.match(text)
+    if found:
+        digits = found.group(1)
+        if len(digits) == 3:
+            digits = "".join(ch * 2 for ch in digits)
+        r, g, b = (int(digits[i:i + 2], 16) for i in (0, 2, 4))
+    else:
+        found = _RGB.match(text)
+        if not found:
+            return None
+        r, g, b = (min(255, int(value)) for value in found.groups())
+    return round((0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0, 4)
+
+
+#: Text lighter than this vanishes on the light page a message is shown on.
+PALE_TEXT = 0.72
+#: A background darker than this is a dark design, whose pale text is meant.
+DARK_PAGE = 0.40
+
+
+def has_dark_background(html: str) -> bool:
+    """Whether the message paints any dark background of its own: then its
+    pale text sits on it and is left alone."""
+    for value in re.findall(r'bgcolor\s*=\s*["\']?\s*([^"\'\s>]+)', html or "", re.I):
+        light = luminance(value)
+        if light is not None and light < DARK_PAGE:
+            return True
+    for value in _BACKGROUND_DECL.findall(html or ""):
+        light = luminance(value.split()[0] if value.strip() else "")
+        if light is not None and light < DARK_PAGE:
+            return True
+    return False
+
+
+def _readable_css(css: str) -> str:
+    """Pale text colours darkened, for a message shown on a light page that
+    paints no dark background of its own."""
+    def darken(match):
+        light = luminance(match.group(2))
+        if light is not None and light >= PALE_TEXT:
+            return f"{match.group(1)}: #333333"
+        return match.group(0)
+
+    return _COLOUR_DECL.sub(darken, css)
+
+
 class _Cleaner(HTMLParser):
     """Writes the document back out with the dangerous parts left out."""
 
-    def __init__(self, pictures: bool = False, families=None) -> None:
+    def __init__(self, pictures: bool = False, families=None,
+                 dark_page: bool = False) -> None:
         super().__init__(convert_charrefs=False)
         self.pictures = pictures
         self.families = families
+        #: Whether the message paints its own dark background; without one it
+        #: is shown on a light page, where its pale text would vanish.
+        self.dark_page = dark_page
         self.out: List[str] = []
         self._skipping = 0
         self._in_style = False
@@ -537,6 +604,12 @@ class _Cleaner(HTMLParser):
                 continue
             if name == "style":
                 value = _known_fonts(_CSS_URL.sub("none", value), self.families)
+                if not self.dark_page:
+                    value = _readable_css(value)
+            if name in ("color", "text") and not self.dark_page:
+                light = luminance(value)
+                if light is not None and light >= PALE_TEXT:
+                    value = "#333333"
             if name == "face" and self.families is not None and (
                     value.strip().lower() not in self.families):
                 continue
@@ -561,6 +634,8 @@ class _Cleaner(HTMLParser):
             return
         if self._in_style:
             data = _known_fonts(_CSS_URL.sub("none", data), self.families)
+            if not self.dark_page:
+                data = _readable_css(data)
         self.out.append(data)
 
     def handle_entityref(self, name):
@@ -613,7 +688,7 @@ def sanitise_for_view(html: str, pictures: bool = False,
     when they are wanted. Whatever is left can still not fetch anything of
     its own: the view refuses every resource, and fetches the pictures
     itself."""
-    cleaner = _Cleaner(pictures, families)
+    cleaner = _Cleaner(pictures, families, dark_page=has_dark_background(html or ""))
     cleaner.feed(defuse_stray_brackets(html or ""))
     cleaner.close()
     return "".join(cleaner.out)

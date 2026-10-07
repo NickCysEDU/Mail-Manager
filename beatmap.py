@@ -82,7 +82,8 @@ LOW, MID, HIGH = (0.00, 0.25), (0.25, 0.64), (0.64, 1.00)
 #: lower floor calls every kick a hat; a hat landing on a kick is mostly kick
 #: and cannot be recovered from shares.
 PROFILE: Dict[str, dict] = {
-    "Kick":  {"top": (0.00, 0.20), "leads": "bottom"},
+    "Kick":  {"top": (0.00, 0.20), "leads": "bottom", "attack": 2.0,
+              "attack_floor": 1.15},
     "Snare": {"bottom": (0.00, 0.85), "middle": (0.14, 1.01),
               "top": (0.01, 0.25)},
     "Hats":  {"top": (0.10, 1.01)},
@@ -90,6 +91,80 @@ PROFILE: Dict[str, dict] = {
     "Synth": {"bottom": (0.00, 0.62), "middle": (0.30, 1.01),
               "top": (0.02, 1.01)},
 }
+
+
+#: How a kick's own attack tells it from a bass note in the same band: the
+#: bottom jumps, where a note swells. On four real recordings the kick
+#: candidates on the drums' beat rose 2.3 to 30 times over the fifty
+#: milliseconds before them at the median, and the ones between beats 1.2
+#: to 1.6; the bar is 2.0. Before it, a tech-house bassline's off-beat notes
+#: were kicks, and a four-on-the-floor track had a kick every eighth. The
+#: click of the beater, measured as how much of the rest of the spectrum
+#: rose, told the two apart not at all, and is not asked for.
+#:
+#: Under a held sub bass the band is loud already and a kick's jump is
+#: smaller: on a written kit of that kind the kicks rose 1.5 to 1.7 times,
+#: under the bar, while a real bassline's stabs reach 2.2. What tells those
+#: apart is time, not level: a smaller rise is a kick only if it lands
+#: where the unmistakable kicks land. The beat comes from the drums' own
+#: reading (trackstyle.rhythm_of), right on every written kit and real
+#: record tried, where a fold of the hard kicks alone was not. Which
+#: division of it a smaller rise may land on is the division the hard
+#: kicks keep to: the beat on four-to-the-floor, so a bassline's stabs on
+#: the eighths are left out; the eighths or the sixteenths where the kicks
+#: themselves are syncopated. With no beat to believe, every smaller rise
+#: is kept, as it always was.
+ATTACK_BEFORE = 3
+ATTACK_SPAN = 2
+#: How far from the beat a smaller rise may land and still be a kick: a
+#: sixteenth at 120 BPM is 125 ms, and a kick under a beating sub is placed
+#: a few frames out.
+ON_THE_BEAT = 0.06
+#: The share of the sure kicks that must keep to a division for it to be
+#: the pattern's: under a bassline a quarter of the rises that clear the
+#: bar are the bassline's own hardest stabs, between the beats.
+KEEPS_TO = 0.65
+
+
+def attack(frames: Sequence, at: int, low: float, high: float,
+           before: int = ATTACK_BEFORE, span: int = ATTACK_SPAN) -> float:
+    """How many times louder a band is just after a moment than just
+    before it: a hit's rise, as against a note's swell."""
+    if at <= 0 or at >= len(frames):
+        return 0.0
+    bands = len(frames[0])
+    start = max(0, min(bands - 1, int(bands * low)))
+    stop = max(start + 1, min(bands, int(math.ceil(bands * high))))
+    earlier = [frames[index] for index in range(max(0, at - before), at)]
+    later = [frames[index] for index in range(at, min(len(frames), at + span + 1))]
+    if not earlier or not later:
+        return 0.0
+    was = sum(sum(frame[start:stop]) for frame in earlier) / len(earlier)
+    now = max(sum(frame[start:stop]) for frame in later)
+    return now / max(1e-6, was)
+
+
+def _lands(at: float, phase: float, step: float, within: float) -> bool:
+    off = (at - phase) % step
+    return min(off, step - off) <= within
+
+
+def on_the_beat(hits: Sequence[Beat], weaker: Sequence[Beat],
+                bpm: float, phase: float,
+                within: float = ON_THE_BEAT) -> Optional[List[Beat]]:
+    """The weaker candidates that land where the hits land on a beat of
+    ``bpm`` phased at ``phase``: on the beat itself where the hits keep to
+    it, else the eighths, else the sixteenths. None where there is no beat
+    or too few hits to say where they keep to: keep them all."""
+    if len(hits) < 6 or bpm <= 0:
+        return None
+    period = 60.0 / bpm
+    for division in (1, 2, 4):
+        step = period / division
+        keeping = sum(1 for hit in hits if _lands(hit.at, phase, step, within))
+        if keeping >= KEEPS_TO * len(hits):
+            break
+    return [beat for beat in weaker if _lands(beat.at, phase, step, within)]
 
 
 def fits(profile: Optional[dict], bottom: float, middle: float,
@@ -438,10 +513,12 @@ def elements(frames: Sequence, rate: float,
     if not frames or rate <= 0:
         return {name: BeatMap() for name in ELEMENTS}
     profiles: Dict[int, Tuple[float, float, float]] = {}
+    set_aside: Dict[str, List[Beat]] = {}
     for name, (low, high, gap) in ELEMENTS.items():
         envelope = flux(frames, low, high)
         kept: List[Beat] = []
         wants = PROFILE.get(name)
+        weaker: List[Beat] = []
         for beat in onsets(envelope, rate, sensitivity, gap=gap):
             index = int(round(beat.at * rate))
             if index not in profiles:
@@ -449,13 +526,42 @@ def elements(frames: Sequence, rate: float,
             bottom, middle, top = profiles[index]
             if not fits(wants, bottom, middle, top):
                 continue
+            # A kick has to arrive like one: a jump in its band. A smaller
+            # jump is set aside, to be kept only if it lands on the beat the
+            # unmistakable ones set.
+            if wants and "attack" in wants:
+                rise = attack(frames, index, low, high)
+                if rise < wants["attack"]:
+                    if rise >= wants.get("attack_floor", wants["attack"]):
+                        weaker.append(beat)
+                    continue
             kept.append(beat)
+        set_aside[name] = weaker
         # Rounded: three places is a thousandth of the range, and halves what
         # crosses between processes.
         found[name] = BeatMap(beats=tuple(kept),
                               flux=tuple(round(value, 3) for value in envelope)
                               if name in KEPT_FLUX else (),
                               rate=float(rate))
+    # The smaller rises in the kick's band, once the drums' beat is known
+    # to measure them against: kept where they land with the sure kicks,
+    # all kept where no beat can be believed.
+    weaker = set_aside.get("Kick", [])
+    if weaker:
+        import trackstyle
+
+        kicks = found["Kick"]
+        rhythm = trackstyle.rhythm_of(found) or {}
+        bpm = float(rhythm.get("tempo") or 0.0)
+        phase = float(rhythm.get("phase") or 0.0)
+        if not bpm:
+            bpm, score, phase = tempo_of(kicks.beats)
+            if score < LOCK_SCORE * 0.8:
+                bpm = 0.0
+        rescued = on_the_beat(kicks.beats, weaker, bpm, phase)
+        together = sorted(list(kicks.beats) + (weaker if rescued is None else rescued),
+                          key=lambda b: b.at)
+        found["Kick"] = BeatMap(beats=tuple(together), flux=kicks.flux, rate=kicks.rate)
     return found
 
 

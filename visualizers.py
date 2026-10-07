@@ -3807,6 +3807,9 @@ class Rider(Scene):
     #: How much of that each kind of section gets: calm parts wind most.
     BEND_SHARE = {"drop": 0.6, "groove": 0.75, "build": 0.6,
                   "break": 1.0, "intro": 0.95, "outro": 0.95}
+    #: The quiet kinds, and how much shorter their phrases of road are.
+    CALM = frozenset({"break", "intro", "outro"})
+    CALM_PHRASE = 0.5
 
     def _bends(self, count: int) -> list:
         """A turn a phrase long, one way and then mostly the other: long sweeps
@@ -3835,15 +3838,18 @@ class Rider(Scene):
         segment = -1
         for index in range(count):
             when = index / rate
-            here = int(max(0.0, when - first) // length)
+            section = style.section_at(when)
+            kind = section.kind if section else "groove"
+            share = self.BEND_SHARE.get(kind, 0.6)
+            # A quiet passage winds: its turns come twice as often, so the
+            # road sweeps one way and the other rather than holding a line.
+            stretch = length * (self.CALM_PHRASE if kind in self.CALM else 1.0)
+            here = int(max(0.0, when - first) // stretch)
             if here != segment:
                 segment = here
                 if rng.random() < 0.8:
                     direction = -direction
-            section = style.section_at(when)
-            share = self.BEND_SHARE.get(section.kind if section else "groove",
-                                        0.6)
-            phase = (max(0.0, when - first) % length) / length
+            phase = (max(0.0, when - first) % stretch) / stretch
             pull = math.sin(math.pi * phase) ** 2
             run += direction * self.BEND_RATE * share * pull / rate
             out.append(run)

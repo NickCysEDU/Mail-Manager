@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import QEvent, Qt, QUrl, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, QUrl, Signal
 from PySide6.QtGui import (QAction, QColor, QFont, QKeySequence,
                            QTextCharFormat, QTextCursor, QTextListFormat)
 from PySide6.QtWidgets import (QColorDialog, QComboBox, QCompleter,
@@ -22,12 +22,39 @@ from PySide6.QtWidgets import (QColorDialog, QComboBox, QCompleter,
                                QTextEdit, QToolBar, QToolButton, QVBoxLayout,
                                QWidget)
 
+import icons
 import outgoing
 from widgets import _html, _paint_button
+
+#: The Touch Bar's picture names, as the buttons' own icons.
+_ICONS = {
+    "arrowshape.turn.up.left": "reply", "arrowshape.turn.up.left.2": "reply-all",
+    "arrowshape.turn.up.right": "forward", "envelope.badge": "unread", "flag": "flag",
+    "archivebox": "archive", "xmark.bin": "junk", "trash": "trash",
+    "chevron.up": "previous", "chevron.down": "next", "paperplane": "send",
+    "tray.and.arrow.down": "draft", "paperclip": "attach",
+}
+
+
+def _ink(widget) -> str:
+    """The colour the icons are drawn in: the text's."""
+    from PySide6.QtGui import QPalette
+
+    return widget.palette().color(QPalette.ColorRole.WindowText).name()
 
 #: The sizes the editor offers, in points: three steps, which is what a
 #: letter needs.
 SIZES = ((11.0, "Small"), (13.0, "Normal"), (16.0, "Large"), (22.0, "Huge"))
+
+
+def _nothing_to_read(attachments) -> str:
+    """What to show for a message with no text: what it carries."""
+    names = [name for name in (attachments or ()) if name]
+    if not names:
+        return "This message has no text."
+    listed = "\n".join(f"  \u2022 {name}" for name in names)
+    return (f"This message has no text. It carries {len(names)} "
+            f"attachment{'' if len(names) == 1 else 's'}:\n{listed}")
 
 
 def _action(parent, text: str, shortcut: str = "", slot=None,
@@ -41,6 +68,9 @@ def _action(parent, text: str, shortcut: str = "", slot=None,
         action.triggered.connect(slot)
     if icon:
         action.setData(icon)
+        name = _ICONS.get(icon)
+        if name:
+            action.setIcon(icons.icon(name, _ink(parent)))
     return action
 
 
@@ -176,7 +206,10 @@ class MessageWindow(QMainWindow):
 
         bar = QToolBar("Message")
         bar.setMovable(False)
-        bar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        bar.setIconSize(QSize(18, 18))
+        bar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.move_button.setIcon(icons.icon("move", _ink(self)))
+        self.move_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         for action in (self.reply_action, self.reply_all_action,
                        self.forward_action):
             bar.addAction(action)
@@ -302,17 +335,24 @@ class MessageWindow(QMainWindow):
         if message.account_label:
             lines.append(f"<b>Mailbox:</b> {_html(message.account_label)}")
         self.who.setText("<br>".join(lines))
-        if message.body_html:
-            self.view.show_message(message.body_html)
-        else:
-            self.view.setPlainText(message.body_text or "(this message had no readable text body)")
         names = message.attachments or ()
+        if message.body_html and (message.body_text.strip()
+                                  or "<img" in message.body_html.lower()):
+            self.view.show_message(message.body_html)
+        elif message.body_text.strip():
+            self.view.setPlainText(message.body_text)
+        else:
+            # An HTML shell with nothing in it, or no body at all: say so,
+            # and what the message carries instead, rather than a blank page.
+            self.view.setPlainText(_nothing_to_read(names))
         self.attachments_button.setVisible(bool(names))
         self.attachments_button.setText(
             f"Attachments ({len(names)})" if names else "Attachments")
         flags = {f.lower() for f in (message.flags or ())}
         self.read_action.setText("Mark as Unread" if "\\seen" in flags
                                  else "Mark as Read")
+        self.read_action.setIcon(icons.icon(
+            "unread" if "\\seen" in flags else "read", _ink(self)))
         self.flag_action.blockSignals(True)
         self.flag_action.setChecked("\\flagged" in flags)
         self.flag_action.blockSignals(False)
@@ -750,9 +790,11 @@ class ComposeWindow(QMainWindow):
 
         bar = QToolBar("Message")
         bar.setMovable(False)
-        bar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        bar.setIconSize(QSize(18, 18))
+        bar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         # Send is a proper button, painted as the one thing to press.
         self.send_button = QPushButton("Send")
+        self.send_button.setIcon(icons.icon("send", "#ffffff"))
         self.send_button.setToolTip("Send it (⌘↩).")
         self.send_button.clicked.connect(self.send)
         _paint_button(self.send_button, "primary")

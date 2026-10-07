@@ -780,3 +780,22 @@ class TestThePreviewPane:
             assert "Unread" not in pane.header.text() and "⚑ Flagged" in pane.header.text()
         finally:
             pane.deleteLater()
+
+
+class TestThePreviewOfAnEmptyMessage:
+    def test_an_html_shell_shows_as_text_naming_its_attachments(self, qapp):
+        from triage_table import PreviewPane
+
+        pane = PreviewPane()
+        try:
+            empty = item("1", body_html="<html><body><div><br></div></body></html>",
+                         body_text="", attachments=("notes.md",))
+            pane.show_item(0, empty)
+            assert pane.body_stack.currentWidget() is pane.body_view
+            assert "This message has no text" in pane.body_view.toPlainText()
+            assert "notes.md" in pane.body_view.toPlainText()
+            full = item("2")
+            pane.show_item(1, full)
+            assert pane.body_stack.currentWidget() is pane.rich_view
+        finally:
+            pane.deleteLater()

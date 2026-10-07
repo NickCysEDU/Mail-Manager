@@ -810,9 +810,16 @@ class TestTheKitIsReadInEveryStyle:
     #: The least each style may score, as a mean F1 over kick, snare and hats,
     #: with several points of room: a floor catches a change of behaviour
     #: rather than pinning a number.
+    #: Trap was 48 until the kick learnt to arrive like one (beatmap.attack):
+    #: this kit's kicks are short, soft hits on the sixteenths, which rise
+    #: too little to clear the bar and sit off the beat the sure ones set.
+    #: No real trap record tried has them - its 808s rise ten times harder -
+    #: and on nine recordings the kicks found went from half between the
+    #: beats to nearly all on them. Measured: 46, from 48, with the kick at
+    #: 38/89 where it was 97/74.
     FLOORS = {
         "house": 60, "techno": 68, "trance": 75, "dubstep": 57,
-        "trap": 48, "dnb": 61, "garage": 67, "breaks": 69,
+        "trap": 45, "dnb": 61, "garage": 67, "breaks": 69,
         "rock": 85, "hiphop": 59, "jazz": 80,
     }
 

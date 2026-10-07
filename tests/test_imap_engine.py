@@ -826,3 +826,51 @@ class TestTheCopyReceipt:
         assert _expand_uid_set("1:3,7,10:11") == ["1", "2", "3", "7", "10", "11"]
         assert _expand_uid_set("") == []
         assert _expand_uid_set("not,a,set") == ["not", "a", "set"]
+
+
+class TestACalendarInvitationIsRead:
+    """An invitation whose only text is its calendar part used to arrive as
+    an empty message; it is read as what, when, where and who."""
+
+    def _invite(self, description="Microsoft Teams meeting\\nJoin: https://teams.example/x"):
+        import email.message
+
+        message = email.message.EmailMessage()
+        message["Subject"] = "Xxxxxx - XX Xxxxxxx - Teams Call"
+        message["From"] = "Xxxxxx Xxxxx <xxxxxx.xxxxx@xxxxxxxxxx.example>"
+        message["To"] = "you@icloud.example"
+        message.set_content("")
+        message.add_alternative("<html><body><div><br></div></body></html>", subtype="html")
+        calendar = (
+            "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\n"
+            "SUMMARY:Xxxxxx - XX Xxxxxxx - Teams\r\n  Call\r\n"
+            "DTSTART;TZID=Xxxxxxx/Xxxxxxx:00000000X000000\r\n"
+            "DTEND;TZID=Xxxxxxx/Xxxxxxx:00000000X000000\r\n"
+            "LOCATION:Microsoft Teams\r\n"
+            "ORGANIZER;CN=Xxxxxx Xxxxx:mailto:xxxxxx.xxxxx@xxxxxxxxxx.example\r\n"
+            f"DESCRIPTION:{description}\r\n"
+            "END:VEVENT\r\nEND:VCALENDAR\r\n")
+        message.add_attachment(calendar.encode("utf-8"), maintype="text", subtype="calendar",
+                               disposition="inline", filename=None)
+        return message.as_bytes()
+
+    def test_the_invitation_becomes_the_text(self):
+        from imap_engine import parse_message
+
+        found = parse_message(self._invite(), "7")
+        assert found.body_text.startswith("Calendar invitation: Xxxxxx - XX Xxxxxxx - Teams Call")
+        assert "When: 0000-00-00 00:00" in found.body_text
+        assert "Until: 0000-00-00 00:00" in found.body_text
+        assert "Where: Microsoft Teams" in found.body_text
+        assert "From: xxxxxx.xxxxx@xxxxxxxxxx.example" in found.body_text
+        assert "Microsoft Teams meeting" in found.body_text
+        assert "Join: https://teams.example/x" in found.body_text
+        assert found.attachments == ()
+
+    def test_a_calendar_part_with_no_event_adds_nothing(self):
+        from imap_engine import _calendar_text, _calendar_when
+
+        assert _calendar_text("BEGIN:VCALENDAR\r\nEND:VCALENDAR") == ""
+        assert _calendar_when("20261005T150000Z") == "2026-10-05 15:00 UTC"
+        assert _calendar_when("20261005") == "2026-10-05"
+        assert _calendar_when("next tuesday") == "next tuesday"

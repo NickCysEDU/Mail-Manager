@@ -55,7 +55,7 @@ rules finish the scan; a rejected key is reported instead.
 
 ### The built-in rules
 
-`rules_engine.py` scores 1,082 weighted signals: phrases, senders, links and
+`rules_engine.py` scores 1,088 weighted signals: phrases, senders, links and
 the shape of a message. It copes with messy text (mojibake, accents, smart
 quotes, zero-width characters, look-alike letters, spaced-out words) and has
 phrases in Spanish, French, German and Portuguese for the commonest verdicts.
@@ -179,7 +179,9 @@ sender. Patterns that could hang the app, such as `(a+)+`, are refused.
 ## Reading and replying
 
 Double-click a message, or press Return on it, and it opens in a window of
-its own with the whole message as sent. Along the top: Reply (⌘R), Reply All
+its own with the whole message as sent, on its own light page whatever the
+app's look; a message with no dark design of its own has any pale text
+darkened so it can be read. Along the top: Reply (⌘R), Reply All
 (⌘⇧R), Forward (⌘⇧F), Mark as Read or Unread, Flag, Move to, Archive (⌘E),
 Junk and Delete (⌘⌫). ⌘↑ and ⌘↓ walk the table in the order it is shown.
 Opening a message marks it read, as it would anywhere else. The same actions
@@ -236,7 +238,9 @@ you open is downloaded, and nothing is ever run:
 
 Audio files can be played with a music visualiser, including a game. Its
 strobe is off by default; at its fastest it can trigger photosensitive
-epilepsy.
+epilepsy. The strobe set to Bass follows the drums' own beat once the
+track has been read, and the game's road is a curve that winds more in the
+quiet parts; kicks are told from bass notes by how they arrive.
 
 **Links** lists every link in a message by the site it really goes to, to open
 or copy. Opening one, from there or from the analysis, first shows the site and
@@ -296,7 +300,7 @@ See [SECURITY.md](../SECURITY.md) for reporting a problem.
 ./dev dry      # scan for real, with moves disabled
 ./dev fake     # the pipeline in the terminal, offline
 ./dev scan     # the pipeline on real mail, read-only
-./dev test     # 4,875 tests (with the evaluation sets present)
+./dev test     # 4,899 tests (with the evaluation sets present)
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 

@@ -662,11 +662,17 @@ class MailView(QTextBrowser):
         self.setOpenLinks(False)
         self.setSearchPaths([])
         # On its own light page whatever the app's look: a message is laid
-        # out for one, and its dark grey text vanished on a dark base.
+        # out for one, and its dark grey text vanished on a dark base. The
+        # palette alone was not enough: the app's stylesheet paints every
+        # scroll area its own base, and in the dark look that put dark text
+        # on a dark page. A stylesheet on the view itself outranks it.
         page = self.palette()
         page.setColor(QPalette.ColorRole.Base, QColor(255, 255, 255))
         page.setColor(QPalette.ColorRole.Text, QColor(20, 20, 20))
         self.setPalette(page)
+        self.setStyleSheet(
+            "QTextBrowser { background-color: #ffffff; color: #141414; "
+            "selection-background-color: #b3d4fc; selection-color: #141414; }")
         self._pictures = False
         self._html = ""
         self._manager = None
@@ -807,6 +813,11 @@ class PreviewPane(QWidget):
         self.reply_button = QToolButton()
         self.reply_button.setText("Reply")
         self.reply_button.setEnabled(False)
+        import icons
+        from PySide6.QtGui import QPalette
+        self.reply_button.setIcon(icons.icon(
+            "reply", self.palette().color(QPalette.ColorRole.WindowText).name()))
+        self.reply_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.reply_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.reply_button.setProperty("menu", "true")
         self.reply_button.setToolTip("Answer, forward or open this message.")
@@ -1142,16 +1153,19 @@ class PreviewPane(QWidget):
             self.body_stack.setCurrentWidget(self.body_view)
             return
         message = self._item.email
-        text = message.body_text or "(this message had no readable text body)"
+        text = message.body_text or _nothing_to_read(message.attachments)
         if message.links:
             text += "\n\n--- LINKS ---\n" + "\n".join(f"• {link}" for link in message.links)
         if message.attachments:
             text += "\n\n--- ATTACHMENTS ---\n" + "\n".join(
                 f"• {_attachment_line(a)}" for a in message.attachments)
         self.body_view.setPlainText(text)
-        # The message as sent where there is HTML to draw; plain mail is its
+        # The message as sent where there is HTML with something in it to
+        # draw; plain mail, and an HTML shell with nothing inside, are their
         # text either way.
-        if mode == 0 and message.body_html:
+        drawable = bool(message.body_html) and (
+            bool(message.body_text.strip()) or "<img" in message.body_html.lower())
+        if mode == 0 and drawable:
             self.rich_view.show_message(message.body_html)
             self.body_stack.setCurrentWidget(self.rich_view)
         else:
@@ -1340,6 +1354,13 @@ def _reasoning_html(item: TriageItem) -> str:
     )
     return f"<table style='font-size:13px'>{body}</table>"
 
+
+
+def _nothing_to_read(attachments) -> str:
+    """What to show for a message with no text: what it carries."""
+    from mail_window import _nothing_to_read as same
+
+    return same(attachments)
 
 
 def _attachment_line(name: str) -> str:

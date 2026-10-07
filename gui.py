@@ -1861,12 +1861,17 @@ class MainWindow(QMainWindow):
         """What can be done to the selected messages, as any mail client
         offers it: written to, marked, and moved. Ticking and filing for
         the next Apply stay in the Edit menu and on the table."""
+        import icons
+
+        ink = self.palette().color(self.palette().ColorRole.WindowText).name()
         menu = menubar.addMenu("&Message")
         new_message = QAction("&New Message", self)
+        new_message.setIcon(icons.icon("compose", ink))
         new_message.setShortcut(QKeySequence("Ctrl+N"))
         new_message.triggered.connect(lambda: self.compose("new"))
         menu.addAction(new_message)
         self.open_message_action = QAction("&Open Message", self)
+        self.open_message_action.setIcon(icons.icon("open", ink))
         self.open_message_action.setShortcut(QKeySequence("Ctrl+O"))
         self.open_message_action.setStatusTip(
             "Read the selected message in a window of its own. A double-click "
@@ -1878,15 +1883,18 @@ class MainWindow(QMainWindow):
         for label, mode in (("&Reply", "reply"), ("Reply &All", "reply_all"),
                             ("&Forward", "forward")):
             action = QAction(label, self)
+            action.setIcon(icons.icon(mode.replace("_", "-"), ink))
             action.triggered.connect(lambda checked=False, m=mode: self._compose_selected(m))
             menu.addAction(action)
             self.compose_actions[mode] = action
         menu.addSeparator()
         self.mark_read_action = QAction("Mark as Read", self)
+        self.mark_read_action.setIcon(icons.icon("read", ink))
         self.mark_read_action.setShortcut(QKeySequence("Ctrl+Shift+U"))
         self.mark_read_action.triggered.connect(lambda: self._act_on_selected("read"))
         menu.addAction(self.mark_read_action)
         self.mark_flag_action = QAction("Flag", self)
+        self.mark_flag_action.setIcon(icons.icon("flag", ink))
         self.mark_flag_action.setShortcut(QKeySequence("Ctrl+Shift+L"))
         self.mark_flag_action.triggered.connect(lambda: self._act_on_selected("flag"))
         menu.addAction(self.mark_flag_action)
@@ -1896,6 +1904,7 @@ class MainWindow(QMainWindow):
                                   ("Move to Junk", "junk", "Ctrl+Shift+J"),
                                   ("Delete", "delete", "Ctrl+Backspace")):
             action = QAction(label, self)
+            action.setIcon(icons.icon({"delete": "trash"}.get(what, what), ink))
             action.setShortcut(QKeySequence(keys))
             action.triggered.connect(lambda checked=False, w=what: self._act_on_selected(w))
             menu.addAction(action)
