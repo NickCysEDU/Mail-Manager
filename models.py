@@ -24,7 +24,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 APP_NAME = "Mail Manager"
 APP_DISPLAY_NAME = "Mail Manager"
 APP_BUNDLE_ID = "com.mailmanager.icloudjobtriage"
-APP_VERSION = "1.3.3"
+APP_VERSION = "1.4.0"
 
 #: Confidence at or above which the app is willing to pre-approve a move.
 DEFAULT_CONFIDENCE_THRESHOLD = 0.95
