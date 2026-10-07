@@ -2352,6 +2352,15 @@ class SettingsDialog(QDialog):
             "Links in mail open in your browser. With this on, the address "
             "is shown first and nothing opens until you say.")
         form.addRow("", self.links_check)
+        self.images_check = QCheckBox("Show the pictures in messages")
+        form.addRow("", self.images_check)
+        images_note = QLabel(
+            "A message's pictures are fetched from wherever the sender keeps "
+            "them, which tells the sender it was opened. Off, each one is "
+            "shown as [image].")
+        images_note.setWordWrap(True)
+        images_note.setProperty("dim", "true")
+        form.addRow("", images_note)
         self.updates_check = QCheckBox("Look for new versions")
         form.addRow("", self.updates_check)
         updates_note = QLabel(
@@ -2765,6 +2774,7 @@ class SettingsDialog(QDialog):
         self.readable_check.setChecked(settings.readable)
         self.help_check.setChecked(settings.help_mode)
         self.links_check.setChecked(settings.warn_on_links)
+        self.images_check.setChecked(settings.show_images)
         self.updates_check.setChecked(settings.check_updates)
         self.help_check.toggled.connect(
             lambda on: self.help_button.setChecked(on))
@@ -2848,6 +2858,7 @@ class SettingsDialog(QDialog):
             density=self.density_combo.currentData() or "comfortable",
             help_mode=self.help_check.isChecked(),
             warn_on_links=self.links_check.isChecked(),
+            show_images=self.images_check.isChecked(),
             check_updates=self.updates_check.isChecked(),
             row_lines=self.rows_spin.value(),
             row_lines_auto=self._settings.row_lines_auto and not self._row_lines_touched,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+import html_utils
 from html_utils import (
     ExtractedText,
     clean_body,
@@ -518,3 +519,23 @@ class TestTheMessageAsSent:
         sanitise_for_view("<" * 40_000 + "<p>end</p>")
         assert time.perf_counter() - started < 2.0
 
+
+
+class TestPicturesInTheMessage:
+    PAGE = ('<p>Hi</p><img src="https://pictures.example/a.png" alt="A" '
+            'width="300" height="120px"><img src="https://t.example/p.gif" '
+            'width="1" height="1"><img src="data:image/png;base64,AAAA" alt="d">'
+            '<img src="file:///etc/hosts" alt="f"><img src="https://pictures.example/a.png">')
+
+    def test_wanted_they_are_kept_bar_the_pixels(self):
+        out = html_utils.sanitise_for_view(self.PAGE, pictures=True)
+        assert '<img src="https://pictures.example/a.png" alt="A" width="300" height="120" />' in out
+        assert "t.example" not in out, "a tracking pixel was kept"
+        assert 'src="data:image/png;base64,AAAA"' in out
+        assert "file:" not in out and "[image: f]" in out
+        assert html_utils.pictures_in(out) == ["https://pictures.example/a.png"]
+
+    def test_unwanted_they_are_placeholders(self):
+        out = html_utils.sanitise_for_view(self.PAGE)
+        assert "pictures.example" not in out and "[image: A]" in out
+        assert html_utils.pictures_in(out) == []

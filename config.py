@@ -232,6 +232,9 @@ class Settings:
     help_mode: bool = False
     #: Say where a link from a message goes before opening it.
     warn_on_links: bool = True
+    #: Show the pictures in a message, fetched from wherever it keeps them,
+    #: which tells the sender it was opened.
+    show_images: bool = True
     #: Look on GitHub for a new version, at most once a day. When it last
     #: looked, and a version the person said to skip.
     check_updates: bool = True

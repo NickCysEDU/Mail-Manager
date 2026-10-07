@@ -856,3 +856,106 @@ class TestFileIntoIsAList:
         box.setCurrentIndex(box.count() - 1)
         assert row._value_text() == "Archive/2026"
 
+
+
+class TestThePicturesInAMessage:
+    """With pictures wanted the view fetches each one the message shows and
+    hands it to the sealed document; without, they are placeholders and
+    nothing is asked for."""
+
+    HTML = ('<p>Offer</p><img src="https://pictures.example/coin.png" alt="coin" '
+            'width="40" height="40"><img src="https://t.example/open.gif" width="1" height="1">')
+
+    @staticmethod
+    def _png() -> bytes:
+        from PySide6.QtCore import QBuffer, QIODevice
+        from PySide6.QtGui import QColor, QImage
+
+        image = QImage(4, 4, QImage.Format.Format_RGB32)
+        image.fill(QColor(200, 30, 30))
+        buffer = QBuffer()
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        image.save(buffer, "PNG")
+        return bytes(buffer.data())
+
+    def _pane(self, qtbot, monkeypatch, wanted=True):
+        from dataclasses import replace
+
+        from triage_table import MailView, PreviewPane
+
+        asked = []
+        monkeypatch.setattr(MailView, "_fetch", lambda self, url: asked.append(url))
+        pane = PreviewPane()
+        qtbot.addWidget(pane)
+        pane.set_pictures(wanted)
+        item = next(iter(TestTheMessageIsShownAsSent._items().values()))
+        item.email = replace(item.email, body_html=self.HTML)
+        pane.show_item(0, item)
+        return pane, asked
+
+    def test_each_picture_is_asked_for_once_and_no_pixel(self, qtbot, monkeypatch):
+        pane, asked = self._pane(qtbot, monkeypatch)
+        assert asked == ["https://pictures.example/coin.png"]
+        assert pane.rich_view.pictures_wanted() == []
+        assert "t.example" not in pane.rich_view._html
+
+    def test_a_picture_that_arrives_is_drawn_in_place(self, qtbot, monkeypatch):
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QTextDocument
+
+        pane, _asked = self._pane(qtbot, monkeypatch)
+        view = pane.rich_view
+        url = "https://pictures.example/coin.png"
+        view.add_picture(url, self._png())
+        found = view.document().resource(QTextDocument.ResourceType.ImageResource, QUrl(url))
+        assert found is not None and not found.isNull()
+        assert "coin.png" in view.document().toHtml()
+
+    def test_a_late_picture_for_another_message_is_dropped(self, qtbot, monkeypatch):
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QTextDocument
+
+        pane, _asked = self._pane(qtbot, monkeypatch)
+        view = pane.rich_view
+        view.add_picture("https://elsewhere.example/x.png", self._png())
+        assert view.document().resource(
+            QTextDocument.ResourceType.ImageResource,
+            QUrl("https://elsewhere.example/x.png")) is None
+
+    def test_a_broken_or_outsized_picture_is_ignored(self, qtbot, monkeypatch):
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QTextDocument
+
+        pane, _asked = self._pane(qtbot, monkeypatch)
+        view = pane.rich_view
+        url = "https://pictures.example/coin.png"
+        view.add_picture(url, b"not a picture")
+        view.add_picture(url, b"\x89PNG" + b"\x00" * (view.PICTURE_MOST + 1))
+        assert view.document().resource(
+            QTextDocument.ResourceType.ImageResource, QUrl(url)) is None
+
+    def test_unwanted_nothing_is_asked_for(self, qtbot, monkeypatch):
+        pane, asked = self._pane(qtbot, monkeypatch, wanted=False)
+        assert asked == []
+        assert "[image: coin]" in pane.rich_view._html
+
+    def test_the_document_still_fetches_nothing_itself(self, qtbot, monkeypatch):
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QTextDocument
+
+        pane, _asked = self._pane(qtbot, monkeypatch)
+        document = pane.rich_view.document()
+        for name in ("https://pictures.example/coin.png", "file:///etc/hosts"):
+            assert document.loadResource(
+                QTextDocument.ResourceType.ImageResource, QUrl(name)) is None
+
+    def test_the_setting_goes_through_the_dialog(self, qtbot):
+        from config import InMemoryCredentialStore, Settings
+        from settings_dialog import SettingsDialog
+
+        settings = Settings(icloud_email="you@icloud.example", show_images=False).normalized()
+        dialog = SettingsDialog(settings, InMemoryCredentialStore())
+        qtbot.addWidget(dialog)
+        assert not dialog.images_check.isChecked()
+        dialog.images_check.setChecked(True)
+        assert dialog.collect().show_images

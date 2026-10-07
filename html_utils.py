@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from html import unescape
 from html.parser import HTMLParser
 from typing import Iterable, List, Optional, Sequence, Set, Tuple
 from urllib.parse import unquote, urlparse
@@ -457,11 +458,23 @@ def _safe_link(value: str) -> bool:
     return found is None or found.group(1).lower() in _SAFE_SCHEMES
 
 
+def pictures_in(html: str) -> list:
+    """The pictures a sanitised message asks the view to fetch, once each,
+    in order: http and https only, since nothing else gets this far."""
+    found = []
+    for source in re.findall(r'<img src="([^"]+)"', html):
+        source = unescape(source)
+        if source.lower().startswith(("http://", "https://")) and source not in found:
+            found.append(source)
+    return found
+
+
 class _Cleaner(HTMLParser):
     """Writes the document back out with the dangerous parts left out."""
 
-    def __init__(self) -> None:
+    def __init__(self, pictures: bool = False) -> None:
         super().__init__(convert_charrefs=False)
+        self.pictures = pictures
         self.out: List[str] = []
         self._skipping = 0
         self._in_style = False
@@ -486,7 +499,7 @@ class _Cleaner(HTMLParser):
         if tag in _DROP_TAG or tag in _UNWRAP:
             return
         if tag == "img":
-            self.out.append(_image(attrs))
+            self.out.append(_image(attrs, self.pictures))
             return
         if tag == "style":
             self._in_style = True
@@ -539,18 +552,28 @@ def _attr(value: str) -> str:
             .replace("<", "&lt;").replace(">", "&gt;"))
 
 
-def _image(attrs) -> str:
-    """An embedded image stays; a remote one is a placeholder, or nothing for
-    the pixels mail uses to tell its sender it was opened."""
+def _size(found: dict, name: str) -> float:
+    try:
+        return float(re.sub(r"[^0-9.]", "", found.get(name, "")) or 0)
+    except ValueError:
+        return 0.0
+
+
+def _image(attrs, pictures: bool = False) -> str:
+    """An embedded image stays. A remote one is kept for the view to fetch
+    when pictures are wanted, bar the pixels mail uses to tell its sender it
+    was opened; otherwise it is a placeholder, or nothing for a pixel."""
     found = {name.lower(): (value or "") for name, value in attrs}
     source = found.get("src", "").strip()
     alt = found.get("alt", "").strip()
     if source.lower().startswith("data:image/"):
         return f'<img src="{_attr(source)}" alt="{_attr(alt)}" />'
-    try:
-        wide = float(re.sub(r"[^0-9.]", "", found.get("width", "")) or 0)
-    except ValueError:
-        wide = 0.0
+    wide, tall = _size(found, "width"), _size(found, "height")
+    if (pictures and source.lower().startswith(("http://", "https://"))
+            and not (0.0 < wide <= 2.0 or 0.0 < tall <= 2.0)):
+        size = "".join(f' {name}="{int(value)}"' for name, value
+                       in (("width", wide), ("height", tall)) if value)
+        return f'<img src="{_attr(source)}" alt="{_attr(alt)}"{size} />'
     if alt:
         return f"<span style=\"color:#8a8a8a\">[image: {_attr(alt)}]</span>"
     if wide >= 40.0:
@@ -558,11 +581,13 @@ def _image(attrs) -> str:
     return ""
 
 
-def sanitise_for_view(html: str) -> str:
+def sanitise_for_view(html: str, pictures: bool = False) -> str:
     """The message's HTML with scripts, embeds, forms and every remote
-    reference taken out, for Qt's document engine to draw. Whatever is
-    left can still not fetch anything: the view refuses every resource."""
-    cleaner = _Cleaner()
+    reference taken out, for Qt's document engine to draw, bar the pictures
+    when they are wanted. Whatever is left can still not fetch anything of
+    its own: the view refuses every resource, and fetches the pictures
+    itself."""
+    cleaner = _Cleaner(pictures)
     cleaner.feed(defuse_stray_brackets(html or ""))
     cleaner.close()
     return "".join(cleaner.out)

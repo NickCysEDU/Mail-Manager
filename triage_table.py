@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import List, Optional, Sequence, Tuple
 
-from PySide6.QtCore import (QAbstractTableModel, QModelIndex, QSize,
+from PySide6.QtCore import (QAbstractTableModel, QModelIndex, QSize, QUrl,
                             QSortFilterProxyModel, Qt, Signal, Slot)
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPalette, QTextDocument
 from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel,
@@ -635,7 +635,12 @@ class _SealedDocument(QTextDocument):
 
 class MailView(QTextBrowser):
     """The message as sent, drawn by Qt's own document engine. Nothing the
-    message refers to is ever fetched: no image, no stylesheet, no file."""
+    message refers to is fetched by the document: no stylesheet, no file.
+    With pictures wanted, the view fetches each picture the message shows
+    itself, by http or https, and hands it to the document."""
+
+    #: The most a picture may weigh.
+    PICTURE_MOST = 8 * 1024 * 1024
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -643,9 +648,78 @@ class MailView(QTextBrowser):
         self.setOpenExternalLinks(False)
         self.setOpenLinks(False)
         self.setSearchPaths([])
+        # On its own light page whatever the app's look: a message is laid
+        # out for one, and its dark grey text vanished on a dark base.
+        page = self.palette()
+        page.setColor(QPalette.ColorRole.Base, QColor(255, 255, 255))
+        page.setColor(QPalette.ColorRole.Text, QColor(20, 20, 20))
+        self.setPalette(page)
+        self._pictures = False
+        self._html = ""
+        self._manager = None
+        self._pending: set = set()
 
     def loadResource(self, kind, name):      # noqa: N802 - Qt's name
         return None
+
+    def set_pictures(self, wanted: bool) -> None:
+        self._pictures = bool(wanted)
+
+    def show_message(self, html: str) -> None:
+        self._html = html_utils.sanitise_for_view(html, pictures=self._pictures)
+        self.setHtml(self._html)
+        for url in self.pictures_wanted():
+            self._pending.add(url)
+            self._fetch(url)
+
+    def pictures_wanted(self) -> list:
+        """What is still to fetch for the message on show."""
+        document = self.document()
+        return [url for url in html_utils.pictures_in(self._html)
+                if url not in self._pending and not document.resource(
+                    QTextDocument.ResourceType.ImageResource, QUrl(url))]
+
+    def _fetch(self, url: str) -> None:
+        from PySide6.QtNetwork import QNetworkAccessManager, QNetworkRequest
+
+        if self._manager is None:
+            self._manager = QNetworkAccessManager(self)
+            self._manager.setTransferTimeout(10000)
+            self._manager.finished.connect(self._picture_arrived)
+        request = QNetworkRequest(QUrl(url))
+        request.setAttribute(
+            QNetworkRequest.Attribute.RedirectPolicyAttribute,
+            QNetworkRequest.RedirectPolicy.NoLessSafeRedirectPolicy)
+        request.setMaximumRedirectsAllowed(3)
+        self._manager.get(request)
+
+    def _picture_arrived(self, reply) -> None:
+        from PySide6.QtNetwork import QNetworkReply
+
+        url = reply.request().url().toString()
+        data = (bytes(reply.readAll())
+                if reply.error() == QNetworkReply.NetworkError.NoError else b"")
+        reply.deleteLater()
+        self.add_picture(url, data)
+
+    def add_picture(self, url: str, data: bytes) -> None:
+        """A fetched picture into the message, where it is still the one on
+        show; the view keeps its place."""
+        from PySide6.QtGui import QImage
+
+        self._pending.discard(url)
+        if url not in html_utils.pictures_in(self._html):
+            return
+        if not data or len(data) > self.PICTURE_MOST:
+            return
+        image = QImage.fromData(data)
+        if image.isNull():
+            return
+        self.document().addResource(
+            QTextDocument.ResourceType.ImageResource, QUrl(url), image)
+        scrolled = self.verticalScrollBar().value()
+        self.setHtml(self._html)
+        self.verticalScrollBar().setValue(scrolled)
 
 
 class PreviewPane(QWidget):
@@ -1025,10 +1099,15 @@ class PreviewPane(QWidget):
         # The message as sent where there is HTML to draw; plain mail is its
         # text either way.
         if mode == 0 and message.body_html:
-            self.rich_view.setHtml(html_utils.sanitise_for_view(message.body_html))
+            self.rich_view.show_message(message.body_html)
             self.body_stack.setCurrentWidget(self.rich_view)
         else:
             self.body_stack.setCurrentWidget(self.body_view)
+
+    def set_pictures(self, wanted: bool) -> None:
+        """Whether a message's pictures are fetched and shown."""
+        self.rich_view.set_pictures(wanted)
+        self._render_body()
 
     def _sync_attachments(self, item) -> None:
         """The button says how many, because "Attachments" alone is a guess."""
