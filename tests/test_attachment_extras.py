@@ -14243,3 +14243,105 @@ class TestTheScreenAnswersWhatYouDo:
         assert after == before, (
             f"the callout left the painter with {after} where it found "
             f"{before}")
+
+
+class TestAddingTracks:
+    """Importing music into the visualiser: the panel starts in Music and
+    remembers where the last track came from, files can be dropped on the
+    window, anything that is not sound is refused by name, and an empty
+    library asks for a track."""
+
+    @staticmethod
+    def _viewer(qtbot):
+        from attachment_view import AttachmentViewer
+
+        viewer = AttachmentViewer([], "", library=True)
+        qtbot.addWidget(viewer)
+        return viewer
+
+    @staticmethod
+    def _wav(folder) -> str:
+        import struct
+
+        path = folder / "one.wav"
+        body = b"\x00" * 800
+        path.write_bytes(b"RIFF" + struct.pack("<I", 36 + len(body)) + b"WAVE"
+                         + b"fmt " + struct.pack("<IHHIIHH", 16, 1, 1, 8000,
+                                                 16000, 2, 16)
+                         + b"data" + struct.pack("<I", len(body)) + body)
+        return str(path)
+
+    def test_sound_is_listed_and_the_rest_refused_by_name(self, qtbot,
+                                                          tmp_path,
+                                                          monkeypatch):
+        from PySide6.QtWidgets import QMessageBox
+
+        said = []
+        monkeypatch.setattr(QMessageBox, "information",
+                            staticmethod(lambda *a: said.append(a[2])))
+        note = tmp_path / "note.txt"
+        note.write_text("not music")
+        viewer = self._viewer(qtbot)
+        viewer._add_files([self._wav(tmp_path), str(note)])
+        assert viewer.list.count() == 1
+        assert viewer._found[0].name == "one.wav"
+        assert viewer.list.currentRow() == 0
+        assert said and "note.txt" in said[0]
+
+    def test_files_dropped_on_the_window_are_added(self, qtbot, tmp_path):
+        from PySide6.QtCore import QMimeData, QUrl
+
+        class Drop:
+            def __init__(self, data):
+                self.data, self.taken = data, False
+
+            def mimeData(self):      # noqa: N802 - Qt's name
+                return self.data
+
+            def acceptProposedAction(self):      # noqa: N802 - Qt's name
+                self.taken = True
+
+        viewer = self._viewer(qtbot)
+        assert viewer.acceptDrops()
+        data = QMimeData()
+        data.setUrls([QUrl.fromLocalFile(self._wav(tmp_path))])
+        enter = Drop(data)
+        viewer.dragEnterEvent(enter)
+        assert enter.taken
+        words = QMimeData()
+        words.setText("not a file")
+        refused = Drop(words)
+        viewer.dragEnterEvent(refused)
+        assert not refused.taken
+        drop = Drop(data)
+        viewer.dropEvent(drop)
+        assert drop.taken and viewer.list.count() == 1
+
+    def test_the_panel_starts_in_music_and_remembers(self, qtbot, tmp_path,
+                                                     monkeypatch):
+        from PySide6.QtCore import QStandardPaths
+        from PySide6.QtWidgets import QFileDialog
+
+        asked = []
+        wav = self._wav(tmp_path)
+        monkeypatch.setattr(
+            QFileDialog, "getOpenFileNames",
+            staticmethod(lambda *a, **k: (asked.append(a[2]), ([wav], ""))[1]))
+        viewer = self._viewer(qtbot)
+        viewer._add_tracks()
+        music = QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.MusicLocation)
+        assert asked[0] == (music or str(tmp_path.home()))
+        assert viewer.list.count() == 1
+        viewer._add_tracks()
+        assert asked[1] == str(tmp_path)
+
+    def test_an_empty_library_asks_for_a_track(self, qtbot):
+        from attachment_view import AttachmentViewer
+
+        viewer = self._viewer(qtbot)
+        assert "Add a track" in viewer.heading.text()
+        plain = AttachmentViewer([], "", library=False)
+        qtbot.addWidget(plain)
+        assert "Nothing is attached" in plain.heading.text()
+        assert not plain.acceptDrops()

@@ -21,8 +21,8 @@ import tempfile
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from PySide6.QtCore import (QEvent, QSize, Qt, QThread, QTimer, QUrl,
-                            Signal, Slot)
+from PySide6.QtCore import (QEvent, QSize, QStandardPaths, Qt, QThread,
+                            QTimer, QUrl, Signal, Slot)
 from PySide6.QtGui import (QAction, QGuiApplication, QImage, QKeySequence,
                            QPixmap)
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
@@ -2116,6 +2116,10 @@ class AttachmentViewer(QDialog):
         os.chmod(self._temp, 0o700)
         self._written: List[Path] = []
         self._last_dir = str(Path.home() / "Downloads")
+        #: Where the library's file panel opens: Music, then wherever the
+        #: last track came from.
+        self._tracks_dir = (QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.MusicLocation) or str(Path.home()))
         self._showing_metadata = False
         #: In flight, by row, and what is waiting behind them.
         self._workers: dict = {}
@@ -2240,10 +2244,12 @@ class AttachmentViewer(QDialog):
         self.copy_button.clicked.connect(self._copy_image)
         self._add_shortcuts()
 
+        self.setAcceptDrops(self.library)
         if self._found:
             self.list.setCurrentRow(0)
         else:
-            self.heading.setText("<b>Nothing is attached to this message.</b>")
+            self.heading.setText("<b>Add a track to watch it.</b>" if self.library
+                                 else "<b>Nothing is attached to this message.</b>")
             for button in (self.save_button, self.save_all, self.info_button):
                 button.setEnabled(False)
         self._give_touch_bar()
@@ -2321,14 +2327,31 @@ class AttachmentViewer(QDialog):
 
     def _add_tracks(self) -> None:
         """Pick sound files and list them as if they had arrived attached."""
-        from PySide6.QtWidgets import QFileDialog, QMessageBox
+        from PySide6.QtWidgets import QFileDialog
 
         chosen, _ = QFileDialog.getOpenFileNames(
-            self, "Choose sound files", "",
+            self, "Choose sound files", self._tracks_dir,
             "Audio (*.mp3 *.m4a *.aac *.wav *.aiff *.aif *.flac *.ogg "
             "*.oga *.opus *.wma);;Any file (*)")
-        if not chosen:
-            return
+        if chosen:
+            self._tracks_dir = str(Path(chosen[0]).parent)
+            self._add_files(chosen)
+
+    def dragEnterEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        if self.library and any(url.isLocalFile()
+                                for url in event.mimeData().urls()):
+            event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        self._add_files([url.toLocalFile() for url in event.mimeData().urls()
+                         if url.isLocalFile()])
+        event.acceptProposedAction()
+
+    def _add_files(self, chosen) -> None:
+        """List sound files as if they had arrived attached; anything else is
+        refused by name."""
+        from PySide6.QtWidgets import QMessageBox
+
         refused = []
         for name in chosen:
             path = Path(name)
