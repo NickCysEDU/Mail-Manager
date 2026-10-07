@@ -12,7 +12,7 @@ from typing import List, Optional, Sequence, Tuple
 from PySide6.QtCore import (QAbstractTableModel, QModelIndex, QSize,
                             QSortFilterProxyModel, Qt, Signal, Slot)
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPalette, QTextDocument
-from PySide6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QLabel,
+from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel,
                                QPlainTextEdit, QPushButton, QSplitter, QStyle,
                                QStyledItemDelegate, QStyleOptionViewItem,
                                QTextBrowser, QToolButton, QVBoxLayout, QWidget,
@@ -26,9 +26,9 @@ import theme
 from imap_engine import MoveReport
 from models import (CATEGORY_COLORS, OTHER_COLOR, TOPIC_COLORS, Category,
                     Disposition, TriageItem, TriageSummary)
-from widgets import (ACCENT_BLUE, ACCENT_RED, _attr_url, _confidence_rgb,
-                     _draw_wrapped, _html, _is_dark, _mono_font, _one_line,
-                     _tint, _wrap, system_font)
+from widgets import (ACCENT_BLUE, ACCENT_RED, RoomyCombo, _attr_url,
+                     _confidence_rgb, _draw_wrapped, _html, _is_dark,
+                     _mono_font, _one_line, _tint, _wrap, system_font)
 
 
 #: What the folder box shows when a message is to stay where it is.
@@ -712,7 +712,7 @@ class PreviewPane(QWidget):
         self.links_button.clicked.connect(self._show_links)
         self._link_list = None
 
-        self.body_mode = QComboBox()
+        self.body_mode = RoomyCombo(every=True)
         # Short enough to sit on one line beside the Attachments button, in a
         # half as small as 306 by 70 px. The caption said what the entries
         # already say, and the longer wording is in the tooltip.
@@ -747,7 +747,7 @@ class PreviewPane(QWidget):
         self.reasoning_view.anchorClicked.connect(
             lambda url: self.linkRequested.emit(url.toString()))
 
-        self.folder_combo = QComboBox()
+        self.folder_combo = RoomyCombo()
         self.folder_combo.setToolTip(
             "Where this message goes when you press Apply. Change it and "
             "the next one from this sender follows.")

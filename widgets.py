@@ -15,8 +15,8 @@ from PySide6.QtGui import (QColor, QFont, QFontDatabase, QFontMetrics, QIcon,
 from PySide6.QtWidgets import (QApplication, QComboBox, QFrame, QLabel,
                                QLineEdit,
                                QListWidget, QMessageBox, QScrollArea,
-                               QSizePolicy, QStyle, QStyleOptionViewItem,
-                               QToolButton, QWidget)
+                               QSizePolicy, QStyle, QStyleOptionComboBox,
+                               QStyleOptionViewItem, QToolButton, QWidget)
 from PySide6.QtCore import QThread
 
 import buildinfo
@@ -250,45 +250,68 @@ class ElidingLabel(QLabel):
 
 
 class RoomyCombo(QComboBox):
-    """A dropdown whose menu is as wide as its longest option.
+    """A dropdown wide enough for its options, with a menu as wide as the
+    longest of them.
 
-    These boxes are narrow, sharing a row with three or four controls, and
     Qt sizes the menu to the box, cutting long options short where nothing
-    is beside them. The box asks for room for the option it shows, up to
-    ``MOST``, so a pathological one gives way rather than pushing the dialog
-    off the screen.
+    is beside them, and the box to the option it shows. This one asks for
+    room for the option it shows - for every option, with ``every``, so a
+    row of filters never shifts - up to ``MOST``, so a pathological one
+    gives way rather than pushing the dialog off the screen. The room is
+    what the style says a box needs, arrow and frame included: measured by
+    hand with an allowance, the last letter was cut off on some styles.
 
     Tooltips are left alone: several explain the field they set.
     """
 
-    #: Room for the arrow, the padding either side and a scroll bar.
+    #: Room for the arrow, the padding either side and a scroll bar, in the
+    #: menu.
     EXTRA = 44
     #: The most room the box will ask the layout for.
     MOST = 280
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, every: bool = False) -> None:
         super().__init__(parent)
         self._floor = 0
+        self._every = every
         self.currentIndexChanged.connect(lambda _index: self._fit())
+        self.model().rowsInserted.connect(lambda *_: self._fit())
 
     def setMinimumWidth(self, width: int) -> None:      # noqa: N802 - Qt
         """Remembered, so that fitting the text cannot undercut it."""
         self._floor = int(width)
         self._fit()
 
+    def changeEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
+            self._fit()
+
+    def room_for(self, text: str) -> int:
+        """What the style says a box showing ``text`` needs."""
+        option = QStyleOptionComboBox()
+        self.initStyleOption(option)
+        metrics = self.fontMetrics()
+        return self.style().sizeFromContents(
+            QStyle.ContentsType.CT_ComboBox, option,
+            QSize(metrics.horizontalAdvance(text), metrics.height()),
+            self).width()
+
     def showPopup(self) -> None:      # noqa: N802 - Qt's name
         view = self.view()
         if view is not None and self.count():
-            metrics = self.fontMetrics()
-            widest = max(metrics.horizontalAdvance(self.itemText(index))
-                         for index in range(self.count()))
-            view.setMinimumWidth(max(self.width(), widest + self.EXTRA))
+            # What the list itself says its column needs, margins included,
+            # and nothing shortened with an ellipsis either way.
+            view.setTextElideMode(Qt.TextElideMode.ElideNone)
+            view.setMinimumWidth(max(self.width(),
+                                     view.sizeHintForColumn(0) + self.EXTRA))
         super().showPopup()
 
     def _fit(self) -> None:
-        wanted = self.fontMetrics().horizontalAdvance(self.currentText())
-        super().setMinimumWidth(
-            max(self._floor, min(self.MOST, wanted + self.EXTRA)))
+        texts = ([self.itemText(index) for index in range(self.count())]
+                 if self._every else [self.currentText()])
+        wanted = max((self.room_for(text) for text in texts), default=0)
+        super().setMinimumWidth(max(self._floor, min(self.MOST, wanted)))
 
 
 class VersionLabel(QLabel):

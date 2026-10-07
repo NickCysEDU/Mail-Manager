@@ -1414,3 +1414,76 @@ class TestTheWindowFixtureDestroysItsWindow:
         assert not offenders, (
             "these fixtures close a window but never delete it, so it stays "
             f"alive for the whole session: {offenders}")
+
+
+class TestNoFilterIsCutShort:
+    """The filters' boxes show every option whole, at the window's smallest
+    and under a bigger type: the Show box cut "everything but job mail"
+    short even full screen."""
+
+    @staticmethod
+    def _field(combo) -> int:
+        """How wide the part of the box that shows the text is."""
+        from PySide6.QtWidgets import QStyle, QStyleOptionComboBox
+
+        option = QStyleOptionComboBox()
+        combo.initStyleOption(option)
+        return combo.style().subControlRect(
+            QStyle.ComplexControl.CC_ComboBox, option,
+            QStyle.SubControl.SC_ComboBoxEditField, combo).width()
+
+    def _check(self, qapp, window):
+        for combo in (window.show_combo, window.category_filter):
+            metrics = combo.fontMetrics()
+            for index in range(combo.count()):
+                combo.setCurrentIndex(index)
+                qapp.processEvents()
+                text = combo.currentText()
+                assert self._field(combo) >= metrics.horizontalAdvance(text), (
+                    f"{text!r} is cut short in a box {combo.width()}px wide")
+
+    def test_at_the_window_s_smallest(self, qapp, window):
+        window.show()
+        window.resize(window.minimumSizeHint())
+        qapp.processEvents()
+        self._check(qapp, window)
+
+    def test_under_a_bigger_type_chosen_once_it_is_up(self, qapp, window):
+        """Qt sizes a box to its contents once, on first show: a bigger type
+        chosen in Settings afterwards left the Show box at its old width."""
+        from PySide6.QtGui import QFont
+
+        was = QFont(qapp.font())
+        bigger = QFont(was)
+        bigger.setPointSizeF(was.pointSizeF() * 1.5)
+        window.show()
+        qapp.processEvents()
+        try:
+            qapp.setFont(bigger)
+            qapp.processEvents()
+            window.resize(window.minimumSizeHint())
+            qapp.processEvents()
+            self._check(qapp, window)
+        finally:
+            qapp.setFont(was)
+
+
+class TestTheLibraryOpensItsPanelOnceItIsUp:
+    def test_the_file_panel_waits_for_the_window(self, qapp, window,
+                                                 monkeypatch):
+        """A panel opened before its window was on the screen came up with
+        its sidebar dead."""
+        from PySide6.QtWidgets import QFileDialog
+
+        calls = []
+        monkeypatch.setattr(QFileDialog, "getOpenFileNames",
+                            staticmethod(lambda *a, **k: (calls.append(a), ([], ""))[1]))
+        window._visualise_a_file()
+        viewer = window._visualiser_window
+        try:
+            assert viewer is not None and viewer.isVisible()
+            assert calls == [], "the panel came up before the window"
+            qapp.processEvents()
+            assert len(calls) == 1
+        finally:
+            viewer.close()

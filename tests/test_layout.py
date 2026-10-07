@@ -861,3 +861,61 @@ class TestTheAnalysisHasRoomToBeRead:
                     f"{child.__class__.__name__} runs below the row")
         finally:
             pane.close()
+
+
+class TestEveryFixedListIsRoomy:
+    """Every dropdown of fixed wording is a RoomyCombo: a plain box sized by
+    hand, with an allowance for the arrow, cut the last letter of "Show:
+    everything but job mail" on the Mac's own style."""
+
+    @pytest.mark.parametrize("module", ["gui", "triage_table", "welcome",
+                                        "cleanup_dialog"])
+    def test_no_plain_box_is_built(self, module):
+        import importlib
+
+        source = inspect.getsource(importlib.import_module(module))
+        assert "QComboBox()" not in source, (
+            f"a plain QComboBox is still being built in {module}")
+
+    def test_the_room_is_what_the_style_says(self, qapp):
+        """Within a pixel or two of what Qt itself gives a box sized to its
+        contents, which goes through the same style."""
+        from widgets import RoomyCombo
+
+        text = "matches this regular expression"
+        combo = RoomyCombo()
+        combo.addItems(["is", text])
+        combo.setCurrentIndex(1)
+        qapp.processEvents()
+        plain = QComboBox()
+        plain.addItems([text])
+        plain.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        assert abs(combo.room_for(text) - plain.sizeHint().width()) <= 2
+        assert combo.minimumWidth() == min(combo.MOST, combo.room_for(text))
+
+    def test_every_option_fits_when_asked(self, qapp):
+        from widgets import RoomyCombo
+
+        combo = RoomyCombo(every=True)
+        combo.addItems(["Show: everything", "Show: everything but job mail"])
+        combo.setCurrentIndex(0)
+        qapp.processEvents()
+        assert combo.minimumWidth() >= combo.room_for(
+            "Show: everything but job mail")
+
+    def test_a_bigger_font_gets_more_room(self, qapp):
+        from PySide6.QtGui import QFont
+
+        from widgets import RoomyCombo
+
+        combo = RoomyCombo(every=True)
+        combo.addItems(["Show: everything but job mail"])
+        qapp.processEvents()
+        before = combo.minimumWidth()
+        font = QFont(combo.font())
+        font.setPointSizeF(font.pointSizeF() * 1.6)
+        combo.setFont(font)
+        qapp.processEvents()
+        assert combo.minimumWidth() > before
+        assert combo.minimumWidth() >= combo.room_for(
+            "Show: everything but job mail")

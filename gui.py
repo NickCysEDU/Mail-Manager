@@ -33,7 +33,6 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QStackedWidget,
     QApplication,
-    QComboBox,
     QDateEdit,
     QDialog,
     QFrame,
@@ -84,7 +83,8 @@ from models import (
 from flowlayout import FlowLayout, Spacer
 from widgets import (
     ACCENT_AMBER, ACCENT_BLUE, ACCENT_GREEN, AdaptiveLineEdit, ElidingLabel,
-    VersionLabel, _abandon, _chip, _format_duration, _html, _mono_font,
+    RoomyCombo, VersionLabel, _abandon, _chip, _format_duration, _html,
+    _mono_font,
     _paint_button, _stored_date, _swatch, describe, menu_text, selectable,
     EMPTY_STATE, NOTHING_FOUND, SHOW_ALL, SHOW_JOB_ONLY, SHOW_OTHER_ONLY,
     SHOW_SELECTED, _one_of)
@@ -1248,7 +1248,7 @@ class MainWindow(QMainWindow):
         self.search_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         row.addWidget(self.search_edit)
 
-        self.category_filter = QComboBox()
+        self.category_filter = RoomyCombo(every=True)
         self.category_filter.setToolTip(
             "Show only one category at a time. The list is built from what "
             "this scan actually found.")
@@ -1259,7 +1259,7 @@ class MainWindow(QMainWindow):
         row.addWidget(self.category_filter)
 
         # One "Show" menu instead of a row of competing checkboxes.
-        self.show_combo = QComboBox()
+        self.show_combo = RoomyCombo(every=True)
         self.show_combo.setToolTip(
             "Narrow the table to job mail, or to the rows you have ticked.")
         self.show_combo.addItem("Show: everything", SHOW_ALL)
@@ -1267,13 +1267,6 @@ class MainWindow(QMainWindow):
         self.show_combo.addItem("Show: everything but job mail",
                                 SHOW_OTHER_ONLY)
         self.show_combo.addItem("Show: ticked only", SHOW_SELECTED)
-        # Wide enough for its longest entry, popup included; left to itself it
-        # elided them.
-        metrics = self.show_combo.fontMetrics()
-        widest = max(metrics.horizontalAdvance(self.show_combo.itemText(i))
-                     for i in range(self.show_combo.count()))
-        self.show_combo.setMinimumWidth(widest + 46)
-        self.show_combo.view().setMinimumWidth(widest + 28)
         self.show_combo.setCurrentIndex(1 if self.settings.hide_non_job else 0)
         self.show_combo.currentIndexChanged.connect(self._show_filter_changed)
         row.addWidget(self.show_combo)
@@ -3396,7 +3389,9 @@ class MainWindow(QMainWindow):
         self._visualiser_window = window
         window.finished.connect(lambda *_: self._forget_visualiser())
         window.show()
-        window._add_tracks()
+        # Once the window is up: a file panel opened before its window was on
+        # the screen came up with its sidebar dead.
+        QTimer.singleShot(0, window, window._add_tracks)
 
     def _forget_visualiser(self) -> None:
         self._visualiser_window = None

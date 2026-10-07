@@ -15,7 +15,6 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
-    QComboBox,
     QFormLayout,
     QGridLayout,
     QGroupBox,
@@ -39,7 +38,7 @@ from accounts import Account
 import config
 from config import CredentialError, CredentialStore, Settings
 from models import APP_DISPLAY_NAME, FolderPlan
-from widgets import _attr_url
+from widgets import RoomyCombo, _attr_url
 
 
 def _watermark() -> Optional[QPixmap]:
@@ -131,7 +130,7 @@ class AccountsPage(QWizardPage):
         form = QFormLayout()
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
-        self.preset = QComboBox()
+        self.preset = RoomyCombo(every=True)
         for name, label in accounts.choices():
             self.preset.addItem(label, name)
         self.preset.currentIndexChanged.connect(self._preset_changed)
@@ -299,12 +298,12 @@ class ClassifierPage(QWizardPage):
         self.setTitle("How messages get sorted")
         self.setSubTitle("The built-in sorter needs no account and no network.")
 
-        self.backend = QComboBox()
+        self.backend = RoomyCombo(every=True)
         for name, label, _blurb in providers.provider_choices():
             self.backend.addItem(label, name)
         self.backend.currentIndexChanged.connect(self._backend_changed)
 
-        self.field = QComboBox()
+        self.field = RoomyCombo(every=True)
         for name, label, _blurb in rulesets.choices():
             self.field.addItem(label, name)
 

@@ -19,7 +19,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog,
+from PySide6.QtWidgets import (QCheckBox, QDialog,
                                QDialogButtonBox, QFormLayout, QFrame,
                                QGroupBox, QHBoxLayout, QLabel, QListWidget,
                                QListWidgetItem, QMessageBox, QPlainTextEdit,
@@ -142,7 +142,7 @@ class ClearOutDialog(QDialog):
         form.setFieldGrowthPolicy(
             QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
-        self.folder_combo = QComboBox()
+        self.folder_combo = widgets.RoomyCombo(every=True)
         self.folder_combo.addItem("INBOX", "INBOX")
         self.folder_combo.setSizePolicy(QSizePolicy.Policy.Expanding,
                                         QSizePolicy.Policy.Fixed)
