@@ -270,12 +270,20 @@ class Installer:
         self.stage("Opening the disk image")
         mount = Path(tempfile.mkdtemp(prefix="mm-update-"))
         try:
-            attached = subprocess.run(
-                ["hdiutil", "attach", "-nobrowse", "-readonly", "-noautoopen",
-                 "-mountpoint", str(mount), str(image)],
-                capture_output=True, timeout=180)
+            # hdiutil refuses now and then, "Resource busy", and is fine a
+            # moment later.
+            for attempt in range(3):
+                attached = subprocess.run(
+                    ["hdiutil", "attach", "-nobrowse", "-readonly",
+                     "-noautoopen", "-mountpoint", str(mount), str(image)],
+                    capture_output=True, timeout=180)
+                if attached.returncode == 0:
+                    break
+                time.sleep(2.0)
             if attached.returncode != 0:
-                raise UpdateError("The disk image would not open.")
+                said = attached.stderr.decode("utf-8", "replace").strip()
+                raise UpdateError("The disk image would not open"
+                                  + (f": {said[-200:]}" if said else "."))
             try:
                 apps = [path for path in mount.iterdir()
                         if path.suffix == ".app" and not path.is_symlink()]

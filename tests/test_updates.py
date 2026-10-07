@@ -434,3 +434,40 @@ class TestTheMainWindow:
         assert said == [] and window.settings.update_checked > 0
         gui.MainWindow._update_found(window, same, by_hand=True)
         assert said == ["Up to date"]
+
+
+class TestTheImageIsTriedAgain:
+    """hdiutil refuses now and then on a busy machine and is fine a moment
+    later: one refusal does not fail an update, three do, with its words."""
+
+    @staticmethod
+    def _refusing(monkeypatch, refusals: int):
+        import subprocess as real
+
+        calls = []
+        done = real.run
+
+        def run(command, *args, **kwargs):
+            if command[:2] == ["hdiutil", "attach"]:
+                calls.append(command)
+                if len(calls) <= refusals:
+                    return real.CompletedProcess(command, 1, b"", b"hdiutil: attach failed - Resource busy")
+            return done(command, *args, **kwargs)
+
+        monkeypatch.setattr(updates.subprocess, "run", run)
+        monkeypatch.setattr(updates.time, "sleep", lambda _s: None)
+        return calls
+
+    def test_one_refusal_is_tried_again(self, made, monkeypatch):
+        old, data, release, _tmp = made
+        calls = self._refusing(monkeypatch, 1)
+        updates.Installer(release, old, opener=_opener(data)).run()
+        assert len(calls) == 2
+        assert (old / "Contents" / "MacOS" / "Test App").exists()
+
+    def test_three_refusals_say_why(self, made, monkeypatch):
+        old, data, release, _tmp = made
+        calls = self._refusing(monkeypatch, 3)
+        with pytest.raises(updates.UpdateError, match="Resource busy"):
+            updates.Installer(release, old, opener=_opener(data)).run()
+        assert len(calls) == 3
