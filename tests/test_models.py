@@ -682,3 +682,36 @@ class TestMessageDates:
     def test_the_tooltip_form_is_also_12_hour(self):
         moment = datetime(2026, 9, 5, 19, 20).astimezone()
         assert "7:20 PM" in self._message(moment).date_full()
+
+
+class TestTheDayIsInFigures:
+    """Today and Yesterday by name; from there the day in figures, with its
+    weekday for the rest of the week: a bare "Fri" was anybody's guess."""
+
+    def _message(self, moment):
+        return EmailMessage(uid="1", subject="s", sender_name="Alex",
+                            sender_email="you@icloud.example",
+                            date=moment.astimezone())
+
+    def test_this_week_has_the_weekday_and_the_date(self):
+        now = datetime.now().astimezone().replace(hour=12, minute=0, second=0, microsecond=0)
+        moment = now - timedelta(days=3)
+        rendered = self._message(moment).date_human(now)
+        assert rendered.startswith(f"{moment:%a} {moment:%m/%d/%Y}  ")
+        assert rendered.endswith(("AM", "PM"))
+
+    def test_earlier_this_year_is_the_date_and_the_time(self):
+        now = datetime.now().astimezone().replace(month=12, day=20, hour=12, minute=0, second=0, microsecond=0)
+        moment = now - timedelta(days=60)
+        rendered = self._message(moment).date_human(now)
+        assert rendered.startswith(f"{moment:%m/%d/%Y}  ")
+        assert rendered.endswith(("AM", "PM"))
+
+    def test_yesterday_keeps_its_name(self):
+        now = datetime.now().astimezone().replace(hour=12, minute=0, second=0, microsecond=0)
+        assert self._message(now - timedelta(days=1)).date_human(now).startswith("Yesterday  ")
+
+    def test_another_year_is_the_date_alone(self):
+        now = datetime.now().astimezone().replace(hour=12, minute=0, second=0, microsecond=0)
+        moment = now - timedelta(days=400)
+        assert self._message(moment).date_human(now) == f"{moment:%m/%d/%Y}"

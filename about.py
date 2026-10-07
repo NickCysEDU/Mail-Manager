@@ -68,6 +68,7 @@ class AboutDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
         buttons.accepted.connect(self.accept)
+        self._placed = False
         layout.addWidget(buttons)
         import touchbar
 
@@ -86,6 +87,31 @@ class AboutDialog(QDialog):
         # paragraph came up one line short and clipped its own last sentence.
         layout.activate()
         self.adjustSize()
+
+    def showEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        """On the screen, whole: centred over the window that opened it, and
+        no taller than the screen has room for."""
+        super().showEvent(event)
+        if self._placed:
+            return
+        self._placed = True
+        screen = self.screen()
+        if screen is None:
+            return
+        room = screen.availableGeometry()
+        self.adjustSize()
+        # The frame round the window counts: a title bar's worth below the
+        # screen's edge is still off the screen.
+        shell = self.frameGeometry().size() - self.size()
+        size = self.size().boundedTo(room.size() - shell)
+        self.resize(size)
+        outer = size + shell
+        anchor = self.parentWidget().frameGeometry() if self.parentWidget() else room
+        x = anchor.center().x() - outer.width() // 2
+        y = anchor.center().y() - outer.height() // 2
+        x = max(room.left(), min(x, room.right() + 1 - outer.width()))
+        y = max(room.top(), min(y, room.bottom() + 1 - outer.height()))
+        self.move(x, y)
 
     def _heading(self) -> QHBoxLayout:
         row = QHBoxLayout()

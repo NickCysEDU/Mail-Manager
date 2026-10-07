@@ -919,3 +919,32 @@ class TestEveryFixedListIsRoomy:
         assert combo.minimumWidth() > before
         assert combo.minimumWidth() >= combo.room_for(
             "Show: everything but job mail")
+
+
+class TestCaretRoomIsForButtonsWithMenus:
+    """Every tool button was given room for a caret on the right, so the
+    ones with words alone sat off centre."""
+
+    def test_the_style_asks_the_button_whether_it_has_a_menu(self):
+        import theme
+
+        css = theme.stylesheet(theme.resolve(None, "dark", "normal"))
+        assert 'QToolButton[menu="true"]' in css
+        assert 'QToolButton[popupMode="0"]' not in css
+
+    def test_the_window_marks_its_menu_buttons(self, qapp):
+        from PySide6.QtWidgets import QToolButton
+
+        from config import InMemoryCredentialStore, Settings
+        from gui import MainWindow
+
+        window = MainWindow(Settings(icloud_email="you@icloud.example").normalized(),
+                            InMemoryCredentialStore())
+        try:
+            for button in window.findChildren(QToolButton):
+                has_menu = button.menu() is not None
+                marked = button.property("menu") == "true"
+                assert has_menu == marked, (button.text(), has_menu, marked)
+        finally:
+            window.close()
+            window.deleteLater()

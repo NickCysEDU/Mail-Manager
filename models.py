@@ -476,6 +476,7 @@ class EmailMessage:
     in_reply_to: str = ""
     references: str = ""
     to: str = ""
+    cc: str = ""
     reply_to: str = ""
     list_unsubscribe: str = ""
     #: RFC 3834's header, set by anything that answered automatically, and the
@@ -534,9 +535,8 @@ class EmailMessage:
         return local.strftime(fmt) if local else "(no date)"
 
     def date_human(self, now: Optional[datetime] = None) -> str:
-        """A date readable at a glance, less of it the closer it is: "14:53"
-        today, a weekday this week, a date this year, a full date beyond
-        that.
+        """A date readable at a glance: Today and Yesterday by name, the day
+        in figures from there, with its weekday for the rest of the week.
         """
         local = self.local_date()
         if local is None:
@@ -550,10 +550,10 @@ class EmailMessage:
         if delta == 1:
             return f"Yesterday  {clock(local)}"
         if 1 < delta < 7:
-            return f"{local:%a}  {clock(local)}"
+            return f"{local:%a} {local:%m/%d/%Y}  {clock(local)}"
         if day.year == today.year:
-            return f"{local.day} {local:%b}  {clock(local)}"
-        return f"{local.day} {local:%b} {local.year}"
+            return f"{local:%m/%d/%Y}  {clock(local)}"
+        return f"{local:%m/%d/%Y}"
 
     def date_full(self) -> str:
         """The unambiguous form, used for tooltips."""

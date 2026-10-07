@@ -458,6 +458,27 @@ def _safe_link(value: str) -> bool:
     return found is None or found.group(1).lower() in _SAFE_SCHEMES
 
 
+_FONT_FAMILY = re.compile(r"font-family\s*:\s*([^;}]+)", re.I)
+_GENERIC_FONTS = {"serif", "sans-serif", "monospace", "cursive", "fantasy",
+                  "system-ui", "-apple-system", "inherit", "initial"}
+
+
+def _known_fonts(css: str, families) -> str:
+    """``font-family`` declarations kept to the families this machine has:
+    asked for one it does not, Qt went looking through every family it
+    knows, which took a while and said so."""
+    if families is None:
+        return css
+
+    def keep(match):
+        names = [name.strip().strip("'\"") for name in match.group(1).split(",")]
+        kept = [name for name in names
+                if name.lower() in _GENERIC_FONTS or name.lower() in families]
+        return "font-family: " + ", ".join(kept) if kept else ""
+
+    return _FONT_FAMILY.sub(keep, css)
+
+
 def pictures_in(html: str) -> list:
     """The pictures a sanitised message asks the view to fetch, once each,
     in order: http and https only, since nothing else gets this far."""
@@ -472,9 +493,10 @@ def pictures_in(html: str) -> list:
 class _Cleaner(HTMLParser):
     """Writes the document back out with the dangerous parts left out."""
 
-    def __init__(self, pictures: bool = False) -> None:
+    def __init__(self, pictures: bool = False, families=None) -> None:
         super().__init__(convert_charrefs=False)
         self.pictures = pictures
+        self.families = families
         self.out: List[str] = []
         self._skipping = 0
         self._in_style = False
@@ -514,7 +536,10 @@ class _Cleaner(HTMLParser):
             if name == "href" and not _safe_link(value):
                 continue
             if name == "style":
-                value = _CSS_URL.sub("none", value)
+                value = _known_fonts(_CSS_URL.sub("none", value), self.families)
+            if name == "face" and self.families is not None and (
+                    value.strip().lower() not in self.families):
+                continue
             kept.append(f' {name}="{_attr(value)}"')
         self.out.append(f"<{tag}{''.join(kept)}{' /' if void else ''}>")
 
@@ -535,7 +560,7 @@ class _Cleaner(HTMLParser):
         if self._skipping:
             return
         if self._in_style:
-            data = _CSS_URL.sub("none", data)
+            data = _known_fonts(_CSS_URL.sub("none", data), self.families)
         self.out.append(data)
 
     def handle_entityref(self, name):
@@ -581,13 +606,14 @@ def _image(attrs, pictures: bool = False) -> str:
     return ""
 
 
-def sanitise_for_view(html: str, pictures: bool = False) -> str:
+def sanitise_for_view(html: str, pictures: bool = False,
+                      families=None) -> str:
     """The message's HTML with scripts, embeds, forms and every remote
     reference taken out, for Qt's document engine to draw, bar the pictures
     when they are wanted. Whatever is left can still not fetch anything of
     its own: the view refuses every resource, and fetches the pictures
     itself."""
-    cleaner = _Cleaner(pictures)
+    cleaner = _Cleaner(pictures, families)
     cleaner.feed(defuse_stray_brackets(html or ""))
     cleaner.close()
     return "".join(cleaner.out)

@@ -425,6 +425,7 @@ def parse_message(
         in_reply_to=_decode_header_value(message.get("In-Reply-To")),
         references=_decode_header_value(message.get("References")),
         to=_decode_header_value(message.get("To")),
+        cc=_decode_header_value(message.get("Cc")),
         reply_to=_decode_header_value(message.get("Reply-To")),
         list_unsubscribe=_decode_header_value(message.get("List-Unsubscribe")),
         auto_submitted=_decode_header_value(message.get("Auto-Submitted")),
@@ -1159,24 +1160,64 @@ class IMAPEngine:
     DRAFT_CANDIDATES = ("Drafts", "INBOX.Drafts", "[Gmail]/Drafts",
                         "[Google Mail]/Drafts", "Draft")
 
-    def drafts_mailbox(self) -> Optional[str]:
-        """The account's Drafts mailbox, found rather than guessed.
+    #: The mailboxes every account has under some name: what the server
+    #: flags them (RFC 6154), then the names the providers use. iCloud says
+    #: "Sent Messages" and "Deleted Messages", Gmail hides its own under
+    #: "[Gmail]", Outlook says "Sent Items" and "Deleted Items".
+    SPECIAL_MAILBOXES = {
+        "drafts": (("drafts",), DRAFT_CANDIDATES),
+        "sent": (("sent",), ("Sent Messages", "Sent", "Sent Items", "Sent Mail",
+                             "[Gmail]/Sent Mail", "[Google Mail]/Sent Mail",
+                             "INBOX.Sent")),
+        "trash": (("trash",), ("Deleted Messages", "Trash", "Deleted Items",
+                               "[Gmail]/Trash", "[Google Mail]/Trash",
+                               "INBOX.Trash", "Bin")),
+        "archive": (("archive", "all"), ("Archive", "Archives", "[Gmail]/All Mail",
+                                         "[Google Mail]/All Mail",
+                                         "INBOX.Archive")),
+        "junk": (("junk",), ("Junk", "Spam", "Junk Email", "Junk E-mail",
+                             "[Gmail]/Spam", "[Google Mail]/Spam", "Bulk Mail",
+                             "INBOX.Junk", "INBOX.Spam")),
+    }
 
-        Preference is given to whichever folder the server flags \\Drafts,
-        since that is the one the mail client will show.
+    def special_mailbox(self, kind: str) -> Optional[str]:
+        """The account's Drafts, Sent, Trash, Archive or Junk mailbox, found
+        rather than guessed: whichever folder the server flags as such,
+        else the name the provider is known to use. None when there is no
+        such folder.
         """
+        flags, candidates = self.SPECIAL_MAILBOXES[kind]
         try:
             listed = self.list_folders()
         except IMAPError:
             return None
         for info in listed:
-            if any("drafts" in flag.lower() for flag in info.flags):
+            lowered = {flag.lower().lstrip("\\") for flag in info.flags}
+            if lowered & set(flags) and info.selectable:
                 return info.name
-        names = {info.name.lower(): info.name for info in listed}
-        for candidate in self.DRAFT_CANDIDATES:
+        names = {info.name.lower(): info.name for info in listed if info.selectable}
+        for candidate in candidates:
             if candidate.lower() in names:
                 return names[candidate.lower()]
         return None
+
+    def drafts_mailbox(self) -> Optional[str]:
+        """The account's Drafts mailbox: see :meth:`special_mailbox`."""
+        return self.special_mailbox("drafts")
+
+    def save_sent(self, raw: bytes, mailbox: Optional[str] = None) -> str:
+        """Keep a copy of a message that went, in Sent, already read.
+        Returns the mailbox it went to; SMTP keeps nothing, so without this
+        a message sent from here would be in nobody's Sent folder."""
+        target = mailbox or self.special_mailbox("sent")
+        if not target:
+            raise IMAPError(
+                "This account has no Sent mailbox, so the copy of what was "
+                "sent could not be kept.")
+        conn = self._require_conn()
+        self._cmd("Keeping a copy in Sent", conn.append, quote_mailbox(target),
+                  "(\\Seen)", None, raw)
+        return target
 
     def save_draft(self, raw: bytes, mailbox: Optional[str] = None) -> str:
         """Append a message to Drafts. Returns the mailbox it went to."""

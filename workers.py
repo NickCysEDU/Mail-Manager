@@ -1498,3 +1498,189 @@ class CleanOutWorker(_FolderWorker):
             cancel=self.cancel_event)
         if not self.cancelled:
             self.finished_ok.emit(removed)
+
+
+class FlagWorker(_FolderWorker):
+    """Set or clear one flag - read, flagged, answered - on some messages,
+    off the drawing thread. The table changed already; this is the server
+    catching up."""
+
+    done = Signal(int)
+    trouble = "Could not mark the message"
+    task_name = "marking"
+
+    def __init__(self, account, password: str, uids: Sequence[str], flag: str,
+                 add: bool = True, mailbox: str = "INBOX", parent=None) -> None:
+        super().__init__(account, password, parent)
+        self.uids = list(uids)
+        self.flag = flag
+        self.add = add
+        self.mailbox = mailbox or "INBOX"
+
+    def _work(self, engine) -> None:
+        self._emit_progress(0, 1, "Marking…")
+        self.done.emit(engine.set_flags(self.uids, [self.flag], add=self.add,
+                                        mailbox=self.mailbox))
+
+
+#: What the quick moves are called when the account has no such folder.
+_SPECIAL_NAMES = {"archive": "Archive", "trash": "Trash", "junk": "Junk"}
+
+
+class MoveWorker(_FolderWorker):
+    """Move some messages now: to a folder by name, or to the account's
+    Archive, Trash or Junk, whatever it calls them. The same copy, flag and
+    expunge as Apply, so the same undo covers it."""
+
+    done = Signal(object)       # MoveReport
+    trouble = "Could not move the message"
+    task_name = "moving"
+
+    def __init__(self, account, password: str, plans: Sequence[MovePlan],
+                 kind: str = "folder", parent=None) -> None:
+        super().__init__(account, password, parent)
+        self.plans = list(plans)
+        self.kind = kind
+
+    def _work(self, engine) -> None:
+        if self.kind == "folder":
+            target = self.plans[0].target_folder
+            delimiter = engine.delimiter or "/"
+            parts = target.split(delimiter)
+            engine.ensure_folder_paths(
+                [delimiter.join(parts[:n]) for n in range(1, len(parts) + 1)])
+        else:
+            target = engine.special_mailbox(self.kind)
+            if not target and self.kind == "archive":
+                engine.ensure_folder_paths(["Archive"])
+                target = "Archive"
+            if not target:
+                raise IMAPError(f"This mailbox has no {_SPECIAL_NAMES[self.kind]} "
+                                "folder, so there is nowhere to put the message.")
+        report = MoveReport()
+        by_source: Dict[str, List[MovePlan]] = {}
+        for plan in self.plans:
+            by_source.setdefault(plan.source_folder or self.account.source_mailbox
+                                 or "INBOX", []).append(plan)
+        for source, group in by_source.items():
+            if self.cancelled:
+                break
+            part = engine.move_messages(
+                [replace(plan, target_folder=target) for plan in group],
+                mailbox=source, progress=self._emit_progress,
+                cancel=self.cancel_event)
+            report.moved.update(part.moved)
+            report.failed.update(part.failed)
+            report.new_uids.update(part.new_uids)
+            report.created_folders.extend(part.created_folders)
+            report.warnings.extend(part.warnings)
+            report.expunged = report.expunged or part.expunged
+        self.done.emit(report)
+
+
+class SendWorker(_BaseWorker):
+    """Send one message, then keep a copy in Sent where the provider does
+    not, and mark the message it answers as answered. Sending is the part
+    that matters: the copy and the flag are tried after, and only noted
+    when they fail."""
+
+    #: What to say once it has gone: nothing, or what did not quite work.
+    sent = Signal(str)
+    failed = Signal(str)
+    task_name = "sending"
+
+    def __init__(self, account, password: str, draft, answering=None,
+                 parent=None) -> None:
+        super().__init__(parent)
+        self.account = account
+        self.password = password
+        self.draft = draft
+        #: ``(uid, mailbox)`` of the message this answers, in this account.
+        self.answering = answering
+
+    def run(self) -> None:
+        import outgoing
+
+        try:
+            raw = outgoing.build(self.draft)
+            self._emit_progress(0, 1, "Sending…")
+            outgoing.send(raw, outgoing.smtp_for(self.account), self.account.address,
+                          self.password, self.draft.from_address,
+                          self.draft.recipients)
+        except outgoing.SendError as exc:
+            self.failed.emit(str(exc))
+            return
+        except Exception as exc:      # noqa: BLE001 - reported, not raised
+            log.error("Sending failed: %s", exc, exc_info=True)
+            self.failed.emit(f"Sending failed: {exc}")
+            return
+        note = ""
+        keep = self.account.preset not in outgoing.KEEPS_SENT
+        if keep or self.answering:
+            engine = IMAPEngine(host=self.account.host, port=self.account.port)
+            try:
+                engine.connect(self.account.address, self.password)
+                if keep:
+                    engine.save_sent(raw)
+                if self.answering:
+                    uid, mailbox = self.answering
+                    engine.set_flags([uid], ["answered"], add=True, mailbox=mailbox)
+            except Exception as exc:      # noqa: BLE001 - the message went
+                note = ("Sent. The copy for your Sent mailbox could not be kept: "
+                        f"{exc}")
+            finally:
+                engine.logout()
+        self.sent.emit(note)
+
+
+class DraftWorker(_FolderWorker):
+    """Put a message being written into the account's Drafts mailbox."""
+
+    saved = Signal(str)         # the mailbox it went to
+    trouble = "Could not save the draft"
+    task_name = "saving a draft"
+
+    def __init__(self, account, password: str, draft, parent=None) -> None:
+        super().__init__(account, password, parent)
+        self.draft = draft
+
+    def _work(self, engine) -> None:
+        import outgoing
+
+        self._emit_progress(0, 1, "Saving the draft…")
+        self.saved.emit(engine.save_draft(outgoing.build(self.draft)))
+
+
+class AttachmentFetchWorker(_FolderWorker):
+    """Everything attached to one message, downloaded, so a forward
+    carries it. Over the size a message may be, the rest are named rather
+    than attached."""
+
+    ready = Signal(object, object)      # attachments, names left out
+    trouble = "Could not fetch the attachments"
+    task_name = "fetching attachments"
+
+    def __init__(self, account, password: str, message, parent=None) -> None:
+        super().__init__(account, password, parent)
+        self.message = message
+
+    def _work(self, engine) -> None:
+        import outgoing
+
+        self._emit_progress(0, 1, "Fetching what is attached…")
+        engine.select(self.message.source_folder or "INBOX", readonly=True)
+        found = [part for part in engine.fetch_attachments(self.message.uid)
+                 if not part.signature and part.data]
+        carried, left_out = [], []
+        weight = 0
+        for part in found:
+            if self.cancelled:
+                return
+            weight += len(part.data)
+            if weight > outgoing.MOST_BYTES:
+                left_out.append(part.shown)
+                weight -= len(part.data)
+                continue
+            mime = (part.content_type or "").split(";")[0].strip() or "application/octet-stream"
+            carried.append(outgoing.Attachment(part.filename, mime, part.data))
+        self.ready.emit(carried, left_out)

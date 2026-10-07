@@ -70,8 +70,12 @@ OpenAI-compatible service with your own key, in **Settings → Analysis**.
 
 ## Also
 
+- **Read and write** like any mail app: double-click a message for its own
+  window, then reply, reply all, forward, flag, archive, delete or move it.
+  Replies and new messages are written with formatting and attachments, go
+  out through your own mailbox, and a copy lands in Sent.
 - **Rules** file, tick, flag, mark as read, or draft a reply into Drafts.
-  Nothing is ever sent.
+  A rule never sends anything; only you do.
 - **Schedule** scans on a timer, and can keep scanning after you quit.
 - **Briefing** reads the last scan back, most urgent first.
 - **Clear out mail** deletes in bulk by sender, subject or age, after a count
@@ -95,7 +99,7 @@ turns that off. See [SECURITY.md](SECURITY.md).
 
 ```bash
 ./dev demo     # the app with sample mail, no setup
-./dev test     # 4,735 tests, about five minutes on four workers
+./dev test     # 4,848 tests, about five minutes on four workers
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 

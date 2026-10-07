@@ -539,3 +539,19 @@ class TestPicturesInTheMessage:
         out = html_utils.sanitise_for_view(self.PAGE)
         assert "pictures.example" not in out and "[image: A]" in out
         assert html_utils.pictures_in(out) == []
+
+
+class TestFontsAMessageAsksFor:
+    def test_families_this_machine_lacks_are_let_go(self):
+        page = ('<p style="font-family: Graphik, Helvetica, sans-serif">a</p>'
+                '<style>p { font-family: \'Graphik\'; color: red }</style>'
+                '<font face="Graphik">b</font><font face="Helvetica">c</font>')
+        out = html_utils.sanitise_for_view(page, families={"helvetica"})
+        assert "Graphik" not in out
+        assert 'font-family: Helvetica, sans-serif' in out
+        assert "color: red" in out and "font-family: Helvetica" not in out.split("<style>")[1]
+        assert '<font face="Helvetica">' in out and "<font>" in out
+
+    def test_without_a_list_nothing_changes(self):
+        page = '<p style="font-family: Graphik">a</p>'
+        assert "Graphik" in html_utils.sanitise_for_view(page)

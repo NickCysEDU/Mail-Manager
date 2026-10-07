@@ -174,7 +174,29 @@ Rules run top to bottom, so an exception goes at the top with **Stop**.
 A rule that drafts has limits: at most once in N days per person, only within
 chosen hours and days, and never to a no-reply address or an automatic
 sender. Patterns that could hang the app, such as `(a+)+`, are refused.
-**Nothing is ever sent.**
+**A rule never sends anything.** Only you do, from a message window.
+
+## Reading and replying
+
+Double-click a message, or press Return on it, and it opens in a window of
+its own with the whole message as sent. Along the top: Reply (⌘R), Reply All
+(⌘⇧R), Forward (⌘⇧F), Mark as Read or Unread, Flag, Move to, Archive (⌘E),
+Junk and Delete (⌘⌫). ⌘↑ and ⌘↓ walk the table in the order it is shown.
+Opening a message marks it read, as it would anywhere else. The same actions
+are in the **Message** menu and on a right-click in the table, where
+**Archive now** and **Delete now** act at once; **File in…** still waits for
+Apply. A quick move is undoable like any filing.
+
+A reply opens addressed, with the message quoted under your signature (the
+name in **Settings → Rules → Sign as**), and goes out through the mailbox it
+arrived in - any of yours, from the From list. Write with bold, italic,
+lists, links and pictures; attach files with ⌘⇧A or by dropping them. ⌘↩
+sends, ⌘S saves to Drafts, and closing a half-written message asks. A copy of
+what you sent lands in Sent, except on Gmail, which files its own. Forwarding
+carries the attachments along, up to 25 MB.
+
+Mail goes out with the same app password as reading it, to the provider's
+own server. A server of your own goes under **Settings → Mailboxes → Server**.
 
 ## Running on its own
 
@@ -274,7 +296,7 @@ See [SECURITY.md](../SECURITY.md) for reporting a problem.
 ./dev dry      # scan for real, with moves disabled
 ./dev fake     # the pipeline in the terminal, offline
 ./dev scan     # the pipeline on real mail, read-only
-./dev test     # 4,735 tests (with the evaluation sets present)
+./dev test     # 4,848 tests (with the evaluation sets present)
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 

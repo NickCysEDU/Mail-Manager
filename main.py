@@ -646,6 +646,7 @@ def main(argv: Optional[list] = None) -> int:
 
     store = CredentialStore()
     window = MainWindow(settings, store, demo=args.demo, dry_run=args.dry_run)
+    from gui import DockReopen
     if args.demo:
         log.info("Demo mode: using bundled sample data, no network access.")
         window._load_demo_data()
@@ -653,6 +654,10 @@ def main(argv: Optional[list] = None) -> int:
     # However the app ends (the window closed, Quit, the session ending), every
     # background thread is stopped before the event loop returns.
     app.aboutToQuit.connect(window.shutdown)
+
+    # A click on the Dock icon with the window closed brings it back, as it
+    # does in any Mac app.
+    app.installEventFilter(DockReopen(window, app))
 
     # With a menu bar item present, closing the window puts the app away
     # rather than ending it; Quit is what ends it.

@@ -16,7 +16,8 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QFrame, QLabel,
                                QLineEdit,
                                QListWidget, QMessageBox, QScrollArea,
                                QSizePolicy, QStyle, QStyleOptionComboBox,
-                               QStyleOptionViewItem, QToolButton, QWidget)
+                               QStyleOptionViewItem, QStyledItemDelegate,
+                               QToolButton, QWidget)
 from PySide6.QtCore import QThread
 
 import buildinfo
@@ -247,6 +248,50 @@ class ElidingLabel(QLabel):
                 self._full, Qt.TextElideMode.ElideRight, room)
         if shown != super().text():
             super().setText(shown)
+
+
+#: A list item's few words aside: its state, drawn dim at the right.
+ASIDE = Qt.ItemDataRole.UserRole + 7
+
+
+class AsideDelegate(QStyledItemDelegate):
+    """A list item with its name and, at the right in dim type, a few words
+    on its state. The two in one string, dash between, read as one long
+    name and were cut together."""
+
+    GAP = 18
+
+    def paint(self, painter, option, index) -> None:
+        aside = index.data(ASIDE)
+        if not aside:
+            super().paint(painter, option, index)
+            return
+        painter.save()
+        self.initStyleOption(option, index)
+        style = option.widget.style() if option.widget else QApplication.style()
+        text = option.text
+        option.text = ""
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, option,
+                          painter, option.widget)
+        rect = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText,
+                                    option, option.widget)
+        metrics = QFontMetrics(option.font)
+        room = max(0, rect.width() - metrics.horizontalAdvance(str(aside))
+                   - self.GAP)
+        chosen = (option.palette.highlightedText().color()
+                  if option.state & QStyle.StateFlag.State_Selected
+                  else option.palette.text().color())
+        painter.setFont(option.font)
+        painter.setPen(chosen)
+        painter.drawText(rect.adjusted(0, 0, -(rect.width() - room), 0),
+                         Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                         metrics.elidedText(text, Qt.TextElideMode.ElideRight, room))
+        dim = QColor(chosen)
+        dim.setAlphaF(0.55)
+        painter.setPen(dim)
+        painter.drawText(rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
+                         str(aside))
+        painter.restore()
 
 
 class RoomyCombo(QComboBox):

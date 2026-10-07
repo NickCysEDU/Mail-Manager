@@ -629,3 +629,4 @@ class TestTheToolbarDoesNotJump:
             window._window_selected(choice)
             window._fit_window_label()
             QApplication.processEvents()
+

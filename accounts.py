@@ -216,6 +216,11 @@ class Account:
     #: forced the same shape on both.
     folder_root: str = ""
     other_folder_root: str = ""
+    #: Where this mailbox's mail goes out, when the provider's usual
+    #: server is not it. Empty means the provider's, or the usual name
+    #: beside the IMAP host; port 0 means the usual port for the host.
+    smtp_host: str = ""
+    smtp_port: int = 0
 
     def __post_init__(self) -> None:
         self.address = (self.address or "").strip()
@@ -243,6 +248,13 @@ class Account:
         self.color = (self.color or "").strip()
         self.folder_root = (self.folder_root or "").strip()
         self.other_folder_root = (self.other_folder_root or "").strip()
+        self.smtp_host = (self.smtp_host or "").strip()
+        try:
+            self.smtp_port = int(self.smtp_port or 0)
+        except (TypeError, ValueError):
+            self.smtp_port = 0
+        if not 0 <= self.smtp_port <= 65535:
+            self.smtp_port = 0
 
     def roots(self, job_root: str, other_root: str) -> "Tuple[str, str]":
         """This mailbox's folder roots, falling back to the shared ones."""

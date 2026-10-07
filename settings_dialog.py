@@ -9,7 +9,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from PySide6.QtCore import QEvent, Qt, QThread, QUrl, Signal, Slot
+from PySide6.QtCore import QEvent, QSize, Qt, QThread, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices, QDoubleValidator
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
@@ -34,7 +34,10 @@ from config import (EFFORT_LEVELS, CredentialError, CredentialStore, Settings)
 from imap_engine import clean_secret
 from models import (Category, FolderPlan, NonJobRouting, OtherCategory,
                     TriageItem)
-from widgets import (ACCENT_GREEN, ACCENT_RED, AdaptiveLineEdit, ClearingLineEdit, RoomyCombo,
+from flowlayout import FlowHolder, FlowLayout
+from widgets import (ACCENT_AMBER, ACCENT_BLUE, ACCENT_GREEN, ACCENT_RED, ASIDE,
+                     AdaptiveLineEdit, AsideDelegate, ClearingLineEdit,
+                     RoomyCombo, _swatch,
                      WrappingList,
                      _abandon, _attr_url, _compact_button, _html,
                      _paint_button, _scrollable, _separator, menu_text,
@@ -317,9 +320,9 @@ class ModelsDialog(QDialog):
 
         outer = QVBoxLayout(self)
         blurb = QLabel(
-            "Models run on this Mac. Nothing is sent anywhere and there is "
-            "nothing to pay for, but each one takes a few gigabytes of disk "
-            "and the first message after a scan starts is slow while it loads."
+            "Models run on this Mac: nothing is sent and nothing to pay, but "
+            "each takes a few gigabytes, and the first message after a scan "
+            "is slow while it loads."
         )
         blurb.setWordWrap(True)
         outer.addWidget(blurb)
@@ -566,12 +569,17 @@ class SettingsDialog(QDialog):
         self._sample_items: List[TriageItem] = list(sample_items)
 
         self.tabs = QTabWidget()
+        self.tabs.setIconSize(QSize(10, 10))
         # Each tab scrolls, so no amount of text can be cut off at any size.
-        self.tabs.addTab(_scrollable(self._build_account_tab()), "Mailboxes")
-        self.tabs.addTab(_scrollable(self._build_ai_tab()), "Analysis")
-        self.tabs.addTab(_scrollable(self._build_folders_tab()), "Folders")
-        self.tabs.addTab(_scrollable(self._build_reply_tab()), "Rules")
-        self.tabs.addTab(_scrollable(self._build_appearance_tab()), "Appearance")
+        # A colour a page, so the tabs read at a glance rather than as five
+        # words in grey.
+        for page, title, colour in (
+                (self._build_account_tab(), "Mailboxes", ACCENT_BLUE),
+                (self._build_ai_tab(), "Analysis", "#7A5BD6"),
+                (self._build_folders_tab(), "Folders", ACCENT_GREEN),
+                (self._build_reply_tab(), "Rules", ACCENT_AMBER),
+                (self._build_appearance_tab(), "Appearance", "#2B9DA8")):
+            self.tabs.addTab(_scrollable(page), _swatch(colour, 10), title)
 
         self.buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
@@ -657,6 +665,7 @@ class SettingsDialog(QDialog):
         outer = QVBoxLayout(page)
 
         self.account_list = QListWidget()
+        self.account_list.setItemDelegate(AsideDelegate(self.account_list))
         self.account_list.setMinimumHeight(130)
         self.account_list.setAlternatingRowColors(True)
         self.account_list.currentRowChanged.connect(self._account_selected)
@@ -758,6 +767,19 @@ class SettingsDialog(QDialog):
         self.connections_spin.setRange(1, 8)
         advanced.addRow("IMAP host", self.host_edit)
         advanced.addRow("IMAP port", self.port_spin)
+        # Where mail goes out. Empty means the provider's own server, which
+        # is right for every provider in the list.
+        self.smtp_host_edit = QLineEdit()
+        self.smtp_host_edit.setPlaceholderText("the provider's, unless you say")
+        self.smtp_host_edit.setToolTip(
+            "Only for a server of your own. Leave empty for the provider's.")
+        self.smtp_port_spin = QSpinBox()
+        self.smtp_port_spin.setRange(0, 65535)
+        self.smtp_port_spin.setSpecialValueText("usual")
+        self.smtp_port_spin.setToolTip("465 for TLS, 587 for STARTTLS; usual "
+                                       "picks for you.")
+        advanced.addRow("Outgoing host", self.smtp_host_edit)
+        advanced.addRow("Outgoing port", self.smtp_port_spin)
         advanced.addRow("Mailbox to scan", self.mailbox_edit)
         advanced.addRow("Parallel connections", self.connections_spin)
         # Folders per mailbox: a work account where a Job Search folder would
@@ -788,16 +810,15 @@ class SettingsDialog(QDialog):
         # list above shows the truth and there is nothing to press.
         for widget in (self.email_edit, self.account_label_edit, self.host_edit,
                        self.mailbox_edit, self.account_root_edit,
-                       self.account_other_root_edit):
+                       self.account_other_root_edit, self.smtp_host_edit):
             widget.textChanged.connect(self._capture_account)
-        for widget in (self.port_spin, self.connections_spin):
+        for widget in (self.port_spin, self.connections_spin, self.smtp_port_spin):
             widget.valueChanged.connect(self._capture_account)
         self.password_edit.textChanged.connect(self._capture_account)
 
         note = QLabel(
-            "Passwords go into the macOS Keychain, never into a file. Every "
-            "provider here wants an app password rather than the one you sign "
-            "in with, which is a good thing: it can be revoked on its own."
+            "Passwords go in the macOS Keychain, never a file. Each provider "
+            "wants an app password, which can be revoked on its own."
         )
         note.setWordWrap(True)
         note.setProperty("dim", "true")
@@ -838,7 +859,8 @@ class SettingsDialog(QDialog):
         self.account_list.clear()
         for account in self._accounts:
             name = account.describe() if account.address else "New mailbox"
-            item = QListWidgetItem(f"{name}   —   {self._account_status(account)}")
+            item = QListWidgetItem(name)
+            item.setData(ASIDE, self._account_status(account))
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(
                 Qt.CheckState.Checked if account.enabled else Qt.CheckState.Unchecked)
@@ -882,7 +904,8 @@ class SettingsDialog(QDialog):
         editors = (self.preset_combo, self.email_edit, self.host_edit,
                    self.port_spin, self.mailbox_edit, self.connections_spin,
                    self.account_label_edit, self.password_edit,
-                   self.account_root_edit, self.account_other_root_edit)
+                   self.account_root_edit, self.account_other_root_edit,
+                   self.smtp_host_edit, self.smtp_port_spin)
         for widget in editors:
             widget.blockSignals(True)
         self.preset_combo.setCurrentIndex(
@@ -896,12 +919,15 @@ class SettingsDialog(QDialog):
         self.password_edit.setText(self._password_for(account))
         self.account_root_edit.setText(account.folder_root)
         self.account_other_root_edit.setText(account.other_folder_root)
+        self.smtp_host_edit.setText(account.smtp_host)
+        self.smtp_port_spin.setValue(account.smtp_port)
         for widget in editors:
             widget.blockSignals(False)
         # Open the server box on its own when it holds something unexpected.
         spec = accounts.host_for(account.preset)
         self.advanced_box.setChecked(
-            bool(account.host) and account.host != spec.host)
+            (bool(account.host) and account.host != spec.host)
+            or bool(account.smtp_host))
         self._describe_preset(account.preset)
 
     def _capture_account(self) -> None:
@@ -921,6 +947,8 @@ class SettingsDialog(QDialog):
         account.label = self.account_label_edit.text().strip()
         account.folder_root = self.account_root_edit.text().strip()
         account.other_folder_root = self.account_other_root_edit.text().strip()
+        account.smtp_host = self.smtp_host_edit.text().strip()
+        account.smtp_port = self.smtp_port_spin.value()
         if address:
             # Cleaned on the way in as well as out, so what is shown, stored
             # and sent are the same.
@@ -935,7 +963,8 @@ class SettingsDialog(QDialog):
         account = self._accounts[index]
         name = account.describe() if account.address else "New mailbox"
         self.account_list.blockSignals(True)
-        item.setText(f"{name}   ·   {self._account_status(account)}")
+        item.setText(name)
+        item.setData(ASIDE, self._account_status(account))
         self.account_list.blockSignals(False)
         ready = sum(1 for a in self._accounts
                     if self._account_status(a).startswith("ready"))
@@ -1665,10 +1694,9 @@ class SettingsDialog(QDialog):
         outer = QVBoxLayout(page)
 
         headline = QLabel(
-            "<b>Replies are drafted, never sent.</b> A rule can write a reply "
-            "into your Drafts mailbox, file a message, tick it, flag it or mark "
-            "it read, but nothing leaves your account without you pressing send "
-            "in your mail app."
+            "<b>A rule can file, tick, flag, mark read, or draft a reply.</b> "
+            "A drafted reply waits in Drafts; nothing is sent until you press "
+            "Send."
         )
         headline.setWordWrap(True)
         outer.addWidget(headline)
@@ -1796,7 +1824,8 @@ class SettingsDialog(QDialog):
         right.addWidget(_separator())
 
         action_row = QHBoxLayout()
-        action_row.addWidget(QLabel("<b>Then</b>"))
+        action_row.addWidget(QLabel(
+            f"<b style='color:{ACCENT_GREEN}'>Then do this</b>"))
         action_row.addStretch(1)
         add_action = QToolButton()
         add_action.setText("Add an action")
@@ -1812,9 +1841,9 @@ class SettingsDialog(QDialog):
         right.addWidget(self.actions_box)
 
         self.template_note = QLabel(
-            "In a template, {first_name}, {sender}, {subject} and {me} are "
-            "filled in. Anything in [square brackets] is left for you to "
-            "complete and is listed at the bottom of the draft."
+            "{first_name}, {sender}, {subject} and {me} are filled in. "
+            "Anything in [square brackets] is left for you, and listed under "
+            "the draft."
         )
         self.template_note.setWordWrap(True)
         self.template_note.setProperty("dim", "true")
@@ -1871,8 +1900,9 @@ class SettingsDialog(QDialog):
         hours.addStretch(1)
         limits.addRow("Between", hours)
 
-        days = QHBoxLayout()
-        days.setSpacing(2)
+        # A row that wraps: seven boxes in a line were squeezed into each
+        # other on a narrow page.
+        days = FlowLayout(margin=0, spacing=10, vertical_spacing=4)
         self.rule_days = []
         for number, name in enumerate(("Mon", "Tue", "Wed", "Thu", "Fri",
                                        "Sat", "Sun")):
@@ -1881,14 +1911,11 @@ class SettingsDialog(QDialog):
             box.toggled.connect(self._rule_edited)
             days.addWidget(box)
             self.rule_days.append(box)
-        days.addStretch(1)
-        limits.addRow("On", days)
+        limits.addRow("On", FlowHolder(days))
 
         self.loop_note = QLabel(
-            "Mail from a machine is never answered, whatever this says: a "
-            "no-reply address, a bounce, or anything carrying the headers "
-            "an automatic reply sets. Two responders talking to each "
-            "other is how this feature goes wrong.")
+            "Mail from a machine is never answered, whatever this says: "
+            "no-reply addresses, bounces and automatic replies.")
         self.loop_note.setWordWrap(True)
         self.loop_note.setProperty("dim", "true")
         limits.addRow("", self.loop_note)
@@ -1937,7 +1964,8 @@ class SettingsDialog(QDialog):
         for index, rule in enumerate(self._rules):
             if not self._rule_matches_search(rule):
                 continue
-            entry = QListWidgetItem(self._rule_label(rule))
+            entry = QListWidgetItem(
+                f"{self._rule_label(rule)}\n{self._rule_status(rule)}")
             entry.setFlags(entry.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             entry.setCheckState(Qt.CheckState.Checked if rule.enabled
                                 else Qt.CheckState.Unchecked)
@@ -2153,7 +2181,7 @@ class SettingsDialog(QDialog):
             return
         rule = self._rules[self._rule_index]
         self.rule_list.blockSignals(True)
-        entry.setText(self._rule_label(rule))
+        entry.setText(f"{self._rule_label(rule)}\n{self._rule_status(rule)}")
         self.rule_list.measure()
         entry.setCheckState(Qt.CheckState.Checked if rule.enabled
                             else Qt.CheckState.Unchecked)
@@ -2179,9 +2207,10 @@ class SettingsDialog(QDialog):
         return "ready"
 
     def _rule_label(self, rule) -> str:
-        """The name and what it is doing, marked when it cannot run."""
+        """The name, marked when it cannot run; what it is doing goes on the
+        line under it."""
         mark = "⚠ " if rule.problems() else ""
-        return f"{mark}{menu_text(rule.name)}   —   {self._rule_status(rule)}"
+        return f"{mark}{menu_text(rule.name)}"
 
     def _rule_tooltip(self, rule) -> str:
         """The whole name, which the list is too narrow to show, and the gist."""
@@ -2311,10 +2340,8 @@ class SettingsDialog(QDialog):
             self.contrast_combo.addItem(label, value)
         form.addRow("Contrast", self.contrast_combo)
         contrast_note = QLabel(
-            "High contrast darkens the supporting colours until every one of "
-            "them passes against its own background. Maximum goes further and "
-            "drops colour altogether: black on white, or white on black, with "
-            "nothing depending on hue."
+            "High contrast darkens the supporting colours; Maximum drops "
+            "colour altogether."
         )
         contrast_note.setWordWrap(True)
         contrast_note.setProperty("dim", "true")
@@ -2338,9 +2365,7 @@ class SettingsDialog(QDialog):
         )
         form.addRow("", self.help_check)
         help_note = QLabel(
-            "Off by default, because a tooltip nobody asked for is in the way. "
-            "The circled ? at the top right of the window toggles the same "
-            "setting, and is filled in while it is on."
+            "The circled ? at the top right of the window toggles this too."
         )
         help_note.setWordWrap(True)
         help_note.setProperty("dim", "true")
@@ -2811,7 +2836,7 @@ class SettingsDialog(QDialog):
         # Only if nobody has started typing in the meantime.
         if not self.password_edit.text():
             self.password_edit.setText(found.get("password", ""))
-        self.status.setText(f"Keychain backend: {found.get('backend', '')}")
+        self.status.setText("")
 
     def _routing_changed(self) -> None:
         routing = NonJobRouting.parse(self.routing_combo.currentData())

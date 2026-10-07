@@ -121,7 +121,7 @@ class TestTheShowButtonNamesTheMailboxScanned:
                                  account_label=account.label)
         window.model.set_items(items)
         window._rebuild_view_menu()
-        assert "All mailboxes" in window.view_button.text()
+        assert window.view_button.text() == "Mailbox: All"
 
 
 class TestColumnsCanBeTurnedOff:
@@ -699,13 +699,15 @@ class TestTheAccountEditorCannotCorruptAMailbox:
 
     def test_the_list_says_what_each_mailbox_still_needs(self, dialog):
         subject, _store = dialog
+        from widgets import ASIDE
+
         subject._add_account()
-        assert "no address" in subject.account_list.item(1).text()
+        assert "no address" in subject.account_list.item(1).data(ASIDE)
         subject.email_edit.setText("new@fastmail.com")
         subject._address_entered()
-        assert "no password" in subject.account_list.item(1).text()
+        assert "no password" in subject.account_list.item(1).data(ASIDE)
         subject.password_edit.setText("x")
-        assert "ready" in subject.account_list.item(1).text()
+        assert "ready" in subject.account_list.item(1).data(ASIDE)
 
     def test_unticking_a_mailbox_keeps_it_but_stops_scanning_it(self, dialog):
         from PySide6.QtCore import Qt as _Qt
@@ -1579,3 +1581,45 @@ class TestThePreviewKeepsItsSize:
         finally:
             window.close()
             window.deleteLater()
+
+
+class TestTheWindowComesBack:
+    """Closed to the menu bar, the window had no way back but the menu bar
+    item: now the Window menu, the Dock's own menu, and a click on the Dock
+    icon all bring it back."""
+
+    def test_the_window_menu_reveals_it(self, qapp, window):
+        window.show()
+        window.hide()
+        assert not window.isVisible()
+        window.reveal_action.trigger()
+        assert window.isVisible()
+        assert window.reveal_action.shortcut().toString() == "Ctrl+0"
+
+    def test_the_dock_menu_reveals_it(self, qapp, window):
+        import sys
+
+        if sys.platform != "darwin":
+            pytest.skip("the Dock is macOS's")
+        window.show()
+        window.hide()
+        show = next(a for a in window.dock_menu.actions()
+                    if a.text() == "Show Mail Manager")
+        show.trigger()
+        assert window.isVisible()
+        assert [a.text() for a in window.dock_menu.actions()] == [
+            "Show Mail Manager", "Scan Now", "Settings…", "New Message"]
+
+    def test_a_click_on_the_dock_icon_reveals_it(self, qapp, window):
+        from PySide6.QtCore import QEvent
+
+        from gui import DockReopen
+
+        window.show()
+        window.hide()
+        DockReopen(window).eventFilter(qapp, QEvent(QEvent.Type.ApplicationActivate))
+        assert window.isVisible()
+        # And leaves a visible window alone.
+        window.showMinimized()
+        DockReopen(window).eventFilter(qapp, QEvent(QEvent.Type.ApplicationActivate))
+        assert window.isVisible()

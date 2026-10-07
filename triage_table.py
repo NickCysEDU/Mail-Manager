@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel,
                                QPlainTextEdit, QPushButton, QSplitter, QStyle,
                                QStyledItemDelegate, QStyleOptionViewItem,
                                QTextBrowser, QToolButton, QVBoxLayout, QWidget,
-    QInputDialog,
+    QInputDialog, QMenu,
     QStackedWidget)
 
 import html_utils
@@ -633,6 +633,19 @@ class _SealedDocument(QTextDocument):
         return None
 
 
+_FAMILIES = None
+
+
+def _families_here() -> frozenset:
+    """The font families this machine has, in lower case, found once."""
+    global _FAMILIES
+    if _FAMILIES is None:
+        from PySide6.QtGui import QFontDatabase
+
+        _FAMILIES = frozenset(name.lower() for name in QFontDatabase.families())
+    return _FAMILIES
+
+
 class MailView(QTextBrowser):
     """The message as sent, drawn by Qt's own document engine. Nothing the
     message refers to is fetched by the document: no stylesheet, no file.
@@ -666,7 +679,8 @@ class MailView(QTextBrowser):
         self._pictures = bool(wanted)
 
     def show_message(self, html: str) -> None:
-        self._html = html_utils.sanitise_for_view(html, pictures=self._pictures)
+        self._html = html_utils.sanitise_for_view(
+            html, pictures=self._pictures, families=_families_here())
         self.setHtml(self._html)
         for url in self.pictures_wanted():
             self._pending.add(url)
@@ -757,6 +771,10 @@ class PreviewPane(QWidget):
     #: "Sort this mail too" - the window turns non-job routing on.
     sortNonJobRequested = Signal()
     attachmentsRequested = Signal(int)   # source row
+    #: Write back - "reply", "reply_all" or "forward" - to the row shown,
+    #: or open it in a window of its own.
+    composeRequested = Signal(str, int)
+    openRequested = Signal(int)
     #: A link from the message to open, as its address. Whoever owns the
     #: pane says where it goes first: see link_open.
     linkRequested = Signal(str)
@@ -784,6 +802,24 @@ class PreviewPane(QWidget):
         self.links_button.setToolTip(
             "Every link in the message, by where it really goes.")
         self.links_button.clicked.connect(self._show_links)
+
+        # Writing back, in one button with a menu, so the row stays short.
+        self.reply_button = QToolButton()
+        self.reply_button.setText("Reply")
+        self.reply_button.setEnabled(False)
+        self.reply_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.reply_button.setProperty("menu", "true")
+        self.reply_button.setToolTip("Answer, forward or open this message.")
+        self.reply_menu = QMenu(self.reply_button)
+        for label, mode in (("Reply", "reply"), ("Reply All", "reply_all"),
+                            ("Forward", "forward")):
+            action = self.reply_menu.addAction(label)
+            action.triggered.connect(
+                lambda checked=False, m=mode: self._compose(m))
+        self.reply_menu.addSeparator()
+        self.open_action = self.reply_menu.addAction("Open in a Window")
+        self.open_action.triggered.connect(self._open_window)
+        self.reply_button.setMenu(self.reply_menu)
         self._link_list = None
 
         self.body_mode = RoomyCombo(every=True)
@@ -904,6 +940,7 @@ class PreviewPane(QWidget):
         top.setContentsMargins(0, 0, 0, 0)
         top.setSpacing(8)
         top.addWidget(self.header, 1)
+        top.addWidget(self.reply_button, 0, Qt.AlignmentFlag.AlignTop)
         top.addWidget(self.links_button, 0, Qt.AlignmentFlag.AlignTop)
         top.addWidget(self.attachments_button, 0,
                       Qt.AlignmentFlag.AlignTop)
@@ -1038,12 +1075,22 @@ class PreviewPane(QWidget):
         self.reset_button.setEnabled(False)
         self.links_button.setEnabled(False)
         self.links_button.setText("Links")
+        self.reply_button.setEnabled(False)
+
+    def _compose(self, mode: str) -> None:
+        if self._row is not None:
+            self.composeRequested.emit(mode, self._row)
+
+    def _open_window(self) -> None:
+        if self._row is not None:
+            self.openRequested.emit(self._row)
 
     def show_item(self, row: int, item: TriageItem, prompt_text: str = "") -> None:
         self._row = row
         self._item = item
         self._sync_attachments(item)
         self._sync_links(item)
+        self.reply_button.setEnabled(True)
         self._prompt_text = prompt_text
         message = item.email
 
@@ -1055,13 +1102,19 @@ class PreviewPane(QWidget):
             self.sort_these_button.setVisible(item.left_because_not_job)
 
         badge = _disposition_badge(item)
+        flags = {flag.lower() for flag in (message.flags or ())}
+        marks = ""
+        if "\\flagged" in flags:
+            marks += " · <span style='color:#E0A426'>⚑ Flagged</span>"
+        if "\\seen" not in flags:
+            marks += " · Unread"
         # A shorter date than "Monday 20 September 2026": this label wraps, and
         # every line comes off the two halves under it.
         self.header.setText(
             f"<div style='line-height:150%'>"
             f"<b>{_html(message.subject_display)}</b><br>"
             f"<span style='opacity:0.85'>{_html(message.sender_display)}</span> · "
-            f"{_html(message.date_display('%a %d %b %Y, %H:%M'))}<br>"
+            f"{_html(message.date_display('%a %d %b %Y, %H:%M'))}{marks}<br>"
             f"{badge}</div>"
         )
         self.header.setToolTip(

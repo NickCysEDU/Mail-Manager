@@ -388,9 +388,11 @@ def stylesheet(colours: Palette, readable: bool = False,
         subcontrol-origin: padding; subcontrol-position: center right;
         width: {drop_width}px; height: {arrow_px}px;
     }}
-    /* Room for the caret on the right, and the same vertical padding as
-       everything else so the button is the same height as its neighbours. */
-    QToolButton[popupMode="0"], QToolButton[popupMode="2"] {{
+    /* Room for the caret on the right, on the buttons that open a menu, and
+       the same vertical padding as everything else so the button is the
+       same height as its neighbours. Given to every tool button, the ones
+       with words alone sat off centre. */
+    QToolButton[menu="true"] {{
         padding-right: {drop_width + 6}px;
     }}
 

@@ -15,6 +15,8 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import shiboken6
 from PySide6.QtCore import (
+    QEvent,
+    QObject,
     QThread,
     QByteArray,
     QDate,
@@ -97,6 +99,11 @@ from triage_table import (
 from menubar import MenuBarController
 from welcome import SetupWizard
 from workers import (AttachmentWorker,
+    AttachmentFetchWorker,
+    DraftWorker,
+    FlagWorker,
+    MoveWorker,
+    SendWorker,
     ReplyWorker,
     ApplyWorker,
     ScanOutcome,
@@ -131,6 +138,22 @@ class UndoBatch:
 
     plans: List[MovePlan]
     when: datetime
+
+class DockReopen(QObject):
+    """Brings the window back when the app is activated with it hidden: a
+    click on the Dock icon, with the window closed, did nothing."""
+
+    def __init__(self, window, parent=None) -> None:
+        super().__init__(parent)
+        self._window = window
+
+    def eventFilter(self, watched, event) -> bool:      # noqa: N802 - Qt
+        if (event.type() == QEvent.Type.ApplicationActivate
+                and not self._window.isVisible()
+                and QApplication.activeModalWidget() is None):
+            self._window._reveal()
+        return False
+
 
 class MainWindow(QMainWindow):
     """The application window."""
@@ -193,6 +216,10 @@ class MainWindow(QMainWindow):
         self._update_dialog = None
         self._attachment_window = None
         self._visualiser_window = None
+        #: Every message and compose window opened from here. They stand on
+        #: their own, so the main window closing to the menu bar leaves
+        #: them; quitting closes them.
+        self._mail_windows: list = []
         #: The batch an undo is putting back, while it runs.
         self._undoing: Optional[UndoBatch] = None
         #: The period the last scan covered, for the briefing.
@@ -294,6 +321,10 @@ class MainWindow(QMainWindow):
         self.table.sortByColumn(TriageTableModel.COL_DATE, Qt.SortOrder.DescendingOrder)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._table_menu)
+        # A double-click, or Return, opens the message in a window of its
+        # own, as it does in every mail client.
+        self.table.doubleClicked.connect(self._open_index)
+        self.table.activated.connect(self._open_index)
 
         self._apply_density(self.settings.row_lines)
 
@@ -343,6 +374,7 @@ class MainWindow(QMainWindow):
         self.table_stack.addWidget(empty_page)         # index 0
         self.table_stack.addWidget(self.table)         # index 1
         self.model.modelReset.connect(self._sync_table_stack)
+        self.model.modelReset.connect(self._refresh_mail_windows)
         # A filter emptying the view is just as much a reason to swap pages as
         # the model emptying, and only the proxy knows when that happens.
         self.proxy.rowsInserted.connect(self._sync_table_stack)
@@ -355,6 +387,8 @@ class MainWindow(QMainWindow):
         self.preview.linkRequested.connect(self._open_link)
         self.preview.sortNonJobRequested.connect(
             lambda: self._switch_routing(NonJobRouting.FILE))
+        self.preview.composeRequested.connect(self.compose)
+        self.preview.openRequested.connect(self.open_message)
 
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
@@ -624,6 +658,7 @@ class MainWindow(QMainWindow):
         self.model_button.setToolTip("Switch the model backend (⌘M)")
         self.model_menu = QMenu(self)
         self.model_button.setMenu(self.model_menu)
+        self.model_button.setProperty("menu", "true")
         row.addWidget(self.model_button)
 
         # What gets sorted, and what happens to the rest: in the window, where
@@ -632,6 +667,7 @@ class MainWindow(QMainWindow):
         self.sorting_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.sorting_menu = QMenu(self)
         self.sorting_button.setMenu(self.sorting_menu)
+        self.sorting_button.setProperty("menu", "true")
         row.addWidget(self.sorting_button)
 
         # Only worth the space once there is more than one mailbox.
@@ -642,6 +678,7 @@ class MainWindow(QMainWindow):
         self.account_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.account_menu = QMenu(self)
         self.account_button.setMenu(self.account_menu)
+        self.account_button.setProperty("menu", "true")
         row.addWidget(self.account_button)
 
         self.scan_button = QPushButton("Scan && Analyze")
@@ -728,6 +765,10 @@ class MainWindow(QMainWindow):
                             image="list.bullet.rectangle"),
             touchbar.Button("find", "Find", self._focus_search, title="",
                             image="magnifyingglass"),
+            touchbar.Button("new-message", "New message",
+                            lambda: self.compose("new"), image="square.and.pencil"),
+            touchbar.Button("open-message", "Open message", self._open_selected,
+                            image="envelope.open"),
             touchbar.Button("links", "Links", self.preview.links_button,
                             follow=False, image="link"),
             touchbar.Button("clear", "Clear filters", self._clear_filters,
@@ -1291,6 +1332,7 @@ class MainWindow(QMainWindow):
         self.view_button.setToolTip(
             "Which mailboxes' messages are shown in the table.")
         self.view_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.view_button.setProperty("menu", "true")
         self.view_menu = QMenu(self)
         self.view_button.setMenu(self.view_menu)
         row.addWidget(self.view_button)
@@ -1303,6 +1345,7 @@ class MainWindow(QMainWindow):
         self.columns_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.columns_menu = QMenu(self)
         self.columns_button.setMenu(self.columns_menu)
+        self.columns_button.setProperty("menu", "true")
         row.addWidget(self.columns_button)
         # The table does not exist yet; both menus are filled in once it does.
 
@@ -1317,6 +1360,7 @@ class MainWindow(QMainWindow):
             QToolButton.ToolButtonPopupMode.InstantPopup)
         self.ticks_menu = QMenu(self)
         self.ticks_button.setMenu(self.ticks_menu)
+        self.ticks_button.setProperty("menu", "true")
         row.addWidget(self.ticks_button)
         self._build_ticks_menu()
 
@@ -1454,18 +1498,16 @@ class MainWindow(QMainWindow):
             elif len(with_mail) == 1:
                 name = _mailbox_short(with_mail[0])
             else:
-                name = "All mailboxes"
+                name = "All"
         elif not showing:
-            name = "No mailboxes"
+            name = "None"
         elif len(showing) == 1:
-            only = next((l for a, l, _n in linked if a in showing), "One mailbox")
+            only = next((l for a, l, _n in linked if a in showing), "One")
             name = _mailbox_short(only)
         else:
-            name = f"{len(showing)} of {len(linked)} mailboxes"
-        self.view_button.setText(menu_text(f"Show: {name}"))
-        self.view_button.setToolTip(
-            "Which mailboxes are shown in the table."
-        )
+            name = f"{len(showing)} of {len(linked)}"
+        self.view_button.setText(menu_text(f"Mailbox: {name}"))
+        self.view_button.setToolTip("Whose mail is in the table.")
 
     def _rebuild_columns_menu(self) -> None:
         self.columns_menu.clear()
@@ -1596,7 +1638,7 @@ class MainWindow(QMainWindow):
         reply_action.setShortcut(QKeySequence("Ctrl+Shift+R"))
         reply_action.setToolTip(
             "Run the auto-reply rules over what was scanned: draft, file, tick, "
-            "flag or mark read, whatever they say. Nothing is ever sent."
+            "flag or mark read, whatever they say. A rule never sends anything."
         )
         reply_action.triggered.connect(self.draft_replies)
         file_menu.addAction(reply_action)
@@ -1773,6 +1815,24 @@ class MainWindow(QMainWindow):
         open_logs.triggered.connect(lambda: _reveal(log_dir()))
         view_menu.addAction(open_logs)
 
+        self._build_message_menu(menubar)
+
+        window_menu = menubar.addMenu("&Window")
+        minimise = QAction("Minimize", self)
+        minimise.triggered.connect(self.showMinimized)
+        window_menu.addAction(minimise)
+        zoom = QAction("Zoom", self)
+        zoom.triggered.connect(lambda: self.showNormal() if self.isMaximized()
+                               else self.showMaximized())
+        window_menu.addAction(zoom)
+        window_menu.addSeparator()
+        # Back from wherever it went: the menu bar item, a closed window.
+        self.reveal_action = QAction("Mail Manager", self)
+        self.reveal_action.setShortcut(QKeySequence("Ctrl+0"))
+        self.reveal_action.triggered.connect(self._reveal)
+        window_menu.addAction(self.reveal_action)
+        self._give_dock_menu()
+
         help_menu = menubar.addMenu("&Help")
         # Named for what people come looking for: linking another mailbox is
         # ordinary, not a re-run of setup.
@@ -1796,6 +1856,77 @@ class MainWindow(QMainWindow):
         about.setMenuRole(QAction.MenuRole.AboutRole)
         about.triggered.connect(self._about)
         help_menu.addAction(about)
+
+    def _build_message_menu(self, menubar) -> None:
+        """What can be done to the selected messages, as any mail client
+        offers it: written to, marked, and moved. Ticking and filing for
+        the next Apply stay in the Edit menu and on the table."""
+        menu = menubar.addMenu("&Message")
+        new_message = QAction("&New Message", self)
+        new_message.setShortcut(QKeySequence("Ctrl+N"))
+        new_message.triggered.connect(lambda: self.compose("new"))
+        menu.addAction(new_message)
+        self.open_message_action = QAction("&Open Message", self)
+        self.open_message_action.setShortcut(QKeySequence("Ctrl+O"))
+        self.open_message_action.setStatusTip(
+            "Read the selected message in a window of its own. A double-click "
+            "or Return on the row does the same.")
+        self.open_message_action.triggered.connect(self._open_selected)
+        menu.addAction(self.open_message_action)
+        menu.addSeparator()
+        self.compose_actions: Dict[str, QAction] = {}
+        for label, mode in (("&Reply", "reply"), ("Reply &All", "reply_all"),
+                            ("&Forward", "forward")):
+            action = QAction(label, self)
+            action.triggered.connect(lambda checked=False, m=mode: self._compose_selected(m))
+            menu.addAction(action)
+            self.compose_actions[mode] = action
+        menu.addSeparator()
+        self.mark_read_action = QAction("Mark as Read", self)
+        self.mark_read_action.setShortcut(QKeySequence("Ctrl+Shift+U"))
+        self.mark_read_action.triggered.connect(lambda: self._act_on_selected("read"))
+        menu.addAction(self.mark_read_action)
+        self.mark_flag_action = QAction("Flag", self)
+        self.mark_flag_action.setShortcut(QKeySequence("Ctrl+Shift+L"))
+        self.mark_flag_action.triggered.connect(lambda: self._act_on_selected("flag"))
+        menu.addAction(self.mark_flag_action)
+        menu.addSeparator()
+        self.quick_actions: Dict[str, QAction] = {}
+        for label, what, keys in (("Archive", "archive", "Ctrl+E"),
+                                  ("Move to Junk", "junk", "Ctrl+Shift+J"),
+                                  ("Delete", "delete", "Ctrl+Backspace")):
+            action = QAction(label, self)
+            action.setShortcut(QKeySequence(keys))
+            action.triggered.connect(lambda checked=False, w=what: self._act_on_selected(w))
+            menu.addAction(action)
+            self.quick_actions[what] = action
+        # Kept in step with the selection, not only when the menu opens: a
+        # shortcut never opens the menu, and a disabled action ignores it.
+        menu.aboutToShow.connect(self._sync_message_menu)
+        self.table.selectionModel().selectionChanged.connect(
+            lambda *_: self._sync_message_menu())
+        self.model.modelReset.connect(self._sync_message_menu)
+        self.message_menu = menu
+        self._sync_message_menu()
+
+    def _sync_message_menu(self) -> None:
+        """Enable what the selection allows, and word the toggles for it."""
+        rows = self._selected_rows()
+        items = [self.model.item_at(row) for row in rows]
+        items = [item for item in items if item is not None]
+        one = len(items) == 1
+        self.open_message_action.setEnabled(one)
+        for action in self.compose_actions.values():
+            action.setEnabled(one)
+        live = [item for item in items if not item.moved]
+        for action in (self.mark_read_action, self.mark_flag_action,
+                       *self.quick_actions.values()):
+            action.setEnabled(bool(live))
+        unread = any("\\seen" not in _flags_of(item) for item in live)
+        self.mark_read_action.setText("Mark as Read" if unread or not live
+                                      else "Mark as Unread")
+        flagged = live and all("\\flagged" in _flags_of(item) for item in live)
+        self.mark_flag_action.setText("Unflag" if flagged else "Flag")
 
     def _restore_geometry(self) -> None:
         if self.settings.window_geometry:
@@ -1860,7 +1991,13 @@ class MainWindow(QMainWindow):
                 "ready to file")
 
     def confirm_quit(self) -> bool:
-        """Ask before throwing away a scan that has not been applied."""
+        """Ask before throwing away a scan that has not been applied, or a
+        message half written: its window asks, and Cancel there stops the
+        quit."""
+        for window in self._live_mail_windows():
+            window.close()
+            if shiboken6.isValid(window) and window.isVisible():
+                return False
         outstanding = self._unfinished_work()
         if not outstanding:
             return True
@@ -1889,6 +2026,7 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self._close_attachment_window()
+        self._close_mail_windows()
         self.shutdown()
         self._save_layout()
         super().closeEvent(event)
@@ -2042,6 +2180,22 @@ class MainWindow(QMainWindow):
         self.showNormal()
         self.raise_()
         self.activateWindow()
+
+    def _give_dock_menu(self) -> None:
+        """The Dock icon's own menu, on a Mac: the window back, a scan and
+        Settings, with the window closed or not."""
+        if not hasattr(QMenu, "setAsDockMenu"):
+            return
+        self.dock_menu = QMenu()
+        show = self.dock_menu.addAction("Show Mail Manager")
+        show.triggered.connect(self._reveal)
+        scan = self.dock_menu.addAction("Scan Now")
+        scan.triggered.connect(lambda: (self._reveal(), self.scan_button.click()))
+        settings = self.dock_menu.addAction("Settings…")
+        settings.triggered.connect(lambda: (self._reveal(), self.open_settings()))
+        write = self.dock_menu.addAction("New Message")
+        write.triggered.connect(lambda: self.compose("new"))
+        self.dock_menu.setAsDockMenu()
 
     def quit_app(self, before=None) -> None:
         """Leave for good, rather than hiding to the menu bar. ``before`` is
@@ -2719,6 +2873,26 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def _on_apply_done(self, report: MoveReport) -> None:
+        message = self._record_moves(report)
+        details = [message]
+        if report.created_folders:
+            details.append("Created: " + ", ".join(report.created_folders))
+        if report.warnings:
+            details.extend(report.warnings)
+        if report.failed:
+            sample = list(report.failed.items())[:5]
+            details.append(
+                "Failures:\n" + "\n".join(f"  UID {uid}: {error}" for uid, error in sample)
+            )
+        icon = QMessageBox.Icon.Warning if report.failed else QMessageBox.Icon.Information
+        box = QMessageBox(icon, "Folder moves", "\n\n".join(details), parent=self)
+        selectable(box)
+        box.exec()
+        self._update_status(message)
+
+    def _record_moves(self, report: MoveReport) -> str:
+        """Carry a move report into the table and the undo stack; returns
+        the one-line account of it."""
         # Where everything came from, so it can be put back: undo is what makes
         # moving real mail safe to try.
         plans: List[MovePlan] = []
@@ -2747,26 +2921,12 @@ class MainWindow(QMainWindow):
         self._sync_undo_action()
         self.model.apply_report(report)
         self._refresh_folder_choices()
+        self._refresh_mail_windows()
         message = f"Filed {report.moved_count} message(s)."
         if report.failed:
             message += f" {report.failed_count} could not be moved."
         self._append_log(message)
-
-        details = [message]
-        if report.created_folders:
-            details.append("Created: " + ", ".join(report.created_folders))
-        if report.warnings:
-            details.extend(report.warnings)
-        if report.failed:
-            sample = list(report.failed.items())[:5]
-            details.append(
-                "Failures:\n" + "\n".join(f"  UID {uid}: {error}" for uid, error in sample)
-            )
-        icon = QMessageBox.Icon.Warning if report.failed else QMessageBox.Icon.Information
-        box = QMessageBox(icon, "Folder moves", "\n\n".join(details), parent=self)
-        selectable(box)
-        box.exec()
-        self._update_status(message)
+        return message
 
     def _register(self, worker: QThread) -> QThread:
         """Track a worker and reap it when it finishes. Otherwise finished
@@ -3008,6 +3168,36 @@ class MainWindow(QMainWindow):
             file_thread.setMenu(sub)
             file_thread.setEnabled(bool(folders))
             menu.addSeparator()
+
+        if not many:
+            open_action = menu.addAction("Open in a Window")
+            open_action.triggered.connect(lambda: self.open_message(rows[0]))
+            for label, mode in (("Reply", "reply"), ("Reply All", "reply_all"),
+                                ("Forward", "forward")):
+                action = menu.addAction(label)
+                action.triggered.connect(
+                    lambda checked=False, m=mode: self.compose(m, rows[0]))
+            menu.addSeparator()
+        live = [item for item in items if not item.moved]
+        unread = any("\\seen" not in _flags_of(item) for item in live)
+        read = menu.addAction("Mark as Read" if unread else "Mark as Unread")
+        read.triggered.connect(
+            lambda: self.act_on_rows("read" if unread else "unread", rows))
+        flagged = bool(live) and all("\\flagged" in _flags_of(item) for item in live)
+        flag = menu.addAction("Unflag" if flagged else "Flag")
+        flag.triggered.connect(
+            lambda: self.act_on_rows("unflag" if flagged else "flag", rows))
+        quick = []
+        for label, what in (("Archive", "archive"), ("Move to Junk", "junk"),
+                            ("Delete", "delete")):
+            action = menu.addAction(f"{label} now" if label != "Move to Junk"
+                                    else "Move to Junk now")
+            action.triggered.connect(
+                lambda checked=False, w=what: self.act_on_rows(w, rows))
+            quick.append(action)
+        for action in (read, flag, *quick):
+            action.setEnabled(bool(live))
+        menu.addSeparator()
 
         copy = menu.addAction("Copy sender address"
                               if not many else "Copy sender addresses")
@@ -3370,6 +3560,17 @@ class MainWindow(QMainWindow):
             ("⌘D", "Clear all ticks"),
             ("⌘L", "Show or hide the activity log"),
             ("⌘,", "Settings"),
+            ("⌘N", "New message"),
+            ("⌘O", "Open the selected message in its own window"),
+            ("⌘E / ⌘⌫", "Archive / delete the selected messages"),
+            ("⌘⇧U / ⌘⇧L", "Mark as read or unread / flag or unflag"),
+            ("In a message window", ""),
+            ("⌘R / ⌘⇧R / ⌘⇧F", "Reply / reply all / forward"),
+            ("⌘↑ / ⌘↓", "Previous / next message"),
+            ("While writing", ""),
+            ("⌘↩", "Send"),
+            ("⌘S", "Save as a draft"),
+            ("⌘B / ⌘I / ⌘U", "Bold / italic / underline"),
         ]
         body = "".join(
             f"<tr><td style='padding:3px 18px 3px 0'><b>{key}</b></td>"
@@ -3598,6 +3799,401 @@ class MainWindow(QMainWindow):
 
         self.quit_app(before=lambda: installer.launch(Path(script)))
 
+    # -- Reading and writing mail ---------------------------------------------
+    #
+    # A message opens in a window of its own; a reply, a forward or a new
+    # message is written in another. Both windows hand everything back to
+    # here - what to do to a message, where it goes, who sends it - because
+    # this window holds the accounts, the passwords and the table.
+
+    #: The quick marks, by what the windows and menus ask for.
+    FLAG_ACTIONS = {"read": ("seen", True), "unread": ("seen", False),
+                    "flag": ("flagged", True), "unflag": ("flagged", False),
+                    "answered": ("answered", True)}
+    #: The quick moves, by what the windows and menus ask for.
+    MOVE_ACTIONS = {"archive": "archive", "delete": "trash", "junk": "junk",
+                    "move": "folder"}
+
+    def _live_mail_windows(self) -> list:
+        # A closed window is deleted on the next turn of the loop, and is
+        # no longer a window to count until then either.
+        self._mail_windows = [w for w in self._mail_windows
+                              if shiboken6.isValid(w) and w.isVisible()]
+        return list(self._mail_windows)
+
+    def _account_id_of(self, message) -> str:
+        """Which mailbox a message belongs to. A single-mailbox scan leaves
+        the field empty, which means the primary one."""
+        return message.account_id or self.settings.primary_account.id
+
+    def _adopt_mail_window(self, window) -> None:
+        self._mail_windows.append(window)
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+    def _close_mail_windows(self) -> None:
+        for window in self._live_mail_windows():
+            window.close()
+        self._mail_windows = []
+
+    def _refresh_mail_windows(self) -> None:
+        """After the table changed - a flag, a move, a scan - every message
+        window looks at its message again, and closes if it has gone."""
+        from mail_window import MessageWindow
+
+        for window in self._live_mail_windows():
+            if isinstance(window, MessageWindow):
+                window.refresh()
+
+    @Slot(int)
+    def open_message(self, row: int) -> None:
+        """One message in a window of its own, marked read the way opening
+        it anywhere else would. A second opening of the same message
+        brings its window forward rather than making another."""
+        from mail_window import MessageWindow
+
+        item = self.model.item_at(row)
+        if item is None:
+            return
+        for window in self._live_mail_windows():
+            if isinstance(window, MessageWindow) and window.same_message(item):
+                window.show_row(row)
+                window.show()
+                window.raise_()
+                window.activateWindow()
+                return
+        window = MessageWindow(self, row)
+        self._adopt_mail_window(window)
+        if "\\seen" not in _flags_of(item):
+            self.act_on_rows("read", [row])
+
+    def _open_index(self, index) -> None:
+        """A double-click or Return on a row. Not on the tick box: two quick
+        clicks there are two ticks, not a window."""
+        if not index.isValid() or index.column() == TriageTableModel.COL_SELECT:
+            return
+        self.open_message(self.proxy.mapToSource(index).row())
+
+    def _open_selected(self) -> None:
+        rows = self._selected_rows()
+        if rows:
+            self.open_message(rows[0])
+
+    def _compose_selected(self, mode: str) -> None:
+        rows = self._selected_rows()
+        if rows:
+            self.compose(mode, rows[0])
+
+    def _act_on_selected(self, what: str) -> None:
+        rows = self._selected_rows()
+        if rows:
+            self.act_on_rows(what, rows)
+
+    def neighbour_row(self, row: int, by: int) -> Optional[int]:
+        """The source row ``by`` places from ``row`` in the table as it is
+        shown - sorted and filtered - or None at either end."""
+        shown = self.proxy.mapFromSource(self.model.index(row, 0))
+        if not shown.isValid():
+            return None
+        wanted = shown.row() + by
+        if not 0 <= wanted < self.proxy.rowCount():
+            return None
+        return self.proxy.mapToSource(self.proxy.index(wanted, 0)).row()
+
+    def select_row(self, row: int) -> None:
+        """Select one source row and bring it into view."""
+        self._select_rows([row])
+        shown = self.proxy.mapFromSource(self.model.index(row, 0))
+        if shown.isValid():
+            self.table.scrollTo(shown)
+
+    def folder_choices(self) -> List[str]:
+        return self._folder_choices()
+
+    def open_link(self, url: str) -> None:
+        self._open_link(url)
+
+    def sender_name(self) -> str:
+        """The name on what goes out: the one replies are signed with."""
+        return (self.settings.reply_signature or "").strip()
+
+    def signature_html(self) -> str:
+        name = self.sender_name()
+        return f"<p>{_html(name)}</p>" if name else ""
+
+    def known_addresses(self) -> List[str]:
+        """Who the To field can offer: the mailboxes here, and everyone
+        who wrote to them."""
+        import outgoing
+
+        found: Dict[str, str] = {}
+        for account in self._sending_accounts():
+            if account.address:
+                found[account.address.lower()] = account.address
+        for item in self.model.items:
+            message = item.email
+            if message.sender_email:
+                found.setdefault(message.sender_email.lower(),
+                                 outgoing.format_address(message.sender_name,
+                                                         message.sender_email))
+        return sorted(found.values(), key=str.lower)
+
+    def _sending_accounts(self) -> list:
+        accounts = [a for a in self.settings.accounts if a.is_configured]
+        if not accounts and self.settings.primary_account.is_configured:
+            accounts = [self.settings.primary_account]
+        return accounts
+
+    def compose(self, mode: str = "new", row: int = -1) -> None:
+        """Write a message: a new one, or a reply, a reply to all or a
+        forward of the row's message, in a window of its own."""
+        import outgoing
+        from mail_window import ComposeWindow
+
+        accounts = self._sending_accounts()
+        if not accounts:
+            QMessageBox.information(
+                self, "No mailbox",
+                "Add a mailbox in Settings first. Mail goes out through it.")
+            return
+        item = self.model.item_at(row) if row >= 0 else None
+        message = item.email if item is not None else None
+        account = None
+        if message is not None:
+            account = next((a for a in accounts if a.id == message.account_id), None)
+        account = account or accounts[0]
+        draft = outgoing.Draft(from_address=account.address,
+                               from_name=self.sender_name())
+        quoted_html = quoted_text = ""
+        answering = None
+        if message is not None and mode in ("reply", "reply_all"):
+            draft.to, draft.cc = outgoing.reply_addresses(
+                message, [a.address for a in accounts], everyone=(mode == "reply_all"))
+            draft.subject = outgoing.reply_subject(message.subject)
+            draft.in_reply_to, draft.references = outgoing.thread_headers(message)
+            quoted_html = outgoing.quoted_html(message)
+            quoted_text = outgoing.quoted_text(message)
+            answering = (message.uid, message.source_folder or "INBOX",
+                         self._account_id_of(message))
+        elif message is not None and mode == "forward":
+            draft.subject = outgoing.reply_subject(message.subject, forward=True)
+            quoted_html = outgoing.forward_html(message)
+            quoted_text = outgoing.forward_text(message)
+        window = ComposeWindow(self, draft, accounts, account, quoted_html,
+                               quoted_text, answering=answering)
+        self._adopt_mail_window(window)
+        if message is not None and mode == "forward" and message.attachments:
+            self._carry_attachments(window, message, account)
+
+    def _password_for(self, account) -> Optional[str]:
+        """The account's password, or None with the reason already shown."""
+        try:
+            password = self.store.get_mailbox_password(account.address)
+        except CredentialError as exc:
+            QMessageBox.warning(self, "Keychain", str(exc))
+            return None
+        if not password:
+            QMessageBox.information(
+                self, "Not connected",
+                f"{account.label} has no password saved. Add it in Settings "
+                "under Mailboxes, then try again.")
+            return None
+        return password
+
+    def _carry_attachments(self, window, message, account) -> None:
+        """A forward takes the attachments with it: fetched in the
+        background, and added to the window as they arrive."""
+        if self.demo:
+            window.note("The demo's attachments are not real, so they stay behind.")
+            return
+        password = self._password_for(account)
+        if password is None:
+            return
+        count = len(message.attachments)
+        window.note(f"Fetching {count} attachment{'' if count == 1 else 's'}…")
+        worker = AttachmentFetchWorker(account, password, message, self)
+
+        def arrived(found, left_out) -> None:
+            if not shiboken6.isValid(window):
+                return
+            window.add_attachments(found)
+            if left_out:
+                window.note(f"Too big to carry: {', '.join(left_out)}")
+            else:
+                window.note("", 0)
+
+        def failed(_title: str, detail: str) -> None:
+            if shiboken6.isValid(window):
+                window.note(f"The attachments could not be fetched: {detail}")
+
+        worker.ready.connect(arrived)
+        worker.failed.connect(failed)
+        self._register(worker)
+        worker.start()
+
+    def send_mail(self, account, draft, done, failed, answering=None) -> None:
+        """Send what the compose window holds, from ``account``. ``done``
+        and ``failed`` are the window's, called on this thread."""
+        if self.demo:
+            failed("This is the demo. Nothing is sent from it.")
+            return
+        if self.dry_run:
+            failed("Dry run: nothing is sent.")
+            return
+        password = self._password_for(account)
+        if password is None:
+            failed(f"{account.label} has no password saved.")
+            return
+        mine = None
+        if answering and answering[2] == account.id:
+            mine = (answering[0], answering[1])
+        worker = SendWorker(account, password, draft, answering=mine, parent=self)
+
+        def sent(note: str) -> None:
+            self._after_send(draft, note, answering)
+            done()
+
+        worker.sent.connect(sent)
+        worker.failed.connect(failed)
+        self._register(worker)
+        worker.start()
+        self._set_status("Sending…")
+
+    def _after_send(self, draft, note: str, answering) -> None:
+        count = len(draft.recipients)
+        self._append_log(f"Sent a message to {count} recipient{'' if count == 1 else 's'}.")
+        self._set_status(note or "Sent.")
+        if answering:
+            uid, _mailbox, account_id = answering
+            rows = [row for row, item in enumerate(self.model.items)
+                    if item.email.uid == uid
+                    and self._account_id_of(item.email) == account_id]
+            if rows:
+                self._mark_locally([(row, self.model.items[row]) for row in rows],
+                                   "answered", True)
+
+    def save_draft(self, account, draft, done, failed) -> None:
+        """Put what the compose window holds into the account's Drafts."""
+        if self.demo:
+            failed("This is the demo. Nothing is saved from it.")
+            return
+        password = self._password_for(account)
+        if password is None:
+            failed(f"{account.label} has no password saved.")
+            return
+        worker = DraftWorker(account, password, draft, self)
+        worker.saved.connect(lambda where: done())
+        worker.failed.connect(lambda _title, detail: failed(detail))
+        self._register(worker)
+        worker.start()
+
+    def act_on_rows(self, what: str, rows: Sequence[int], where: Optional[str] = None) -> None:
+        """Do one thing to some messages, now: mark them read or unread,
+        flag or unflag them, or move them - to Archive, Trash or Junk, or
+        to a folder by name. The table changes at once and the server
+        follows in the background; a move is undoable like any filing.
+        The message window, the Message menu and the table's menu all
+        come here."""
+        items = [(row, self.model.item_at(row)) for row in rows]
+        items = [(row, item) for row, item in items
+                 if item is not None and not item.moved]
+        if not items:
+            return
+        if what in self.FLAG_ACTIONS:
+            flag, add = self.FLAG_ACTIONS[what]
+            self._mark_locally(items, flag, add)
+            if not self.demo:
+                self._mark_on_server(items, flag, add)
+            return
+        kind = self.MOVE_ACTIONS.get(what)
+        if kind is None:
+            raise ValueError(f"not something that can be done to a message: {what!r}")
+        if kind == "folder" and not where:
+            return
+        if self.dry_run:
+            QMessageBox.information(
+                self, "Dry run", "Nothing moves in dry-run mode.")
+            return
+        landing = where if kind == "folder" else {
+            "archive": "Archive", "trash": "Trash", "junk": "Junk"}[kind]
+        if self.demo:
+            self._record_moves(MoveReport(
+                moved={item.email.uid: landing for _row, item in items}))
+            self._update_status(f"Demo: marked {len(items)} message(s) as moved to {landing}.")
+            return
+        if self._busy():
+            return
+        by_account: Dict[str, list] = {}
+        for _row, item in items:
+            by_account.setdefault(item.email.account_id, []).append(item)
+        started = 0
+        for account_id, group in by_account.items():
+            account = (self.settings.account_by_id(account_id)
+                       or self.settings.primary_account)
+            password = self._password_for(account)
+            if password is None:
+                continue
+            plans = [MovePlan(uid=item.email.uid, target_folder=where or "",
+                              subject=item.email.subject_display,
+                              account_id=item.email.account_id,
+                              source_folder=item.email.source_folder or "")
+                     for item in group]
+            worker = MoveWorker(account, password, plans, kind, self)
+            worker.done.connect(self._on_quick_move)
+            worker.failed.connect(self._on_failed)
+            self._register(worker)
+            worker.start()
+            started += len(plans)
+        if started:
+            self._set_status(f"Moving {started} message{'' if started == 1 else 's'} "
+                             f"to {landing}…")
+
+    @Slot(object)
+    def _on_quick_move(self, report: MoveReport) -> None:
+        message = self._record_moves(report)
+        if report.failed:
+            sample = list(report.failed.items())[:5]
+            detail = "\n".join(f"UID {uid}: {error}" for uid, error in sample)
+            QMessageBox.warning(self, "Could not move the message", detail)
+        self._update_status(message.replace("Filed", "Moved", 1))
+
+    def _mark_locally(self, items, flag: str, add: bool) -> None:
+        """The flag in the table, at once; the server is told separately."""
+        name = {"seen": "\\Seen", "flagged": "\\Flagged", "answered": "\\Answered"}[flag]
+        for _row, item in items:
+            flags = [f for f in item.email.flags if f.lower() != name.lower()]
+            if add:
+                flags.append(name)
+            item.email.flags = tuple(flags)
+        self.model._refresh_all()
+        self._refresh_mail_windows()
+        self._selection_changed()
+
+    def _mark_on_server(self, items, flag: str, add: bool) -> None:
+        groups: Dict[Tuple[str, str], list] = {}
+        for _row, item in items:
+            key = (item.email.account_id, item.email.source_folder or "INBOX")
+            groups.setdefault(key, []).append(item.email.uid)
+        for (account_id, folder), uids in groups.items():
+            account = (self.settings.account_by_id(account_id)
+                       or self.settings.primary_account)
+            try:
+                password = self.store.get_mailbox_password(account.address)
+            except CredentialError as exc:
+                self._set_status(f"Keychain: {exc}")
+                continue
+            if not password:
+                self._set_status(f"{account.label} has no password saved, so the "
+                                 "mark stays in the table only.")
+                continue
+            worker = FlagWorker(account, password, uids, flag, add, folder, self)
+            worker.failed.connect(
+                lambda title, detail: (self._append_log(f"✗ {title}: {detail}"),
+                                       self._set_status(f"{title}: {detail}")))
+            self._register(worker)
+            worker.start()
+
     def _open_link(self, url: str) -> None:
         """A link from a message: where it goes is said first, unless the
         person has asked not to be told. See link_open."""
@@ -3746,6 +4342,10 @@ def _metrics_html(metrics: dict) -> str:
         parts.append(_chip("model", _html(str(metrics["model"]))))
     separator = "&nbsp;&nbsp;<span style='opacity:0.35'>|</span>&nbsp;&nbsp;"
     return "<div style='font-size:12px'>" + separator.join(parts) + "</div>"
+
+
+def _flags_of(item) -> set:
+    return {flag.lower() for flag in (item.email.flags or ())}
 
 
 def _mailbox_short(label: str) -> str:

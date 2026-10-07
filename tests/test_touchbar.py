@@ -382,8 +382,9 @@ class TestTheMainWindowsBar:
         top = [key for key in arranged[""] if not key.startswith("space")]
         assert top == ["scan", "apply", "undo", "show", "category", "ticks",
                        "more", "options"]
-        assert arranged["more"] == ["visualise", "briefing", "find", "links",
-                                    "clear", "rescan", "replies"]
+        assert arranged["more"] == ["visualise", "briefing", "find", "new-message",
+                                    "open-message", "links", "clear", "rescan",
+                                    "replies"]
         assert bar.flat["links"].state()["enabled"] is False, \
             "Links with no message open"
         assert arranged["options"] == ["period", "model", "help", "settings"]

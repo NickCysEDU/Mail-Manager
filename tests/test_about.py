@@ -190,3 +190,25 @@ class TestItSaysWhatIsKeptAndHow:
         blanked = entry.to_dict(with_text=False)
         assert blanked["payload"]["summary"] == ""
         assert "About" in blanked["payload"]["reasoning"]
+
+
+class TestItStaysOnTheScreen:
+    def test_it_is_whole_and_centred_over_the_window(self, qtbot):
+        from PySide6.QtWidgets import QApplication, QWidget
+
+        from about import AboutDialog
+        from config import InMemoryCredentialStore, Settings
+
+        parent = QWidget()
+        qtbot.addWidget(parent)
+        parent.resize(600, 500)
+        parent.move(100, 100)
+        parent.show()
+        dialog = AboutDialog(Settings().normalized(), InMemoryCredentialStore(), parent)
+        qtbot.addWidget(dialog)
+        dialog.show()
+        QApplication.processEvents()
+        room = dialog.screen().availableGeometry()
+        box = dialog.frameGeometry()
+        assert room.contains(box), (box, room)
+        assert abs(box.center().x() - parent.frameGeometry().center().x()) <= 2

@@ -42,6 +42,41 @@ describes the app itself.
 - **Anonymising is checked by re-scoring.** If a score moves, a signal was
   keyed on somebody's name. `tests/test_privacy.py` fails on any address that
   could be a real person's.
+- **Every window of its own carries a menu bar** (`mail_window._app_menus`).
+  On a Mac the menu bar belongs to the active window, and a window without
+  one leaves the main window's up, whose key equivalents Cocoa fires
+  regardless of Qt's shortcut context: ⌘R would scan from a message window,
+  ⌘↩ would file from the compose window. The bar needs the app roles too
+  (Settings, About, Quit), or the app menu loses them.
+
+### Mail going out
+
+- **The windows own nothing.** `MessageWindow` and `ComposeWindow` hand every
+  action to the main window - `compose`, `act_on_rows`, `send_mail`,
+  `save_draft`, `neighbour_row`, `select_row`, `folder_choices`,
+  `known_addresses` - because it holds the table, the accounts and the
+  passwords. `tests/test_mail_window.py` has the stand-in that spells out
+  the contract.
+- **A quick move keeps the row,** marked moved, through the same
+  `MoveReport` and undo stack as Apply (`_record_moves`). Nothing removes a
+  row from the table but a scan. A message window follows its message by
+  `(account_id, uid)`, not by row, so a scan or a sort does not swap the
+  message under it.
+- **A closed window is counted gone at once** (`_live_mail_windows` wants
+  visible): `WA_DeleteOnClose` deletes on the next turn of the loop, and the
+  wrapper in between would be found and raised as the open window.
+- **An empty `account_id` on a message means the primary mailbox**
+  (`_account_id_of`), as the rest of the app already assumed; the answered
+  flag and the sent copy need the real id.
+- **SMTP keeps nothing.** `SendWorker` appends the copy to Sent itself
+  (`IMAPEngine.save_sent`), except for providers in `outgoing.KEEPS_SENT`,
+  which file their own. The special folders are found through
+  `special_mailbox`, by the server's flag first and the provider's names
+  second; a missing Archive is created, a missing Trash is an error.
+- **Sending is the part that matters.** A refused send fails; a lost copy or
+  flag after it is a note on the status line, never a second attempt.
+- **Opening a message marks it read,** on the server through `FlagWorker`
+  once there is a password, in the table either way.
 
 ### Heavy jobs
 
@@ -160,7 +195,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 4,735 tests
+./dev test                     # 4,848 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus
