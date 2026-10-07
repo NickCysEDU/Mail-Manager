@@ -22,6 +22,11 @@ With the default sorter, no message text leaves your Mac. With a model
 backend, the subject, sender and a trimmed body go to that provider.
 Attachments are never uploaded.
 
+The pictures in a message are fetched from wherever the sender keeps them
+when the preview shows it, which tells the sender it was opened. Settings
+turns that off; the one-pixel images mail uses only for that are never
+fetched either way, and nothing else a message refers to is.
+
 Once a day, unless turned off in Settings, the app asks GitHub for the latest
 version number. Nothing else is sent.
 

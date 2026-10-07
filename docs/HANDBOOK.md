@@ -199,6 +199,11 @@ default. Deletion on IMAP is permanent.
 
 ## Attachments and links
 
+**Message** shows a message as it was sent, pictures included: they are
+fetched from wherever the sender keeps them, which tells the sender it was
+opened, so **Settings** can turn them off, and each is then shown as [image].
+**Plain text** is the text alone.
+
 **Attachments** opens a viewer for images, audio, PDF and text. Only the part
 you open is downloaded, and nothing is ever run:
 
@@ -269,7 +274,7 @@ See [SECURITY.md](../SECURITY.md) for reporting a problem.
 ./dev dry      # scan for real, with moves disabled
 ./dev fake     # the pipeline in the terminal, offline
 ./dev scan     # the pipeline on real mail, read-only
-./dev test     # 4,720 tests (with the evaluation sets present)
+./dev test     # 4,733 tests (with the evaluation sets present)
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 
