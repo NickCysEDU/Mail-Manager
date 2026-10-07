@@ -95,7 +95,7 @@ turns that off. See [SECURITY.md](SECURITY.md).
 
 ```bash
 ./dev demo     # the app with sample mail, no setup
-./dev test     # 4,706 tests, about five minutes on four workers
+./dev test     # 4,720 tests, about five minutes on four workers
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 

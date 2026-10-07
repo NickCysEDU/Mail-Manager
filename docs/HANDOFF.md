@@ -63,6 +63,13 @@ describes the app itself.
   (`addStrut`).
 - **A new track keeps the picture open** (`Spectrum.clear(keep_open=True)`);
   the progress bar is drawn outside the new scene's fade.
+- **The library's file panel opens a loop pass after the window shows**
+  (`MainWindow._visualise_a_file`): opened in the same pass, the Mac's panel
+  came up with its sidebar dead. It starts in Music and then where the last
+  track came from; files can be dropped on the window (`_add_files`).
+- **Every dropdown of fixed wording is a `RoomyCombo(every=True)`**, sized
+  by what the style says the widest option needs; measured by hand with an
+  allowance for the arrow, the last letter was cut off on the Mac's style.
 
 ### The picture
 
@@ -153,7 +160,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 4,706 tests
+./dev test                     # 4,720 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus
