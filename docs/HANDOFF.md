@@ -615,6 +615,16 @@ About's security link is a 404 for everyone but the owner.
 
 ## Open
 
+- **PySide6 6.12.0 is kept out** (`requirements.txt` caps it below 6.12).
+  On it the suite loses test workers: a segfault inside PySide converting
+  `QApplication.topLevelWidgets()` for `OpenWindows.windows()` (the native
+  stack ends in `PySide::getWrapperForQObject`), and an abort while
+  `reap_deleted_widgets` deletes widgets. pytest-xdist then waits for the
+  dead workers for ever: CI ran into its 30-minute limit at 99%. Reproduced
+  here with CI's exact versions; never seen on 6.11.2, which is what the app
+  is built with. Before lifting the cap, run the whole suite on the new
+  version; `OpenWindows` could keep its own list of windows rather than ask
+  for every top-level widget.
 - **One viewer test fails now and then in a full local run**
   (`test_viewer_window.py`, `test_when_the_words_under_the_controls_change_length`):
   about one run in three or four on 6 and 8 October, never alone, never in

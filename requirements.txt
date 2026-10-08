@@ -1,7 +1,12 @@
 # Runtime dependencies for Mail Manager.
 # Verified against the exact versions listed in the comments.
 
-PySide6>=6.6.0          # tested with 6.11.2, native macOS GUI
+# Native macOS GUI. Capped below 6.12: 6.12.0 crashes inside PySide itself,
+# handing Python the application's windows (getWrapperForQObject, under
+# QApplication.topLevelWidgets) and deleting widgets; the suite lost workers
+# to it on CI and here, and none in any run on 6.11.2. Lift the cap when a
+# 6.12 release runs the whole suite clean.
+PySide6>=6.6.0,<6.12    # tested with 6.11.2
 anthropic>=1.0.0        # tested with 1.3.0, structured outputs and beta fallbacks
 keyring>=24.0.0         # tested with 25.7.0, macOS Keychain credential storage
 certifi>=2024.0.0     # CA bundle, so a frozen app can verify TLS anywhere
