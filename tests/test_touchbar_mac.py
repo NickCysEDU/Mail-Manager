@@ -107,6 +107,9 @@ def _run(arch: str, *parts: str) -> dict:
         said = late.stderr or ""
         if isinstance(said, bytes):
             said = said.decode(errors="replace")
+        # Less AppKit's knob warnings, which on macOS 14 come in thousands.
+        said = "\n".join(line for line in said.splitlines()
+                         if "did not get back knob" not in line)
         pytest.fail(f"no answer in {late.timeout:.0f} s; it last said:\n"
                     f"{said[-3000:]}")
     lines = [line for line in done.stdout.splitlines() if line.startswith("{")]
@@ -581,12 +584,18 @@ def test_the_visualisers_bar_fits_beside_the_control_strip(arch):
 
         def width(made):
             view = rt.send(made, "view")
-            if not rt.send(view, "window"):
+            borrowed = not rt.send(view, "window")
+            if borrowed:
                 rt.send(host, "addSubview:", view, argtypes=[_id])
             rt.send(host, "layoutSubtreeIfNeeded")
             size = rt.send(view, "fittingSize", restype=NSSize)
             if size.width < 1:
                 size = rt.send(view, "frame", restype=NSRect)
+            if borrowed:
+                # One at a time: a host keeping every view measured so far
+                # laid them all out again for each new one, and on macOS 14
+                # every slider among them logs AppKit's knob warnings.
+                rt.send(view, "removeFromSuperview")
             return size.width
 
         def measure(bar, state):
