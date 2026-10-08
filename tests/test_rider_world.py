@@ -5,12 +5,17 @@ through the card harness in test_gpu_canvas, which skips without a context.
 
 from __future__ import annotations
 
+import json
 import math
+import os
+import subprocess
+import sys
 import textwrap
 
 import pytest
 
-from test_gpu_canvas import on_the_card
+import test_gpu_canvas
+from test_gpu_canvas import real_platform_or_skip
 
 #: A pane playing the rider to a steady 120 bpm kick, on a stepped clock, so
 #: the game is the same on every machine.
@@ -68,6 +73,69 @@ RIDER = textwrap.dedent("""
                 r += c.redF(); g += c.greenF(); b += c.blueF(); n += 1
         return (r / n, g / n, b / n)
 """)
+
+#: A frame of the world at 640 by 400, in milliseconds, past which the card
+#: is too slow for the scripts here, which draw hundreds of frames each. A
+#: Mac of the last few years draws one in about seven; on a hosted runner
+#: whose card was far slower every script ran out its three minutes, and the
+#: run its half hour. The card harness's own check draws the cheapest scene.
+WORLD_FRAME_MOST = 100.0
+#: The most the measuring may take, in seconds.
+WORLD_PROBE_FOR = 60.0
+_world_speed: list = []
+
+
+def on_the_card(body: str) -> dict:
+    """The card harness's, for a script that draws the world: skipped, with
+    the reason, where the card draws it too slowly for a script to finish in
+    its time."""
+    real_platform_or_skip()
+    if not _world_speed:
+        _world_speed.append(_measure_the_world())
+    if _world_speed[0] is not None:
+        pytest.skip(_world_speed[0])
+    return test_gpu_canvas.on_the_card(body)
+
+
+def _measure_the_world():
+    """Why the world cannot be drawn in time here, or None. A script that
+    fails is not a reason: the tests run, and report it themselves."""
+    env = dict(os.environ)
+    env.pop("QT_QPA_PLATFORM", None)
+    env["MAIL_MANAGER_GPU"] = "1"
+    body = test_gpu_canvas.HEAD + RIDER + textwrap.dedent("""
+        import statistics
+        made, scene = rider_pane(size=(640, 400))
+        costs = []
+        with Clock() as clock:
+            for i in range(16):
+                clock.step(1 / 60)
+                made.set_position(int((10 + i / 60) * 1000))
+                started = time.perf_counter()
+                made._tick()
+                made._canvas.grabFramebuffer()
+                costs.append((time.perf_counter() - started) * 1000.0)
+        # The first frames build the world's shaders and buffers.
+        print(json.dumps({"frame": statistics.median(costs[4:])}))
+    """) + test_gpu_canvas.TAIL
+    try:
+        done = subprocess.run([sys.executable, "-c", body],
+                              capture_output=True, text=True,
+                              timeout=WORLD_PROBE_FOR, env=env,
+                              cwd=test_gpu_canvas.ROOT)
+    except subprocess.TimeoutExpired:
+        return (f"the card did not draw sixteen frames of the world within "
+                f"{WORLD_PROBE_FOR:.0f}s")
+    lines = [line for line in done.stdout.splitlines() if line.startswith("{")]
+    if done.returncode != 0 or not lines:
+        return None
+    found = json.loads(lines[-1])
+    if "skip" in found:
+        return found["skip"]
+    if found["frame"] > WORLD_FRAME_MOST:
+        return (f"the card here draws the world at {found['frame']:.0f} ms a "
+                f"frame, too slowly for these")
+    return None
 
 
 def _bare_world():

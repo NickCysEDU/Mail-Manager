@@ -625,6 +625,16 @@ About's security link is a 404 for everyone but the owner.
   is built with. Before lifting the cap, run the whole suite on the new
   version; `OpenWindows` could keep its own list of windows rather than ask
   for every top-level widget.
+- **A hosted runner's graphics vary from run to run.** On 8 October one
+  drew the rider's world at least sixty times slower than a Mac: four world
+  scripts each ran out their three minutes and the run its half hour, where
+  the 1.8 and 1.9 runs finished in sixteen minutes. `test_rider_world.py`
+  now draws sixteen frames of the world first and skips its scripts on the
+  card when a frame takes over `WORLD_FRAME_MOST` (100 ms; about seven
+  here). A script that fails there is not a reason to skip.
+- **`test_the_towers_stay_upright_whatever_the_road_does` failed once** in
+  about a dozen runs of its file here (the towers ahead differed by more
+  than 1%); never alone in eight. Not looked into.
 - **One viewer test fails now and then in a full local run**
   (`test_viewer_window.py`, `test_when_the_words_under_the_controls_change_length`):
   about one run in three or four on 6 and 8 October, never alone, never in
