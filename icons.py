@@ -19,7 +19,7 @@ from PySide6.QtGui import (QColor, QFont, QIcon, QPainter, QPainterPath, QPen,
 #: The names a button can ask for.
 NAMES = ("reply", "reply-all", "forward", "flag", "archive", "junk", "trash",
          "previous", "next", "attach", "send", "draft", "open", "compose",
-         "read", "unread", "move",
+         "read", "unread", "move", "inbox", "folder", "sidebar",
          "bold", "italic", "underline", "strikethrough", "text-colour",
          "bullets", "numbers", "outdent", "indent", "align-left",
          "align-centre", "align-right", "align-justify", "link", "picture",
@@ -267,6 +267,49 @@ def _move(painter, s, colour):
     painter.drawPath(head)
 
 
+def _inbox(painter, s, colour):
+    m = s * 0.16
+    tray = QPainterPath()
+    tray.moveTo(m + s * 0.06, m + s * 0.08)
+    tray.lineTo(m, s * 0.56)
+    tray.lineTo(m, s - m)
+    tray.lineTo(s - m, s - m)
+    tray.lineTo(s - m, s * 0.56)
+    tray.lineTo(s - m - s * 0.06, m + s * 0.08)
+    tray.closeSubpath()
+    painter.drawPath(tray)
+    slot = QPainterPath()
+    slot.moveTo(m, s * 0.56)
+    slot.lineTo(s * 0.36, s * 0.56)
+    slot.lineTo(s * 0.40, s * 0.67)
+    slot.lineTo(s * 0.60, s * 0.67)
+    slot.lineTo(s * 0.64, s * 0.56)
+    slot.lineTo(s - m, s * 0.56)
+    painter.drawPath(slot)
+
+
+def _folder(painter, s, colour):
+    m = s * 0.14
+    body = QPainterPath()
+    body.moveTo(m, m + s * 0.10)
+    body.lineTo(s * 0.40, m + s * 0.10)
+    body.lineTo(s * 0.48, m + s * 0.20)
+    body.lineTo(s - m, m + s * 0.20)
+    body.lineTo(s - m, s - m - s * 0.06)
+    body.lineTo(m, s - m - s * 0.06)
+    body.closeSubpath()
+    painter.drawPath(body)
+
+
+def _sidebar(painter, s, colour):
+    m = s * 0.14
+    painter.drawRoundedRect(QRectF(m, m + s * 0.06, s - 2 * m, s - 2 * m - s * 0.12),
+                            s * 0.08, s * 0.08)
+    painter.drawLine(QPointF(s * 0.40, m + s * 0.06), QPointF(s * 0.40, s - m - s * 0.06))
+    for y in (0.38, 0.50):
+        painter.drawLine(QPointF(m + s * 0.08, s * y), QPointF(s * 0.32, s * y))
+
+
 # -- The formatting bar's ------------------------------------------------
 
 def _letter(painter: QPainter, s: float, text: str, bold: bool = True,
@@ -453,7 +496,7 @@ _DRAWERS = {
     "archive": _archive, "junk": _junk, "trash": _trash, "previous": _previous,
     "next": _next, "attach": _attach, "send": _send, "draft": _draft,
     "open": _open, "compose": _compose, "read": _read, "unread": _unread,
-    "move": _move,
+    "move": _move, "inbox": _inbox, "folder": _folder, "sidebar": _sidebar,
     "bold": _bold, "italic": _italic, "underline": _underline,
     "strikethrough": _strikethrough, "text-colour": _text_colour,
     "bullets": _bullets, "numbers": _numbers, "outdent": _outdent,

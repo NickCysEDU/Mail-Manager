@@ -62,12 +62,18 @@ STRIP_MOST = 640.0
 #: A slider's width when its item does not say.
 SLIDER_WIDTH = 180.0
 
-#: The press-and-hold slider: centred on the bar, between its two end
-#: icons, never narrower or wider than these, in points. Edge to edge it
-#: read as a gauge rather than a control; sized to its own item it sat
-#: hard against the right end of the bar.
+#: The press-and-hold slider, in points. AppKit opens a held bar beside the
+#: finger, on whichever side of the bar has more room, as the system's own
+#: brightness and volume do. Never narrower than HOLD_LEAST, it fits on
+#: either side; up to HOLD_MOST, it stretches across the side it opens on,
+#: as the system's does, instead of hugging the finger. Held to the middle
+#: as the bar's principal item, it could not stretch.
 HOLD_LEAST = 300.0
-HOLD_MOST = 460.0
+HOLD_MOST = 940.0
+
+#: A slider knob's corners, in points, on Apple's continuous curve. AppKit
+#: draws the knob on the bar as a sharp-cornered square.
+KNOB_ROUNDING = 6.0
 
 #: Every message sent, by class; "+" for messages to the class itself.
 NEEDED = {
@@ -80,12 +86,12 @@ NEEDED = {
     "+NSObject": ("alloc",),
     "NSObject": ("retain", "release", "init"),
     "NSArray": ("count", "objectAtIndex:"),
-    "NSView": ("window",),
+    "NSView": ("window", "subviews", "layer", "setWantsLayer:", "setHidden:"),
+    "CALayer": ("setCornerRadius:", "setCornerCurve:", "setMasksToBounds:"),
     "NSWindow": ("setTouchBar:", "touchBar"),
     "NSTouchBar": ("init", "setDefaultItemIdentifiers:", "setTemplateItems:",
                    "setCustomizationIdentifier:",
                    "setCustomizationAllowedItemIdentifiers:",
-                   "setPrincipalItemIdentifier:",
                    "defaultItemIdentifiers"),
     "+NSButtonTouchBarItem": (
         "buttonTouchBarItemWithIdentifier:title:target:action:",),
@@ -108,7 +114,8 @@ NEEDED = {
                               "setPopoverTouchBar:", "setShowsCloseButton:",
                               "setPressAndHoldTouchBar:",
                               "dismissPopover:", "setCustomizationLabel:"),
-    "NSSliderTouchBarItem": ("initWithIdentifier:", "slider", "setTarget:",
+    "NSSliderTouchBarItem": ("initWithIdentifier:", "slider", "view",
+                             "setTarget:",
                              "setAction:", "setMinimumValueAccessory:",
                              "setMaximumValueAccessory:",
                              "setMinimumSliderWidth:",
@@ -165,6 +172,7 @@ class _Runtime:
                 ("objc_getClass", _id, [ctypes.c_char_p]),
                 ("sel_registerName", _id, [ctypes.c_char_p]),
                 ("object_getClass", _id, [_id]),
+                ("object_getClassName", ctypes.c_char_p, [_id]),
                 ("class_respondsToSelector", _bool, [_id, _id]),
                 ("objc_allocateClassPair", _id, [_id, ctypes.c_char_p,
                                                  ctypes.c_size_t]),
@@ -350,6 +358,8 @@ class _Handle:
         self.layouts: Dict[int, int] = {}
         #: A slider's name, beside it.
         self.labels: Dict[str, int] = {}
+        #: key -> the view a slider is drawn in, restyled by Renderer._polish.
+        self.drawn: Dict[str, int] = {}
         #: Everything retained here, released together.
         self.owned: List[int] = []
         self.released = False
@@ -431,6 +441,32 @@ class Renderer:
             "initWithIdentifier:", ident, argtypes=[_id]), retain=False)
         self.rt.send(made, "setView:", view, argtypes=[_id])
         return made
+
+    def _polish(self, view) -> None:
+        """Round the knob of every slider under ``view`` and hide a held
+        slider's backing panel, which AppKit draws at half the bar's height
+        with square ends behind a knob taller than it: the system's own
+        sliders are a track and a rounded knob on the bar's black."""
+        rt = self.rt
+        subviews = rt.send(view, "subviews") if view else None
+        count = rt.send(subviews, "count", restype=_ulong) if subviews else 0
+        for index in range(count):
+            child = rt.send(subviews, "objectAtIndex:", index,
+                            argtypes=[_ulong])
+            name = (rt.objc.object_getClassName(child) or b"").decode()
+            if name.endswith("NSSliderKnob"):
+                # Its own layer now: a bar not yet shown has none to round.
+                rt.send(child, "setWantsLayer:", True, argtypes=[_bool])
+                layer = rt.send(child, "layer")
+                if layer:
+                    rt.send(layer, "setCornerRadius:", KNOB_ROUNDING,
+                            argtypes=[_double])
+                    rt.send(layer, "setCornerCurve:", rt.string("continuous"),
+                            argtypes=[_id])
+                    rt.send(layer, "setMasksToBounds:", True, argtypes=[_bool])
+            elif name.endswith("_NSSliderBackgroundView"):
+                rt.send(child, "setHidden:", True, argtypes=[_bool])
+            self._polish(child)
 
     def _segments(self, handle: _Handle, labels, mode: int) -> int:
         control = self.rt.send(
@@ -581,6 +617,7 @@ class Renderer:
             made = self._custom(handle, ident, stack)
             handle.controls[item.key] = slider
             handle.labels[item.key] = self._keep(handle, name)
+            handle.drawn[item.key] = slider
             self._targets[slider] = (handle, item.key, kind, 0)
         elif kind == "popover":
             inside = [self._make(handle, child) for child in item.items
@@ -631,9 +668,8 @@ class Renderer:
         bar = self._new_bar(handle, [made])
         rt.send(bar, "setDefaultItemIdentifiers:", rt.array([ident]),
                 argtypes=[_id])
-        # In the middle of the bar, the way a principal item is.
-        rt.send(bar, "setPrincipalItemIdentifier:", ident, argtypes=[_id])
         rt.send(popover, "setPressAndHoldTouchBar:", bar, argtypes=[_id])
+        handle.drawn[hold.key] = rt.send(made, "view")
         handle.kinds[hold.key] = ("slider", "")
         handle.items[hold.key] = made
         handle.controls[hold.key] = slider
@@ -701,6 +737,8 @@ class Renderer:
                         argtypes=[_double])
                 rt.send(slider, "setEnabled:",
                         bool(state.get("enabled", True)), argtypes=[_bool])
+                # Every push, from the first: AppKit may draw them afresh.
+                self._polish(handle.drawn.get(key))
             elif kind == "popover":
                 rt.send(made, "setCollapsedRepresentationLabel:",
                         rt.string(state.get("title") or ""), argtypes=[_id])
@@ -780,6 +818,7 @@ class Renderer:
         handle.owned.clear()
         handle.items.clear()
         handle.controls.clear()
+        handle.drawn.clear()
 
     def _press(self, handle: _Handle, key: str, value) -> None:
         """Hand a press to the bar once AppKit's call has returned."""

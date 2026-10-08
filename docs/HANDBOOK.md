@@ -139,6 +139,18 @@ All**. Under it: a search box, a category filter, **Show** (everything, job
 mail only, ticked only) and the tick shortcuts. The preview pane shows the
 message and the analysis; **Links** and **Attachments** open what is in it.
 
+Down the left, the sidebar lists your mailboxes as Mail does: the inbox,
+Drafts, Sent, Junk, Trash and Archive, each gathering every account's, then
+each account's own folders. Choose one to see its mail: each time you do, it
+is looked at again, reading only what is new, and **View → Get New Mail**
+(⇧⌘N) looks again at the one on screen. The button at the left of the
+toolbar, or ⌃⌘S, hides the sidebar and brings it back. The window
+opens on the last month of your inbox, read without marking anything, so it
+is never empty. Until a scan reads them those rows say **Not sorted yet**,
+and a scan's verdicts then show over them: a message outside the scan's
+window stays as it was listed. Mail in any other mailbox can be read and
+answered there, but only mail in the inbox is filed.
+
 Columns can be hidden and resized, and **View → Row height** sets how much of
 each summary shows. Dates read as a person would say them, with the exact time
 on hover. Settings can be exported to a file and imported on another Mac;
@@ -151,6 +163,8 @@ passwords are not in it.
 | ⌘. | Stop all |
 | ⌘Z | Undo the last filing |
 | ⌘F / Esc | Search / clear filters |
+| ⌃⌘S | Show or hide the sidebar |
+| ⇧⌘N | Get new mail |
 | ⌘1 to ⌘4 | Past 24 hours, 3 days, 7 days, custom |
 | ⌘A / ⌘⇧A / ⌘D | Tick all / tick confident / clear ticks |
 | ⌘B | Briefing |
@@ -169,12 +183,13 @@ commands; the sliders icon has the time window, the model, hover help and
 Settings. Every window has its own: the visualiser's has play, the scenes,
 the strobe, the game's and the scope's settings and the picture's; Settings
 has its pages and their main choices; dialogs have their buttons. A button
-that opens onto a slider - the scope's glow, the game's effects, the
-strobe's sensitivity, and the seek bar and the volume while the picture is
-on - can be held instead: keep a finger on it and drag, as the brightness
-control does, and the slider follows without opening, with what each end
-means drawn at either side (quiet and loud, dim and bright, less and more,
-start and end).
+that opens onto a slider - the volume, the scope's glow, the game's effects,
+the strobe's sensitivity, and the seek bar while the picture is on - can be
+held instead: keep a finger on it and drag, as the volume and brightness
+controls do. The slider opens beside your finger, on the side of the bar
+with room, with what each end means drawn at either side (quiet and loud,
+dim and bright, less and more, start and end), and moves from where it was
+rather than jumping to your finger. Its knob is rounded, like the system's.
 
 ## Rules
 
@@ -247,6 +262,10 @@ own server. A server of your own goes under **Settings → Mailboxes → Server*
 a launchd agent, so scans continue after you quit. A background scan files
 only what would have been ticked. The menu bar icon offers a quick scan and
 shows the last result.
+
+**Auto scan**, under **Settings → Mailboxes**, scans as soon as the app
+opens, once the inbox is listed. It never stops to ask: if a password or a
+key is missing, the log says which and nothing runs.
 
 ## Briefing, clearing out and undo
 
@@ -321,6 +340,11 @@ Each password is kept in the Keychain. With more than one mailbox, the toolbar
 chooses which to scan and the table gains a Mailbox column. A work Microsoft
 account may have password sign-in turned off by its administrator.
 
+**When Mail Manager opens**, at the foot of the page, sets how much of the
+inbox the window lists (the last week, two weeks, month, three months, six
+months or year; a month to begin with, and at most the newest thousand
+messages), or turns the listing off, and turns Auto scan on.
+
 ## Updates
 
 Once a day, while **Settings → Appearance → Look for new versions** is on, the
@@ -355,7 +379,7 @@ See [SECURITY.md](../SECURITY.md) for reporting a problem.
 ./dev dry      # scan for real, with moves disabled
 ./dev fake     # the pipeline in the terminal, offline
 ./dev scan     # the pipeline on real mail, read-only
-./dev test     # 5,076 tests (with the evaluation sets present)
+./dev test     # 5,178 tests (with the evaluation sets present)
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 

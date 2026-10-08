@@ -120,6 +120,45 @@ describes the app itself.
   file panel had its sidebar greyed out for the same reason, so
   `AttachmentViewer.add_tracks_when_ready` opens it once the window is active
   (`PANEL_WAIT_MS` at most).
+- **Every file panel opens through `widgets.open_file` and its three
+  siblings,** which call `macname.refocus_file_panel` first: run from source,
+  the panel's sidebar (drawn by another process) still came up grey, and
+  clicking away and back fixed it. It watches for the panel to become the
+  modal window (`PANEL_LOOK_MS`, up to `PANEL_LOOKS`): here it took over half
+  a second to appear, and a fixed 400 ms wait missed it. Then it leaves it
+  `PANEL_SETTLE_MS` and hands the focus to the Dock and back, only from the
+  Dock. A test fails on any `QFileDialog.get…` call outside `widgets.py`.
+  The round trip is tested on the real platform; whether it ungreys the
+  sidebar is not, since this session cannot capture the screen.
+- **The inbox is two lists** (`MainWindow._listed`, `_sorted`): the messages
+  a `ListWorker` read when the window opened (`TriageItem.analysed` False,
+  shown as Not sorted yet), and the last scan's rows, shown together by
+  `models.one_row_each`. A scan replaces `_sorted`; a message outside its
+  window falls back to how it was listed. Filing, the Apply count, undo,
+  unfinished work, drafting and the briefing read `_inbox_rows()`, never
+  `model.items`, which may be another mailbox: tests fill the window through
+  `_on_scan_done`.
+- **A row from any mailbox but the one sorted is never filed**
+  (`TriageItem.fileable`): undo puts mail back into the sorted mailbox, and
+  the folder picker and `set_override` refuse such a row.
+- **A move report keeps each mailbox's part** (`MoveReport.add`, `about`):
+  merged by UID, it dropped `new_uids`, so no filing from the window was ever
+  undoable, and it let one mailbox's message 1 stand for another's.
+  `build_move_plans` names each message's own folder.
+- **A mailbox is looked at again when chosen by hand** (`_chosen`, and
+  Get New Mail), never when the window moves itself (`_go_to`, as a scan
+  starting does). A look again reads only UIDs not held at the last look
+  (`fetch_window(skip=)`, `_present`, `_known_uids`) and takes out what has
+  gone (`Listing.present`, `TriageTableModel.remove_where`), keeping the
+  selection; a row a scan read stays as it was read. A new period or new
+  mailboxes forget `_present` with the rows.
+- **The listings are readers, not tasks** (`_mailbox_workers`, never
+  `_workers`), so Scan is never refused for them; Stop All cancels them and
+  quitting stops them. A listing replaced since (Settings changed what it
+  depends on, see `_mailbox_shape`) is not heard. Nothing at launch asks:
+  `_scan_on_open` says in the log what it lacked. Auto scan is the launch's,
+  run once (`_scanned_at_launch`): `main.py` starts it with no window when
+  the app opens in the menu bar.
 - **Hover help waits in some windows** (`helpmode.PATIENT` on the message,
   compose and viewer windows): with the ? off, a control explains itself
   after the pointer has rested on it for `PATIENT_DELAY`; with it on, at once.
@@ -247,15 +286,21 @@ describes the app itself.
   flashes as fast as it can (`spam_flash`); neither ticks the strobe box.
   Rings and pulses are thrown on a rising edge only, or a held key
   machine-gunned them.
-- **The rave's lasers are for the drops** (`Rave._drop_runs`, from
-  `trackstyle` sections once the drums have been read, `style.from_drums`;
-  `DROP_CARRY` decides which sections count). Each run is snapped to where
+- **The rave's lasers are for the big drops** (`Rave._drop_runs`, from
+  `trackstyle` sections once the drums have been read, `style.from_drums`).
+  The reading names a verse a drop when it follows a quiet intro, so the rig
+  takes only drops at `RIG_LEVEL` that arrive `RIG_LEAD` above their lead-in
+  (or after a part without drums), and carries one through the next part
+  only within `RIG_CARRY` of its level and for at most its own length: on
+  the test records that took the rig from half of each track to under a
+  third, verses and rap sections out. Each run is snapped to where
   the loudness really rises and falls (`_snapped`), since the sections came
   up to a bar early on real records; the rig comes up over `RIG_IN` seconds
   and goes over `RIG_OUT` beats. Nothing is lit before the drums are read.
-- **The bloom's halo is softened before it is added** (`PostProcess._soften`,
-  `SOFTEN` passes): drawn from an eighth-size buffer it showed blocks in a
-  window, which is where the rave looked worst.
+- **The bloom's halo is not blurred before it is added.** A softened halo
+  (two binomial passes) took the neon off the rave's wireframe; what made
+  the rave look bad in a window was its haze, stretched from a small tile,
+  and `HAZE_DOUBLINGS` is the fix for that.
 - **Scene changes** fade over the last frame on the GPU (`_GpuCanvas.hold`,
   `cover`); a change during a change folds the two frames first. The CPU path
   fades from the background.
@@ -355,12 +400,33 @@ describes the app itself.
   (`_NSLayoutConstraintNumberExceedsLimit`, seen with a bare item and
   nothing of ours set); the native tests set that line aside and fail on
   any other.
-- **A held slider looks like the brightness control's:** both ends carry an
-  `NSSliderAccessory` with a symbol (quiet and loud, dim and bright, less and
-  more, start and end: `AudioPane.QUIET_LOUD` and its neighbours), its width
-  is held between
-  `HOLD_LEAST` and `HOLD_MOST`, and it is the bar's principal item, so it
-  sits in the middle rather than running to the right edge.
+- **A held slider works as the system's volume does.** AppKit carries the
+  held finger through a private transposer; the slider item's
+  (`NSTouchBarSliderPopoverTransposer`) moves the value by the finger's
+  movement (dx × range ÷ track width), never to the finger, and
+  `NSTouchBarItemOverlay.currentRecommendedOptions` opens the bar beside the
+  finger, on the side with more room, when its minimum width fits there.
+  Read from AppKit's own code, by disassembly; see `## Open`. So the slider
+  is never narrower than `HOLD_LEAST`, to fit either side, and up to
+  `HOLD_MOST` it stretches across its side, as the Control Strip's slider
+  container (941 points) does. It is not the principal item: that held it
+  to the middle and stopped it stretching. Both ends carry an
+  `NSSliderAccessory` symbol (`AudioPane.QUIET_LOUD` and its neighbours).
+- **AppKit draws its slider badly on this macOS's bar:** a grey panel of
+  half the bar's height with square ends, behind a square knob taller than
+  it. `Renderer._polish` hides `_NSSliderBackgroundView` and rounds every
+  `NSSliderKnob` (`KNOB_ROUNDING`, continuous corners), on every push of a
+  slider's state from the first, giving a knob its own layer first: a bar
+  not yet shown has none. Found by class name, so on a macOS without those
+  classes nothing changes. The visualiser's volume is always a button to tap
+  or hold: a plain slider jumps to where it is touched.
+- **The live bar can be read in-process** while the Touch Bar is awake
+  (`+[NSFunctionRow isDynamicFunctionRowAvailable]`): item views sit in an
+  `_NSFunctionRowPanel`, and `renderInContext:` of the root view's layer
+  draws what is on the glass. Asleep, with nobody at the keyboard, nothing
+  is hosted. `tests/test_touchbar_mac.py` renders a held slider in
+  `+[NSAppearance _functionRowAppearance]` in an off-screen window and
+  checks the knob's corners and the panel's place in the pixels.
 - **ctypes callbacks cannot return structs,** so a scrubber's entries share
   one width (`_fit`). A scrubber keeps its count until `reloadData`.
 - **The suite cannot see the bar.** `tests/test_touchbar_mac.py` runs on the
@@ -380,7 +446,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 5,076 tests
+./dev test                     # 5,178 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus
@@ -466,9 +532,14 @@ About's security link is a 404 for everyone but the owner.
   on the grid first.
 - **Gatekeeper:** without a paid Developer ID, the first launch needs
   right-click, Open.
-- **The Touch Bar has not been checked by eye,** nor the press-and-hold
-  bars, and macOS's customise palette for the main window's bar is
-  untested.
+- **The Touch Bar has not been checked by eye or with a finger.** Its
+  drawing is checked in pixels and its layout was read live once, but where
+  a held bar opens and how far it stretches come from AppKit's code: the bar
+  was asleep whenever it could have been measured. macOS's customise palette
+  for the main window's bar is untested.
+- **Other mailboxes are listed over the inbox's period** and read only:
+  there is no paging beyond `workers.LIST_MOST`, no unread count in the
+  sidebar, and no filing from them.
 - **The rules page's dropdowns could not be made to cut an option short** on
   this Mac, at 760 or 980 wide, in light or dark, at the normal or the
   larger type; every combo now asks room for all of its options

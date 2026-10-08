@@ -16,11 +16,12 @@ from typing import Dict, List, Optional
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import (QAction, QActionGroup, QColor, QIntValidator,
                            QKeySequence, QPixmap, QTextListFormat)
-from PySide6.QtWidgets import (QColorDialog, QComboBox, QFileDialog, QFrame,
+from PySide6.QtWidgets import (QColorDialog, QComboBox, QFrame,
                                QInputDialog, QMenu, QMessageBox, QToolButton,
                                QWidget)
 
 import icons
+import widgets
 from flowlayout import FlowHolder, FlowLayout
 
 #: The sizes offered, in points; any whole number can be typed as well.
@@ -403,7 +404,7 @@ class FormatBar(QWidget):
             self.editor.insert_link(url.strip())
 
     def add_picture(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
+        path, _ = widgets.open_file(
             self.window(), "Choose a picture", "",
             "Pictures (*.png *.jpg *.jpeg *.gif *.webp)")
         if path and not self.editor.insert_picture(path):

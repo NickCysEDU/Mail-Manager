@@ -15,7 +15,7 @@ from typing import Optional
 from PySide6.QtCore import QEvent, QSize, Qt, QUrl, Signal
 from PySide6.QtGui import (QAction, QColor, QFont, QKeySequence,
                            QTextCharFormat, QTextCursor, QTextListFormat)
-from PySide6.QtWidgets import (QComboBox, QCompleter, QFileDialog,
+from PySide6.QtWidgets import (QComboBox, QCompleter,
                                QFormLayout, QHBoxLayout, QLabel, QMainWindow,
                                QMenu, QMessageBox, QPushButton, QSizePolicy,
                                QTextEdit, QToolBar, QToolButton, QVBoxLayout,
@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (QComboBox, QCompleter, QFileDialog,
 import helpmode
 import icons
 import outgoing
+import widgets
 from format_bar import DEFAULT_SIZE, FormatBar, tip
 from widgets import _html, _paint_button
 
@@ -860,7 +861,7 @@ class ComposeWindow(QMainWindow):
         self._show_copies(on)
 
     def attach(self) -> None:
-        paths, _ = QFileDialog.getOpenFileNames(self, "Attach files", "")
+        paths, _ = widgets.open_files(self, "Attach files", "")
         self.attach_paths(paths)
 
     def attach_paths(self, paths) -> None:

@@ -6831,6 +6831,52 @@ class TestTheLaserRigRunsThroughTheDrop:
             f"the premise: the second half reads as a groove: {kinds}")
         assert scene._drop_runs == [(8.0, 24.0), (32.0, 40.0)]
 
+    @staticmethod
+    def _read_as(*parts):
+        """The sections a reading handed over, part by part as (seconds,
+        kind, level, drums), for testing what the rig makes of them."""
+        import trackstyle
+
+        style = trackstyle.Style(tempo=120.0, from_drums=True)
+        at = 0.0
+        for seconds, kind, level, drums in parts:
+            style.sections.append(trackstyle.Section(at, at + seconds, kind,
+                                                     level, drums))
+            at += seconds
+        return style
+
+    def test_a_verse_the_reading_calls_a_drop_does_not_light_it(self):
+        """After a quiet intro the reading names the first part with drums a
+        drop, and on a song that is the verse: the rig came in for it. It
+        runs for the track's big drops only."""
+        import visualizers
+
+        style = self._read_as((8.0, "intro", 0.05, False), (16.0, "drop", 0.6, True),
+                              (8.0, "break", 0.2, False), (16.0, "drop", 0.95, True))
+        assert visualizers.Rave._runs_of(style) == [(32.0, 48.0)]
+
+    def test_a_drop_barely_louder_than_its_lead_in_does_not_light_it(self):
+        import visualizers
+
+        style = self._read_as((8.0, "intro", 0.05, False), (8.0, "groove", 0.6, True),
+                              (8.0, "drop", 0.82, True), (8.0, "break", 0.1, False),
+                              (8.0, "drop", 0.9, True))
+        assert visualizers.Rave._runs_of(style) == [(32.0, 40.0)]
+
+    def test_a_drop_carries_on_for_its_own_length_at_most(self):
+        """A drop's second half reads as a groove and keeps the rig; a groove
+        a minute long after a short drop went on into a rap verse, and the
+        rig with it."""
+        import visualizers
+
+        style = self._read_as((8.0, "break", 0.1, False), (12.0, "drop", 0.85, True),
+                              (60.0, "groove", 0.84, True), (8.0, "outro", 0.1, False))
+        assert visualizers.Rave._runs_of(style) == [(8.0, 32.0)]
+        # And not at all through a groove that drops most of the weight.
+        style = self._read_as((8.0, "break", 0.1, False), (12.0, "drop", 0.85, True),
+                              (12.0, "groove", 0.5, True))
+        assert visualizers.Rave._runs_of(style) == [(8.0, 20.0)]
+
     def test_a_groove_before_a_drop_does_not_light_it(self):
         """A part with drums that has not dropped yet is not carried by
         anything: the rig waits for the drop."""
@@ -7784,51 +7830,6 @@ class TestThePolishPassIsOneBlit:
         finally:
             onto.end()
         return out
-
-    def test_a_thin_line_glows_smoothly(self, qapp, monkeypatch):
-        """Shrunk eightfold and stretched straight back, a thin line's glow
-        was a row of steps eight pixels long, and the picture read as low
-        resolution. Measured along the glow beside a slanted line, as how
-        much it wavers, with the blur and without."""
-        from PySide6.QtCore import QPointF, QRectF, QSize
-        from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
-
-        from attachment_widgets import PostProcess
-
-        def glow(passes):
-            monkeypatch.setattr(PostProcess, "SOFTEN", passes)
-            buffer = QPixmap(QSize(640, 360))
-            buffer.setDevicePixelRatio(1.0)
-            buffer.fill(QColor(0, 0, 0))
-            inner = QPainter(buffer)
-            inner.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-            inner.setPen(QPen(QColor(255, 255, 255), 1.0))
-            inner.drawLine(QPointF(0, 120), QPointF(640, 200))
-            inner.end()
-            out = QImage(640, 360, QImage.Format.Format_ARGB32_Premultiplied)
-            out.fill(QColor(0, 0, 0))
-            post = PostProcess()
-            post._allow = 99
-            post._settle = 10_000
-            post._area = 640 * 360
-            onto = QPainter(out)
-            try:
-                post.apply(onto, QRectF(0, 0, 640, 360), buffer,
-                           {"bloom": 0.9})
-            finally:
-                onto.end()
-            # Six pixels below the line, all the way along it.
-            seen = [out.pixelColor(x, int(120 + x * 80 / 640 + 6)).valueF()
-                    for x in range(40, 600)]
-            steps = [abs(b - a) for a, b in zip(seen, seen[1:])]
-            return sum(steps) / len(steps), sum(seen) / len(seen)
-
-        rough, lit_rough = glow(0)
-        smooth, lit_smooth = glow(PostProcess.SOFTEN or 2)
-        assert lit_smooth > 0.01, "there is no glow to measure"
-        assert smooth < rough * 0.5, (
-            f"the glow wavers by {smooth:.4f} a pixel along the line, and "
-            f"{rough:.4f} without the blur")
 
     def test_the_fringing_still_happens(self, qapp):
         """The fringing still happens: measured on the picture, since it now
@@ -9426,6 +9427,35 @@ class TestTheWaveformWidget:
             "the played part and the rest are drawn the same colour")
         assert early.alphaF() > 0.5 and late.alphaF() > 0.0, (
             "one side of the playhead was not drawn at all")
+
+    def test_nothing_stands_above_the_waveform_to_mark_the_playhead(self, qapp):
+        """The played part is the shading, and nothing else: a line the full
+        height of the bar stood above every column."""
+        bar = self._made([0.5] * 200, span=100_000, at=37_300)
+        image = self._drawn(bar)
+        middle = bar.height() / 2.0
+        reach = 0.5 * (middle - 2.0) + 1.0
+        tall = [(x, y) for x in range(image.width()) for y in range(image.height())
+                if image.pixelColor(x, y).alphaF() > 0.05
+                and abs(y + 0.5 - middle) > reach]
+        assert not tall, f"drawn beyond the waveform's columns at {tall[:4]}"
+
+    def test_the_column_under_the_playhead_fills_from_the_left(self, qapp):
+        """So the shading moves smoothly rather than a column at a time."""
+        bar = self._made([0.9] * 200, span=300_000)
+        step = bar.STEP
+        # Halfway along the eleventh column's bar.
+        x = 10 * step
+        bar.set_position(int((x + bar.BAR * 0.5) / bar.width() * 300_000))
+        image = self._drawn(bar)
+        middle = bar.height() // 2
+        left = image.pixelColor(int(x), middle)
+        right = image.pixelColor(int(x) + 1, middle)
+        played = image.pixelColor(int(step), middle)
+        ahead = image.pixelColor(int(x + 3 * step), middle)
+        assert left == played and right != played and ahead != played, (
+            f"the column under the playhead is {left.name()} then "
+            f"{right.name()}, played is {played.name()}, ahead {ahead.name()}")
 
     def test_a_quiet_passage_is_drawn_shorter_than_a_loud_one(self, qapp):
         bar = self._made([1.0] * 100 + [0.1] * 100, span=100_000)

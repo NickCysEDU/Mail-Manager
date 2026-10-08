@@ -31,7 +31,6 @@ from PySide6.QtGui import (
     QKeySequence,
 )
 from PySide6.QtWidgets import (
-    QFileDialog,
     QAbstractItemView,
     QStackedWidget,
     QApplication,
@@ -61,6 +60,7 @@ import providers
 import rulesets
 import scheduler
 import touchbar
+import widgets
 from config import (
     CredentialError,
     CredentialStore,
@@ -78,7 +78,10 @@ from models import (
     OtherCategory,
     TimeWindow,
     TriageItem,
+    TriageSummary,
     clock,
+    message_key,
+    one_row_each,
     resolve_window,
 )
 from flowlayout import FlowLayout, Spacer
@@ -93,14 +96,18 @@ import helpmode
 import theme
 from settings_dialog import SettingsDialog
 from triage_table import (
-    CategoryDelegate, ConfidenceDelegate, PreviewPane, TriageFilterProxy,
-    TriageTableModel, WrapDelegate, category_color)
+    NOT_SORTED, CategoryDelegate, ConfidenceDelegate, PreviewPane,
+    TriageFilterProxy, TriageTableModel, WrapDelegate, category_color,
+    mark_moves)
+from sidebar import INBOX, MailboxList, Place, accounts_having
 from menubar import MenuBarController
 from welcome import SetupWizard
 from workers import (AttachmentWorker,
     AttachmentFetchWorker,
     DraftWorker,
     FlagWorker,
+    ListWorker,
+    MailboxesWorker,
     MoveWorker,
     SendWorker,
     ReplyWorker,
@@ -224,6 +231,27 @@ class MainWindow(QMainWindow):
         self._mail_windows: list = []
         #: The batch an undo is putting back, while it runs.
         self._undoing: Optional[UndoBatch] = None
+        #: The inbox, by message, as listed when the window opened: rows the
+        #: sorter has not read. Then the last scan's rows. The table shows
+        #: the second over the first; see _inbox_rows.
+        self._listed: Dict[tuple, TriageItem] = {}
+        self._sorted: List[TriageItem] = []
+        #: The rows of every other mailbox looked at, by place and then by
+        #: message, as listed.
+        self._elsewhere: Dict[Place, Dict[tuple, TriageItem]] = {}
+        #: Every UID a folder held at its last look, listed or outside the
+        #: period, by place, account and folder: a look again reads the rest.
+        self._present: Dict[tuple, set] = {}
+        #: Listings running, by place, and the workers listing each account's
+        #: folders for the sidebar.
+        self._listings: Dict[Place, List[QThread]] = {}
+        self._mailbox_workers: List[QThread] = []
+        #: Whether the mailboxes have been opened: once, when the window
+        #: first shows. And whether a scan at launch waits for the inbox.
+        self._mailboxes_opened = False
+        self._scan_after_listing = False
+        #: Auto scan is a launch's: tried once, window or no window.
+        self._scanned_at_launch = False
         #: The period the last scan covered, for the briefing.
         self._scanned_window = (None, None)
         self._replies_prompted = True
@@ -413,7 +441,23 @@ class MainWindow(QMainWindow):
         self.outer_splitter.addWidget(self.log_view)
         self.outer_splitter.setStretchFactor(0, 5)
         self.outer_splitter.setSizes([720, 0])
-        layout.addWidget(self.outer_splitter, 1)
+
+        # The mailboxes down the left, as in Mail: under the toolbar, beside
+        # the messages.
+        self.sidebar = MailboxList()
+        self.sidebar.chosen.connect(self._chosen)
+        self.sidebar.set_accounts(self.settings.accounts)
+        self.sidebar.setVisible(self.settings.show_sidebar)
+        self.side_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.side_splitter.addWidget(self.sidebar)
+        self.side_splitter.addWidget(self.outer_splitter)
+        self.side_splitter.setCollapsible(0, False)
+        self.side_splitter.setCollapsible(1, False)
+        self.side_splitter.setStretchFactor(0, 0)
+        self.side_splitter.setStretchFactor(1, 1)
+        width = self.settings.sidebar_width or MailboxList.WIDTH
+        self.side_splitter.setSizes([width, 1000])
+        layout.addWidget(self.side_splitter, 1)
         self._apply_preview_position(self.settings.preview_position)
 
         self.setCentralWidget(central)
@@ -579,6 +623,16 @@ class MainWindow(QMainWindow):
         frame.setFrameShape(QFrame.Shape.NoFrame)
         row = FlowLayout(frame, margin=0, spacing=6, vertical_spacing=6)
         self.action_bar_layout = row
+
+        self.sidebar_button = QToolButton()
+        self.sidebar_button.setCheckable(True)
+        self.sidebar_button.setChecked(self.settings.show_sidebar)
+        self.sidebar_button.setToolTip(
+            "Show or hide your mailboxes: the inbox, Drafts, Sent and every "
+            "folder (\u2303\u2318S).")
+        self.sidebar_button.toggled.connect(self._show_sidebar)
+        self._paint_sidebar_button()
+        row.addWidget(self.sidebar_button)
 
         self.window_buttons: Dict[TimeWindow, QToolButton] = {}
         for window in TimeWindow:
@@ -801,7 +855,7 @@ class MainWindow(QMainWindow):
             touchbar.Button("apply", "Apply", self.apply_button,
                             title=self._apply_title, follow=False,
                             image="tray.and.arrow.down",
-                            role=lambda: ("confirm" if self.model.summary().approved
+                            role=lambda: ("confirm" if self._inbox_summary().approved
                                           else None),
                             watch=[self.model.selectionChanged],
                             priority="high"),
@@ -823,7 +877,7 @@ class MainWindow(QMainWindow):
         ], "main", customizable=True)
 
     def _apply_title(self) -> str:
-        approved = self.model.summary().approved
+        approved = self._inbox_summary().approved
         return f"Apply {approved}" if approved else "Apply"
 
     def _model_actions(self) -> List[QAction]:
@@ -1149,6 +1203,8 @@ class MainWindow(QMainWindow):
             self.help_button.blockSignals(False)
         self._apply_density(self.settings.effective_row_lines)
         self._reset_columns()
+        self._paint_sidebar_button()
+        self.sidebar.set_accounts(self.settings.accounts)
         self.table.viewport().update()
 
     def _apply_spacing(self) -> None:
@@ -1214,14 +1270,15 @@ class MainWindow(QMainWindow):
         self._rebuild_sorting_menu()
 
     def _retarget_items(self) -> None:
-        """Re-file the rows already on screen under the new folder plan."""
-        items = list(self.model.items)
+        """Re-file the inbox's rows under the new folder plan."""
+        items = self._inbox_rows()
         if not items:
             return
         for item in items:
             item.folders = self.folder_plan
             item.non_job_routing = self.settings.routing
-        self.model.set_items(items)
+        if self._showing_inbox():
+            self.model.set_items(items)
         self._rebuild_view_menu()
         self._update_status()
 
@@ -1747,6 +1804,24 @@ class MainWindow(QMainWindow):
 
         view_menu = menubar.addMenu("&View")
 
+        # Its words say what it will do, as in Mail, which keeps the same
+        # keys: Control-Command-S.
+        self.sidebar_action = QAction(
+            "Hide Sidebar" if self.settings.show_sidebar else "Show Sidebar", self)
+        self.sidebar_action.setShortcut(QKeySequence("Meta+Ctrl+S"))
+        self.sidebar_action.setStatusTip(
+            "Your mailboxes down the left: the inbox, Drafts, Sent and every folder.")
+        self.sidebar_action.triggered.connect(
+            lambda: self._show_sidebar(not self.settings.show_sidebar))
+        view_menu.addAction(self.sidebar_action)
+        self.new_mail_action = QAction("Get New Mail", self)
+        self.new_mail_action.setShortcut(QKeySequence("Ctrl+Shift+N"))
+        self.new_mail_action.setStatusTip(
+            "Look again at the mailbox on screen, and at every account's folders.")
+        self.new_mail_action.triggered.connect(self._get_new_mail)
+        view_menu.addAction(self.new_mail_action)
+        view_menu.addSeparator()
+
         visualise_action = QAction("Visualise an audio file…", self)
         visualise_action.setShortcut(QKeySequence("Ctrl+Shift+V"))
         visualise_action.setStatusTip(
@@ -1986,6 +2061,7 @@ class MainWindow(QMainWindow):
             self._first_run_checked = True
             QTimer.singleShot(0, self, self._first_run_check)
             QTimer.singleShot(0, self, self._probe_api_keys)
+            QTimer.singleShot(0, self, self._open_mailboxes)
             # A little after the window is up, so it never holds it up.
             QTimer.singleShot(5000, self, self._look_for_updates)
 
@@ -1997,7 +2073,7 @@ class MainWindow(QMainWindow):
         if self.demo or self.dry_run:
             return ""
         pending = sum(
-            1 for item in self.model.items
+            1 for item in self._rows_in_reach()
             if item.approved and not item.moved
             and item.disposition is Disposition.MOVE
         )
@@ -2079,6 +2155,8 @@ class MainWindow(QMainWindow):
             self.table.horizontalHeader().saveState().toBase64()
         ).decode()
         self.settings.show_log_panel = self.log_view.isVisible()
+        if self.settings.show_sidebar and self.side_splitter.sizes()[0] > 0:
+            self.settings.sidebar_width = self.side_splitter.sizes()[0]
         self.settings.hide_non_job = self.show_combo.currentData() == SHOW_JOB_ONLY
         try:
             self.settings.save()
@@ -2093,10 +2171,11 @@ class MainWindow(QMainWindow):
         """
         self.schedule_timer.stop()
         self.menu_bar.hide()
-        for worker in list(self._workers):
+        for worker in list(self._workers) + list(self._mailbox_workers):
             if worker.isRunning() and not worker.stop(3000):
                 _abandon(worker)
         self._workers.clear()
+        self._mailbox_workers.clear()
         # The update check and an update's download are threads too, parented
         # to this window: destroyed while running, Qt aborts the process.
         dialog = self._update_dialog
@@ -2365,7 +2444,7 @@ class MainWindow(QMainWindow):
     @Slot()
     def open_settings(self, tab: int = 0) -> None:
         dialog = SettingsDialog(self.settings, self.store, self,
-                                sample_items=self.model.items)
+                                sample_items=self._inbox_rows())
         if tab:
             dialog.tabs.setCurrentIndex(tab)
         # Remembered so Quit can deal with it: with modal Settings open, Cmd-Q
@@ -2398,6 +2477,7 @@ class MainWindow(QMainWindow):
             self.settings.table_state,
         )
         new_settings.window_geometry, new_settings.splitter_state, new_settings.table_state = preserved
+        mailboxes_were = self._mailbox_shape()
         self.settings = new_settings
         try:
             self.settings.save()
@@ -2417,8 +2497,50 @@ class MainWindow(QMainWindow):
         self._rebuild_account_menu()
         self._rebuild_view_menu()
         self._sync_account_column()
+        self._mailboxes_changed(mailboxes_were)
         self._append_log("Settings saved.")
         self._update_status()
+
+    def _mailbox_shape(self) -> tuple:
+        """What the mailboxes listed depend on: each account's server, the
+        mailbox sorted and whether it has a password, and the period."""
+        def has_password(account) -> bool:
+            try:
+                return bool(self.store.get_mailbox_password(account.address))
+            except CredentialError:
+                return False
+
+        return (tuple((account.id, account.address, account.host, account.port,
+                       account.source_mailbox, has_password(account))
+                      for account in self.settings.accounts),
+                self.settings.open_with_inbox, self.settings.inbox_days)
+
+    def _mailboxes_changed(self, before: tuple) -> None:
+        """After Settings: read again what the change touched. A mailbox
+        added or taken away, a password stored, or a new period, lists the
+        folders and the inbox again; the scan at launch is not run again."""
+        self.sidebar.set_accounts(self.settings.accounts)
+        if not self._mailboxes_opened or self.demo or self._mailbox_shape() == before:
+            return
+        known = {account.id for account in self.settings.accounts}
+        for running in self._listings.values():
+            for worker in running:
+                worker.cancel()
+        self._listings.clear()
+        self._listed.clear()
+        self._present.clear()
+        self._sorted = [row for row in self._sorted if row.email.account_id in known]
+        self._elsewhere.clear()
+        passwords = self._stored_passwords()
+        for account in self.settings.accounts:
+            if account.id in passwords:
+                self._list_mailboxes(account, passwords[account.id])
+        if self.settings.open_with_inbox:
+            self._list(INBOX, passwords)
+        if self._showing_inbox():
+            self._show_inbox()
+        else:
+            self._go_to(INBOX)
 
     def _window_selected(self, window: TimeWindow) -> None:
         self.settings.last_window = window.name
@@ -2553,6 +2675,8 @@ class MainWindow(QMainWindow):
             return
 
         start, end = self._current_window()
+        if not self._showing_inbox():
+            self._go_to(INBOX)
         self._prompt_cache.clear()
         self.preview.clear()
         self._set_busy(True, "Scanning…")
@@ -2593,7 +2717,10 @@ class MainWindow(QMainWindow):
             non_job_routing=self.settings.routing,
             auto_approve_non_job=self.settings.auto_approve_non_job,
         )
-        self.model.set_items(items)
+        self._sorted = list(items)
+        self.sidebar.choose(INBOX)
+        self.model.set_addressed(False)
+        self.model.set_items(self._inbox_rows())
         self._refresh_category_filter()
         self._refresh_folder_choices()
         self.usage_label.setText("demo data · no API calls · $0.00")
@@ -2608,9 +2735,15 @@ class MainWindow(QMainWindow):
         self._has_scanned = True
         # Kept for the briefing, which says what window it reports on.
         self._scanned_window = (outcome.window_start, outcome.window_end)
-        self.model.set_items(outcome.items)
-        self._view_accounts = []
-        self._view_all = True
+        # Over the listing: messages outside this scan's window stay in the
+        # table as they were listed.
+        self._sorted = list(outcome.items)
+        if self._showing_inbox():
+            self.model.set_addressed(False)
+            self.model.set_items(self._inbox_rows())
+            self._view_accounts = []
+            self._view_all = True
+            self.sidebar.choose(INBOX)
         self._sync_account_column()
         self._rebuild_view_menu()
         self._refresh_category_filter()
@@ -2623,12 +2756,13 @@ class MainWindow(QMainWindow):
             self._append_log(f"⚠︎ {warning}")
 
         self.metrics_bar.setVisible(False)
-        summary = self.model.summary()
+        summary = self._inbox_summary()
         if not outcome.items:
             self._set_status("No messages found in this window.")
         else:
             self._set_status(summary.describe())
-            self._select_first_row()
+            if self._showing_inbox():
+                self._select_first_row()
 
         if outcome.warnings:
             QMessageBox.information(self, "Scan notes", "\n\n".join(outcome.warnings))
@@ -2729,7 +2863,7 @@ class MainWindow(QMainWindow):
             )
             self.open_settings(tab=3)
             return
-        items = [i for i in self.model.items if not i.classification.error]
+        items = [i for i in self._sorted if not i.classification.error]
         if not items:
             QMessageBox.information(self, "Nothing to reply to",
                                     "Run a scan first.")
@@ -2822,7 +2956,7 @@ class MainWindow(QMainWindow):
                 "--dry-run to file messages for real.",
             )
             return
-        items = self.model.items
+        items = self._rows_in_reach()
         plans = build_move_plans(items)
         if not plans:
             QMessageBox.information(
@@ -2910,24 +3044,22 @@ class MainWindow(QMainWindow):
         box.exec()
         self._update_status(message)
 
-    def _record_moves(self, report: MoveReport) -> str:
+    def _record_moves(self, report: MoveReport, among=None) -> str:
         """Carry a move report into the table and the undo stack; returns
         the one-line account of it."""
         # Where everything came from, so it can be put back: undo is what makes
         # moving real mail safe to try.
         plans: List[MovePlan] = []
-        for item in self.model.items:
-            filed_to = report.moved.get(item.email.uid)
-            if not filed_to:
-                continue
+        held = self._rows_in_reach() if among is None else list(among)
+        for item in held:
+            account_id, home = self._home_of(item)
+            filed_to, _why, landed = report.about(account_id, home,
+                                                  item.email.uid)
             # The UID the message has now, after the COPY. Without the server's
             # receipt it cannot be named, so it is left out rather than pointed
             # at whatever holds that number.
-            landed = report.new_uids.get(item.email.uid)
-            if not landed:
+            if not filed_to or not landed:
                 continue
-            account = self.settings.account_by_id(item.email.account_id)
-            home = account.source_mailbox if account else self.settings.source_mailbox
             plans.append(MovePlan(
                 uid=landed,
                 target_folder=home,
@@ -2939,7 +3071,12 @@ class MainWindow(QMainWindow):
             self._undo_stack.append(UndoBatch(plans=plans, when=datetime.now()))
             del self._undo_stack[:-UNDO_DEPTH]
         self._sync_undo_action()
-        self.model.apply_report(report)
+        mark_moves(held, report, where=self._home_of)
+        # Gone from the inbox: never listed again as if still there.
+        for item in held:
+            if item.moved:
+                self._listed.pop(message_key(item), None)
+        self.model.refresh()
         self._refresh_folder_choices()
         self._refresh_mail_windows()
         message = f"Filed {report.moved_count} message(s)."
@@ -2947,6 +3084,357 @@ class MainWindow(QMainWindow):
             message += f" {report.failed_count} could not be moved."
         self._append_log(message)
         return message
+
+    def _home_of(self, item: TriageItem) -> Tuple[str, str]:
+        """The mailbox and folder a row's message is filed from, named as
+        the filing worker names them."""
+        account = (self.settings.account_by_id(item.email.account_id)
+                   or self.settings.primary_account)
+        if account is None:
+            return item.email.account_id, item.email.source_folder or "INBOX"
+        return account.id, item.email.source_folder or account.source_mailbox
+
+    def _inbox_rows(self) -> List[TriageItem]:
+        """The inbox, one row per message: the last scan's reading of each
+        message it reached, and the listing of the rest."""
+        return one_row_each(self._listed.values(), self._sorted)
+
+    def _rows_in_reach(self) -> List[TriageItem]:
+        """Every row the window holds: the inbox's, and the table's when it
+        shows another mailbox. A row from elsewhere is never fileable, so
+        filing over all of them files the inbox's alone; a move made from
+        the table is found wherever it was made."""
+        rows = self._inbox_rows()
+        seen = {id(row) for row in rows}
+        return rows + [row for row in self.model.items if id(row) not in seen]
+
+    def _inbox_summary(self) -> TriageSummary:
+        return TriageSummary.build(self._rows_in_reach())
+
+    def _showing_inbox(self) -> bool:
+        return self.sidebar.place().is_inbox
+
+    def _show_inbox(self) -> None:
+        """Put the inbox in the table, filtered to the account chosen in
+        the sidebar if one is."""
+        place = self.sidebar.place()
+        self.model.set_addressed(False)
+        self.model.set_items(self._inbox_rows())
+        self._set_view_accounts([place.account_id] if place.account_id else [])
+        self._after_rows_changed()
+
+    def _after_rows_changed(self) -> None:
+        self._sync_account_column()
+        self._rebuild_view_menu()
+        self._refresh_category_filter()
+        self._refresh_folder_choices()
+        self._sync_table_stack()
+        self._update_status()
+
+    @Slot(object)
+    def _chosen(self, place: Place) -> None:
+        """A mailbox chosen by hand: shown as last listed, then looked at
+        again for what has come and gone, as Mail does."""
+        self._go_to(place)
+        self._refresh(place)
+
+    def _go_to(self, place: Place) -> None:
+        """Show one mailbox as it was last listed."""
+        self.sidebar.choose(place)
+        self.preview.clear()
+        if place.is_inbox:
+            self._show_inbox()
+            self._select_first_row()
+            return
+        self.model.set_addressed(place.kind in ("sent", "drafts"))
+        self.model.set_items(list(self._elsewhere.get(place, {}).values()))
+        self._set_view_accounts([])
+        self._after_rows_changed()
+        self._select_first_row()
+
+    def _refresh(self, place: Optional[Place] = None) -> None:
+        """Look at a mailbox again: only what is new is read, and what has
+        gone is taken out. Not before the window has opened its mailboxes,
+        and never in the demo."""
+        place = place or self.sidebar.place()
+        if self._mailboxes_opened and not self.demo and place not in self._listings:
+            self._list(place)
+
+    def _get_new_mail(self) -> None:
+        """Get New Mail: the mailbox on screen again, and every account's
+        folders."""
+        if not self._mailboxes_opened or self.demo:
+            return
+        passwords = self._stored_passwords()
+        for account in self.settings.accounts:
+            if account.id in passwords:
+                self._list_mailboxes(account, passwords[account.id])
+        place = self.sidebar.place()
+        if place not in self._listings:
+            self._list(place, passwords)
+
+    def _known_uids(self, place: Place, account_id: str, folder: str) -> List[str]:
+        """The UIDs one folder of one account held at the last look, and any
+        listed since: a look again need not read them."""
+        rows = (self._listed.values() if place.is_inbox
+                else self._elsewhere.get(place, {}).values())
+        listed = {row.email.uid for row in rows
+                  if row.email.account_id == account_id
+                  and (row.email.source_folder or "INBOX") == folder}
+        return sorted(listed | self._present.get(
+            (self._listing_of(place), account_id, folder), set()))
+
+    @staticmethod
+    def _listing_of(place: Place):
+        """Which listing a place shows: every inbox place shows the one."""
+        return INBOX if place.is_inbox else place
+
+    def _paint_sidebar_button(self) -> None:
+        import icons
+        from PySide6.QtGui import QPalette
+
+        self.sidebar_button.setIcon(icons.icon(
+            "sidebar", self.palette().color(QPalette.ColorRole.ButtonText).name(), 18))
+
+    def _show_sidebar(self, on: bool) -> None:
+        """Show or hide the mailboxes, from the View menu or the toolbar."""
+        on = bool(on)
+        self.sidebar.setVisible(on)
+        self.sidebar_action.setText("Hide Sidebar" if on else "Show Sidebar")
+        self.sidebar_button.blockSignals(True)
+        self.sidebar_button.setChecked(on)
+        self.sidebar_button.blockSignals(False)
+        if self.settings.show_sidebar != on:
+            self.settings.show_sidebar = on
+            try:
+                self.settings.save()
+            except OSError as exc:
+                log.warning("Could not save settings: %s", exc)
+
+    def _stored_passwords(self) -> Dict[str, str]:
+        """Every account's app password, read without asking anything: an
+        account without one, or a Keychain that will not say, is left out
+        and the log says so."""
+        found: Dict[str, str] = {}
+        for account in self.settings.accounts:
+            try:
+                secret = self.store.get_mailbox_password(account.address)
+            except CredentialError as exc:
+                self._append_log(f"{account.label}: the Keychain would not give "
+                                 f"its password ({exc}).")
+                continue
+            if secret:
+                found[account.id] = secret
+            else:
+                self._append_log(f"{account.label}: no app password is stored; "
+                                 "it is not listed.")
+        return found
+
+    def _open_mailboxes(self) -> None:
+        """Once, when the window first shows: each account's folders for the
+        sidebar, the inbox for the table, then a scan if one is wanted at
+        launch. Nothing here asks anything; what is missing is said in the
+        log and the status bar."""
+        if self._mailboxes_opened or self.demo:
+            return
+        self._mailboxes_opened = True
+        self.sidebar.set_accounts(self.settings.accounts)
+        if not self.settings.is_configured():
+            return
+        passwords = self._stored_passwords()
+        for account in self.settings.accounts:
+            if account.id in passwords:
+                self._list_mailboxes(account, passwords[account.id])
+        if self.settings.open_with_inbox and self._list(INBOX, passwords):
+            # The scan waits for the listing: both read the same messages,
+            # and the listing is what fills the window.
+            self._scan_after_listing = self.settings.scan_on_open
+        elif self.settings.scan_on_open:
+            self._scan_on_open()
+
+    def _list_mailboxes(self, account, password: str) -> None:
+        worker = MailboxesWorker(account, password, parent=self)
+        worker.finished_ok.connect(self.sidebar.set_mailboxes)
+        worker.failed.connect(lambda _title, detail, a=account: self._append_log(
+            f"{a.label}: could not list its mailboxes ({detail})."))
+        self._read_quietly(worker)
+
+    def _read_quietly(self, worker: QThread) -> None:
+        """Start a worker that only reads: it never makes the window busy,
+        so Scan is never refused because of it; quitting still stops it."""
+        self._mailbox_workers.append(worker)
+
+        def ended(w=worker) -> None:
+            if w in self._mailbox_workers:
+                self._mailbox_workers.remove(w)
+            w.deleteLater()
+
+        worker.finished.connect(ended)
+        worker.start()
+
+    def _inbox_since(self) -> datetime:
+        return datetime.now(timezone.utc) - timedelta(days=self.settings.inbox_days)
+
+    def _list(self, place: Place, passwords: Optional[Dict[str, str]] = None) -> bool:
+        """List what a place holds over the inbox period, account by account,
+        filling the table as the rows come. Returns whether anything was
+        started."""
+        if passwords is None:
+            passwords = self._stored_passwords()
+        reach = [(account, folder) for account, folder in
+                 accounts_having(self.sidebar, place, self.settings.accounts)
+                 if account.id in passwords]
+        if not reach:
+            return False
+        since = self._inbox_since()
+        plan = self.folder_plan or self.settings.folder_plan()
+        running: List[QThread] = []
+        if not place.is_inbox:
+            self._elsewhere.setdefault(place, {})
+        for account, folder in reach:
+            worker = ListWorker(account, passwords[account.id], folder, since,
+                                self.settings, plan, fileable=place.is_inbox,
+                                known=self._known_uids(place, account.id, folder),
+                                parent=self)
+            worker.arrived.connect(
+                lambda rows, p=place, w=worker: self._on_listed(p, rows, w))
+            worker.finished_ok.connect(
+                lambda listing, p=place: self._on_listing_done(p, listing))
+            worker.failed.connect(
+                lambda _title, detail, p=place, a=account:
+                    self._on_listing_failed(p, a, detail))
+            worker.finished.connect(
+                lambda p=place, w=worker: self._listing_ended(p, w))
+            running.append(worker)
+        self._listings[place] = running
+        self._set_status(f"Reading {self.sidebar.title_of(place)}…")
+        for worker in running:
+            self._read_quietly(worker)
+        self._sync_table_stack()
+        return True
+
+    def _on_listed(self, place: Place, rows: List[TriageItem],
+                   worker: Optional[QThread] = None) -> None:
+        """A batch of a listing: kept, and shown at once if its mailbox is
+        the one on screen and the message is not already there. A listing
+        replaced since says nothing."""
+        if worker is not None and worker not in self._listings.get(place, []):
+            return
+        if place.is_inbox:
+            for row in rows:
+                self._listed[message_key(row)] = row
+        else:
+            kept = self._elsewhere.setdefault(place, {})
+            for row in rows:
+                kept[message_key(row)] = row
+        if place.is_inbox != self._showing_inbox() or (
+                not place.is_inbox and self.sidebar.place() != place):
+            return
+        shown = {message_key(item) for item in self.model.items}
+        fresh = [row for row in rows if message_key(row) not in shown]
+        if fresh:
+            self.model.add_items(fresh)
+            if len(shown) == 0:
+                self._after_rows_changed()
+                self._select_first_row()
+
+    def _on_listing_done(self, place: Place, listing) -> None:
+        """A listing of one folder of one account finished: what is no longer
+        there goes, from the list kept and from the table."""
+        present = set(listing.present)
+        self._present[(self._listing_of(place), listing.account_id,
+                       listing.folder)] = present
+
+        def gone(row) -> bool:
+            return (row.email.account_id == listing.account_id
+                    and (row.email.source_folder or "INBOX") == listing.folder
+                    and row.email.uid not in present)
+
+        if place.is_inbox:
+            vanished = {key for key, row in self._listed.items() if gone(row)}
+            for key in vanished:
+                del self._listed[key]
+            if vanished and self._showing_inbox():
+                # A message a scan read stays as the scan read it.
+                self.model.remove_where(
+                    lambda row: not row.analysed and message_key(row) in vanished)
+        else:
+            self._elsewhere[place] = {
+                key: row for key, row in self._elsewhere.get(place, {}).items()
+                if not gone(row)}
+            if self.sidebar.place() == place:
+                self.model.remove_where(gone)
+        account = self.settings.account_by_id(listing.account_id)
+        name = account.label if account else listing.account_id
+        note = (f"{name}: listed {len(listing.rows)} message(s) in "
+                f"{listing.folder} from the last {self._period_words()}.")
+        if listing.capped:
+            note += " The period holds more; these are the newest."
+        self._append_log(note)
+
+    def _on_listing_failed(self, place: Place, account, detail: str) -> None:
+        self._append_log(f"{account.label}: could not read "
+                         f"{self.sidebar.title_of(place)} ({detail}).")
+        self._set_status(f"Could not read {self.sidebar.title_of(place)} in "
+                         f"{account.label}: {detail}")
+
+    def _listing_ended(self, place: Place, worker: QThread) -> None:
+        running = self._listings.get(place)
+        if running is None or worker not in running:
+            return      # replaced by a newer listing, which speaks for itself
+        running.remove(worker)
+        if running:
+            return
+        self._listings.pop(place, None)
+        if self._showing(place):
+            self._after_rows_changed()
+        if place.is_inbox and self._scan_after_listing:
+            self._scan_after_listing = False
+            self._scan_on_open()
+
+    def _showing(self, place: Place) -> bool:
+        current = self.sidebar.place()
+        return current == place or (current.is_inbox and place.is_inbox)
+
+    def _period_words(self) -> str:
+        from config import INBOX_PERIODS
+
+        return dict(INBOX_PERIODS).get(self.settings.inbox_days,
+                                       f"{self.settings.inbox_days} days")
+
+    def _why_not_scan_on_open(self) -> str:
+        """Why a scan at launch would have to ask something first, or empty
+        when it would not."""
+        if not self.settings.is_configured():
+            return "no mailbox is set up yet"
+        try:
+            missing = self._mailboxes_missing_a_password()
+            key = self.store.get_provider_key(self.settings.provider)
+        except CredentialError as exc:
+            return f"the Keychain would not answer ({exc})"
+        if missing:
+            return "no app password is stored for " + ", ".join(missing)
+        if self.settings.needs_api_key and not key:
+            return f"no {self.settings.provider_label} API key is stored"
+        return ""
+
+    def _scan_on_open(self) -> None:
+        """Auto scan: Scan & Analyze as the app opens, when nothing needs
+        asking first. Once a launch, whether it starts with the window or in
+        the menu bar with the window opened later."""
+        if self._scanned_at_launch:
+            return
+        self._scanned_at_launch = True
+        why = self._why_not_scan_on_open()
+        if why:
+            note = f"Auto scan did not run: {why}."
+            self._append_log(note)
+            self._set_status(note)
+            return
+        if self.running_workers():
+            return
+        self._append_log("Auto scan: scanning as the app opens.")
+        self._begin_scan()
 
     def _register(self, worker: QThread) -> QThread:
         """Track a worker and reap it when it finishes. Otherwise finished
@@ -2976,6 +3464,11 @@ class MainWindow(QMainWindow):
         many were running; safe with nothing running, and safe twice.
         """
         running = self.running_workers()
+        # The quiet readers too: Stop All means all. They are not tasks to
+        # count or wait for, only to end.
+        for reader in list(self._mailbox_workers):
+            reader.cancel()
+        self._scan_after_listing = False
         if not running:
             self._set_status("Nothing is running.")
             return 0
@@ -3041,7 +3534,7 @@ class MainWindow(QMainWindow):
         # The primary button becomes Stop while work runs, so it is always in
         # the same place and never greyed out when it is wanted most.
         self._set_scan_button(busy)
-        self.apply_button.setEnabled(not busy and self.model.summary().approved > 0)
+        self.apply_button.setEnabled(not busy and self._inbox_summary().approved > 0)
         self.progress.setVisible(busy)
         self.stop_action.setEnabled(busy)
         for button in self.window_buttons.values():
@@ -3358,17 +3851,22 @@ class MainWindow(QMainWindow):
 
     def _refresh_category_filter(self) -> None:
         current = self.category_filter.currentData()
-        labels = sorted({item.classification.category_label for item in self.model.items})
+        # A row not sorted yet carries an empty verdict, which names no
+        # category it has.
+        read = [item for item in self.model.items if item.analysed]
+        labels = sorted({item.classification.category_label for item in read})
         colors = {
             item.classification.category_label: category_color(
                 item.classification, item)
-            for item in self.model.items
+            for item in read
         }
         self.category_filter.blockSignals(True)
         self.category_filter.clear()
         self.category_filter.addItem("All categories", None)
         for label in labels:
             self.category_filter.addItem(_swatch(colors.get(label, OTHER_COLOR)), label, label)
+        if len(read) < len(self.model.items):
+            self.category_filter.addItem(_swatch(OTHER_COLOR), NOT_SORTED, NOT_SORTED)
         index = self.category_filter.findData(current)
         self.category_filter.setCurrentIndex(index if index >= 0 else 0)
         self.category_filter.blockSignals(False)
@@ -3390,7 +3888,7 @@ class MainWindow(QMainWindow):
         line, such as an apply result, that the counts would otherwise
         overwrite.
         """
-        summary = self.model.summary()
+        summary = self._inbox_summary()
         running = bool(self.running_workers())
         self.apply_button.setEnabled(summary.approved > 0 and not running)
         # Short enough to keep the toolbar on one row; the full wording is the
@@ -3409,6 +3907,14 @@ class MainWindow(QMainWindow):
         self.stop_action.setEnabled(running)
         if message is not None:
             self._set_status(message)
+        elif not running and not self._showing_inbox():
+            place = self.sidebar.place()
+            count = self.model.rowCount()
+            reading = " (still reading)" if place in self._listings else ""
+            self._set_status(
+                f"{self.sidebar.title_of(place)}: {count} message"
+                f"{'s' if count != 1 else ''} from the last "
+                f"{self._period_words()}{reading}.")
         elif summary.total and not running:
             self._set_status(summary.describe())
 
@@ -3431,8 +3937,7 @@ class MainWindow(QMainWindow):
             return
         self.table_stack.setCurrentIndex(0)
         if not self.model.rowCount():
-            self.empty_label.setText(
-                EMPTY_STATE if not self._has_scanned else NOTHING_FOUND)
+            self.empty_label.setText(self._empty_words())
             self.clear_filters_button.setVisible(False)
             return
         filters = self.proxy.active_filters()
@@ -3444,6 +3949,31 @@ class MainWindow(QMainWindow):
             f"<span style='opacity:0.7'>All {total} message(s) are hidden by "
             f"{reason}.</span></div>")
         self.clear_filters_button.setVisible(True)
+
+    def _empty_words(self) -> str:
+        """Why the table is empty, for the mailbox on screen."""
+        place = self.sidebar.place()
+
+        def say(title: str, detail: str) -> str:
+            return ("<div style='text-align:center;line-height:170%'>"
+                    f"<span style='font-size:15px'><b>{_html(title)}</b></span><br>"
+                    f"<span style='opacity:0.7'>{_html(detail)}</span></div>")
+
+        name = self.sidebar.title_of(place)
+        if any(self._showing(listed) for listed in self._listings):
+            return say(f"Reading {name}\u2026",
+                       f"The last {self._period_words()} of it, newest first. "
+                       "Nothing is marked as read.")
+        if not place.is_inbox:
+            return say(f"No mail in {name}",
+                       f"Nothing in the last {self._period_words()}.")
+        if self._has_scanned:
+            return NOTHING_FOUND
+        if self._mailboxes_opened and self.settings.open_with_inbox \
+                and self.settings.is_configured():
+            return say("Your inbox is empty",
+                       f"Nothing arrived in the last {self._period_words()}.")
+        return EMPTY_STATE
 
     def _set_status(self, message: str) -> None:
         """Show as much of `message` as fits; the rest lives in the tooltip.
@@ -3523,7 +4053,7 @@ class MainWindow(QMainWindow):
             Path.home() / "Downloads" / f"job-triage-{datetime.now():%Y%m%d-%H%M}.{fmt}"
         )
         filter_text = "CSV (*.csv)" if fmt == "csv" else "JSON (*.json)"
-        path, _ = QFileDialog.getSaveFileName(self, "Export results", suggested, filter_text)
+        path, _ = widgets.save_file(self, "Export results", suggested, filter_text)
         if not path:
             return
         try:
@@ -3648,13 +4178,25 @@ class MainWindow(QMainWindow):
         """
         import briefing_dialog
 
-        items = list(self.model.items)
+        items = list(self._sorted)
         start, end = self._scanned_window
         briefing_dialog.show(
             items, parent=self, window_start=start, window_end=end,
             mailboxes=[a.label or a.address
                        for a in self.settings.scan_accounts],
-            on_row=self._reveal_row)
+            on_row=lambda index, shown=items: self._reveal_item(
+                shown[index] if 0 <= index < len(shown) else None))
+
+    def _reveal_item(self, wanted: Optional[TriageItem]) -> None:
+        """Select a row of the inbox, going back to the inbox for it."""
+        if wanted is None:
+            return
+        if not self._showing_inbox():
+            self._go_to(INBOX)
+        for row, item in enumerate(self.model.items):
+            if item is wanted:
+                self._reveal_row(row)
+                return
 
     def _reveal_row(self, row: int) -> None:
         """Select a row the briefing pointed at, first clearing any filter
@@ -3705,7 +4247,7 @@ class MainWindow(QMainWindow):
             log.info("Could not read the corrections memory (%s).", exc)
 
         dialog = ClearOutDialog(account, password,
-                                items=list(self.model.items),
+                                items=self._inbox_rows(),
                                 protected=protected, parent=self)
         dialog.cleared.connect(
             lambda removed: self._set_status(
@@ -3964,7 +4506,7 @@ class MainWindow(QMainWindow):
         for account in self._sending_accounts():
             if account.address:
                 found[account.address.lower()] = account.address
-        for item in self.model.items:
+        for item in self._inbox_rows() + list(self.model.items):
             message = item.email
             if message.sender_email:
                 found.setdefault(message.sender_email.lower(),
@@ -4152,7 +4694,8 @@ class MainWindow(QMainWindow):
             "archive": "Archive", "trash": "Trash", "junk": "Junk"}[kind]
         if self.demo:
             self._record_moves(MoveReport(
-                moved={item.email.uid: landing for _row, item in items}))
+                moved={item.email.uid: landing for _row, item in items}),
+                among=[item for _row, item in items])
             self._update_status(f"Demo: marked {len(items)} message(s) as moved to {landing}.")
             return
         if self._busy():

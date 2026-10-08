@@ -279,6 +279,90 @@ class TestUndoingMoreThanOnce:
             f"F{gui.UNDO_DEPTH + 4}"
 
 
+from workers import ScanOutcome  # noqa: E402
+
+
+class TestFilingKeepsMailboxesApart:
+    """A UID names a message only inside one folder of one mailbox. Two
+    mailboxes each hold a message 1; filing one must neither mark the other
+    moved nor record it for undo, and the filing must be undoable."""
+
+    @staticmethod
+    def _row(account, subject):
+        from datetime import datetime, timezone
+
+        from models import Category, Classification, EmailMessage, TriageItem
+
+        email = EmailMessage(uid="1", account_id=account.id,
+                             account_label=account.label, subject=subject,
+                             date=datetime(2026, 10, 1, tzinfo=timezone.utc),
+                             source_folder="INBOX")
+        return TriageItem(email=email, classification=Classification(
+            is_job_related=True, category=Category.INTERVIEW,
+            confidence_score=0.99))
+
+    def test_a_real_filing_arms_undo_for_its_own_mailbox_only(
+            self, two_mailbox_window, monkeypatch, fake_imap_factory, mime_factory):
+        import workers
+        from imap_engine import IMAPEngine
+
+        window = two_mailbox_window
+        first, second = window.settings.accounts
+        filed_row, other_row = self._row(first, "Filed"), self._row(second, "Kept")
+        window._on_scan_done(ScanOutcome(items=[filed_row, other_row]))
+        other_row.approved = False
+        servers = {
+            first.host: fake_imap_factory(
+                folders=["INBOX"], messages={"1": mime_factory(subject="Filed")}),
+            second.host: fake_imap_factory(
+                folders=["INBOX"], messages={"1": mime_factory(subject="Kept")}),
+        }
+        monkeypatch.setattr(workers, "IMAPEngine", lambda host=None, port=None:
+                            IMAPEngine(connection_factory=lambda h, p: servers[host]))
+        worker = workers.ApplyWorker(
+            window.settings, {account.id: "app-specific"
+                              for account in window.settings.accounts},
+            workers.build_move_plans(window.model.items))
+        reports = []
+        worker.finished_ok.connect(reports.append)
+        worker.run()
+        report = reports[0]
+        assert report.moved_count == 1
+
+        window._record_moves(report)
+        assert filed_row.moved is True
+        assert other_row.moved is False, "the other mailbox's message 1"
+        assert "1" in servers[second.host].messages
+        assert window.undo_action.isEnabled() is True
+        [plan] = window._undo_stack[-1].plans
+        assert plan.account_id == first.id
+        assert plan.uid == str(servers[first.host]._next_copy_uid)
+        assert plan.source_folder == "Job Search/Interview"
+        assert plan.target_folder == "INBOX"
+
+    def test_a_message_is_filed_from_and_put_back_where_it_was_read(
+            self, two_mailbox_window):
+        """The mailbox to sort can be changed after a scan; a UID read from
+        the old one names nothing, or something else, in the new one."""
+        import workers
+
+        window = two_mailbox_window
+        first, _second = window.settings.accounts
+        row = self._row(first, "Read from the old one")
+        row.email.source_folder = "Old Inbox"
+        window._on_scan_done(ScanOutcome(items=[row]))
+        [plan] = workers.build_move_plans(window.model.items)
+        assert plan.source_folder == "Old Inbox"
+        report = MoveReport()
+        report.add(first.id, "Old Inbox", MoveReport(
+            moved={"1": "Job Search/Interview"}, new_uids={"1": "41"}))
+        window._record_moves(report)
+        assert row.moved is True
+        [back] = window._undo_stack[-1].plans
+        assert (back.uid, back.source_folder, back.target_folder) == (
+            "41", "Job Search/Interview", "Old Inbox")
+
+
 class TestApplyGroupsByWhereMessagesActuallyAre:
     def test_moves_are_grouped_by_account_and_source(self, qapp, tmp_path, monkeypatch):
         from workers import ApplyWorker

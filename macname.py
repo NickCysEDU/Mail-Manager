@@ -108,7 +108,7 @@ _NEEDED = {
     "+NSWorkspace": ("sharedWorkspace",),
     "NSWorkspace": ("frontmostApplication",),
     "+NSApplication": ("sharedApplication",),
-    "NSApplication": ("activateIgnoringOtherApps:",),
+    "NSApplication": ("activateIgnoringOtherApps:", "modalWindow", "isActive"),
     "+NSString": ("stringWithUTF8String:",),
     "NSString": ("UTF8String",),
 }
@@ -213,6 +213,80 @@ class _AppKit:
         if app:
             self.send(app, "activateIgnoringOtherApps:", True,
                       argtypes=[ctypes.c_bool])
+
+    def is_active(self) -> bool:
+        app = self.send(self._class("NSApplication"), "sharedApplication")
+        return bool(app) and bool(self.send(app, "isActive", restype=ctypes.c_bool))
+
+    def panel_is_up(self) -> bool:
+        """Whether the app is in front with a modal panel open."""
+        app = self.send(self._class("NSApplication"), "sharedApplication")
+        return (self.is_active() and bool(app)
+                and bool(self.send(app, "modalWindow")))
+
+
+#: While a file panel opens, how often to look whether it is up, and how many
+#: times before giving up: here it took over half a second to appear. Then
+#: how long it is left to draw before the focus goes away and comes back.
+PANEL_LOOK_MS = 50
+PANEL_LOOKS = 100
+PANEL_SETTLE_MS = 250
+
+
+def refocus_file_panel(app=None, appkit=None) -> bool:
+    """Focus the file panel about to open again once it is up, as clicking
+    away and back does by hand.
+
+    A file panel's sidebar is drawn by another process, which for an app
+    run from a terminal starts out drawing it as if the panel were in the
+    background: greyed out until the focus goes away and comes back. So,
+    called just before a panel opens, this watches for the panel to become
+    the app's modal window with the app in front, leaves it PANEL_SETTLE_MS
+    to draw, then hands the focus to the Dock and takes it back. A built app
+    needs none of it.
+
+    Returns whether it was arranged.
+    """
+    if sys.platform != "darwin" or getattr(sys, "frozen", False):
+        return False
+    if app is None:
+        from PySide6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+    if app is None:
+        return False
+    if appkit is None:
+        # Drawn by anything but Cocoa, a file panel is Qt's own widget.
+        appkit = _AppKit.load() if app.platformName() == "cocoa" else None
+    if appkit is None:
+        return False
+    counted = {"looks": 0, "waits": 0}
+
+    def look() -> None:
+        if appkit.panel_is_up():
+            QTimer.singleShot(PANEL_SETTLE_MS, app, away)
+            return
+        counted["looks"] += 1
+        if counted["looks"] < PANEL_LOOKS:
+            QTimer.singleShot(PANEL_LOOK_MS, app, look)
+
+    def away() -> None:
+        if appkit.panel_is_up() and appkit.activate_dock():
+            QTimer.singleShot(BACK_AFTER_MS, app, back)
+
+    def back() -> None:
+        if appkit.dock_is_front():
+            appkit.activate_self()
+            return
+        # Still in front, the Dock has not taken the focus yet. Anywhere
+        # else, the person went there meanwhile, and the focus is theirs.
+        counted["waits"] += 1
+        if (counted["waits"] * BACK_AFTER_MS < ROUND_TRIP_MS
+                and appkit.is_active()):
+            QTimer.singleShot(BACK_AFTER_MS, app, back)
+
+    QTimer.singleShot(PANEL_LOOK_MS, app, look)
+    return True
 
 
 def wake_menu_bar(app, appkit=None):

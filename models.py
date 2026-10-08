@@ -824,6 +824,13 @@ class TriageItem:
     #: Which conversation this belongs to, and how many messages are in it.
     thread_key: str = ""
     thread_size: int = 1
+    #: False for a message listed from the mailbox that the sorter has not
+    #: read: it shows as it is and is filed only by hand.
+    analysed: bool = True
+    #: False for a message in a mailbox other than the one being sorted, such
+    #: as Sent: filing moves messages out of that mailbox by UID, so such a
+    #: row is never filed, by hand or otherwise.
+    fileable: bool = True
 
     @property
     def in_a_conversation(self) -> bool:
@@ -847,6 +854,8 @@ class TriageItem:
         which part is unclear; a promotion the sorter is 88% sure of is not
         job mail, and stays where it is.
         """
+        if not self.analysed:
+            return Disposition.LEAVE
         cls_ = self.classification
         if cls_.error is not None:
             return Disposition.REVIEW
@@ -904,12 +913,14 @@ class TriageItem:
     @property
     def is_actionable(self) -> bool:
         """Can this row be moved at all?"""
-        return bool(self.target_folder) and not self.moved
+        return self.fileable and bool(self.target_folder) and not self.moved
 
     @property
     def source_label(self) -> str:
-        """Where the message already is, shown when nothing will move it."""
-        return self.email.source_folder or "Inbox"
+        """Where the message already is, shown when nothing will move it:
+        the inbox by its name in words, not the server's INBOX."""
+        folder = self.email.source_folder or "INBOX"
+        return "Inbox" if folder.upper() == "INBOX" else folder
 
     @property
     def override_note(self) -> str:
@@ -948,6 +959,10 @@ class TriageItem:
             return f"Failed: {self.move_error}"
         if self.moved:
             return "Moved"
+        if not self.fileable:
+            return f"In {self.source_label}"
+        if not self.analysed:
+            return "Not sorted yet"
         if self.classification.error:
             return "Analysis failed"
         if self.left_because_not_job:
@@ -978,7 +993,8 @@ class TriageItem:
         nothing is wrong with the message or the analysis, and the choice is
         one click to change.
         """
-        return (self.disposition is Disposition.LEAVE
+        return (self.analysed
+                and self.disposition is Disposition.LEAVE
                 and not self.classification.is_job_related
                 and self.classification.error is None
                 and self.non_job_routing is NonJobRouting.LEAVE)
@@ -988,7 +1004,8 @@ class TriageItem:
         """Non-job mail that would be filed if the sorter were surer: the
         setting says file it, and it is not being filed.
         """
-        return (self.disposition is Disposition.LEAVE
+        return (self.analysed
+                and self.disposition is Disposition.LEAVE
                 and not self.classification.is_job_related
                 and self.classification.error is None
                 and self.non_job_routing is NonJobRouting.FILE
@@ -999,6 +1016,12 @@ class TriageItem:
         """One sentence on why this row cannot be ticked, or empty."""
         if self.is_actionable or self.moved:
             return ""
+        if not self.fileable:
+            return ("Only mail in the mailbox being sorted is filed from "
+                    "here.")
+        if not self.analysed:
+            return ("Not sorted yet: Scan & Analyze reads it and suggests a "
+                    "folder, or pick one below.")
         # A failed analysis is not one of these: it routes to Needs Review,
         # which is a folder, so such a row can be ticked like any other.
         if self.left_because_not_job:
@@ -1010,6 +1033,23 @@ class TriageItem:
                     f"{self.threshold * 100:.0f}%. Move it by hand below, or "
                     "lower the threshold in Settings.")
         return "There is no folder for this message."
+
+
+def message_key(item: TriageItem) -> Tuple[str, str, str]:
+    """Which message a row is: its mailbox, its folder and its UID there."""
+    email = item.email
+    return (email.account_id, email.source_folder or "INBOX", email.uid)
+
+
+def one_row_each(listed: Iterable[TriageItem],
+                 sorted_rows: Iterable[TriageItem]) -> List[TriageItem]:
+    """The inbox as the table shows it: every message the last scan read,
+    as it read it, then every listed message it did not reach. A message
+    read by an earlier scan, outside this one's window, is back to how it
+    was listed rather than gone."""
+    rows = list(sorted_rows)
+    seen = {message_key(item) for item in rows}
+    return rows + [item for item in listed if message_key(item) not in seen]
 
 
 @dataclass(frozen=True)
@@ -1026,6 +1066,8 @@ class TriageSummary:
     moved: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
+    #: Listed from the mailbox and not yet read by the sorter.
+    unsorted: int = 0
 
     @classmethod
     def build(cls, items: Sequence["TriageItem"]) -> "TriageSummary":
@@ -1034,9 +1076,14 @@ class TriageSummary:
             Disposition.REVIEW: 0,
             Disposition.LEAVE: 0,
         }
-        job_related = approved = errors = moved = 0
+        job_related = approved = errors = moved = unsorted = 0
         input_tokens = output_tokens = 0
         for item in items:
+            if not item.analysed:
+                unsorted += 1
+                moved += int(item.moved)
+                approved += int(bool(item.approved))
+                continue
             counts[item.disposition] += 1
             if item.classification.is_job_related:
                 job_related += 1
@@ -1059,17 +1106,21 @@ class TriageSummary:
             moved=moved,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
+            unsorted=unsorted,
         )
 
     def describe(self) -> str:
-        parts = [
-            f"{self.total} message{'s' if self.total != 1 else ''}",
-            f"{self.job_related} job-related",
-            f"{self.to_move} ready to file",
-            f"{self.needs_review} need review",
-        ]
+        parts = [f"{self.total} message{'s' if self.total != 1 else ''}"]
+        if self.total > self.unsorted:
+            parts += [
+                f"{self.job_related} job-related",
+                f"{self.to_move} ready to file",
+                f"{self.needs_review} need review",
+            ]
         if self.leave_in_place:
             parts.append(f"{self.leave_in_place} left in place")
+        if self.unsorted:
+            parts.append(f"{self.unsorted} not sorted yet")
         if self.errors:
             parts.append(f"{self.errors} failed")
         if self.moved:

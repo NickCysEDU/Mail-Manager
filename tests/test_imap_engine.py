@@ -941,3 +941,30 @@ class TestACalendarInvitationIsRead:
         assert _calendar_when("20261005T150000Z") == "2026-10-05 15:00 UTC"
         assert _calendar_when("20261005") == "2026-10-05"
         assert _calendar_when("next tuesday") == "next tuesday"
+
+
+class TestAReportOverSeveralMailboxes:
+    """Each mailbox's moves are kept whole: merged by UID, the message 1 of
+    one would be taken for the message 1 of another."""
+
+    def test_each_message_is_answered_for_in_its_own_mailbox_and_folder(self):
+        from imap_engine import MoveReport
+
+        combined = MoveReport()
+        combined.add("one", "INBOX", MoveReport(moved={"1": "Job Search/Interview"},
+                                                new_uids={"1": "500"}))
+        combined.add("two", "INBOX", MoveReport(failed={"1": "Copy refused"}))
+        combined.add("one", "Job Search/Offers", MoveReport(moved={"1": "INBOX"},
+                                                            new_uids={"1": "77"}))
+        assert combined.about("one", "INBOX", "1") == ("Job Search/Interview", "", "500")
+        assert combined.about("two", "INBOX", "1") == ("", "Copy refused", "")
+        assert combined.about("one", "Job Search/Offers", "1") == ("INBOX", "", "77")
+        assert combined.about("three", "INBOX", "1") == ("", "", "")
+        assert (combined.moved_count, combined.failed_count) == (2, 1)
+
+    def test_a_report_of_one_mailbox_answers_by_uid(self):
+        from imap_engine import MoveReport
+
+        single = MoveReport(moved={"4": "Archive"}, new_uids={"4": "9"})
+        assert single.about("anyone", "anywhere", "4") == ("Archive", "", "9")
+        assert single.moved_count == 1

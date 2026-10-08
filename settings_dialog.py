@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from PySide6.QtCore import QEvent, QSize, Qt, QThread, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices, QDoubleValidator
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
+    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
     QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget,
     QListWidgetItem, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
     QSizePolicy, QSlider, QSpinBox, QTabWidget, QToolButton, QVBoxLayout,
@@ -25,12 +25,14 @@ import config
 import corrections
 import verdict_cache
 import helpmode
+import widgets
 import ondevice
 import profiles
 import providers
 import theme
 from accounts import Account
-from config import (EFFORT_LEVELS, CredentialError, CredentialStore, Settings)
+from config import (EFFORT_LEVELS, INBOX_PERIODS, CredentialError,
+                    CredentialStore, Settings)
 from imap_engine import clean_secret
 from models import (Category, FolderPlan, NonJobRouting, OtherCategory,
                     TriageItem)
@@ -826,6 +828,29 @@ class SettingsDialog(QDialog):
         note.setWordWrap(True)
         note.setProperty("dim", "true")
         outer.addWidget(note)
+
+        outer.addWidget(_separator())
+        outer.addWidget(QLabel("<b>When Mail Manager opens</b>"))
+        inbox_row = QHBoxLayout()
+        self.open_inbox_check = QCheckBox("Show the inbox from the last")
+        self.open_inbox_check.setToolTip(
+            "Lists your inbox as the window opens. Nothing is marked as read, "
+            "and nothing moves until Scan & Analyze sorts it.")
+        self.inbox_period_combo = RoomyCombo()
+        for days, words in INBOX_PERIODS:
+            self.inbox_period_combo.addItem(words, days)
+        self.inbox_period_combo.setToolTip("How far back the inbox goes.")
+        self.open_inbox_check.toggled.connect(self.inbox_period_combo.setEnabled)
+        inbox_row.addWidget(self.open_inbox_check)
+        inbox_row.addWidget(self.inbox_period_combo)
+        inbox_row.addStretch(1)
+        outer.addLayout(inbox_row)
+        self.scan_on_open_check = QCheckBox(
+            "Auto scan: Scan && Analyze as soon as it opens")
+        self.scan_on_open_check.setToolTip(
+            "Sorts new mail as the app opens, once your mailboxes and the "
+            "sorter are set up. If anything is missing, the log says what.")
+        outer.addWidget(self.scan_on_open_check)
         outer.addStretch(1)
         return page
 
@@ -2535,7 +2560,7 @@ class SettingsDialog(QDialog):
     def _export_settings(self) -> None:
         """Write the current settings, including anything not yet saved."""
         default = str(Path.home() / "Downloads" / "Mail Manager settings.txt")
-        path, _chosen = QFileDialog.getSaveFileName(
+        path, _chosen = widgets.save_file(
             self, "Export settings", default, "Text files (*.txt *.json);;All files (*)")
         if not path:
             return
@@ -2550,7 +2575,7 @@ class SettingsDialog(QDialog):
         """Read a settings file into the open dialog, to be looked at, adjusted
         or cancelled like any other change.
         """
-        path, _chosen = QFileDialog.getOpenFileName(
+        path, _chosen = widgets.open_file(
             self, "Import settings", str(Path.home() / "Downloads"),
             "Text files (*.txt *.json);;All files (*)")
         if not path:
@@ -2850,6 +2875,11 @@ class SettingsDialog(QDialog):
         self._load_accounts(settings)
         self._load_rules(settings)
         self.fetch_kb_spin.setValue(max(8, settings.fetch_bytes // 1024))
+        self.open_inbox_check.setChecked(settings.open_with_inbox)
+        self.inbox_period_combo.setCurrentIndex(
+            max(0, self.inbox_period_combo.findData(settings.inbox_days)))
+        self.inbox_period_combo.setEnabled(settings.open_with_inbox)
+        self.scan_on_open_check.setChecked(settings.scan_on_open)
 
         provider_index = self.provider_combo.findData(settings.provider)
         self.provider_combo.setCurrentIndex(max(0, provider_index))
@@ -2989,6 +3019,9 @@ class SettingsDialog(QDialog):
             subscribe_new_folders=self.subscribe_check.isChecked(),
             learn_from_corrections=self.learn_check.isChecked(),
             reuse_verdicts=self.reuse_check.isChecked(),
+            open_with_inbox=self.open_inbox_check.isChecked(),
+            inbox_days=int(self.inbox_period_combo.currentData() or 30),
+            scan_on_open=self.scan_on_open_check.isChecked(),
         )
         return Settings(**data).normalized()
 

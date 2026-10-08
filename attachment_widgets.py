@@ -3524,40 +3524,14 @@ class PostProcess:
     #: How much of the halo each offset copy adds, for the fringing.
     FRINGE = 0.16
 
-    #: The halo is blurred at its own size before it is stretched over the
-    #: frame. Shrunk eightfold and stretched straight back, a thin line's
-    #: glow was a row of steps eight pixels long, which read as a picture
-    #: drawn at low resolution, most of all in a window, where the lines
-    #: are much of the picture. Passes of a three-by-three binomial, added
-    #: with Plus; a few tenths of a millisecond on a halo.
-    SOFTEN = 2
-    SOFTEN_KERNEL = ((0, 0, 4), (1, 0, 2), (-1, 0, 2), (0, 1, 2), (0, -1, 2),
-                     (1, 1, 1), (-1, 1, 1), (1, -1, 1), (-1, -1, 1))
-
-    def _soften(self, halo):
-        """The halo, blurred: see SOFTEN."""
-        for _ in range(self.SOFTEN):
-            out = QPixmap(halo.size())
-            out.fill(QColor(0, 0, 0, 0))
-            inner = QPainter(out)
-            try:
-                inner.setCompositionMode(
-                    QPainter.CompositionMode.CompositionMode_Plus)
-                for dx, dy, weight in self.SOFTEN_KERNEL:
-                    inner.setOpacity(weight / 16.0)
-                    inner.drawPixmap(dx, dy, halo)
-            finally:
-                inner.end()
-            halo = out
-        return halo
-
     def _glow(self, halo, amount: float, shift: float):
         """The halo plus its two offset copies, composed at the halo's own size
         and put up once: one full-size blit instead of three (at 1512x982
         the blit alone is 1.92 ms). Added with Plus either way round, so
         composing small only changes where the result clips at white.
+        Not blurred any further: a softened halo took the neon off the
+        rave's wireframe.
         """
-        halo = self._soften(halo)
         wide = QPixmap(halo.size())
         wide.fill(QColor(0, 0, 0, 0))
         inner = QPainter(wide)
@@ -3657,8 +3631,9 @@ class PostProcess:
 class Waveform(QWidget):
     """The shape of the whole track, above the seek bar, so seeking is aiming:
     it shows where the drop and the break are. Mirrored bars, with the
-    played part in the highlight colour; click or drag to seek. Drawn from
-    the scenes' analysis, so it is empty until that lands.
+    played part shaded in the highlight colour as it goes, and no line of
+    its own; click or drag to seek. Drawn from the scenes' analysis, so it
+    is empty until that lands.
     """
 
     #: Emitted with a position in milliseconds when somebody clicks it.
@@ -3703,12 +3678,12 @@ class Waveform(QWidget):
 
     def set_position(self, milliseconds: int) -> None:
         self._at = max(0, int(milliseconds))
-        # Only when it would move a column past the one last painted;
-        # otherwise it redraws sixty times a second for nothing. Measured
-        # from the last report, the fifty-millisecond steps a player makes
-        # never added up to a column, and the played part never moved.
+        # Only when the shading would move by half a pixel; otherwise it
+        # redraws sixty times a second for nothing. Measured from the last
+        # paint: from the last report, the fifty-millisecond steps a player
+        # makes never added up, and the played part never moved.
         if self._span > 0 and self.width() > 0:
-            step = max(1, self._span * int(self.STEP) // max(1, self.width()))
+            step = max(1, self._span // max(1, self.width() * 2))
             if abs(self._at - self._drawn) < step:
                 return
         self.update()
@@ -3765,6 +3740,8 @@ class Waveform(QWidget):
         rest = self.palette().windowText().color()
         rest.setAlphaF(0.30)
         painter.setPen(Qt.PenStyle.NoPen)
+        # Fractions of a pixel, for the column the playhead is in.
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         columns = int(width / self.STEP) + 1
         for column in range(columns):
             x = column * self.STEP
@@ -3773,13 +3750,15 @@ class Waveform(QWidget):
             index = min(len(self._shape) - 1,
                         int(column * len(self._shape) / max(1, columns)))
             high = max(self.FLOOR, self._shape[index] * (middle - 2.0))
+            bar = QRectF(x, middle - high, self.BAR, high * 2.0)
             painter.setBrush(tint if x + self.BAR <= played else rest)
-            painter.drawRect(QRectF(x, middle - high, self.BAR, high * 2.0))
-        # The column the playhead is in is half played, so the line moves
-        # smoothly.
-        if 0.0 < played < width:
-            painter.setBrush(tint)
-            painter.drawRect(QRectF(played - 1.0, 0.0, 1.0, tall))
+            painter.drawRect(bar)
+            # The column the playhead is in fills from the left as it goes,
+            # so the shading moves smoothly and nothing stands above the
+            # waveform to mark it.
+            if x < played < x + self.BAR:
+                painter.setBrush(tint)
+                painter.drawRect(QRectF(x, bar.top(), played - x, bar.height()))
 
 
 #: Kept under its old name, where every pane reaches for it; the class is

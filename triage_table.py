@@ -34,6 +34,27 @@ from widgets import (ACCENT_BLUE, ACCENT_RED, RoomyCombo, _attr_url,
 #: What the folder box shows when a message is to stay where it is.
 LEAVE_IN_PLACE = "- leave in place -"
 
+#: The category filter's name for rows listed but not yet read by the sorter.
+NOT_SORTED = "Not sorted yet"
+
+
+def opening(email) -> str:
+    """How a message begins, on one line: what a row not sorted yet shows
+    where a sorted one shows the sorter's summary."""
+    return _one_line(email.body_text, limit=200)
+
+
+def first_recipient(email) -> str:
+    """Who a message is to, for Sent and Drafts: the first name or address,
+    and how many more."""
+    from email.utils import getaddresses
+
+    found = [name or address for name, address in getaddresses([email.to or ""])
+             if name or address]
+    if not found:
+        return ""
+    return found[0] + (f" +{len(found) - 1}" if len(found) > 1 else "")
+
 def category_color(classification, item=None) -> str:
     """The accent colour for a row. A job category always has one; an everyday
     topic only when the current settings file that topic somewhere,
@@ -45,6 +66,24 @@ def category_color(classification, item=None) -> str:
     if item is not None and item.topic_is_sorted:
         return TOPIC_COLORS.get(classification.other_category, OTHER_COLOR)
     return OTHER_COLOR
+
+
+def mark_moves(items: Sequence[TriageItem], report: MoveReport, where=None) -> None:
+    """Mark on each row what a filing did to its message. ``where`` names a
+    row's mailbox and folder, which a report of moves in several needs: a
+    UID alone names a message only within one of them."""
+    for item in items:
+        uid = item.email.uid
+        if where is not None:
+            moved_to, why, _landed = report.about(*where(item), uid)
+        else:
+            moved_to, why = report.moved.get(uid), report.failed.get(uid)
+        if moved_to:
+            item.moved = True
+            item.approved = False
+            item.move_error = None
+        elif why:
+            item.move_error = why
 
 
 class TriageTableModel(QAbstractTableModel):
@@ -79,7 +118,8 @@ class TriageTableModel(QAbstractTableModel):
         "Who the message is from.",
         "The subject line.",
         "When the message arrived. Hover a cell for the exact date.",
-        "The model's two-sentence summary.",
+        "The model's two-sentence summary; for mail not sorted yet, how the "
+        "message begins.",
         "The category, and for non-job mail the topic.",
         "Where it will be filed. Hover for the full path.",
         "How confident the model is. Below the threshold it goes to Needs Review.",
@@ -92,6 +132,9 @@ class TriageTableModel(QAbstractTableModel):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._items: List[TriageItem] = []
+        #: Whether the rows are mail sent, from Sent or Drafts: the sender
+        #: column then says who it went to.
+        self._addressed = False
         #: Collapsed one-line summary and reasoning per row: they never change
         #: once a scan lands.
         self._one_line_cache: List[Tuple[str, str]] = []
@@ -110,6 +153,18 @@ class TriageTableModel(QAbstractTableModel):
         self.endResetModel()
         self.selectionChanged.emit()
 
+    def set_addressed(self, addressed: bool) -> None:
+        """Show who each message went to instead of who sent it."""
+        if bool(addressed) != self._addressed:
+            self._addressed = bool(addressed)
+            self.headerDataChanged.emit(Qt.Orientation.Horizontal,
+                                        self.COL_SENDER, self.COL_SENDER)
+            self._refresh_column(self.COL_SENDER)
+
+    @property
+    def addressed(self) -> bool:
+        return self._addressed
+
     def item_at(self, row: int) -> Optional[TriageItem]:
         if 0 <= row < len(self._items):
             return self._items[row]
@@ -124,6 +179,11 @@ class TriageTableModel(QAbstractTableModel):
     def headerData(self, section: int, orientation, role=Qt.ItemDataRole.DisplayRole):  # noqa: N802
         if orientation != Qt.Orientation.Horizontal:
             return None
+        if self._addressed and section == self.COL_SENDER:
+            if role == Qt.ItemDataRole.DisplayRole:
+                return "To"
+            if role == Qt.ItemDataRole.ToolTipRole:
+                return "Who the message went to."
         if role == Qt.ItemDataRole.DisplayRole:
             return self.HEADERS[section]
         if role == Qt.ItemDataRole.ToolTipRole:
@@ -157,17 +217,23 @@ class TriageTableModel(QAbstractTableModel):
             if column == self.COL_ACCOUNT:
                 return item.email.mailbox_display
             if column == self.COL_SENDER:
+                if self._addressed:
+                    return first_recipient(item.email)
                 return item.email.sender_short
             if column == self.COL_SUBJECT:
                 return item.email.subject_display
             if column == self.COL_DATE:
                 return item.email.date_human()
+            if column == self.COL_FOLDER:
+                return item.folder_short
+            if not item.analysed:
+                # Nothing is known yet; the empty verdict a listed row
+                # carries must not read as one.
+                return opening(item.email) if column == self.COL_SUMMARY else ""
             if column == self.COL_SUMMARY:
                 return classification.summary
             if column == self.COL_CATEGORY:
                 return classification.category_label
-            if column == self.COL_FOLDER:
-                return item.folder_short
             if column == self.COL_CONFIDENCE:
                 return f"{classification.confidence_percent:.0f}%"
             if column == self.COL_REASONING:
@@ -175,7 +241,7 @@ class TriageTableModel(QAbstractTableModel):
             return None
 
         if role == Qt.ItemDataRole.UserRole + 1:  # accent colour for this row
-            return category_color(classification, item)
+            return category_color(classification, item) if item.analysed else None
 
         if role == Qt.ItemDataRole.UserRole:  # sort key
             if column == self.COL_SELECT:
@@ -183,13 +249,18 @@ class TriageTableModel(QAbstractTableModel):
             if column == self.COL_DATE:
                 return (item.email.date or datetime.min.replace(tzinfo=timezone.utc)).timestamp()
             if column == self.COL_CONFIDENCE:
-                return classification.confidence_score
+                # Below every verdict, and never drawn as one.
+                return classification.confidence_score if item.analysed else -1.0
             if column == self.COL_CATEGORY:
-                return classification.category_label
+                return classification.category_label if item.analysed else ""
             value = self.data(index, Qt.ItemDataRole.DisplayRole)
             return (value or "").lower() if isinstance(value, str) else value
 
         if role == Qt.ItemDataRole.ToolTipRole:
+            if not item.analysed and column in (self.COL_CONFIDENCE,
+                                                self.COL_CATEGORY,
+                                                self.COL_REASONING):
+                return NOT_SORTED + "."
             if column == self.COL_CONFIDENCE:
                 return (
                     f"{classification.confidence_percent:.1f}% confident.\n"
@@ -197,12 +268,15 @@ class TriageTableModel(QAbstractTableModel):
                 )
             if column in (self.COL_SUMMARY, self.COL_REASONING, self.COL_SUBJECT):
                 text = {
-                    self.COL_SUMMARY: classification.summary,
+                    self.COL_SUMMARY: (classification.summary if item.analysed
+                                       else opening(item.email)),
                     self.COL_REASONING: classification.reasoning,
                     self.COL_SUBJECT: item.email.subject_display,
                 }[column]
                 return _wrap(text)
             if column == self.COL_SENDER:
+                if self._addressed:
+                    return item.email.to
                 return item.email.sender_display
             if column == self.COL_DATE:
                 return item.email.date_full()
@@ -229,6 +303,9 @@ class TriageTableModel(QAbstractTableModel):
                 return None
             if item.moved:
                 return QColor(120, 120, 120)
+            if not item.analysed and column == self.COL_SUMMARY:
+                # How it begins, not what anyone made of it.
+                return QColor(140, 140, 140)
             if classification.error or item.move_error:
                 return QColor(ACCENT_RED)
             if column == self.COL_FOLDER:
@@ -328,7 +405,7 @@ class TriageTableModel(QAbstractTableModel):
 
     def set_override(self, row: int, folder: Optional[str]) -> None:
         item = self.item_at(row)
-        if item is None:
+        if item is None or not item.fileable:
             return
         item.override_folder = folder
         if folder and not item.moved:
@@ -340,15 +417,42 @@ class TriageTableModel(QAbstractTableModel):
         self.dataChanged.emit(top, bottom)
         self.selectionChanged.emit()
 
-    def apply_report(self, report: MoveReport) -> None:
-        for item in self._items:
-            uid = item.email.uid
-            if uid in report.moved:
-                item.moved = True
-                item.approved = False
-                item.move_error = None
-            elif uid in report.failed:
-                item.move_error = report.failed[uid]
+    def apply_report(self, report: MoveReport, where=None) -> None:
+        """Mark what a filing did to the rows shown. See mark_moves."""
+        mark_moves(self._items, report, where)
+        self.refresh()
+
+    def add_items(self, items: Sequence[TriageItem]) -> None:
+        """Rows arriving after the rest, as a listing reads them: added in
+        place, so the selection and the scroll stay where they were."""
+        if not items:
+            return
+        first = len(self._items)
+        self.beginInsertRows(QModelIndex(), first, first + len(items) - 1)
+        self._items.extend(items)
+        self._one_line_cache.extend(
+            (_one_line(item.classification.summary),
+             _one_line(item.classification.reasoning)) for item in items)
+        self.endInsertRows()
+        self.selectionChanged.emit()
+
+    def remove_where(self, gone) -> int:
+        """Take out the rows ``gone`` picks, one at a time, so the rest keep
+        their selection and their place. Returns how many went."""
+        removed = 0
+        for row in range(len(self._items) - 1, -1, -1):
+            if gone(self._items[row]):
+                self.beginRemoveRows(QModelIndex(), row, row)
+                del self._items[row]
+                del self._one_line_cache[row]
+                self.endRemoveRows()
+                removed += 1
+        if removed:
+            self.selectionChanged.emit()
+        return removed
+
+    def refresh(self) -> None:
+        """Redraw every row, for a change made to the rows themselves."""
         self._refresh_all()
         self.selectionChanged.emit()
 
@@ -455,16 +559,18 @@ class TriageFilterProxy(QSortFilterProxyModel):
             return False
         if self._only_selected and not item.approved:
             return False
-        if self._category and item.classification.category_label != self._category:
+        if self._category and self._category != (
+                item.classification.category_label if item.analysed else NOT_SORTED):
             return False
         if self._text:
+            told = ((item.classification.summary, item.classification.reasoning,
+                     item.classification.category_label) if item.analysed
+                    else (opening(item.email),))
             haystack = " ".join(
                 (
                     item.email.sender_display,
                     item.email.subject_display,
-                    item.classification.summary,
-                    item.classification.reasoning,
-                    item.classification.category_label,
+                    *told,
                     item.folder_display,
                 )
             ).lower()
@@ -483,7 +589,9 @@ class ConfidenceDelegate(QStyledItemDelegate):
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
         model = index.model()
         value = model.data(index, Qt.ItemDataRole.UserRole)
-        if not isinstance(value, (int, float)):
+        # A row not sorted yet has no confidence to draw, only a sort key.
+        if (not isinstance(value, (int, float))
+                or not model.data(index, Qt.ItemDataRole.DisplayRole)):
             super().paint(painter, option, index)
             return
 
@@ -1021,10 +1129,19 @@ class PreviewPane(QWidget):
 
     def set_backend_label(self, label: str) -> None:
         """Name the backend that produced the reasoning shown on the right."""
-        self.analysis_label.setText(f"{label} analysis" if label else "Analysis")
+        self._backend = label
+        self.analysis_label.setText(self._analysis_title())
         self.body_mode.setItemText(
             2, f"Exactly what {label} was sent" if label else "Exactly what the model was sent"
         )
+
+    def _analysis_title(self) -> str:
+        """Whose reasoning is on the right: nobody's, for mail not read yet."""
+        item = self._item
+        if item is not None and not item.analysed:
+            return "Not analysed yet" if item.fileable else "Not analysed"
+        backend = getattr(self, "_backend", "")
+        return f"{backend} analysis" if backend else "Analysis"
 
     #: The last entry of the folder list, which asks for a folder by name.
     OTHER_FOLDER = "Other folder…"
@@ -1082,6 +1199,8 @@ class PreviewPane(QWidget):
         self.rich_view.clear()
         self.body_stack.setCurrentWidget(self.body_view)
         self.reasoning_view.setHtml("")
+        self.analysis_label.setText(self._analysis_title())
+        self.folder_row.setVisible(True)
         self.folder_combo.setEnabled(False)
         self.reset_button.setEnabled(False)
         self.links_button.setEnabled(False)
@@ -1134,13 +1253,17 @@ class PreviewPane(QWidget):
         self._fit_header()
 
         self._updating = True
-        self.folder_combo.setEnabled(not item.moved)
-        self.reset_button.setEnabled(not item.moved and item.override_folder is not None)
+        # Mail in another mailbox is never filed from here: no box to file it.
+        self.folder_row.setVisible(item.fileable)
+        self.folder_combo.setEnabled(not item.moved and item.fileable)
+        self.reset_button.setEnabled(not item.moved and item.fileable
+                                     and item.override_folder is not None)
         self._pick_folder(item.target_folder or LEAVE_IN_PLACE)
         self._folder_was = self.folder_combo.currentIndex()
         self._updating = False
 
         self._render_body()
+        self.analysis_label.setText(self._analysis_title())
         self.reasoning_view.setHtml(_reasoning_html(item))
 
     @Slot()
@@ -1246,6 +1369,16 @@ class PreviewPane(QWidget):
 
 def _disposition_badge(item: TriageItem) -> str:
     classification = item.classification
+    if not item.analysed:
+        dot = "<span style='color:#8a8a8a'>&#9679;</span> "
+        # Mail elsewhere is only where it is; the inbox's is waiting.
+        parts = ([dot + f"<b>{NOT_SORTED}</b>", _html(item.folder_display)]
+                 if item.fileable else [dot + f"<b>{_html(item.source_label)}</b>"])
+        if item.moved:
+            parts.append("<b>moved</b>")
+        if item.move_error:
+            parts.append(f"<span style='color:#c65b4e'>{_html(item.move_error)}</span>")
+        return " &nbsp;·&nbsp; ".join(parts)
     colors = {
         Disposition.MOVE: "#2e9e63",
         Disposition.REVIEW: "#d69e2e",
@@ -1298,6 +1431,13 @@ def _runners_up(classification) -> str:
 
 def _reasoning_html(item: TriageItem) -> str:
     classification = item.classification
+    if not item.analysed:
+        # Nothing has read it: say so, and nothing that reads as a verdict.
+        # Why it waits is said once, over the folder box.
+        decision = item.status_display
+        if item.override_folder:
+            decision += f" → {item.folder_display}"
+        return _reasoning_rows([("Decision", _html(decision))], item)
     rows = [
         ("Summary", _html(classification.summary)),
         ("Reasoning", _html(classification.reasoning).replace("\n", "<br>")),
@@ -1341,6 +1481,11 @@ def _reasoning_html(item: TriageItem) -> str:
         rows.append(("Safety adjustments", f"<span style='color:#d69e2e'>{adjustments}</span>"))
     if classification.error:
         rows.append(("Error", f"<span style='color:#c65b4e'>{_html(classification.error)}</span>"))
+    return _reasoning_rows(rows, item)
+
+
+def _reasoning_rows(rows, item: TriageItem) -> str:
+    """The table of reasons, with the links the message carries."""
     if item.email.links:
         links = "<br>".join(
             f'• <a href="{_attr_url(link)}">{_html(link[:110])}</a>' for link in item.email.links[:12]

@@ -26,6 +26,8 @@ confidence score for every row. Tick what you want filed and press Apply.
 - Everyday mail can be sorted too, into as many of thirteen topics as you
   like, or left where it is.
 - Anything it is unsure of goes to Needs Review rather than a guess.
+- It opens on the last month of your inbox, with your mailboxes down the
+  left as in Mail, and can scan as it opens.
 - Nothing is marked as read, and ⌘Z undoes a filing.
 
 ## Install
@@ -92,7 +94,8 @@ OpenAI-compatible service with your own key, in **Settings → Analysis**.
 - **Links** in a message are listed by where they really go, and the address
   is shown before anything opens.
 - **Touch Bar**: each window's controls are on it, on a MacBook Pro that has
-  one; a button that opens onto a slider can be held and dragged instead.
+  one; a button that opens onto a slider can be held and dragged instead,
+  as the system's own volume is.
 
 ## Privacy
 
@@ -105,7 +108,7 @@ turns that off. See [SECURITY.md](SECURITY.md).
 
 ```bash
 ./dev demo     # the app with sample mail, no setup
-./dev test     # 5,076 tests, about five minutes on four workers
+./dev test     # 5,178 tests, about five minutes on four workers
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 

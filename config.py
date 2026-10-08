@@ -55,6 +55,11 @@ PROVIDER_ENV_KEYS = {
 
 EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 
+#: How much of the inbox the window lists when it opens: days, and the words
+#: for them after "the last".
+INBOX_PERIODS = ((7, "week"), (14, "two weeks"), (30, "month"),
+                 (90, "three months"), (180, "six months"), (365, "year"))
+
 
 class CredentialError(RuntimeError):
     """Raised when the system keychain cannot be read or written."""
@@ -265,6 +270,19 @@ class Settings:
     start_in_menu_bar: bool = False
     hide_non_job: bool = False
 
+    # The window as a mailbox
+    #: List the inbox when the window first opens, so it is never empty, and
+    #: how many days of it: one of INBOX_PERIODS.
+    open_with_inbox: bool = True
+    inbox_days: int = 30
+    #: Scan & Analyze as soon as the app opens, when everything a scan needs
+    #: is already set up: nothing is asked at launch.
+    scan_on_open: bool = False
+    #: The list of mailboxes down the left of the window, and its width (0
+    #: for the default).
+    show_sidebar: bool = True
+    sidebar_width: int = 0
+
     def __post_init__(self) -> None:
         # An empty model means this backend's default, resolved here so every
         # Settings instance is usable, not only those that went through
@@ -346,6 +364,10 @@ class Settings:
         )
         if data["last_window"] not in {w.name for w in TimeWindow}:
             data["last_window"] = TimeWindow.LAST_24_HOURS.name
+        days = _clamp_int(data["inbox_days"], 1, 3660, 30)
+        data["inbox_days"] = min((d for d, _label in INBOX_PERIODS),
+                                 key=lambda d: (abs(d - days), d))
+        data["sidebar_width"] = _clamp_int(data["sidebar_width"], 0, 600, 0)
         if data.get("preview_position") not in ("below", "right"):
             data["preview_position"] = "below"
         for key in ("auto_approve_non_job", "subscribe_new_folders", "show_log_panel",
@@ -353,7 +375,8 @@ class Settings:
                     "background_agent", "menu_bar_icon", "close_to_menu_bar",
                     "start_in_menu_bar", "readable", "help_mode", "auto_reply",
                     "row_lines_auto", "learn_from_corrections",
-                    "reuse_verdicts", "apply_sorting_rules"):
+                    "reuse_verdicts", "apply_sorting_rules",
+                    "open_with_inbox", "scan_on_open", "show_sidebar"):
             data[key] = bool(data[key])
         settled = Settings(**data)
         settled._sync_mailboxes()
@@ -543,7 +566,8 @@ class Settings:
 
     #: Never in an export: window geometry means nothing elsewhere. The mailbox
     #: list is exported without passwords, which stay in the Keychain.
-    PRIVATE_FIELDS = ("window_geometry", "splitter_state", "table_state")
+    PRIVATE_FIELDS = ("window_geometry", "splitter_state", "table_state",
+                      "sidebar_width")
 
     def export_text(self) -> str:
         """A readable copy of the settings, safe to send to somebody else.

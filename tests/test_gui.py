@@ -62,6 +62,13 @@ def make_item(uid="1", subject="Subject", sender="Dana Reyes", **overrides):
     return TriageItem(message, classification, FolderPlan(), **overrides)
 
 
+def scanned(window, items):
+    """Rows put on the window the way the app puts them: a finished scan."""
+    from workers import ScanOutcome
+
+    window._on_scan_done(ScanOutcome(items=list(items)))
+
+
 @pytest.fixture
 def model(qapp):
     model = TriageTableModel()
@@ -110,8 +117,8 @@ class TestTableModel:
         assert cell(0, TriageTableModel.COL_FOLDER) == "Interview"
         assert cell(0, TriageTableModel.COL_CONFIDENCE) == "98%"
         assert cell(3, TriageTableModel.COL_CATEGORY) == "Other · Newsletters"
-        # Non-job mail names the mailbox it is staying in.
-        assert cell(3, TriageTableModel.COL_FOLDER) == "INBOX"
+        # Non-job mail names the mailbox it is staying in, in words.
+        assert cell(3, TriageTableModel.COL_FOLDER) == "Inbox"
 
     def test_the_folder_tooltip_carries_the_full_path(self, model):
         tip = model.data(model.index(0, TriageTableModel.COL_FOLDER),
@@ -509,7 +516,7 @@ class TestMainWindow:
         assert window.settings.routing.name == "FILE"
 
     def test_switching_profile_refiles_rows_already_on_screen(self, window):
-        window.model.set_items([make_item("1"), make_item("4", classification={
+        scanned(window, [make_item("1"), make_item("4", classification={
             "is_job_related": False, "category": Category.UNCLASSIFIED_OTHER,
             "other_category": OtherCategory.NEWSLETTER, "confidence_score": 0.99})])
         before = window.model.items[0].target_folder
@@ -529,13 +536,13 @@ class TestMainWindow:
         assert window.table_stack.currentIndex() == 0   # the empty-state page
 
     def test_apply_button_reflects_the_selection(self, window):
-        window.model.set_items([make_item("1"), make_item("2")])
+        scanned(window, [make_item("1"), make_item("2")])
         window._update_status()
         assert window.apply_button.isEnabled() is True
         assert window.apply_button.text() == "Apply 2 Moves"
 
     def test_singular_button_label(self, window):
-        window.model.set_items([make_item("1")])
+        scanned(window, [make_item("1")])
         window._update_status()
         assert window.apply_button.text() == "Apply 1 Move"
         # The full wording moved to the tooltip so the toolbar fits one row.

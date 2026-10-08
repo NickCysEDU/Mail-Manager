@@ -26,7 +26,7 @@ from PySide6.QtCore import (QEvent, QSize, QStandardPaths, Qt, QThread,
 from PySide6.QtGui import (QAction, QGuiApplication, QImage, QKeySequence,
                            QPixmap)
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-                               QFileDialog, QFrame, QHBoxLayout,
+                               QFrame, QHBoxLayout,
                                QLabel, QListWidget, QListWidgetItem,
                                QMessageBox, QPlainTextEdit, QPushButton,
                                QScrollArea, QSizePolicy, QSlider,
@@ -38,6 +38,7 @@ import attachment_meta
 import attachments
 from attachment_widgets import (FlowHolder, FlowRow, SeekBar, Spectrum,
                                 Waveform)
+import widgets
 from widgets import _html, system_font
 
 #: Text longer than this is truncated on screen; a log attached to a bug report
@@ -1885,9 +1886,11 @@ class AudioPane(QWidget):
                 hold=touchbar.Slider("sense-held", "Sensitivity", self.sense,
                                      title=lambda: caption(self.sense_box),
                                      ends=self.LESS_MORE)),
-            # With the picture on, the seek bar and the volume leave the bar
-            # for the scene's controls; these bring them back under a
-            # finger: tap to open, or hold and drag.
+            # With the picture on, the seek bar leaves the bar for the
+            # scene's controls; this brings it back under a finger: tap to
+            # open, or hold and drag. The volume is always such a button, as
+            # the system's own is: a plain slider jumps to where it is
+            # touched, which for a volume can mean all the way up.
             touchbar.Popover("where", "Seek", [
                 touchbar.Slider("seek-in", "", self.position, settle=150,
                                 change=self._seek_to, width=260,
@@ -1902,8 +1905,7 @@ class AudioPane(QWidget):
             touchbar.Popover("sound", "Volume", [
                 touchbar.Slider("volume-in", "", self.volume, width=200,
                                 ends=self.QUIET_LOUD),
-            ], image="speaker.wave.2", when=on,
-                watch=[self.enable_box.toggled],
+            ], image="speaker.wave.2",
                 hold=touchbar.Slider("volume-held", "", self.volume,
                                      ends=self.QUIET_LOUD)),
         ]
@@ -1914,9 +1916,6 @@ class AudioPane(QWidget):
                                 image="arrow.up.left.and.arrow.down.right",
                                 when=on, watch=[self.enable_box.toggled],
                                 priority="high"),
-                touchbar.Slider("volume", "", self.volume, width=130,
-                                ends=self.QUIET_LOUD,
-                                when=lambda: not on()),
             ]
         else:
             items.append(touchbar.Button(
@@ -2411,9 +2410,7 @@ class AttachmentViewer(QDialog):
 
     def _add_tracks(self) -> None:
         """Pick sound files and list them as if they had arrived attached."""
-        from PySide6.QtWidgets import QFileDialog
-
-        chosen, _ = QFileDialog.getOpenFileNames(
+        chosen, _ = widgets.open_files(
             self, "Choose sound files", self._tracks_dir,
             "Audio (*.mp3 *.m4a *.aac *.wav *.aiff *.aif *.flac *.ogg "
             "*.oga *.opus *.wma);;Any file (*)")
@@ -2751,7 +2748,7 @@ class AttachmentViewer(QDialog):
             return
         if item.executable and not self._confirm_program(item):
             return
-        chosen, _ = QFileDialog.getSaveFileName(
+        chosen, _ = widgets.save_file(
             self, "Save attachment", str(Path(self._last_dir) / item.filename))
         if not chosen:
             return
@@ -2760,7 +2757,7 @@ class AttachmentViewer(QDialog):
 
     @Slot()
     def _save_all(self) -> None:
-        directory = QFileDialog.getExistingDirectory(
+        directory = widgets.choose_directory(
             self, "Save every attachment into", self._last_dir)
         if not directory:
             return

@@ -12,8 +12,8 @@ from typing import List, Sequence
 from PySide6.QtCore import QDate, QEvent, QObject, QRect, QRectF, QSize, Qt
 from PySide6.QtGui import (QColor, QFont, QFontDatabase, QFontMetrics, QIcon,
                            QPainter, QPalette, QPixmap)
-from PySide6.QtWidgets import (QApplication, QComboBox, QDateEdit, QFrame,
-                               QLabel, QLineEdit,
+from PySide6.QtWidgets import (QApplication, QComboBox, QDateEdit, QFileDialog,
+                               QFrame, QLabel, QLineEdit,
                                QListWidget, QMessageBox, QScrollArea,
                                QSizePolicy, QStyle, QStyleOptionComboBox,
                                QStyleOptionViewItem, QStyledItemDelegate,
@@ -87,6 +87,37 @@ def _one_of(names: Sequence[str]) -> str:
     if len(names) == 1:
         return names[0]
     return ", ".join(names[:-1]) + " and " + names[-1]
+
+
+# The Mac's file panels, opened so their sidebar works from the first moment:
+# see macname.refocus_file_panel. Each is QFileDialog's own.
+
+def open_files(parent, caption: str, directory: str = "", filters: str = ""):
+    import macname
+
+    macname.refocus_file_panel()
+    return QFileDialog.getOpenFileNames(parent, caption, directory, filters)
+
+
+def open_file(parent, caption: str, directory: str = "", filters: str = ""):
+    import macname
+
+    macname.refocus_file_panel()
+    return QFileDialog.getOpenFileName(parent, caption, directory, filters)
+
+
+def save_file(parent, caption: str, directory: str = "", filters: str = ""):
+    import macname
+
+    macname.refocus_file_panel()
+    return QFileDialog.getSaveFileName(parent, caption, directory, filters)
+
+
+def choose_directory(parent, caption: str, directory: str = "") -> str:
+    import macname
+
+    macname.refocus_file_panel()
+    return QFileDialog.getExistingDirectory(parent, caption, directory)
 
 
 class ClearingLineEdit(QLineEdit):

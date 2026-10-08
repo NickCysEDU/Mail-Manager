@@ -512,12 +512,33 @@ class TestTheViewersBar:
         qtbot.waitUntil(lambda: viewer.stack.currentWidget() is viewer.audio,
                         timeout=3000)
         keys = self._keys(viewer)
-        assert {"play", "seek", "visualiser", "volume"} <= set(keys)
+        assert {"play", "seek", "visualiser", "sound"} <= set(keys)
         assert "scene" not in keys and "picture" not in keys
         viewer.audio.enable_box.setChecked(True)
         keys = self._keys(viewer)
-        assert {"play", "scene", "strobe", "picture", "full"} <= set(keys)
-        assert "seek" not in keys and "volume" not in keys
+        assert {"play", "scene", "strobe", "picture", "full", "sound"} <= set(keys)
+        assert "seek" not in keys
+
+    def test_the_volume_is_a_button_to_tap_or_hold_with_the_picture_off_or_on(
+            self, viewer, qtbot):
+        """A plain slider on the bar jumps to where it is touched, which for
+        a volume can mean all the way up; the system's own volume is a
+        button that opens a slider and follows a held finger from where the
+        volume was."""
+        import touchbar
+
+        qtbot.waitUntil(lambda: viewer.stack.currentWidget() is viewer.audio,
+                        timeout=3000)
+        bar = touchbar.of(viewer)
+        for picture in (False, True):
+            viewer.audio.enable_box.setChecked(picture)
+            shown = {entry["key"]: entry for entry in bar.describe()}
+            assert shown["sound"]["kind"] == "popover"
+            assert shown["sound"]["hold"]["key"] == "volume-held"
+            plain = [key for key, entry in shown.items()
+                     if entry["kind"] == "slider"
+                     and bar.flat[key].source is viewer.audio.volume]
+            assert plain == [], picture
 
     def test_choosing_a_scene_turns_the_visualiser_on(self, viewer, qtbot):
         import touchbar

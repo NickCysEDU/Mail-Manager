@@ -836,11 +836,8 @@ class ApplyWorker(_BaseWorker):
                     progress=apply_report,
                     cancel=self.cancel_event,
                 )
-                combined.moved.update(report.moved)
-                combined.failed.update(report.failed)
-                combined.warnings.extend(report.warnings)
+                combined.add(account.id, source, report)
                 combined.created_folders = list(combined.created_folders) + list(created)
-                combined.expunged = combined.expunged or report.expunged
                 done_so_far += len(plans)
             except ScanCancelled:
                 self._log("Apply cancelled before completion.")
@@ -1372,10 +1369,12 @@ class ConnectionTestWorker(_BaseWorker):
 
 
 def build_move_plans(items: Sequence[TriageItem]) -> List[MovePlan]:
-    """Approved, movable rows -> IMAP move plans."""
+    """Approved, movable rows -> IMAP move plans, each from the folder its
+    message was read from: a UID means nothing anywhere else."""
     return [
         MovePlan(uid=item.email.uid, target_folder=item.target_folder,
-                 subject=item.email.subject_display, account_id=item.email.account_id)
+                 subject=item.email.subject_display, account_id=item.email.account_id,
+                 source_folder=item.email.source_folder)
         for item in items
         if item.approved and item.is_actionable and item.target_folder
     ]
@@ -1591,6 +1590,137 @@ class FolderListWorker(_FolderWorker):
             self.finished_ok.emit(found)
 
 
+#: The most messages one listing of a folder shows: the newest, when the
+#: period holds more.
+LIST_MOST = 1000
+
+#: The mailboxes every account has, in the order a mail app lists them.
+SPECIAL_ORDER = ("drafts", "sent", "junk", "trash", "archive")
+
+
+@dataclass
+class Mailboxes:
+    """One account's folders, as the window's sidebar lists them."""
+
+    account_id: str
+    delimiter: str = "/"
+    #: Every folder that can be opened, as the server names it.
+    folders: List[str] = field(default_factory=list)
+    #: kind -> the folder that is this account's Drafts, Sent, and so on.
+    special: Dict[str, str] = field(default_factory=dict)
+
+
+class MailboxesWorker(_FolderWorker):
+    """The folders of one mailbox, for the window's sidebar: one LIST, which
+    also says which of them are its Drafts, Sent, Junk, Trash and Archive.
+    Nothing is counted or fetched."""
+
+    finished_ok = Signal(object)
+    task_name = "listing mailboxes"
+    trouble = "Could not list the mailboxes"
+
+    def _work(self, engine) -> None:
+        listed = engine.list_folders()
+        special = {}
+        for kind in SPECIAL_ORDER:
+            name = engine.special_in(kind, listed)
+            if name:
+                special[kind] = name
+        found = Mailboxes(account_id=self.account.id,
+                          delimiter=engine.delimiter or "/",
+                          folders=[info.name for info in listed if info.selectable],
+                          special=special)
+        if not self.cancelled:
+            self.finished_ok.emit(found)
+
+
+@dataclass
+class Listing:
+    """What one listing of one folder found."""
+
+    account_id: str
+    folder: str
+    rows: List[TriageItem] = field(default_factory=list)
+    #: The period held more than LIST_MOST messages; these are the newest.
+    capped: bool = False
+    #: Every UID the folder holds in the period now, read or skipped.
+    present: List[str] = field(default_factory=list)
+
+
+class ListWorker(_FolderWorker):
+    """One folder's messages over a period, read and not sorted: the inbox
+    before a scan has read it, and every other mailbox. Nothing is marked
+    read and no folder is made."""
+
+    #: Rows as each batch arrives, so the table fills while the rest is read.
+    arrived = Signal(list)
+    finished_ok = Signal(object)
+    task_name = "listing a mailbox"
+    trouble = "Could not list the mailbox"
+
+    def __init__(self, account, password: str, folder: str, since: datetime,
+                 settings: Settings, plan: FolderPlan, fileable: bool = True,
+                 known: Sequence[str] = (), parent=None) -> None:
+        super().__init__(account, password, parent)
+        self.folder = folder
+        #: UIDs already listed: a second look reads only what is new.
+        self.known = tuple(known)
+        #: The period's first moment. Not ``start``: that is QThread's.
+        self.since = since
+        self.settings = settings
+        self.plan = plan
+        #: False for any folder but the one sorted: see TriageItem.fileable.
+        self.fileable = fileable
+        self._rows: Dict[int, TriageItem] = {}
+        self._lock = threading.Lock()
+
+    def _row(self, message: EmailMessage) -> TriageItem:
+        with self._lock:
+            row = self._rows.get(id(message))
+            if row is None:
+                message.account_id = self.account.id
+                message.account_label = self.account.label
+                message.account_address = self.account.address
+                row = TriageItem(
+                    email=message, classification=Classification(),
+                    folders=self.plan,
+                    threshold=self.settings.confidence_threshold,
+                    non_job_routing=self.settings.routing,
+                    analysed=False, fileable=self.fileable)
+                self._rows[id(message)] = row
+            return row
+
+    def _in_period(self, message: EmailMessage) -> bool:
+        # The server's date search is a day wide at each end.
+        return message.date is None or message.date >= self.since
+
+    def _work(self, engine) -> None:
+        sent = set()
+
+        def hand_over(batch) -> None:
+            rows = [self._row(message) for message in batch
+                    if self._in_period(message)]
+            sent.update(id(row) for row in rows)
+            if rows and not self.cancelled:
+                self.arrived.emit(rows)
+
+        found = engine.fetch_window(
+            start=self.since, end=None, mailbox=self.folder,
+            max_messages=LIST_MOST, progress=self._emit_progress,
+            cancel=self.cancel_event, connections=self.account.connections,
+            max_bytes=self.settings.fetch_bytes, on_batch=hand_over,
+            skip=self.known)
+        rows = [self._row(message) for message in found.messages]
+        late = [row for row in rows if id(row) not in sent]
+        if late and not self.cancelled:
+            self.arrived.emit(late)
+        if not self.cancelled:
+            self.finished_ok.emit(Listing(account_id=self.account.id,
+                                          folder=self.folder, rows=rows,
+                                          capped=found.truncated_to_max,
+                                          present=list(found.candidate_uids)))
+
+
 class CountMatchingWorker(_FolderWorker):
     """How many messages a set of criteria would delete. Deletes nothing.
 
@@ -1704,12 +1834,8 @@ class MoveWorker(_FolderWorker):
                 [replace(plan, target_folder=target) for plan in group],
                 mailbox=source, progress=self._emit_progress,
                 cancel=self.cancel_event)
-            report.moved.update(part.moved)
-            report.failed.update(part.failed)
-            report.new_uids.update(part.new_uids)
+            report.add(self.account.id, source, part)
             report.created_folders.extend(part.created_folders)
-            report.warnings.extend(part.warnings)
-            report.expunged = report.expunged or part.expunged
         self.done.emit(report)
 
 

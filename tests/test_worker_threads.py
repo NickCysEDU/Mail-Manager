@@ -265,6 +265,19 @@ class TestApplyWorker:
         assert server.expunged == ["1"]
         assert "2" in server.messages
 
+    def test_the_report_says_where_each_message_landed(self, qapp, wired):
+        """Undo puts a message back by the number the server gave its copy,
+        so the report the window gets must carry that number: without it
+        no filing could be undone."""
+        server = wired(folders=["INBOX"], messages=dict(MESSAGES))
+        worker = self.apply_worker([MovePlan("1", "Job Search/Interview")])
+        recorder = Recorder(worker)
+        worker.run()
+        report = recorder.result
+        assert report.moved == {"1": "Job Search/Interview"}
+        # The number the server's COPYUID receipt gave the copy, its last.
+        assert report.new_uids == {"1": str(server._next_copy_uid)}
+
     def test_missing_folders_are_created_first(self, qapp, wired):
         server = wired(folders=["INBOX"], messages=dict(MESSAGES))
         worker = self.apply_worker(

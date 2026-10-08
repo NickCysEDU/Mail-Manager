@@ -17,8 +17,10 @@ from typing import Optional
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QColor, QCursor, QImage, QImageReader, QPixmap
 from PySide6.QtWidgets import (QColorDialog, QDialog, QDialogButtonBox,
-                               QFileDialog, QHBoxLayout, QLabel, QMessageBox,
+                               QHBoxLayout, QLabel, QMessageBox,
                                QPushButton, QVBoxLayout)
+
+import widgets
 
 #: A photograph is decoded to look at, not to keep. Anything past this is
 #: scaled down first, so a forty megapixel picture cannot fill memory.
@@ -259,7 +261,7 @@ class ColourWindow(QDialog):
         self.to_background.setChecked(swatch is self.background)
 
     def _open(self) -> None:
-        chosen, _ = QFileDialog.getOpenFileName(
+        chosen, _ = widgets.open_file(
             self, "Open a picture", str(Path.home()), readable_formats())
         if not chosen:
             return

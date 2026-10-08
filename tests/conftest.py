@@ -37,6 +37,19 @@ def no_update_checks(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_real_mail_servers(monkeypatch):
+    """No test reaches a mail server. A window opening lists its inbox, so
+    one shown with a password stored would try; a connection the test did
+    not hand the engine itself fails at once, as an unreachable server
+    does."""
+    class Refused(imaplib.IMAP4_SSL):
+        def __init__(self, *args, **kwargs):
+            raise OSError("no network in tests")
+
+    monkeypatch.setattr(imaplib, "IMAP4_SSL", Refused)
+
+
+@pytest.fixture(autouse=True)
 def isolated_home(tmp_path, monkeypatch):
     """Point settings and logs at a temp dir for every test."""
     monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path / "app-home"))

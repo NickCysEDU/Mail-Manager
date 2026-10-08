@@ -2065,10 +2065,18 @@ class Rave(Scene):
     #: on a downbeat.
     RIG_IN = 0.06
     RIG_OUT = 1.0
-    #: A drop runs on through the parts after it that keep its drums and
-    #: most of its weight: on real records the reading often names a drop's
-    #: second half a groove, a little quieter, and the rig went out half way.
-    DROP_CARRY = 0.7
+    #: Which drops the rig runs for: one of the track's strongest parts
+    #: (RIG_LEVEL, against the rest of the track), arriving clearly louder
+    #: than what led into it (RIG_LEAD) or after a part without drums. The
+    #: reading also names a verse a drop when it follows a quiet intro, and
+    #: the rig came in for verses. A drop runs on through the part after it
+    #: that keeps its drums and most of its weight (RIG_CARRY below its
+    #: level), for at most the drop's own length: on real records a drop's
+    #: second half reads as a groove, and a groove a minute long after it
+    #: went on into a rap verse.
+    RIG_LEVEL = 0.8
+    RIG_LEAD = 0.3
+    RIG_CARRY = 0.2
     #: The reading cuts parts on bar lines, and on real records it put a
     #: drop's first bar a bar or two beats ahead of the music (a fill, a
     #: shout, the third beat taken for the first). So each end is moved to
@@ -2271,9 +2279,9 @@ class Rave(Scene):
 
     @classmethod
     def _runs_of(cls, style, contour=None) -> list:
-        """Each drop with the parts after it that carry it on (see
-        DROP_CARRY), as (start, end), each end on the beat the music changes
-        (see SNAP_BEATS): only from the drums' own reading."""
+        """Each big drop with what carries it on (see RIG_LEVEL), as (start,
+        end), each end on the beat the music changes (see SNAP_BEATS): only
+        from the drums' own reading."""
         if style is None or not style.from_drums:
             return []
         runs = []
@@ -2281,16 +2289,19 @@ class Rave(Scene):
         index = 0
         while index < len(sections):
             section = sections[index]
-            if section.kind != "drop":
-                index += 1
-                continue
-            end = section.end
+            before = sections[index - 1] if index > 0 else None
             index += 1
-            while (index < len(sections)
+            if not (section.kind == "drop" and section.drums
+                    and section.level >= cls.RIG_LEVEL and before is not None
+                    and (before.level <= section.level - cls.RIG_LEAD
+                         or not before.drums)):
+                continue
+            end, most = section.end, section.end + section.length
+            while (index < len(sections) and end < most
                    and sections[index].kind in ("groove", "drop")
                    and sections[index].drums
-                   and sections[index].level >= cls.DROP_CARRY):
-                end = sections[index].end
+                   and sections[index].level >= section.level - cls.RIG_CARRY):
+                end = min(sections[index].end, most)
                 index += 1
             runs.append(cls._snapped(section.start, end, style, contour))
         return runs

@@ -578,13 +578,40 @@ class MoveReport:
     #: Where each message ended up: source uid -> its uid in the destination
     #: folder. A COPY assigns a new one.
     new_uids: Dict[str, str] = field(default_factory=dict)
+    #: The report of each mailbox and starting folder in a run over several,
+    #: kept whole: a UID names a message only within one folder of one
+    #: mailbox, so merged by UID two of them could be taken for each other.
+    parts: Dict[Tuple[str, str], "MoveReport"] = field(default_factory=dict)
+
+    def add(self, account_id: str, folder: str, part: "MoveReport") -> None:
+        """Take in the report of one mailbox's moves out of ``folder``."""
+        self.parts[(account_id, folder)] = part
+        self.moved.update(part.moved)
+        self.failed.update(part.failed)
+        self.new_uids.update(part.new_uids)
+        self.warnings.extend(part.warnings)
+        self.expunged = self.expunged or part.expunged
+
+    def about(self, account_id: str, folder: str, uid: str) -> Tuple[str, str, str]:
+        """What happened to one message: the folder it was filed to, why it
+        could not be, and its UID there; each empty where it does not apply.
+        A report of one mailbox's moves answers by UID alone."""
+        part = self.parts.get((account_id, folder)) if self.parts else self
+        if part is None:
+            return "", "", ""
+        return (part.moved.get(uid, ""), part.failed.get(uid, ""),
+                part.new_uids.get(uid, ""))
 
     @property
     def moved_count(self) -> int:
+        if self.parts:
+            return sum(len(part.moved) for part in self.parts.values())
         return len(self.moved)
 
     @property
     def failed_count(self) -> int:
+        if self.parts:
+            return sum(len(part.failed) for part in self.parts.values())
         return len(self.failed)
 
     def describe(self) -> str:
@@ -955,8 +982,13 @@ class IMAPEngine:
         connections: int = DEFAULT_CONNECTIONS,
         max_bytes: int = DEFAULT_FETCH_BYTES,
         on_batch: Optional[Callable[[List[EmailMessage]], None]] = None,
+        skip: Sequence[str] = (),
     ) -> ScanResult:
         """Fetch every message in the window, newest first, without marking read.
+
+        ``skip`` names UIDs the caller already holds: they are counted in
+        ``candidate_uids``, which says what the window holds now, and not
+        fetched again.
 
         ``on_batch``, if given, is called with each group of messages as it
         arrives, so a caller can start work on them rather than waiting for
@@ -983,6 +1015,9 @@ class IMAPEngine:
             )
             ordered = ordered[:max_messages]
         result.candidate_uids = list(ordered)
+        if skip:
+            held = set(skip)
+            ordered = [uid for uid in ordered if uid not in held]
 
         total = len(ordered)
         if total == 0:
@@ -1298,11 +1333,16 @@ class IMAPEngine:
         else the name the provider is known to use. None when there is no
         such folder.
         """
-        flags, candidates = self.SPECIAL_MAILBOXES[kind]
         try:
             listed = self.list_folders()
         except IMAPError:
             return None
+        return self.special_in(kind, listed)
+
+    @classmethod
+    def special_in(cls, kind: str, listed: Sequence["MailboxInfo"]) -> Optional[str]:
+        """:meth:`special_mailbox`, answered from a listing already made."""
+        flags, candidates = cls.SPECIAL_MAILBOXES[kind]
         for info in listed:
             lowered = {flag.lower().lstrip("\\") for flag in info.flags}
             if lowered & set(flags) and info.selectable:

@@ -374,7 +374,8 @@ class TestRouting:
         assert item.disposition is Disposition.LEAVE
         assert item.target_folder is None
         assert item.approved is False
-        assert item.folder_display == "INBOX"
+        # The inbox by its name in words, not the server's INBOX.
+        assert item.folder_display == "Inbox"
         assert item.is_actionable is False
 
     def test_non_job_mail_can_be_routed_to_review(self):
@@ -445,7 +446,7 @@ class TestRouting:
             non_job_routing=NonJobRouting.LEAVE,
         )
         assert item.disposition is Disposition.LEAVE
-        assert item.folder_short == "INBOX"
+        assert item.folder_short == "Inbox"
 
     def test_uncertain_non_job_mail_is_not_filed_by_topic_either(self):
         """Filing by topic needs the topic to be right, which it is not here."""
@@ -552,6 +553,103 @@ class TestTriageSummary:
         summary = TriageSummary.build(items)
         assert summary.input_tokens == 350
         assert summary.output_tokens == 35
+
+
+class TestAMessageNotSortedYet:
+    """Listed from the inbox before a scan has read it: shown as it is, and
+    never ticked or filed unless a folder is picked for it by hand. What a
+    listing knows is nothing about the message, so nothing may be read
+    into the empty verdict it carries."""
+
+    def test_it_stays_where_it_is_and_is_not_ticked(self, item_factory):
+        item = item_factory(analysed=False)
+        assert item.disposition is Disposition.LEAVE
+        assert item.target_folder is None
+        assert item.approved is False and not item.is_actionable
+        assert item.status_display == "Not sorted yet"
+        assert "Scan & Analyze" in item.why_not_actionable
+        assert not item.left_because_not_job
+        assert not item.held_back_by_confidence
+
+    @pytest.mark.parametrize("routing", list(NonJobRouting))
+    def test_its_empty_verdict_is_not_read_as_one(self, item_factory, routing):
+        """A listing carries Classification(): not job mail, nothing sure.
+        Read as a verdict it would say "left in place" or "not sure
+        enough", and offer to sort it."""
+        item = item_factory(analysed=False, classification=Classification(),
+                            non_job_routing=routing)
+        assert item.disposition is Disposition.LEAVE
+        assert not item.left_because_not_job
+        assert not item.held_back_by_confidence
+        assert item.status_display == "Not sorted yet"
+        assert item.why_not_actionable.startswith("Not sorted yet")
+
+    def test_it_can_be_filed_by_hand(self, item_factory):
+        item = item_factory(analysed=False)
+        item.override_folder = "Job Search/Interview"
+        assert item.is_actionable
+
+    def test_a_row_from_another_mailbox_is_never_filed(self, item_factory):
+        """Filing moves messages out of the sorted mailbox by UID; a UID
+        from Sent would name something else there."""
+        item = item_factory(analysed=False, fileable=False)
+        item.override_folder = "Job Search/Interview"
+        assert not item.is_actionable
+        assert "mailbox being sorted" in item.why_not_actionable
+
+
+class TestTheSummaryOfAListing:
+    def test_rows_not_sorted_yet_are_counted_as_that(self, item_factory):
+        items = [item_factory(), item_factory(analysed=False),
+                 item_factory(analysed=False)]
+        summary = TriageSummary.build(items)
+        assert (summary.total, summary.unsorted, summary.to_move) == (3, 2, 1)
+        # Nobody decided to leave them: they are not "left in place".
+        assert summary.leave_in_place == 0
+        assert summary.job_related == 1
+        assert "2 not sorted yet" in summary.describe()
+
+    def test_a_listing_alone_says_nothing_about_jobs(self, item_factory):
+        summary = TriageSummary.build([item_factory(analysed=False)])
+        assert summary.describe() == "1 message  ·  1 not sorted yet  ·  0 selected"
+
+    def test_a_row_filed_by_hand_counts_as_selected(self, item_factory):
+        item = item_factory(analysed=False)
+        item.override_folder = "Job Search/Interview"
+        item.approved = True
+        assert TriageSummary.build([item]).approved == 1
+
+
+class TestOneRowEachMessage:
+    def _row(self, item_factory, uid, account="a", folder="INBOX", **kwargs):
+        return item_factory(email_kwargs={"uid": uid, "account_id": account,
+                                          "source_folder": folder}, **kwargs)
+
+    def test_what_the_scan_read_replaces_the_listed_row(self, item_factory):
+        from models import one_row_each
+
+        listed = [self._row(item_factory, "1", analysed=False),
+                  self._row(item_factory, "2", analysed=False)]
+        scanned = [self._row(item_factory, "2")]
+        rows = one_row_each(listed, scanned)
+        assert [(row.email.uid, row.analysed) for row in rows] == [
+            ("2", True), ("1", False)]
+
+    def test_the_same_uid_elsewhere_is_another_message(self, item_factory):
+        from models import one_row_each
+
+        listed = [self._row(item_factory, "1", account="b", analysed=False),
+                  self._row(item_factory, "1", folder="Archive", analysed=False)]
+        scanned = [self._row(item_factory, "1")]
+        rows = one_row_each(listed, scanned)
+        assert len(rows) == 3
+        assert sum(row.analysed for row in rows) == 1
+
+    def test_a_scan_with_nothing_listed_is_shown_as_it_came(self, item_factory):
+        from models import one_row_each
+
+        scanned = [self._row(item_factory, uid) for uid in ("3", "1", "2")]
+        assert one_row_each([], scanned) == scanned
 
 
 class TestTimeWindows:

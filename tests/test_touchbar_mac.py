@@ -48,6 +48,15 @@ HEAD = textwrap.dedent("""
         QTimer.singleShot(ms, loop.quit)
         loop.exec()
 
+    def spin_until(check, ms=5000):
+        # Until check() holds, or ms have gone: for a change that waits on
+        # a timer of its own, which a loaded machine delays.
+        import time
+
+        ends = time.monotonic() + ms / 1000.0
+        while not check() and time.monotonic() < ends:
+            spin(50)
+
     def send_action(control):
         rt.send(control, "sendAction:to:", rt.send(control, "action"),
                 rt.send(control, "target"), restype=ctypes.c_bool,
@@ -258,13 +267,17 @@ def test_a_held_popover_opens_onto_its_own_slider(arch):
         spin(300)
         out["value_from_item"] = slider.value()
         slider.setValue(55)
-        spin(400)
+        # The knob ignores its control for HELD_FOR after a touch, then
+        # follows it.
+        spin_until(lambda: rt.send(knob, "doubleValue",
+                                   restype=ctypes.c_double) == 55.0)
         out["knob"] = rt.send(knob, "doubleValue", restype=ctypes.c_double)
     """)
     assert result["has_bar"], "no press-and-hold bar on the popover"
     assert result["idents"] == ["com.mailmanager.probe.volume-held"]
-    # In the middle of the bar, between its two end icons, at a set width.
-    assert result["principal"] == "com.mailmanager.probe.volume-held"
+    # Between its two end icons, free to stretch across the side of the bar
+    # AppKit opens it on: a principal item is held to the middle.
+    assert result["principal"] == ""
     assert result["ends"] == [True, True]
     import touchbar_mac
 
@@ -358,3 +371,167 @@ def test_the_apps_own_windows(arch):
             "NSTouchBarItemIdentifierFlexibleSpace"} <= set(result["allowed"])
     assert result["scan"] == "Reload"
     assert not layout_complaints(result["stderr"])
+
+
+LOOK = """
+    def views(root):
+        found = [root]
+        subs = rt.send(root, "subviews")
+        count = rt.send(subs, "count", restype=ctypes.c_ulong) if subs else 0
+        for index in range(count):
+            found += views(rt.send(subs, "objectAtIndex:", index,
+                                   argtypes=[ctypes.c_ulong]))
+        return found
+
+    def name_of(view):
+        return rt.objc.object_getClassName(view).decode()
+
+    def look(root):
+        knobs, panels = [], []
+        for view in views(root):
+            if name_of(view).endswith("NSSliderKnob"):
+                layer = rt.send(view, "layer")
+                knobs.append([rt.send(layer, "cornerRadius",
+                                      restype=ctypes.c_double),
+                              rt.text(rt.send(layer, "cornerCurve"))])
+            elif name_of(view).endswith("_NSSliderBackgroundView"):
+                panels.append(bool(rt.send(view, "isHidden",
+                                           restype=ctypes.c_bool)))
+        return {"knobs": knobs, "panels": panels}
+"""
+
+
+def test_a_slider_on_the_bar_has_a_rounded_knob_and_no_square_panel(arch):
+    """AppKit draws a slider's knob on the bar as a sharp-cornered square,
+    and a held slider's backing panel at half the bar's height with square
+    ends; the system's own sliders are a track and a rounded knob. AppKit
+    may draw its views afresh, so the look must hold after an update."""
+    result = _run(arch, BAR, LOOK, """
+        held = rt.send(handle.items["volume-held"], "view")
+        plain = handle.controls["volume"]
+        out["held"], out["plain"] = look(held), look(plain)
+        # As if AppKit had drawn them afresh: square knobs, the panel back.
+        for view in views(held) + views(plain):
+            if name_of(view).endswith("NSSliderKnob"):
+                rt.send(rt.send(view, "layer"), "setCornerRadius:", 0.0,
+                        argtypes=[ctypes.c_double])
+            elif name_of(view).endswith("_NSSliderBackgroundView"):
+                rt.send(view, "setHidden:", False, argtypes=[ctypes.c_bool])
+        slider.setValue(15)
+        spin(400)
+        out["held_after"], out["plain_after"] = look(held), look(plain)
+    """)
+    import touchbar_mac
+
+    for key in ("held", "plain", "held_after", "plain_after"):
+        knobs = result[key]["knobs"]
+        assert knobs, f"no knob in the {key} slider"
+        assert all(radius == touchbar_mac.KNOB_ROUNDING and curve == "continuous"
+                   for radius, curve in knobs), (key, knobs)
+    assert result["held"]["panels"] == [True]
+    assert result["held_after"]["panels"] == [True]
+    assert not layout_complaints(result["stderr"])
+
+
+def test_a_held_slider_draws_with_a_rounded_knob_on_black(arch):
+    """The pixels themselves, in the bar's own appearance: the knob's
+    corners are not white, its middle is, and where AppKit's square panel
+    was the bar's black shows."""
+    result = _run(arch, BAR, LOOK, """
+        import touchbar_mac
+        from touchbar_mac import NSRect
+        look_of_bar = rt.send(rt.cls("NSAppearance"), "_functionRowAppearance")
+        if not look_of_bar:
+            print(json.dumps({"skip": "no Touch Bar appearance here"}))
+            sys.exit(0)
+        item = rt.send(handle.items["volume-held"], "view")
+        host = rt.send(rt.send(rt.cls("NSView"), "alloc"), "initWithFrame:",
+                       NSRect(0, 0, 420, 30), argtypes=[NSRect])
+        rt.send(host, "setWantsLayer:", True, argtypes=[ctypes.c_bool])
+        rt.send(rt.send(host, "layer"), "setBackgroundColor:",
+                rt.send(rt.send(rt.cls("NSColor"), "blackColor"), "CGColor"),
+                argtypes=[_id])
+        # Off every screen, so Core Animation draws it unseen.
+        window = rt.send(rt.send(rt.cls("NSWindow"), "alloc"),
+                         "initWithContentRect:styleMask:backing:defer:",
+                         NSRect(-6000, -6000, 420, 30), 0, 2, False,
+                         argtypes=[NSRect, ctypes.c_ulong, ctypes.c_ulong,
+                                   ctypes.c_bool])
+        rt.send(window, "setContentView:", host, argtypes=[_id])
+        rt.send(window, "setAppearance:", look_of_bar, argtypes=[_id])
+        rt.send(host, "addSubview:", item, argtypes=[_id])
+        rt.send(item, "setFrame:", NSRect(10, 0, 400, 30), argtypes=[NSRect])
+        rt.send(window, "orderFront:", None, argtypes=[_id])
+        slider.setValue(40)
+        spin(600)
+        rt.send(host, "layoutSubtreeIfNeeded")
+        spin(300)
+        scale = 2
+        cg = ctypes.cdll.LoadLibrary(
+            "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+        cg.CGColorSpaceCreateDeviceRGB.restype = ctypes.c_void_p
+        cg.CGBitmapContextCreate.restype = ctypes.c_void_p
+        cg.CGBitmapContextCreate.argtypes = [
+            ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t,
+            ctypes.c_size_t, ctypes.c_void_p, ctypes.c_uint32]
+        cg.CGContextScaleCTM.argtypes = [ctypes.c_void_p, ctypes.c_double,
+                                         ctypes.c_double]
+        cg.CGBitmapContextGetData.restype = ctypes.c_void_p
+        cg.CGBitmapContextGetData.argtypes = [ctypes.c_void_p]
+        cg.CGBitmapContextGetBytesPerRow.restype = ctypes.c_size_t
+        cg.CGBitmapContextGetBytesPerRow.argtypes = [ctypes.c_void_p]
+        width, height = 420 * scale, 30 * scale
+        context = cg.CGBitmapContextCreate(None, width, height, 8, 0,
+                                           cg.CGColorSpaceCreateDeviceRGB(),
+                                           2 | (2 << 12))
+        cg.CGContextScaleCTM(context, scale, scale)
+        rt.send(rt.send(host, "layer"), "renderInContext:", context,
+                argtypes=[_id])
+        row = cg.CGBitmapContextGetBytesPerRow(context)
+        data = ctypes.string_at(cg.CGBitmapContextGetData(context), row * height)
+
+        def brightness(x, y):
+            # x, y in points from the window's bottom left.
+            px, py = int(x * scale), height - 1 - int(y * scale)
+            blue, green, red, _ = data[py * row + px * 4: py * row + px * 4 + 4]
+            return max(red, green, blue)
+
+        import platform
+
+        # A rectangle comes back through objc_msgSend_stret on Intel.
+        returns_rect = ctypes.cast(
+            rt.objc.objc_msgSend_stret if platform.machine() == "x86_64"
+            else rt.objc.objc_msgSend, _id).value
+
+        def rect(receiver, selector, *args, argtypes=()):
+            return ctypes.CFUNCTYPE(NSRect, _id, _id, *argtypes)(returns_rect)(
+                receiver, rt.sel(selector), *args)
+
+        def frame(view):
+            got = rect(view, "convertRect:toView:", rect(view, "bounds"), None,
+                       argtypes=[NSRect, _id])
+            return [got.x, got.y, got.width, got.height]
+
+        knobs = [frame(view) for view in views(item)
+                 if name_of(view).endswith("NSSliderKnob")
+                 and not rt.send(view, "isHidden", restype=ctypes.c_bool)
+                 and frame(view)[2] > 4]
+        x, y, w, h = max(knobs, key=lambda box: box[2] * box[3])
+        out["knob"] = [x, y, w, h]
+        out["middle"] = brightness(x + w / 2, y + h / 2)
+        inset = 0.75
+        out["corners"] = [brightness(x + inset, y + inset),
+                          brightness(x + w - inset, y + inset),
+                          brightness(x + inset, y + h - inset),
+                          brightness(x + w - inset, y + h - inset)]
+        panel = [frame(view) for view in views(item)
+                 if name_of(view).endswith("_NSSliderBackgroundView")]
+        px, py, pw, ph = panel[0]
+        # Inside the panel's ends, clear of the end icons and the track.
+        out["panel_ends"] = [brightness(px + 2, py + ph / 2),
+                             brightness(px + pw - 2, py + ph / 2)]
+        rt.send(window, "orderOut:", None, argtypes=[_id])
+    """)
+    assert result["middle"] > 230, result
+    assert max(result["corners"]) < 140, result
+    assert max(result["panel_ends"]) < 25, result

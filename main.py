@@ -672,6 +672,11 @@ def main(argv: Optional[list] = None) -> int:
 
     if settings.start_in_menu_bar and window.menu_bar.visible():
         log.info("Starting in the menu bar; the window is available from it.")
+        if settings.scan_on_open and not args.demo:
+            # Auto scan is the launch's, not the window's: with no window
+            # it runs now, and opening the window later does not run it again.
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, window, window._scan_on_open)
     else:
         window.show()
         window.raise_()
