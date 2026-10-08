@@ -623,6 +623,12 @@ def test_the_visualisers_bar_fits_beside_the_control_strip(arch):
         for scene in visualizers.SCENES:
             audio.scene_box.setCurrentText(scene.name)
             measure(touchbar.of(viewer), scene.name)
+        # The full-screen window's bar, with the window shown as a window: its
+        # items are the same, and under Rosetta a hosted runner never
+        # finished moving the window into a Space of its own.
+        from attachment_widgets import FullScreenSpectrum
+        FullScreenSpectrum.showFullScreen = FullScreenSpectrum.show
+        sys.stderr.write("going full screen\\n")
         audio._go_full_screen()
         spin(300)
         for scene in visualizers.SCENES:

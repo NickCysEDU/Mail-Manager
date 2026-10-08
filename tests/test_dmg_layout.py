@@ -19,9 +19,12 @@ import shutil
 import struct
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
+
+from conftest import hdiutil_alone
 
 pytest.importorskip("ds_store")
 pytest.importorskip("mac_alias")
@@ -38,11 +41,22 @@ import dmg_layout  # noqa: E402
 BUILDER = "builder"
 
 
+def _hdiutil(*args: str) -> str:
+    """hdiutil, tried again when it refuses for a moment, as a hosted
+    runner's does now and then ("Resource busy", "Device not configured")."""
+    for _ in range(5):
+        done = subprocess.run(["hdiutil", *args], capture_output=True, text=True)
+        if done.returncode == 0:
+            return done.stdout
+        time.sleep(2.0)
+    raise AssertionError(f"hdiutil {args[0]} would not: "
+                         f"{done.stderr.strip()[-500:]}")
+
+
 def _attach(path: Path, *flags: str) -> Path:
-    attached = subprocess.run(
-        ["hdiutil", "attach", "-noverify", "-noautoopen", "-nobrowse", *flags,
-         str(path)], check=True, capture_output=True, text=True)
-    return Path(attached.stdout.strip().splitlines()[-1].split("\t")[-1])
+    attached = _hdiutil("attach", "-noverify", "-noautoopen", "-nobrowse",
+                        *flags, str(path))
+    return Path(attached.strip().splitlines()[-1].split("\t")[-1])
 
 
 @pytest.fixture
@@ -54,36 +68,35 @@ def image(tmp_path):
     a file on a disk whose file numbers fit in 32 bits, as HFS+ ones do and
     the Mac's own disk's do not.
     """
-    disk = tmp_path / "disk.dmg"
-    subprocess.run(["hdiutil", "create", "-size", "20m", "-fs", "HFS+",
-                    "-volname", f"Builder HD {os.getpid()}", "-ov", str(disk)],
-                   check=True, capture_output=True)
-    host = _attach(disk, "-readwrite")
-    try:
-        work = host / "Users" / BUILDER / "work"
-        source = work / "staging"
-        (source / ".background").mkdir(parents=True)
-        shutil.copy(ROOT / "assets" / "dmg-background.png",
-                    source / ".background" / "background.png")
-        (source / "Mail Manager.app" / "Contents").mkdir(parents=True)
-        (source / "Mail Manager.app" / "Contents" / "Info.plist").write_text(
-            "<plist/>")
-        (source / "Read me first.txt").write_text(
-            "Drag the app onto Applications.\n")
-        made = work / "Mail Manager.dmg.tmp.dmg"
-        subprocess.run(["hdiutil", "create", "-volname", f"Layout {os.getpid()}",
-                        "-srcfolder", str(source), "-ov", "-format", "UDRW",
-                        "-fs", "HFS+", str(made)], check=True,
-                       capture_output=True)
-        mount = _attach(made, "-readwrite")
+    with hdiutil_alone():
+        disk = tmp_path / "disk.dmg"
+        _hdiutil("create", "-size", "20m", "-fs", "HFS+", "-volname",
+                 f"Builder HD {os.getpid()}", "-ov", str(disk))
+        host = _attach(disk, "-readwrite")
         try:
-            yield mount, made, f"/Users/{BUILDER}"
+            work = host / "Users" / BUILDER / "work"
+            source = work / "staging"
+            (source / ".background").mkdir(parents=True)
+            shutil.copy(ROOT / "assets" / "dmg-background.png",
+                        source / ".background" / "background.png")
+            (source / "Mail Manager.app" / "Contents").mkdir(parents=True)
+            (source / "Mail Manager.app" / "Contents" / "Info.plist"
+             ).write_text("<plist/>")
+            (source / "Read me first.txt").write_text(
+                "Drag the app onto Applications.\n")
+            made = work / "Mail Manager.dmg.tmp.dmg"
+            _hdiutil("create", "-volname", f"Layout {os.getpid()}",
+                     "-srcfolder", str(source), "-ov", "-format", "UDRW",
+                     "-fs", "HFS+", str(made))
+            mount = _attach(made, "-readwrite")
+            try:
+                yield mount, made, f"/Users/{BUILDER}"
+            finally:
+                subprocess.run(["hdiutil", "detach", str(mount), "-force"],
+                               capture_output=True)
         finally:
-            subprocess.run(["hdiutil", "detach", str(mount), "-force"],
+            subprocess.run(["hdiutil", "detach", str(host), "-force"],
                            capture_output=True)
-    finally:
-        subprocess.run(["hdiutil", "detach", str(host), "-force"],
-                       capture_output=True)
 
 
 def _finders_layout(volume: Path, image: Path) -> dict:

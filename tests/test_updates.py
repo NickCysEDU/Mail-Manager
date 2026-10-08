@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 import updates
+from conftest import hdiutil_alone
 
 MAC = sys.platform == "darwin"
 DMG_URL = "https://github.com/example/app/releases/download/v1.1.0/App.dmg"
@@ -144,7 +145,9 @@ def image(tmp_path_factory):
     if not MAC:
         pytest.skip("disk images and code signing are macOS's")
     folder = tmp_path_factory.mktemp("build")
-    return _image(_app(folder, "1.1.0", says="new"), folder.parent / "App.dmg")
+    with hdiutil_alone():
+        return _image(_app(folder, "1.1.0", says="new"),
+                      folder.parent / "App.dmg")
 
 
 @pytest.fixture
@@ -154,7 +157,9 @@ def made(image, tmp_path):
     old = _app(installed, "1.0.0")
     release = updates.Release(version="1.1.0", url=DMG_URL, size=len(image),
                               sha256=hashlib.sha256(image).hexdigest())
-    return old, image, release, tmp_path
+    # Installing opens the image with hdiutil.
+    with hdiutil_alone():
+        yield old, image, release, tmp_path
 
 
 @pytest.mark.timeout(240)

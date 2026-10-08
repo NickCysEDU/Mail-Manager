@@ -5,6 +5,7 @@ Nothing in the suite touches the network or the macOS Keychain.
 
 from __future__ import annotations
 
+import contextlib
 import email.message
 import imaplib
 import os
@@ -601,6 +602,24 @@ def reap_deleted_widgets():
         return
     app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     app.processEvents()
+
+
+@contextlib.contextmanager
+def hdiutil_alone():
+    """Use hdiutil with no other test worker using it. Two workers at once,
+    one making and mounting images while the other opens one, and the disk
+    image service fails a call, "Device not configured", for longer than the
+    retries wait."""
+    import fcntl
+    import tempfile
+
+    with open(Path(tempfile.gettempdir()) / "mail-manager-tests-hdiutil.lock",
+              "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 #: The repository root, for git calls that must run from inside it.

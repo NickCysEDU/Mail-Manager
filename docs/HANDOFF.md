@@ -459,8 +459,17 @@ describes the app itself.
   draws the knob is not known: no such Mac has been tried.
 - **A hosted runner draws the visualiser very slowly** (each step of the
   bar's measurement took over five seconds, against a fifth of one here).
-  A test that measures the bar stops the picture's frame clock, and
+  A test that measures the bar stops the picture's frame clock, measures
+  one item at a time (a host keeping every item laid them all out again for
+  each new one, each slider logging AppKit's knob warnings on macOS 14),
+  and shows the full-screen window as a window: the bar is the same, and
+  under Rosetta a runner never finished moving it into a Space of its own.
   `_run` reports what the probe last said when it runs out of time.
+- **Tests that use hdiutil take turns** (`conftest.hdiutil_alone()`, a lock
+  across the test workers): with the image layout's tests making and
+  mounting images on one worker while the updater's opened one on another,
+  the disk image service failed a call, "Device not configured", for longer
+  than the retries waited.
 - **ctypes callbacks cannot return structs,** so a scrubber's entries share
   one width (`_fit`). A scrubber keeps its count until `reloadData`.
 - **The suite cannot see the bar.** `tests/test_touchbar_mac.py` runs on the
