@@ -108,6 +108,12 @@ BG_NAME="background.${BACKGROUND##*.}"
 if ! osascript <<APPLESCRIPT >/dev/null 2>&1
 with timeout of 60 seconds
 tell application "Finder"
+  -- Finder hears of a disk a moment after it mounts, and asked before then
+  -- it has no such disk, which left the window unstyled.
+  repeat 40 times
+    if exists disk "$VOLUME" then exit repeat
+    delay 0.25
+  end repeat
   tell disk "$VOLUME"
     open
     set current view of container window to icon view

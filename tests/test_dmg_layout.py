@@ -264,6 +264,10 @@ class TestTheAliasLosesOnlyTheImage:
 class TestTheBuildUsesIt:
     def test_the_layout_is_cleaned_before_compressing_and_checked_after(self):
         script = (ROOT / "build_dmg.sh").read_text(encoding="utf-8")
+        # Finder hears of the disk a moment after it mounts: asked sooner, it
+        # has no such disk and the window goes unstyled.
+        assert (script.index('exists disk "$VOLUME"')
+                < script.index('tell disk "$VOLUME"'))
         laid_out = script.index('tell disk "$VOLUME"')
         cleaned = script.index("tools/dmg_layout.py clean")
         compressed = script.index("hdiutil convert")
