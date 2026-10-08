@@ -8,6 +8,9 @@ no git to ask.
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 
 import pytest
 
@@ -33,6 +36,43 @@ class TestWhatItReports:
             pytest.skip("not a git checkout")
         assert 6 <= len(reference) <= 60
         assert buildinfo.short() == f"{APP_VERSION} · {reference}"
+
+    def test_the_commit_is_named_by_itself_not_by_an_old_tag(
+            self, tmp_path, monkeypatch):
+        """In a repository of its own with a release tagged before the
+        commit: the name is the commit's, and a "+" when there are changes
+        not yet committed."""
+        git = shutil.which("git")
+        if git is None:
+            pytest.skip("no git")
+        quiet = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull,
+                     GIT_CONFIG_NOSYSTEM="1")
+
+        def run(*args: str) -> str:
+            return subprocess.run(
+                [git, "-C", str(tmp_path), "-c", "user.name=Tester",
+                 "-c", "user.email=tester@example.com", *args],
+                check=True, capture_output=True, text=True, env=quiet,
+            ).stdout.strip()
+
+        run("init", "-q")
+        (tmp_path / "notes.txt").write_text("one\n")
+        run("add", "notes.txt")
+        run("commit", "-q", "-m", "One")
+        run("tag", "-a", "v1.0.0", "-m", "One")
+        (tmp_path / "notes.txt").write_text("two\n")
+        run("commit", "-q", "-a", "-m", "Two")
+        head = run("rev-parse", "--short=7", "HEAD")
+
+        monkeypatch.setattr(buildinfo, "__file__", str(tmp_path / "buildinfo.py"))
+        buildinfo._from_git.cache_clear()
+        try:
+            assert buildinfo._from_git() == head
+            (tmp_path / "notes.txt").write_text("three\n")
+            buildinfo._from_git.cache_clear()
+            assert buildinfo._from_git() == head + "+"
+        finally:
+            buildinfo._from_git.cache_clear()
 
 
 class TestAFrozenApp:

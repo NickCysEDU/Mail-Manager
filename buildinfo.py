@@ -43,13 +43,17 @@ def _baked() -> str:
 
 @lru_cache(maxsize=1)
 def _from_git() -> str:
-    """The current commit, when running from a checkout. Never raises."""
+    """The current commit, when running from a checkout. Never raises.
+
+    Tags are left out: with them, every build after a tagged release was
+    named from that release, and 1.10.0 read "v1.7.0-6-g9954e77".
+    """
     if getattr(sys, "frozen", False):
         return ""
     try:
         result = subprocess.run(
             ["git", "-C", str(Path(__file__).resolve().parent),
-             "describe", "--always", "--dirty=+", "--abbrev=7"],
+             "describe", "--always", "--exclude=*", "--dirty=+", "--abbrev=7"],
             capture_output=True, text=True, timeout=2.0,
         )
     except (OSError, subprocess.SubprocessError):
