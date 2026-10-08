@@ -66,19 +66,10 @@ HEAD = textwrap.dedent("""
 """)
 
 
-#: What AppKit logs, once a process, when its own NSSliderTouchBarItem builds
-#: its slider: a width constraint with a constant past its own limit, which
-#: it then substitutes. Seen with a bare item and nothing of ours set on it,
-#: so it is AppKit's, and the press-and-hold bar needs that item (AppKit
-#: hands the held finger to it; a slider in a custom item gets nothing).
-#: Every other layout complaint is still ours.
-APPKITS_OWN = "_NSLayoutConstraintNumberExceedsLimit"
-
-
 def layout_complaints(stderr: str) -> list:
-    """AppKit's complaints about a layout, bar the one that is its own."""
+    """AppKit's complaints about a layout."""
     return [line for line in stderr.splitlines()
-            if "NSLayoutConstraint" in line and APPKITS_OWN not in line]
+            if "NSLayoutConstraint" in line]
 
 
 def _architectures():
@@ -156,9 +147,7 @@ BAR = """
         touchbar.Space("flexible"),
         touchbar.Popover("more", "More", [
             touchbar.Slider("volume", "Volume", slider,
-                            ends=("speaker.fill", "speaker.wave.3.fill"))],
-            hold=touchbar.Slider("volume-held", "Volume", slider,
-                                 ends=("speaker.fill", "speaker.wave.3.fill"))),
+                            ends=("speaker.fill", "speaker.wave.3.fill"))]),
     ], "probe")
     window.show()
     spin(400)
@@ -239,55 +228,42 @@ def test_each_kind_of_press_arrives_as_appkit_sends_it(arch):
     assert result["disabled"] == 1, "a disabled button was pressed"
 
 
-def test_a_held_popover_opens_onto_its_own_slider(arch):
-    """The press-and-hold bar is AppKit's slider item, bound both ways."""
+def test_a_popover_opens_on_a_tap_and_nothing_else(arch):
+    """A finger held on a popover's button and dragged opened a slider of
+    its own, which drove something other than what the button was named
+    for. A popover now opens on a tap alone."""
     result = _run(arch, BAR, """
         popover = handle.items["more"]
-        held = rt.send(popover, "pressAndHoldTouchBar")
-        out["has_bar"] = bool(held)
-        out["idents"] = renderer.identifiers(held) if held else []
-        out["principal"] = rt.text(rt.send(held, "principalItemIdentifier")) if held else ""
-        item = handle.items["volume-held"]
-        out["ends"] = [bool(rt.send(item, "minimumValueAccessory")),
-                       bool(rt.send(item, "maximumValueAccessory"))]
-        out["widths"] = [rt.send(item, "minimumSliderWidth", restype=ctypes.c_double),
-                         rt.send(item, "maximumSliderWidth", restype=ctypes.c_double)]
-        out["popover_idents"] = renderer.identifiers(handle.nested["more"])
-        knob = handle.controls["volume-held"]
-        out["knob_was"] = rt.send(knob, "doubleValue", restype=ctypes.c_double)
-        rt.send(knob, "setDoubleValue:", 25.0, argtypes=[ctypes.c_double])
-        send_action(knob)
-        spin(300)
-        out["value"] = slider.value()
-        # And the way the item itself reports, as AppKit may: the item is
-        # not a control, so its action is sent to the handler by hand.
-        item = handle.items["volume-held"]
-        rt.send(knob, "setDoubleValue:", 40.0, argtypes=[ctypes.c_double])
-        rt.send(rt.send(item, "target"), "act:", item, argtypes=[_id])
-        spin(300)
-        out["value_from_item"] = slider.value()
-        slider.setValue(55)
-        # The knob ignores its control for HELD_FOR after a touch, then
-        # follows it.
-        spin_until(lambda: rt.send(knob, "doubleValue",
-                                   restype=ctypes.c_double) == 55.0)
-        out["knob"] = rt.send(knob, "doubleValue", restype=ctypes.c_double)
+        out["held"] = bool(rt.send(popover, "pressAndHoldTouchBar"))
     """)
-    assert result["has_bar"], "no press-and-hold bar on the popover"
-    assert result["idents"] == ["com.mailmanager.probe.volume-held"]
-    # Between its two end icons, free to stretch across the side of the bar
-    # AppKit opens it on: a principal item is held to the middle.
-    assert result["principal"] == ""
-    assert result["ends"] == [True, True]
-    import touchbar_mac
+    assert result["held"] is False
 
-    assert result["widths"] == [touchbar_mac.HOLD_LEAST, touchbar_mac.HOLD_MOST]
-    assert result["popover_idents"] == ["com.mailmanager.probe.volume"]
-    assert result["knob_was"] == 70.0
-    assert result["value"] == 25
-    assert result["value_from_item"] == 40
-    assert result["knob"] == 55.0
-    assert not layout_complaints(result["stderr"])
+
+def test_a_knob_left_between_two_values_stays_where_it_was_left(arch):
+    """AppKit reports where the finger left the knob, between two whole
+    values; set to the one it rounds to, the knob hopped under the finger."""
+    result = _run(arch, BAR, """
+        knob = handle.controls["volume"]
+        rt.send(knob, "setDoubleValue:", 42.7, argtypes=[ctypes.c_double])
+        send_action(knob)
+        spin_until(lambda: slider.value() == 43)
+        spin(int(touchbar.HELD_FOR * 1000) + 300)
+        out["value"] = slider.value()
+        # Something else about it changes, and it is all sent again.
+        slider.setEnabled(False)
+        spin_until(lambda: not rt.send(knob, "isEnabled",
+                                       restype=ctypes.c_bool))
+        slider.setEnabled(True)
+        spin_until(lambda: rt.send(knob, "isEnabled", restype=ctypes.c_bool))
+        out["knob"] = rt.send(knob, "doubleValue", restype=ctypes.c_double)
+        slider.setValue(60)
+        spin_until(lambda: rt.send(knob, "doubleValue",
+                                   restype=ctypes.c_double) == 60.0)
+        out["followed"] = rt.send(knob, "doubleValue", restype=ctypes.c_double)
+    """)
+    assert result["value"] == 43
+    assert result["knob"] == 42.7
+    assert result["followed"] == 60.0
 
 
 def test_the_bar_follows_the_window(arch):
@@ -387,56 +363,46 @@ LOOK = """
         return rt.objc.object_getClassName(view).decode()
 
     def look(root):
-        knobs, panels = [], []
+        knobs = []
         for view in views(root):
             if name_of(view).endswith("NSSliderKnob"):
                 layer = rt.send(view, "layer")
                 knobs.append([rt.send(layer, "cornerRadius",
                                       restype=ctypes.c_double),
                               rt.text(rt.send(layer, "cornerCurve"))])
-            elif name_of(view).endswith("_NSSliderBackgroundView"):
-                panels.append(bool(rt.send(view, "isHidden",
-                                           restype=ctypes.c_bool)))
-        return {"knobs": knobs, "panels": panels}
+        return {"knobs": knobs}
 """
 
 
-def test_a_slider_on_the_bar_has_a_rounded_knob_and_no_square_panel(arch):
-    """AppKit draws a slider's knob on the bar as a sharp-cornered square,
-    and a held slider's backing panel at half the bar's height with square
-    ends; the system's own sliders are a track and a rounded knob. AppKit
-    may draw its views afresh, so the look must hold after an update."""
+def test_a_slider_on_the_bar_has_a_rounded_knob(arch):
+    """AppKit draws a slider's knob on the bar as a sharp-cornered square;
+    the system's own sliders have a rounded knob. AppKit may draw its views
+    afresh, so the look must hold after an update."""
     result = _run(arch, BAR, LOOK, """
-        held = rt.send(handle.items["volume-held"], "view")
         plain = handle.controls["volume"]
-        out["held"], out["plain"] = look(held), look(plain)
-        # As if AppKit had drawn them afresh: square knobs, the panel back.
-        for view in views(held) + views(plain):
+        out["plain"] = look(plain)
+        # As if AppKit had drawn it afresh: a square knob.
+        for view in views(plain):
             if name_of(view).endswith("NSSliderKnob"):
                 rt.send(rt.send(view, "layer"), "setCornerRadius:", 0.0,
                         argtypes=[ctypes.c_double])
-            elif name_of(view).endswith("_NSSliderBackgroundView"):
-                rt.send(view, "setHidden:", False, argtypes=[ctypes.c_bool])
         slider.setValue(15)
         spin(400)
-        out["held_after"], out["plain_after"] = look(held), look(plain)
+        out["plain_after"] = look(plain)
     """)
     import touchbar_mac
 
-    for key in ("held", "plain", "held_after", "plain_after"):
+    for key in ("plain", "plain_after"):
         knobs = result[key]["knobs"]
         assert knobs, f"no knob in the {key} slider"
         assert all(radius == touchbar_mac.KNOB_ROUNDING and curve == "continuous"
                    for radius, curve in knobs), (key, knobs)
-    assert result["held"]["panels"] == [True]
-    assert result["held_after"]["panels"] == [True]
     assert not layout_complaints(result["stderr"])
 
 
-def test_a_held_slider_draws_with_a_rounded_knob_on_black(arch):
+def test_a_slider_draws_with_a_rounded_knob_on_black(arch):
     """The pixels themselves, in the bar's own appearance: the knob's
-    corners are not white, its middle is, and where AppKit's square panel
-    was the bar's black shows."""
+    corners are not white and its middle is."""
     result = _run(arch, BAR, LOOK, """
         import touchbar_mac
         from touchbar_mac import NSRect
@@ -444,7 +410,7 @@ def test_a_held_slider_draws_with_a_rounded_knob_on_black(arch):
         if not look_of_bar:
             print(json.dumps({"skip": "no Touch Bar appearance here"}))
             sys.exit(0)
-        item = rt.send(handle.items["volume-held"], "view")
+        item = rt.send(handle.items["volume"], "view")
         host = rt.send(rt.send(rt.cls("NSView"), "alloc"), "initWithFrame:",
                        NSRect(0, 0, 420, 30), argtypes=[NSRect])
         rt.send(host, "setWantsLayer:", True, argtypes=[ctypes.c_bool])
@@ -464,6 +430,12 @@ def test_a_held_slider_draws_with_a_rounded_knob_on_black(arch):
         rt.send(window, "orderFront:", None, argtypes=[_id])
         slider.setValue(40)
         spin(600)
+        rt.send(host, "layoutSubtreeIfNeeded")
+        # As tall as it needs, and in the middle of the bar, as AppKit puts it.
+        size = rt.send(item, "fittingSize", restype=touchbar_mac.NSSize)
+        rt.send(item, "setFrame:", NSRect(10, (30 - size.height) / 2,
+                                          size.width, size.height),
+                argtypes=[NSRect])
         rt.send(host, "layoutSubtreeIfNeeded")
         spin(300)
         scale = 2
@@ -524,14 +496,94 @@ def test_a_held_slider_draws_with_a_rounded_knob_on_black(arch):
                           brightness(x + w - inset, y + inset),
                           brightness(x + inset, y + h - inset),
                           brightness(x + w - inset, y + h - inset)]
-        panel = [frame(view) for view in views(item)
-                 if name_of(view).endswith("_NSSliderBackgroundView")]
-        px, py, pw, ph = panel[0]
-        # Inside the panel's ends, clear of the end icons and the track.
-        out["panel_ends"] = [brightness(px + 2, py + ph / 2),
-                             brightness(px + pw - 2, py + ph / 2)]
         rt.send(window, "orderOut:", None, argtypes=[_id])
     """)
     assert result["middle"] > 230, result
     assert max(result["corners"]) < 140, result
-    assert max(result["panel_ends"]) < 25, result
+
+
+#: The app's part of the bar beside the Control Strip as it comes, folded
+#: to its four keys, and what a popover has once its close button is in.
+APP_ROOM = 685.0
+POPOVER_ROOM = 613.0
+#: Between two items.
+GAP = 8.0
+
+
+def test_the_visualisers_bar_fits_beside_the_control_strip(arch):
+    """What does not fit, AppKit leaves off, lowest priority first. Every
+    normal and high item of the visualiser's bars, in every scene, windowed
+    and full screen, and of each popover, fits in the room it has: nothing
+    comes and goes for want of room but what is marked to give way."""
+    result = _run(arch, """
+        import math, struct
+        import attachments, visualizers
+        from attachment_view import AttachmentViewer
+        from touchbar_mac import NSRect, NSSize
+        look_of_bar = rt.send(rt.cls("NSAppearance"), "_functionRowAppearance")
+        if not look_of_bar:
+            print(json.dumps({"skip": "no Touch Bar appearance here"}))
+            sys.exit(0)
+        rate = 22050
+        pcm = b"".join(struct.pack("<h", int(9000 * math.sin(
+            2 * math.pi * 220.0 * i / rate))) for i in range(rate))
+        data = (b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt "
+                + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate * 2, 2, 16)
+                + b"data" + struct.pack("<I", len(pcm)) + pcm)
+        viewer = AttachmentViewer([attachments.Attachment(
+            part="1", name="tone.wav", content_type="audio/wav",
+            size=len(data), data=data)])
+        viewer.show()
+        viewer.list.setCurrentRow(0)
+        spin_until(lambda: viewer.stack.currentWidget() is viewer.audio)
+        # Measured in the bar's own look, whose type and keys are larger
+        # than a window's: off every screen, so nothing is seen.
+        window = rt.send(rt.send(rt.cls("NSWindow"), "alloc"),
+                         "initWithContentRect:styleMask:backing:defer:",
+                         NSRect(-9000, -9000, 1100, 30), 0, 2, False,
+                         argtypes=[NSRect, ctypes.c_ulong, ctypes.c_ulong,
+                                   ctypes.c_bool])
+        rt.send(window, "setAppearance:", look_of_bar, argtypes=[_id])
+        host = rt.send(window, "contentView")
+
+        def width(made):
+            view = rt.send(made, "view")
+            if not rt.send(view, "window"):
+                rt.send(host, "addSubview:", view, argtypes=[_id])
+            rt.send(host, "layoutSubtreeIfNeeded")
+            size = rt.send(view, "fittingSize", restype=NSSize)
+            if size.width < 1:
+                size = rt.send(view, "frame", restype=NSRect)
+            return size.width
+
+        def measure(bar, state):
+            spin(200)
+            handle = bar._handle
+            for key, keys in bar.arrangement().items():
+                kept = [k for k in keys if bar.flat[k].kind != "space"
+                        and bar.flat[k].priority in ("normal", "high")]
+                widths = {k: width(handle.items[k]) for k in kept}
+                room = sum(widths.values()) + GAP * max(0, len(kept) - 1)
+                out.setdefault("rows", []).append(
+                    [state, key or "top", room, widths])
+
+        GAP = 8.0
+        audio = viewer.audio
+        audio.enable_box.setChecked(False)
+        measure(touchbar.of(viewer), "picture off")
+        audio.enable_box.setChecked(True)
+        for scene in visualizers.SCENES:
+            audio.scene_box.setCurrentText(scene.name)
+            measure(touchbar.of(viewer), scene.name)
+        audio._go_full_screen()
+        spin(300)
+        for scene in visualizers.SCENES:
+            audio.scene_box.setCurrentText(scene.name)
+            measure(touchbar.of(audio._full), "full screen, " + scene.name)
+        audio._full.close()
+    """)
+    over = [row for row in result["rows"]
+            if row[2] > (APP_ROOM if row[1] == "top" else POPOVER_ROOM)]
+    assert over == [], over
+    assert len(result["rows"]) > 20
+    assert not layout_complaints(result["stderr"])

@@ -231,6 +231,31 @@ class TestReadability:
     def test_columns_have_a_sensible_minimum(self, window):
         assert window.table.horizontalHeader().minimumSectionSize() >= 40
 
+    def test_the_reading_layout_comes_off_as_it_went_on(self, qapp, window):
+        """Each change added two points to the type the application already
+        had: turned off, the reading layout left everything larger, and each
+        preview of it made everything larger again."""
+        def looks():
+            return (qapp.font().pointSizeF(), qapp.font().letterSpacing(),
+                    window.table.verticalHeader().defaultSectionSize(),
+                    window.scan_button.sizeHint(),
+                    window.model_button.sizeHint())
+
+        with painted_as(qapp, readable=False):
+            window.settings.readable = False
+            window.apply_appearance()
+            before = looks()
+            for readable in (True, False, True, True):
+                window.settings.readable = readable
+                window.apply_appearance()
+            larger = looks()
+            window.settings.readable = False
+            window.apply_appearance()
+            after = looks()
+        assert larger[0] == before[0] + 2
+        assert larger[2] > before[2]
+        assert after == before
+
     def test_resetting_restores_the_defaults(self, window):
         window.table.setColumnWidth(TriageTableModel.COL_SENDER, 12)
         window._reset_columns()
@@ -909,11 +934,16 @@ class TestEveryFixedListIsRoomy:
         from widgets import RoomyCombo
 
         combo = RoomyCombo(every=True)
+        # From a size of its own, under the box's ceiling: an earlier test
+        # that left the application's type larger had it start there.
+        font = QFont(combo.font())
+        font.setPointSizeF(11.0)
+        combo.setFont(font)
         combo.addItems(["Show: everything but job mail"])
         qapp.processEvents()
         before = combo.minimumWidth()
-        font = QFont(combo.font())
-        font.setPointSizeF(font.pointSizeF() * 1.6)
+        assert before < RoomyCombo.MOST
+        font.setPointSizeF(14.0)
         combo.setFont(font)
         qapp.processEvents()
         assert combo.minimumWidth() > before

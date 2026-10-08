@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Sequence
 
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QFont, QPalette
-from PySide6.QtWidgets import (QAbstractItemView, QFrame, QTreeWidget,
+from PySide6.QtWidgets import (QAbstractItemView, QFrame, QMenu, QTreeWidget,
                                QTreeWidgetItem)
 
 import icons
@@ -41,6 +41,8 @@ class Place:
 INBOX = Place("inbox")
 
 _PLACE = Qt.ItemDataRole.UserRole
+#: On an account's heading: which account its folders are.
+_ACCOUNT = Qt.ItemDataRole.UserRole + 1
 
 
 class MailboxList(QTreeWidget):
@@ -48,6 +50,9 @@ class MailboxList(QTreeWidget):
     :meth:`choose` moves the selection without saying so."""
 
     chosen = Signal(object)
+    #: (account id, folder, the folder to move it into or "" for the top
+    #: level): asked for by dragging a folder, or from its menu, as in Mail.
+    moveRequested = Signal(str, str, str)
 
     #: Width when nothing has been chosen, and the narrowest it may get.
     WIDTH = 210
@@ -65,7 +70,17 @@ class MailboxList(QTreeWidget):
         self.setIconSize(QSize(16, 16))
         self.setMinimumWidth(self.LEAST)
         self.setAccessibleName("Mailboxes")
-        self.setToolTip("Your mailboxes. Choose one to see its mail.")
+        self.setToolTip("Your mailboxes. Choose one to see its mail; drag a "
+                        "folder onto another to move it there.")
+        # A folder dragged onto another goes inside it, as in Mail. The
+        # tree is never rearranged by the drag itself: it is drawn again
+        # from the server once the server has moved the folder.
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._menu_at)
         #: (id, label, the mailbox sorted) of every account, in order.
         self._accounts: List[tuple] = []
         #: account id -> workers.Mailboxes, as each arrives.
@@ -108,6 +123,11 @@ class MailboxList(QTreeWidget):
     def place(self) -> Place:
         return self._place
 
+    def delimiter_of(self, account_id: str) -> str:
+        """What separates an account's folder from the one it is in."""
+        found = self._found.get(account_id)
+        return (found.delimiter if found is not None else "") or "/"
+
     def choose(self, place: Place) -> None:
         """Select ``place`` without announcing it: the window has already
         acted on it. A selection of the place already current is never
@@ -128,9 +148,12 @@ class MailboxList(QTreeWidget):
         name = NAMES.get(place.kind, place.kind.title())
         return f"{name} ({label})" if label and len(self._accounts) > 1 else name
 
-    def _section(self, title: str) -> QTreeWidgetItem:
+    def _section(self, title: str, account_id: str = "") -> QTreeWidgetItem:
         item = QTreeWidgetItem(self, [title])
-        item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+        # An account's heading takes a folder dropped on it to its top level.
+        item.setFlags(Qt.ItemFlag.ItemIsEnabled | (
+            Qt.ItemFlag.ItemIsDropEnabled if account_id else Qt.ItemFlag.NoItemFlags))
+        item.setData(0, _ACCOUNT, account_id)
         font = QFont(self.font())
         font.setPointSizeF(max(9.0, font.pointSizeF() - 1.5))
         font.setWeight(QFont.Weight.DemiBold)
@@ -149,6 +172,10 @@ class MailboxList(QTreeWidget):
         else:
             item.setData(0, _PLACE, place)
             item.setToolTip(0, self.title_of(place))
+            flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+            if place.kind == "folder":
+                flags |= Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled
+            item.setFlags(flags)
         return item
 
     def _rebuild(self) -> None:
@@ -170,7 +197,8 @@ class MailboxList(QTreeWidget):
             found = self._found.get(account_id)
             if found is None:
                 continue
-            self._folders(self._section(label), account_id, source, found)
+            self._folders(self._section(label, account_id), account_id, source,
+                          found)
         self._select(self._place)
 
     def _folders(self, section, account_id: str, source: str, found) -> None:
@@ -221,6 +249,78 @@ class MailboxList(QTreeWidget):
             return
         self._place = place
         self.chosen.emit(place)
+
+    def destinations(self, account_id: str, folder: str) -> List[tuple]:
+        """Where a folder may go: (what to call it, the folder) for the top
+        level and every folder of its account it is not already in, bar
+        itself, the folders inside it and the mailboxes the server keeps."""
+        found = self._found.get(account_id)
+        if found is None:
+            return []
+        delimiter = found.delimiter or "/"
+        keeps = {name.lower() for name in found.special.values()} | {"inbox"}
+        home = folder.rsplit(delimiter, 1)[0] if delimiter in folder else ""
+        out = [] if home == "" else [("Top Level", "")]
+        for name in sorted(found.folders, key=str.lower):
+            if (name == folder or name.startswith(folder + delimiter)
+                    or name == home or name.lower() in keeps):
+                continue
+            out.append((" › ".join(name.split(delimiter)), name))
+        return out
+
+    def _menu_at(self, point) -> None:
+        item = self.itemAt(point)
+        place = item.data(0, _PLACE) if item is not None else None
+        if place is None or place.kind != "folder":
+            return
+        menu = QMenu(self)
+        into = menu.addMenu("Move To")
+        for title, folder in self.destinations(place.account_id, place.folder):
+            action = into.addAction(title)
+            action.triggered.connect(
+                lambda _checked=False, f=folder, p=place:
+                    self.moveRequested.emit(p.account_id, p.folder, f))
+        into.setEnabled(not into.isEmpty())
+        menu.exec(self.viewport().mapToGlobal(point))
+
+    def _drop_target(self, event):
+        """What a folder dragged here would go into: a folder of its own
+        account, or its account's heading for the top level; None for
+        anywhere else."""
+        source = self.currentItem()
+        moved = source.data(0, _PLACE) if source is not None else None
+        if moved is None or moved.kind != "folder":
+            return None, None
+        target = self.itemAt(event.position().toPoint())
+        if target is None:
+            return moved, None
+        place = target.data(0, _PLACE)
+        if place is not None and place.kind == "folder" \
+                and place.account_id == moved.account_id:
+            into = place.folder
+        elif target.data(0, _ACCOUNT) == moved.account_id:
+            into = ""
+        else:
+            return moved, None
+        allowed = {folder for _title, folder in
+                   self.destinations(moved.account_id, moved.folder)}
+        return moved, (into if into in allowed else None)
+
+    def dragMoveEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        _moved, into = self._drop_target(event)
+        if into is None:
+            event.ignore()
+        else:
+            event.setDropAction(Qt.DropAction.MoveAction)
+            event.accept()
+
+    def dropEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        moved, into = self._drop_target(event)
+        # The tree is never moved by hand; the server's word redraws it.
+        event.setDropAction(Qt.DropAction.IgnoreAction)
+        event.ignore()
+        if moved is not None and into is not None:
+            self.moveRequested.emit(moved.account_id, moved.folder, into)
 
     def places(self) -> List[Place]:
         """Every place listed, top to bottom."""

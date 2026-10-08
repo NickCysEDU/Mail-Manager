@@ -727,6 +727,27 @@ class TestPartialFetch:
         assert message.body_text.startswith("Thank you for applying. We have received")
         assert message.truncated is False
 
+    def test_a_message_cut_short_can_be_read_whole(self, engine_factory):
+        """A scan reads the start of each message; shown, a message whose
+        text that cut is read again, all of it, still without marking it
+        read."""
+        page = ("<html><body>" + "<p>Your weekly summary from the club.</p>" * 3000
+                + "<p>See you next week.</p></body></html>")
+        raw = build_mime(plain=None, html=page)
+        engine, server = engine_factory(messages={"7": raw})
+        engine.connect("you@icloud.example", "app-specific")
+        engine.select("INBOX", readonly=True)
+        cut = engine._fetch_batch(["7"], "INBOX", max_bytes=65536)[0]
+        assert cut.truncated is True and "See you next week" not in cut.body_html
+        whole = engine.fetch_whole("7", "INBOX")
+        assert whole.truncated is False
+        assert "See you next week" in whole.body_html
+        assert "See you next week" in whole.body_text
+        fetches = [a[1] for name, a in server.commands if name == "UID FETCH"]
+        assert all("BODY.PEEK" in spec for spec in fetches)
+        assert server.readonly is True
+        assert engine.fetch_whole("99", "INBOX") is None
+
     def test_a_readable_part_the_server_described_but_never_sent(self, engine_factory):
         """Text, a photograph, then more text: cut inside the photograph, the
         second text never arrived, and the server's description says so."""
@@ -968,3 +989,84 @@ class TestAReportOverSeveralMailboxes:
         single = MoveReport(moved={"4": "Archive"}, new_uids={"4": "9"})
         assert single.about("anyone", "anywhere", "4") == ("Archive", "", "9")
         assert single.moved_count == 1
+
+
+class TestMovingAFolder:
+    """A folder moved into another, or to the top, as dragging it does in
+    Mail: one RENAME, which takes everything inside it along."""
+
+    FOLDERS = ["INBOX", "Sent Messages", "Deleted Messages", "Drafts", "Junk",
+               "Archive", "Sorted Mail", "Sorted Mail/Receipts", "Church",
+               "Clubs", "Clubs/Climbing", "Job Search"]
+
+    @pytest.fixture
+    def engine(self, engine_factory):
+        engine, server = engine_factory(folders=list(self.FOLDERS))
+        engine.connect("you@icloud.example", "app-specific")
+        return engine, server
+
+    @staticmethod
+    def _renames(server):
+        return [args for name, args in server.commands if name == "RENAME"]
+
+    def test_into_another_folder(self, engine):
+        engine, server = engine
+        assert engine.move_folder("Church", "Sorted Mail") == "Sorted Mail/Church"
+        assert "Sorted Mail/Church" in server.folders and "Church" not in server.folders
+        assert self._renames(server) == [("Church", "Sorted Mail/Church")]
+        assert "Sorted Mail/Church" in server.subscribed
+
+    def test_with_everything_inside_it(self, engine):
+        engine, server = engine
+        assert engine.move_folder("Clubs", "Sorted Mail") == "Sorted Mail/Clubs"
+        assert {"Sorted Mail/Clubs", "Sorted Mail/Clubs/Climbing"} <= set(server.folders)
+        assert not {"Clubs", "Clubs/Climbing"} & set(server.folders)
+
+    def test_back_to_the_top_level(self, engine):
+        engine, server = engine
+        engine.move_folder("Church", "Sorted Mail")
+        assert engine.move_folder("Sorted Mail/Church", "") == "Church"
+        assert "Church" in server.folders
+
+    @pytest.mark.parametrize("folder, into, says", [
+        ("INBOX", "Sorted Mail", "keeps for itself"),
+        ("Sent Messages", "Sorted Mail", "keeps for itself"),
+        ("Deleted Messages", "Clubs", "keeps for itself"),
+        ("Clubs", "Clubs/Climbing", "inside itself"),
+        ("Clubs", "Clubs", "inside itself"),
+    ])
+    def test_refused_before_anything_is_sent(self, engine, folder, into, says):
+        from imap_engine import IMAPError
+
+        engine, server = engine
+        with pytest.raises(IMAPError, match=says):
+            engine.move_folder(folder, into)
+        assert self._renames(server) == []
+
+    def test_a_name_already_taken_there(self, engine):
+        from imap_engine import IMAPError
+
+        engine, server = engine
+        server.folders.append("Sorted Mail/Church")
+        with pytest.raises(IMAPError, match="already has a folder called “Church”"):
+            engine.move_folder("Church", "Sorted Mail")
+        assert self._renames(server) == []
+
+    def test_a_name_with_quotes_and_backslashes_is_sent_as_one_name(
+            self, engine_factory):
+        """A folder's name is the account owner's, or whoever made it; a
+        quote or a backslash in it must not end the name early."""
+        odd = 'Clubs "Climbing" \\ Bouldering'
+        engine, server = engine_factory(folders=["INBOX", "Sorted Mail", odd])
+        engine.connect("you@icloud.example", "app-specific")
+        assert engine.move_folder(odd, "Sorted Mail") == f"Sorted Mail/{odd}"
+        assert f"Sorted Mail/{odd}" in server.folders
+        assert self._renames(server) == [(odd, f"Sorted Mail/{odd}")]
+
+    def test_a_folder_open_on_the_connection_is_shut_first(self, engine):
+        engine, server = engine
+        engine.select("Church", readonly=True)
+        engine.move_folder("Church", "Sorted Mail")
+        names = [name for name, _args in server.commands]
+        assert names.index("CLOSE") < names.index("RENAME")
+        engine.select("Sorted Mail/Church", readonly=True)

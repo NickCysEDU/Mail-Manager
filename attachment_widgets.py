@@ -693,8 +693,13 @@ class Spectrum(QWidget):
         self._rapid_at = -99.0
         self._timer = QTimer(self)
         # Sixty a second; every scene paints in well under a frame at 1080p.
+        # On the card the timer is set afresh each frame for the next tick's
+        # moment (see _frame).
         self._timer.setInterval(self.FRAME_MS)
-        self._timer.timeout.connect(self._tick)
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._timer.timeout.connect(self._on_timer)
+        #: Where the scenes' clock has got to. See _frame.
+        self._tick_clock: Optional[float] = None
 
         self._reveal = 0.0
         self._idling = False
@@ -817,9 +822,7 @@ class Spectrum(QWidget):
                 screen_w * screen_h, ratio, self._scene)
             width = max(2, int(round(screen_w * share)))
             height = max(2, int(round(screen_h * share)))
-            halo = QSize(
-                max(PostProcess.BLOOM_MIN, width // PostProcess.BLOOM_DIVISOR),
-                max(PostProcess.BLOOM_MIN, height // PostProcess.BLOOM_DIVISOR))
+            halo = PostProcess.halo_size(width, height)
             # A scene with a world of its own antialiases it there, so the
             # canvas's own samples would be the same work twice (five
             # milliseconds at full screen).
@@ -1700,13 +1703,10 @@ class Spectrum(QWidget):
             self._giving_way = giving
             self._pace()
 
-    def _pace(self) -> None:
-        """Ask the timer for frames at a rate the scene can meet: a
+    def _paced_ms(self) -> int:
+        """How often the frames measured so far can be asked for: a
         sixteen-millisecond timer handed thirty-millisecond frames fills the
-        event queue, and the pane stops answering the mouse.
-        """
-        if self._working is not None:
-            return      # the analysis has its own, slower, interval
+        event queue, and the pane stops answering the mouse."""
         # The scene's time plus the polish's, both measured: what matters is
         # whether the whole frame fits.
         if self._canvas is not None:
@@ -1722,8 +1722,63 @@ class Spectrum(QWidget):
             # any mouse movement, and the halved rate delayed the light by a
             # frame and a half.
             wanted = int(wanted * self.GIVE_WAY)
+        return wanted
+
+    def _pace(self) -> None:
+        """Ask the timer for frames at a rate the scene can meet."""
+        if self._working is not None:
+            return      # the analysis has its own, slower, interval
+        wanted = self._paced_ms()
+        if self._clocked() and wanted <= self.FRAME_MS:
+            return      # the clock sets each frame's moment (see _frame)
         if self._timer.interval() != wanted:
             self._timer.setInterval(wanted)
+
+    #: The clock the scenes move by: a tick every sixtieth of a second.
+    #: Everything a tick moves is a sixtieth's worth.
+    TICK_S = 1.0 / 60.0
+    #: The most ticks one frame makes up after a late one; past that the
+    #: clock starts again rather than racing through what was missed.
+    CATCH_UP = 3
+
+    def _clocked(self) -> bool:
+        """Whether the frames keep the scenes' clock (see _frame): on the
+        card, outside an analysis, and with nobody working the controls
+        (see GIVE_WAY), which slow the frames down instead."""
+        return (self._canvas is not None and self._working is None
+                and not (self._giving_way
+                         and not (self._holding or self._spamming)))
+
+    def _on_timer(self) -> None:
+        if self._clocked():
+            self._frame()
+        else:
+            self._tick_clock = None
+            self._tick()
+
+    def _frame(self) -> None:
+        """As many ticks as the clock has moved on since the last, then the
+        timer set for the moment the next is due. A timer of whole
+        milliseconds at sixteen ran four per cent fast against a sixtieth of
+        a second, and every twenty-fifth frame met the screen's refresh
+        twice: the picture hitched. One that comes late gets two ticks, so
+        what moves keeps its speed."""
+        now = _time.monotonic()
+        if (self._tick_clock is None
+                or now - self._tick_clock > self.TICK_S * (self.CATCH_UP + 1)):
+            self._tick_clock = now - self.TICK_S
+        due = min(self.CATCH_UP,
+                  int((now - self._tick_clock) / self.TICK_S + 0.25))
+        self._tick_clock += due * self.TICK_S
+        for _ in range(due):
+            self._tick()
+        if self._timer.isActive():
+            wait = self._tick_clock + self.TICK_S - _time.monotonic()
+            # Never sooner than frames this dear can be drawn, which leaves
+            # the mouse and the controls their share of the time.
+            paced = self._paced_ms()
+            self._timer.setInterval(max(1, int(round(wait * 1000.0)),
+                                        paced if paced > self.FRAME_MS else 1))
 
     def _tick(self) -> None:
         self._pace()
@@ -1746,7 +1801,8 @@ class Spectrum(QWidget):
             if self._change <= 0.0:
                 self._fresh = 1.0
             else:
-                step = max(self.FRAME_MS, self._timer.interval()) / 1000.0
+                step = (self.TICK_S if self._clocked()
+                        else max(self.FRAME_MS, self._timer.interval()) / 1000.0)
                 self._fresh = min(1.0, self._fresh + step / self._change)
         self._drift += 0.035
         # Ease between the track and the idle drift rather than swapping, or
@@ -2645,7 +2701,9 @@ class FullScreenSpectrum(QWidget):
 
     def __init__(self, spectrum: Spectrum, owner=None) -> None:
         super().__init__(None)
-        self.setWindowTitle("Visualiser")
+        # Its own name in the Dock's list of windows, beside the window it
+        # came from.
+        self.setWindowTitle("Visualiser, Full Screen")
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         # Its controls explain themselves on a long rest, as the window's do.
         import helpmode
@@ -3401,6 +3459,11 @@ class PostProcess:
     #: Bloom is worked out at this fraction of the frame, so its cost barely
     #: changes between a strip and full screen.
     BLOOM_DIVISOR = 8
+    #: But never across fewer pixels than this: an eighth of a window's frame
+    #: (197 by 104 at the window's usual size) was so coarse that, stretched
+    #: back over it, the glow lay in blotches between the rave's lines.
+    #: Full screen's eighth is about this wide.
+    BLOOM_LEAST = 360
     #: Never build a bloom buffer smaller than this.
     BLOOM_MIN = 32
 
@@ -3505,6 +3568,17 @@ class PostProcess:
 
         blit_scene(painter, rect, frame, smooth)
         self._record((_time.perf_counter() - started) * 1000.0)
+
+    @classmethod
+    def halo_size(cls, width: int, height: int) -> QSize:
+        """The size the bloom of a frame this many pixels across is worked
+        out at, on the card: a fraction by halves, so the card's shrink in
+        halves stays an exact average all the way down."""
+        divisor = cls.BLOOM_DIVISOR
+        while divisor > 2 and width / divisor < cls.BLOOM_LEAST:
+            divisor //= 2
+        return QSize(max(cls.BLOOM_MIN, width // divisor),
+                     max(cls.BLOOM_MIN, height // divisor))
 
     def _halo(self, rect, frame):
         """A small, blurred copy of the frame: the blur is the downscale, and

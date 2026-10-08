@@ -59,6 +59,11 @@ FETCH_BATCH = 40
 #: 60 messages, with the text of all 60 intact.
 DEFAULT_FETCH_BYTES = 65536
 
+#: Bytes read of one message to show the whole of its text, where the start
+#: a scan read cut the text short: a marketing message's HTML runs to a few
+#: hundred kilobytes, and any attachment is left at the end.
+WHOLE_BYTES = 4 * 1024 * 1024
+
 #: Parallel IMAP connections used for the fetch phase. iCloud spends about
 #: 27 ms of server time per message regardless of size, and that parallelises:
 #: 120 messages took 9.5 s on one connection and 3.7 s on four.
@@ -869,6 +874,44 @@ class IMAPEngine:
     def folder_names(self) -> List[str]:
         return [f.name for f in self.list_folders()]
 
+    def move_folder(self, folder: str, parent: str) -> str:
+        """Move a folder, with every message and folder in it, into
+        ``parent`` ("" for the top level), keeping its name: one RENAME,
+        which the server carries out whole. Returns its new name.
+
+        Refused before anything is sent for the inbox and the mailboxes the
+        server keeps for itself (Sent, Trash and the rest), a move into the
+        folder itself or one inside it, and a name already taken there."""
+        delimiter = self.delimiter or "/"
+        leaf = folder.rsplit(delimiter, 1)[-1]
+        target = f"{parent}{delimiter}{leaf}" if parent else leaf
+        if target == folder:
+            return folder
+        listed = self.list_folders()
+        keeps = {name.lower() for name in
+                 (self.special_in(kind, listed) for kind in self.SPECIAL_MAILBOXES)
+                 if name}
+        if folder.lower() == "inbox" or folder.lower() in keeps:
+            raise IMAPError(f"“{leaf}” is one of the mailboxes the server keeps "
+                            "for itself, so it stays where it is.")
+        if parent == folder or parent.startswith(folder + delimiter):
+            raise IMAPError(f"“{leaf}” cannot go inside itself.")
+        if target.lower() in {info.name.lower() for info in listed}:
+            raise IMAPError(f"{f'“{parent}”' if parent else 'The top level'} "
+                            f"already has a folder called “{leaf}”.")
+        if self._selected is not None and (
+                self._selected == folder
+                or self._selected.startswith(folder + delimiter)):
+            # Open on this connection, it would be open under a name that
+            # is gone.
+            self._require_conn().close()
+            self._selected = None
+        self._cmd(f"Moving “{folder}”", self._require_conn().rename,
+                  quote_mailbox(folder), quote_mailbox(target))
+        log.info("Moved mailbox %s to %s", folder, target)
+        self._subscribe_folder(target)
+        return target
+
     def folder_plan(self, root: str, other_root: str = DEFAULT_OTHER_ROOT) -> FolderPlan:
         """A :class:`FolderPlan` bound to this server's hierarchy delimiter."""
         return FolderPlan(root=root, delimiter=self.delimiter or "/", other_root=other_root)
@@ -970,6 +1013,13 @@ class IMAPEngine:
         if not raw:
             return []
         return [uid.decode("ascii", "replace") for uid in raw.split() if uid.isdigit()]
+
+    def fetch_whole(self, uid: str, mailbox: str) -> Optional[EmailMessage]:
+        """One message read again, for a message whose text a scan's
+        partial read cut short. Read-only: unread stays unread."""
+        self.select(mailbox, readonly=True)
+        found = self._fetch_batch([str(uid)], mailbox, WHOLE_BYTES)
+        return found[0] if found else None
 
     def fetch_window(
         self,

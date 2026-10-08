@@ -45,6 +45,8 @@ class _Owner:
         self.model = SimpleNamespace(items=[SimpleNamespace(email=_message(str(n)), moved=False)
                                             for n in range(1, count + 1)])
         self.calls = []
+        #: Messages the window asked to have read whole.
+        self.read = []
         self.accounts = [SimpleNamespace(id="a1", address="you@icloud.example",
                                          describe=lambda: "you · you@icloud.example")]
 
@@ -60,6 +62,12 @@ class _Owner:
 
     def select_row(self, row):
         self.calls.append(("select", row))
+
+    def read_whole(self, item):
+        self.read.append(item.email.uid)
+
+    def missing_from(self, item):
+        return ""
 
     def neighbour_row(self, row, by):
         live = [n for n, item in enumerate(self.model.items)
@@ -129,6 +137,7 @@ class TestTheMessageWindow:
         assert window.reply_action.shortcut().toString() == "Ctrl+R"
         assert window.reply_all_action.shortcut().toString() == "Ctrl+Shift+R"
         assert window.forward_action.shortcut().toString() == "Ctrl+Shift+F"
+        assert owner.read == ["1"], "a message cut short is read whole when shown"
 
     def test_reply_reply_all_and_forward_ask_the_main_window(self, windows):
         owner, window = self._window(windows, row=1)

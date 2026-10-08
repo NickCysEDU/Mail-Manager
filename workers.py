@@ -1912,6 +1912,44 @@ class DraftWorker(_FolderWorker):
         self.saved.emit(engine.save_draft(outgoing.build(self.draft)))
 
 
+class FolderMoveWorker(_FolderWorker):
+    """One folder moved into another, or to the top level, with everything
+    in it: one RENAME on the server."""
+
+    moved = Signal(str, str)        # its name before, its name now
+    trouble = "Could not move the folder"
+    task_name = "moving a folder"
+
+    def __init__(self, account, password: str, folder: str, into: str,
+                 parent=None) -> None:
+        super().__init__(account, password, parent)
+        self.folder = folder
+        self.into = into
+
+    def _work(self, engine) -> None:
+        self._emit_progress(0, 1, f"Moving “{self.folder}”…")
+        moved = engine.move_folder(self.folder, self.into)
+        if not self.cancelled:
+            self.moved.emit(self.folder, moved)
+
+
+class WholeMessageWorker(_FolderWorker):
+    """All of one message's text, for a message a scan read only the start
+    of, so the message on screen is the whole of it."""
+
+    arrived = Signal(object)        # EmailMessage, or None
+    trouble = "Could not read the rest of the message"
+    task_name = "reading a message"
+
+    def __init__(self, account, password: str, message, parent=None) -> None:
+        super().__init__(account, password, parent)
+        self.message = message
+
+    def _work(self, engine) -> None:
+        self.arrived.emit(engine.fetch_whole(
+            self.message.uid, self.message.source_folder or "INBOX"))
+
+
 class AttachmentFetchWorker(_FolderWorker):
     """Everything attached to one message, downloaded, so a forward
     carries it. Over the size a message may be, the rest are named rather

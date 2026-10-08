@@ -284,6 +284,19 @@ def self_test(offline: bool = False) -> int:
 
     check("touch bar", _touch_bar)
 
+    def _message_view() -> str:
+        """Messages are drawn by WebKit, reached through a function-level
+        import; a message WebKit here does not answer would take the app
+        down rather than fall back to Qt's view."""
+        import webview_mac
+
+        gaps = webview_mac._rt().missing(webview_mac.NEEDED)
+        if gaps:
+            raise RuntimeError("WebKit here lacks " + ", ".join(gaps[:4]))
+        return f"{sum(map(len, webview_mac.NEEDED.values()))} messages answered"
+
+    check("message view", _message_view)
+
     def _attachment_viewer() -> str:
         """The viewer is reached by a function-level import, so prove it.
 
@@ -639,6 +652,8 @@ def main(argv: Optional[list] = None) -> int:
     # Every message box, including the ones Qt raises itself, gets text you
     # can select and copy.
     widgets.install_selectable_messages(app)
+    # A menu row the pointer rests on opens, as it does in the Mac's menus.
+    widgets.install_resting_opens_menus(app)
 
     # Each window's controls on the Touch Bar, on a Mac that has one.
     import touchbar

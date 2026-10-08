@@ -97,6 +97,20 @@ def html_noise(rng: random.Random, length: int) -> str:
     return "".join(parts)[:length]
 
 
+def _webkit_page(doc: str) -> str:
+    """The page WebKit is given for a message: none of the message may
+    reach the policy that says what the page may load."""
+    import html_utils
+    import webview_mac
+
+    page = webview_mac.document(html_utils.sanitise_for_view(
+        doc, pictures=False), pictures=False, note=doc[:200])
+    head = page.split("</head>", 1)[0]
+    if head.count("Content-Security-Policy") != 1 or "default-src 'none'" not in head:
+        raise AssertionError("the message reached the page's policy")
+    return page
+
+
 class Runner:
     def __init__(self, seed: int, rounds: int, verbose: bool) -> None:
         self.rng = random.Random(seed)
@@ -143,6 +157,14 @@ class Runner:
             doc = html_noise(self.rng, size)
             self.run("html_to_text", lambda: html_utils.html_to_text(doc), doc)
             self.run("condense", lambda: html_utils.condense(doc), doc)
+            # What the viewer draws: Qt's way, and WebKit's with the pictures
+            # a style names kept.
+            self.run("sanitise_for_view",
+                     lambda: html_utils.sanitise_for_view(doc), doc)
+            self.run("sanitise_for_view(keep_urls)",
+                     lambda: html_utils.sanitise_for_view(
+                         doc, pictures=True, keep_urls=True), doc)
+            self.run("webview document", lambda: _webkit_page(doc), doc)
 
     def stress_mime(self) -> None:
         from imap_engine import parse_message

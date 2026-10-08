@@ -6,6 +6,7 @@ chip, and the preview shows the selected row. gui re-exports these.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import List, Optional, Sequence, Tuple
 
@@ -29,6 +30,8 @@ from models import (CATEGORY_COLORS, OTHER_COLOR, TOPIC_COLORS, Category,
 from widgets import (ACCENT_BLUE, ACCENT_RED, RoomyCombo, _attr_url,
                      _confidence_rgb, _draw_wrapped, _html, _is_dark,
                      _mono_font, _one_line, _tint, _wrap, system_font)
+
+log = logging.getLogger(__name__)
 
 
 #: What the folder box shows when a message is to stay where it is.
@@ -792,10 +795,20 @@ class MailView(QTextBrowser):
     def set_pictures(self, wanted: bool) -> None:
         self._pictures = bool(wanted)
 
-    def show_message(self, html: str) -> None:
+    def show_message(self, html: str, note: str = "",
+                     keep_place: bool = False) -> None:
+        """``note`` goes under the message, in the view's own words: what
+        is missing from it. ``keep_place`` keeps the page where it was
+        scrolled to, for more of the same message."""
+        scrolled = self.verticalScrollBar().value()
         self._html = html_utils.sanitise_for_view(
             html, pictures=self._pictures, families=_families_here())
+        if note:
+            self._html += (f'<p style="color:#6e6e73; font-style:italic">'
+                           f'{_html(note)}</p>')
         self.setHtml(self._html)
+        if keep_place:
+            self.verticalScrollBar().setValue(scrolled)
         for url in self.pictures_wanted():
             self._pending.add(url)
             self._fetch(url)
@@ -850,6 +863,20 @@ class MailView(QTextBrowser):
         self.verticalScrollBar().setValue(scrolled)
 
 
+def message_view(parent=None):
+    """The best view of a message there is here: WebKit's, as in Mail, on
+    a Mac; Qt's own document engine elsewhere, offscreen, or if WebKit will
+    not start. Either takes the same calls."""
+    import webview_mac
+
+    if webview_mac.available():
+        try:
+            return webview_mac.MessageWebView(parent)
+        except Exception:      # noqa: BLE001 - Qt's view is still a view
+            log.exception("WebKit would not draw messages; Qt does")
+    return MailView(parent)
+
+
 class PreviewPane(QWidget):
     """Side-by-side message text and the backend's reasoning."""
 
@@ -899,6 +926,9 @@ class PreviewPane(QWidget):
         self._item: Optional[TriageItem] = None
         self._prompt_text = ""
         self._updating = False
+        #: What a message lacks, said under it: the window says, for a
+        #: message a scan read only the start of.
+        self.missing_from = lambda item: ""
 
         self.header = QLabel("Select a message to see its text and the analysis beside it.")
         self.header.setWordWrap(True)
@@ -951,7 +981,7 @@ class PreviewPane(QWidget):
             "The message as it was sent, its plain text, or exactly what "
             "was sent to the model.")
 
-        self.rich_view = MailView()
+        self.rich_view = message_view()
         self.rich_view.setMinimumHeight(24)
         self.rich_view.anchorClicked.connect(
             lambda url: self.linkRequested.emit(url.toString()))
@@ -1267,7 +1297,7 @@ class PreviewPane(QWidget):
         self.reasoning_view.setHtml(_reasoning_html(item))
 
     @Slot()
-    def _render_body(self) -> None:
+    def _render_body(self, keep_place: bool = False) -> None:
         if self._item is None:
             return
         mode = self.body_mode.currentIndex()
@@ -1276,23 +1306,38 @@ class PreviewPane(QWidget):
             self.body_stack.setCurrentWidget(self.body_view)
             return
         message = self._item.email
+        missing = self.missing_from(self._item)
         text = message.body_text or _nothing_to_read(message.attachments)
+        if missing:
+            text += f"\n\n[{missing}]"
         if message.links:
             text += "\n\n--- LINKS ---\n" + "\n".join(f"• {link}" for link in message.links)
         if message.attachments:
             text += "\n\n--- ATTACHMENTS ---\n" + "\n".join(
                 f"• {_attachment_line(a)}" for a in message.attachments)
+        scrolled = self.body_view.verticalScrollBar().value()
         self.body_view.setPlainText(text)
+        if keep_place:
+            self.body_view.verticalScrollBar().setValue(scrolled)
         # The message as sent where there is HTML with something in it to
         # draw; plain mail, and an HTML shell with nothing inside, are their
         # text either way.
         drawable = bool(message.body_html) and (
             bool(message.body_text.strip()) or "<img" in message.body_html.lower())
         if mode == 0 and drawable:
-            self.rich_view.show_message(message.body_html)
+            self.rich_view.show_message(message.body_html, missing, keep_place)
             self.body_stack.setCurrentWidget(self.rich_view)
         else:
             self.body_stack.setCurrentWidget(self.body_view)
+
+    def refresh_body(self, item: TriageItem) -> None:
+        """The message drawn again, if it is the one on show, where it was
+        scrolled to: more of it has arrived."""
+        if item is not self._item:
+            return
+        self._sync_links(item)
+        self._sync_attachments(item)
+        self._render_body(keep_place=True)
 
     def set_pictures(self, wanted: bool) -> None:
         """Whether a message's pictures are fetched and shown."""

@@ -9,12 +9,13 @@ import html as html_module
 import textwrap
 from typing import List, Sequence
 
-from PySide6.QtCore import QDate, QEvent, QObject, QRect, QRectF, QSize, Qt
+from PySide6.QtCore import (QDate, QEvent, QObject, QRect, QRectF, QSize, Qt,
+                            QTimer)
 from PySide6.QtGui import (QColor, QFont, QFontDatabase, QFontMetrics, QIcon,
                            QPainter, QPalette, QPixmap)
 from PySide6.QtWidgets import (QApplication, QComboBox, QDateEdit, QFileDialog,
                                QFrame, QLabel, QLineEdit,
-                               QListWidget, QMessageBox, QScrollArea,
+                               QListWidget, QMenu, QMessageBox, QScrollArea,
                                QSizePolicy, QStyle, QStyleOptionComboBox,
                                QStyleOptionViewItem, QStyledItemDelegate,
                                QToolButton, QWidget)
@@ -836,6 +837,69 @@ def remove_selectable_messages(app) -> None:
     if existing is not None:
         app.removeEventFilter(existing)
         app._selectable_messages = None
+
+
+class RestingOpensMenus(QObject):
+    """Opens the row of a menu that the pointer comes to rest on, as the
+    Mac's own menus do. Qt's menus here could lose the row under the pointer
+    after a visit to another row's submenu: rested on, it stayed shut until
+    the pointer moved again, and the model menu seemed not to open some of
+    its rows."""
+
+    #: How long the pointer is still before the row under it opens, in
+    #: milliseconds. A pointer on its way to a submenu never rests.
+    REST_MS = 150
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._at = None
+        self._rest = QTimer(self)
+        self._rest.setSingleShot(True)
+        self._rest.setInterval(self.REST_MS)
+        self._rest.timeout.connect(self._rested)
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        # Every event in the application passes through here: the cheapest
+        # test first.
+        if event.type() != QEvent.Type.MouseMove or not isinstance(watched, QMenu):
+            return False
+        self._at = event.globalPosition().toPoint()
+        self._rest.start()
+        return False
+
+    def _rested(self) -> None:
+        menu = _menu_at(self._at) if self._at is not None else None
+        if menu is None:
+            return
+        action = menu.actionAt(menu.mapFromGlobal(self._at))
+        if (action is None or action.isSeparator() or not action.isEnabled()
+                or action.menu() is None):
+            return
+        if menu.activeAction() is action and action.menu().isVisible():
+            return
+        menu.setActiveAction(action)
+
+
+def _menu_at(point) -> "QMenu":
+    """The open menu under a point on the screen: the one in front, where a
+    submenu lies over its parent."""
+    front = QApplication.activePopupWidget()
+    under = [widget for widget in QApplication.topLevelWidgets()
+             if isinstance(widget, QMenu) and widget.isVisible()
+             and widget.geometry().contains(point)]
+    if front in under:
+        return front
+    return under[0] if under else None
+
+
+def install_resting_opens_menus(app) -> RestingOpensMenus:
+    """Attach the filter once."""
+    existing = getattr(app, "_resting_opens_menus", None)
+    if existing is None:
+        existing = RestingOpensMenus(app)
+        app.installEventFilter(existing)
+        app._resting_opens_menus = existing
+    return existing
 
 
 def selectable(box: "QMessageBox") -> "QMessageBox":

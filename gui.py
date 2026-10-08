@@ -8,6 +8,7 @@ import logging
 import re
 import subprocess
 import sys
+import weakref
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -104,6 +105,8 @@ from menubar import MenuBarController
 from welcome import SetupWizard
 from workers import (AttachmentWorker,
     AttachmentFetchWorker,
+    FolderMoveWorker,
+    WholeMessageWorker,
     DraftWorker,
     FlagWorker,
     ListWorker,
@@ -159,6 +162,121 @@ class DockReopen(QObject):
                 and QApplication.activeModalWidget() is None):
             self._window._reveal()
         return False
+
+
+def bring_forward(window: QWidget) -> None:
+    """A window to the front, minimised or not, as it was: full screen or
+    zoomed stays so."""
+    if not shiboken6.isValid(window):
+        return
+    window.show()
+    if window.isMinimized():
+        window.setWindowState(window.windowState() & ~Qt.WindowState.WindowMinimized)
+    window.raise_()
+    window.activateWindow()
+
+
+class OpenWindows(QObject):
+    """Every window that is open, at the top of the Dock icon's menu, as a
+    Mac lists an app's windows there: the one in front ticked, and choosing
+    one brings it forward. Kept in step as windows open, close, are
+    minimised and change their titles.
+
+    One for the application, made by the first menu it serves: one per
+    window would put every event through a filter for each window ever
+    made."""
+
+    CHANGES = (QEvent.Type.Show, QEvent.Type.Hide, QEvent.Type.Close,
+               QEvent.Type.WindowTitleChange, QEvent.Type.WindowStateChange,
+               QEvent.Type.WindowActivate, QEvent.Type.WindowDeactivate)
+
+    @classmethod
+    def serve(cls, menu: QMenu, before: QAction) -> "OpenWindows":
+        """Keep ``menu``'s list of windows, above ``before``."""
+        app = QApplication.instance()
+        found = getattr(app, "_open_windows", None)
+        if found is None or not shiboken6.isValid(found):
+            found = cls(app)
+            app._open_windows = found
+            app.installEventFilter(found)
+        # Weakly: a menu goes with its window, and is not kept for this.
+        found._menus.append((weakref.ref(menu), weakref.ref(before), []))
+        found._again.start()
+        return found
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        #: (menu, the entry the windows go above, the entries put there),
+        #: the first two weakly.
+        self._menus: List[tuple] = []
+        self._shown = 0
+        self._again = QTimer(self)
+        self._again.setSingleShot(True)
+        self._again.setInterval(0)
+        self._again.timeout.connect(self.refresh)
+
+    def eventFilter(self, watched, event) -> bool:      # noqa: N802 - Qt
+        # Every event in the application passes through here: the cheapest
+        # test first.
+        if event.type() not in self.CHANGES or not isinstance(watched, QWidget):
+            return False
+        if watched.isWindow() and not isinstance(watched, QMenu):
+            if (event.type() == QEvent.Type.Show
+                    and watched.property("openedAs") is None):
+                self._shown += 1
+                watched.setProperty("openedAs", self._shown)
+            self._again.start()
+        return False
+
+    #: The longest a window's title is shown in the Dock's menu.
+    TITLE_MOST = 60
+
+    @classmethod
+    def entry_for(cls, title: str) -> str:
+        """A window's title as its entry: a message's window is called by
+        its subject, which its sender wrote. One line, not too long, and an
+        ampersand shown as itself rather than taken for a menu's shortcut
+        mark."""
+        title = " ".join(title.split())
+        if len(title) > cls.TITLE_MOST:
+            title = title[:cls.TITLE_MOST - 1].rstrip() + "…"
+        return title.replace("&", "&&")
+
+    @staticmethod
+    def windows() -> List[QWidget]:
+        """The windows to list, in the order they were opened."""
+        found = [widget for widget in QApplication.topLevelWidgets()
+                 if widget.isVisible() and not isinstance(widget, QMenu)
+                 and widget.windowType() in (Qt.WindowType.Window,
+                                             Qt.WindowType.Dialog)
+                 and widget.windowTitle().strip()]
+        return sorted(found, key=lambda widget: widget.property("openedAs") or 0)
+
+    def refresh(self) -> None:
+        def alive(ref):
+            found = ref()
+            return found is not None and shiboken6.isValid(found)
+
+        self._menus = [entry for entry in self._menus
+                       if alive(entry[0]) and alive(entry[1])]
+        windows = self.windows()
+        front = QApplication.activeWindow()
+        for menu_ref, before_ref, listed in self._menus:
+            menu, before = menu_ref(), before_ref()
+            for action in listed:
+                menu.removeAction(action)
+                action.deleteLater()
+            listed.clear()
+            for window in windows:
+                action = QAction(self.entry_for(window.windowTitle()), menu)
+                action.setCheckable(True)
+                action.setChecked(window is front)
+                action.triggered.connect(
+                    lambda _checked=False, shown=window: bring_forward(shown))
+                menu.insertAction(before, action)
+                listed.append(action)
+            if windows:
+                listed.append(menu.insertSeparator(before))
 
 
 class MainWindow(QMainWindow):
@@ -246,6 +364,12 @@ class MainWindow(QMainWindow):
         #: folders for the sidebar.
         self._listings: Dict[Place, List[QThread]] = {}
         self._mailbox_workers: List[QThread] = []
+        #: Messages whose whole text is being read, has been read, or could
+        #: not be, and why and when: a scan reads only the start of each
+        #: (see read_whole).
+        self._reading_whole: set = set()
+        self._whole_read: set = set()
+        self._whole_failed: Dict[tuple, tuple] = {}
         #: Whether the mailboxes have been opened: once, when the window
         #: first shows. And whether a scan at launch waits for the inbox.
         self._mailboxes_opened = False
@@ -412,6 +536,7 @@ class MainWindow(QMainWindow):
         self.proxy.layoutChanged.connect(self._sync_table_stack)
 
         self.preview = PreviewPane()
+        self.preview.missing_from = self.missing_from
         self.preview.overrideChanged.connect(self._override_changed)
         self.preview.attachmentsRequested.connect(self._open_attachments)
         self.preview.linkRequested.connect(self._open_link)
@@ -446,6 +571,7 @@ class MainWindow(QMainWindow):
         # the messages.
         self.sidebar = MailboxList()
         self.sidebar.chosen.connect(self._chosen)
+        self.sidebar.moveRequested.connect(self._move_folder)
         self.sidebar.set_accounts(self.settings.accounts)
         self.sidebar.setVisible(self.settings.show_sidebar)
         self.side_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -601,20 +727,28 @@ class MainWindow(QMainWindow):
         header = self.table.verticalHeader()
         header.setDefaultSectionSize(height)
         # Rows that exist keep their height, so otherwise the change would show
-        # only on the next scan.
-        for row in range(self.model.rowCount()):
+        # only on the next scan. The header counts the rows shown.
+        for row in range(self.proxy.rowCount()):
             header.resizeSection(row, height)
-        for column in (TriageTableModel.COL_SENDER, TriageTableModel.COL_SUBJECT,
-                       TriageTableModel.COL_SUMMARY, TriageTableModel.COL_REASONING,
-                       TriageTableModel.COL_FOLDER):
-            self.table.setItemDelegateForColumn(column, WrapDelegate(lines, self.table))
-        self.table.setItemDelegateForColumn(
-            TriageTableModel.COL_CONFIDENCE,
-            ConfidenceDelegate(self.settings.confidence_threshold, self.table),
-        )
-        self.table.setItemDelegateForColumn(
-            TriageTableModel.COL_CATEGORY, CategoryDelegate(self.table)
-        )
+        # Made once and told the new count after: a fresh set each time piled
+        # up under the table for the life of the window.
+        if not getattr(self, "_wrap_delegates", None):
+            self._wrap_delegates = []
+            for column in (TriageTableModel.COL_SENDER, TriageTableModel.COL_SUBJECT,
+                           TriageTableModel.COL_SUMMARY, TriageTableModel.COL_REASONING,
+                           TriageTableModel.COL_FOLDER):
+                delegate = WrapDelegate(lines, self.table)
+                self.table.setItemDelegateForColumn(column, delegate)
+                self._wrap_delegates.append(delegate)
+            self.confidence_delegate = ConfidenceDelegate(
+                self.settings.confidence_threshold, self.table)
+            self.table.setItemDelegateForColumn(
+                TriageTableModel.COL_CONFIDENCE, self.confidence_delegate)
+            self.table.setItemDelegateForColumn(
+                TriageTableModel.COL_CATEGORY, CategoryDelegate(self.table))
+        for delegate in self._wrap_delegates:
+            delegate.lines = lines
+        self.table.viewport().update()
         for value, action in self.density_actions.items():
             action.setChecked(value == lines)
 
@@ -758,13 +892,18 @@ class MainWindow(QMainWindow):
 
     def _rebuild_model_menu(self) -> None:
         """Every backend and model, one click away from the main window."""
-        self.model_menu.clear()
+        # The old entries go once what they set off is over: a model chosen
+        # here, or Settings opened from here, rebuilds the menu from inside
+        # the entry's own signal. Made by the window, they were never freed.
+        for action in self.model_menu.actions():
+            self.model_menu.removeAction(action)
+            (action.menu() or action).deleteLater()
         current = (self.settings.provider, self.settings.model)
         for name, label, _blurb in providers.provider_choices():
             spec = providers.provider_class(name)
             section = self.model_menu.addMenu(menu_text(label))
             for choice in spec.models:
-                action = QAction(menu_text(choice.label), self)
+                action = QAction(menu_text(choice.label), section)
                 action.setCheckable(True)
                 action.setChecked((name, choice.value) == current)
                 rate = spec.pricing.get(choice.value)
@@ -778,13 +917,13 @@ class MainWindow(QMainWindow):
                 section.addAction(action)
             if spec.needs_api_key and not self.store_has_key(name, probe=False):
                 section.addSeparator()
-                missing = QAction("No API key stored. Open Settings…", self)
+                missing = QAction("No API key stored. Open Settings…", section)
                 missing.triggered.connect(self.open_settings)
                 section.addAction(missing)
         self.model_menu.addSeparator()
         rules_menu = self.model_menu.addMenu("Local rule set (field)")
         for name, label, blurb in rulesets.choices():
-            action = QAction(menu_text(label), self)
+            action = QAction(menu_text(label), rules_menu)
             action.setCheckable(True)
             action.setChecked(name == self.settings.ruleset)
             action.setStatusTip(blurb)
@@ -792,7 +931,7 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda checked=False, r=name: self._switch_ruleset(r))
             rules_menu.addAction(action)
         self.model_menu.addSeparator()
-        more = QAction("Model settings…", self)
+        more = QAction("Model settings…", self.model_menu)
         more.setShortcut(QKeySequence("Ctrl+M"))
         more.triggered.connect(lambda: self.open_settings(tab=1))
         self.model_menu.addAction(more)
@@ -2271,20 +2410,20 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _reveal(self) -> None:
-        """Bring the window back, whether it was minimised, hidden or closed."""
-        self.show()
-        self.showNormal()
-        self.raise_()
-        self.activateWindow()
+        """Bring the window back, whether it was minimised, hidden or closed,
+        as it was: full screen stays full screen."""
+        bring_forward(self)
 
     def _give_dock_menu(self) -> None:
-        """The Dock icon's own menu, on a Mac: the window back, a scan and
-        Settings, with the window closed or not."""
+        """The Dock icon's own menu, on a Mac: the windows that are open,
+        then the window back, a scan and Settings, with the window closed or
+        not."""
         if not hasattr(QMenu, "setAsDockMenu"):
             return
         self.dock_menu = QMenu()
         show = self.dock_menu.addAction("Show Mail Manager")
         show.triggered.connect(self._reveal)
+        self.open_windows = OpenWindows.serve(self.dock_menu, show)
         scan = self.dock_menu.addAction("Scan Now")
         scan.triggered.connect(lambda: (self._reveal(), self.scan_button.click()))
         settings = self.dock_menu.addAction("Settings…")
@@ -2489,10 +2628,8 @@ class MainWindow(QMainWindow):
         # without a preview, such as row height, would otherwise be saved and
         # ignored.
         self.apply_appearance()
-        self.table.setItemDelegateForColumn(
-            TriageTableModel.COL_CONFIDENCE,
-            ConfidenceDelegate(self.settings.confidence_threshold, self.table),
-        )
+        self.confidence_delegate.threshold = self.settings.confidence_threshold
+        self.table.viewport().update()
         self._rebuild_model_menu()
         self._rebuild_account_menu()
         self._rebuild_view_menu()
@@ -3152,6 +3289,58 @@ class MainWindow(QMainWindow):
         self._after_rows_changed()
         self._select_first_row()
 
+    def _move_folder(self, account_id: str, folder: str, into: str) -> None:
+        """Move a folder, with everything in it, into another or to the top
+        level, on the server, as dragging it does in Mail."""
+        if self.demo:
+            self._set_status("The demo's mailboxes are not real: nothing was moved.")
+            return
+        if self._busy():
+            return
+        account = next((a for a in self.settings.accounts if a.id == account_id),
+                       None)
+        if account is None:
+            return
+        password = self._password_for(account)
+        if password is None:
+            return
+        worker = FolderMoveWorker(account, password, folder, into, parent=self)
+        worker.moved.connect(lambda old, new, a=account, p=password:
+                             self._folder_moved(a, p, old, new))
+        worker.failed.connect(self._on_failed)
+        self._register(worker)
+        self._set_status(f"Moving “{folder}”…")
+        worker.start()
+
+    def _folder_moved(self, account, password: str, old: str, new: str) -> None:
+        """A folder is somewhere else now: what the window kept under its
+        old name is let go, the sidebar is listed again, and a folder on
+        show is followed to where it went."""
+        self._append_log(f"{account.label}: moved “{old}” to “{new}”.")
+        self._set_status(f"Moved “{old}” to “{new}”.")
+        delimiter = self.sidebar.delimiter_of(account.id)
+
+        def renamed(name: str) -> Optional[str]:
+            if name == old or name.startswith(old + delimiter):
+                return new + name[len(old):]
+            return None
+
+        for place in [p for p in self._elsewhere
+                      if p.kind == "folder" and p.account_id == account.id
+                      and renamed(p.folder) is not None]:
+            del self._elsewhere[place]
+        shown = self.sidebar.place()
+        follow = (Place("folder", account.id, renamed(shown.folder))
+                  if shown.kind == "folder" and shown.account_id == account.id
+                  and renamed(shown.folder) is not None else None)
+        worker = MailboxesWorker(account, password, parent=self)
+        worker.finished_ok.connect(self.sidebar.set_mailboxes)
+        if follow is not None:
+            worker.finished_ok.connect(lambda _found, place=follow: self._chosen(place))
+        worker.failed.connect(lambda _title, detail, a=account: self._append_log(
+            f"{a.label}: could not list its mailboxes ({detail})."))
+        self._read_quietly(worker)
+
     def _refresh(self, place: Optional[Place] = None) -> None:
         """Look at a mailbox again: only what is new is read, and what has
         gone is taken out. Not before the window has opened its mailboxes,
@@ -3608,7 +3797,105 @@ class MainWindow(QMainWindow):
         if item is None:
             self.preview.clear()
             return
+        self.read_whole(item)
         self.preview.show_item(row, item, self._prompt_for(item))
+
+    @staticmethod
+    def _whole_key(message) -> tuple:
+        return (message.account_id, message.source_folder, message.uid)
+
+    #: How long after failing to read a message's whole text it is tried
+    #: again, when it is shown again, in seconds.
+    WHOLE_RETRY = 60.0
+
+    def read_whole(self, item) -> None:
+        """Read again a message a scan read only the start of, when it is
+        shown, so what is on screen is all of it: the scan's partial read
+        stops partway through a long message's HTML. Once a message: and
+        after a failure, not again for a while."""
+        import time
+
+        message = item.email
+        key = self._whole_key(message)
+        if (not message.truncated or self.demo or key in self._reading_whole
+                or key in self._whole_read):
+            return
+        failed = self._whole_failed.get(key)
+        if failed is not None and time.monotonic() - failed[1] < self.WHOLE_RETRY:
+            return
+        account = next((a for a in self.settings.accounts
+                        if a.id == message.account_id), None) or next(
+            iter(self.settings.accounts), None)
+        password = ""
+        if account is not None:
+            try:
+                password = self.store.get_mailbox_password(account.address)
+            except CredentialError as exc:
+                self._whole_failed[key] = (str(exc), time.monotonic())
+                return
+        if account is None or not password:
+            self._whole_failed[key] = ("no password is saved for its mailbox",
+                                       time.monotonic())
+            return
+        worker = WholeMessageWorker(account, password, message, parent=self)
+        worker.arrived.connect(
+            lambda whole, k=key, m=message: self._whole_arrived(k, m, whole))
+        worker.failed.connect(
+            lambda _title, detail, k=key: self._whole_missing(k, detail))
+        self._reading_whole.add(key)
+        self._read_quietly(worker)
+
+    def missing_from(self, item) -> str:
+        """What a message on screen lacks, in words to put under it."""
+        message = item.email
+        if not message.truncated:
+            return ""
+        key = self._whole_key(message)
+        if key in self._reading_whole:
+            return "This is the start of the message. The rest is on its way."
+        if key in self._whole_failed:
+            return ("This is only the start of the message: the rest could "
+                    f"not be read ({self._whole_failed[key][0]}).")
+        return "This is only the start of the message."
+
+    def _whole_arrived(self, key: tuple, asked, whole) -> None:
+        self._reading_whole.discard(key)
+        self._whole_failed.pop(key, None)
+        if whole is None:
+            self._whole_missing(key, "the server no longer has it")
+            return
+        shown = [item for item in self._rows_in_reach()
+                 if self._whole_key(item.email) == key]
+        for message in {id(m): m for m in [asked] + [i.email for i in shown]}.values():
+            message.body_text = whole.body_text
+            message.body_html = whole.body_html
+            message.links = whole.links
+            if whole.attachments:
+                message.attachments = whole.attachments
+            message.truncated = whole.truncated
+        self._whole_read.add(key)
+        self._show_again(key)
+
+    def _whole_missing(self, key: tuple, detail: str) -> None:
+        import time
+
+        self._reading_whole.discard(key)
+        self._whole_failed[key] = (detail, time.monotonic())
+        self._append_log(f"Could not read the rest of a message: {detail}")
+        self._show_again(key)
+
+    def _show_again(self, key: tuple) -> None:
+        """A message drawn again wherever it is on show."""
+        from mail_window import MessageWindow
+
+        current = self.preview._item
+        if current is not None and self._whole_key(current.email) == key:
+            self.preview.refresh_body(current)
+        for window in self._live_mail_windows():
+            if isinstance(window, MessageWindow):
+                item = window.item()
+                if item is not None and self._whole_key(item.email) == key:
+                    window.show_row(window.row)
 
     def _selected_rows(self) -> List[int]:
         """Source rows for every selected line, in view order."""
@@ -3924,7 +4211,10 @@ class MainWindow(QMainWindow):
             self.settings.save()
         except OSError:
             pass
-        self.model.layoutChanged.emit()
+        # The rows are only drawn taller or shorter. A bare layoutChanged here
+        # told the filter the rows had moved without warning it first: it
+        # freed its map and left the table's current row pointing into it,
+        # and the next click on a message crashed the app.
 
     @Slot()
     def _sync_table_stack(self) -> None:

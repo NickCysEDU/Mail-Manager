@@ -41,7 +41,7 @@ class NSRect(ctypes.Structure):
 
 
 #: How AppKit ranks what to leave out of a bar that is too narrow.
-PRIORITY = {"high": 1000.0, "normal": 0.0, "low": -1000.0}
+PRIORITY = {"high": 1000.0, "normal": 0.0, "lower": -500.0, "low": -1000.0}
 
 #: The colour behind a button with a role.
 BEZEL = {"primary": "systemBlueColor", "confirm": "systemGreenColor",
@@ -62,15 +62,6 @@ STRIP_MOST = 640.0
 #: A slider's width when its item does not say.
 SLIDER_WIDTH = 180.0
 
-#: The press-and-hold slider, in points. AppKit opens a held bar beside the
-#: finger, on whichever side of the bar has more room, as the system's own
-#: brightness and volume do. Never narrower than HOLD_LEAST, it fits on
-#: either side; up to HOLD_MOST, it stretches across the side it opens on,
-#: as the system's does, instead of hugging the finger. Held to the middle
-#: as the bar's principal item, it could not stretch.
-HOLD_LEAST = 300.0
-HOLD_MOST = 940.0
-
 #: A slider knob's corners, in points, on Apple's continuous curve. AppKit
 #: draws the knob on the bar as a sharp-cornered square.
 KNOB_ROUNDING = 6.0
@@ -86,7 +77,7 @@ NEEDED = {
     "+NSObject": ("alloc",),
     "NSObject": ("retain", "release", "init"),
     "NSArray": ("count", "objectAtIndex:"),
-    "NSView": ("window", "subviews", "layer", "setWantsLayer:", "setHidden:"),
+    "NSView": ("window", "subviews", "layer", "setWantsLayer:"),
     "CALayer": ("setCornerRadius:", "setCornerCurve:", "setMasksToBounds:"),
     "NSWindow": ("setTouchBar:", "touchBar"),
     "NSTouchBar": ("init", "setDefaultItemIdentifiers:", "setTemplateItems:",
@@ -112,15 +103,7 @@ NEEDED = {
                               "setCollapsedRepresentationLabel:",
                               "setCollapsedRepresentationImage:",
                               "setPopoverTouchBar:", "setShowsCloseButton:",
-                              "setPressAndHoldTouchBar:",
                               "dismissPopover:", "setCustomizationLabel:"),
-    "NSSliderTouchBarItem": ("initWithIdentifier:", "slider", "view",
-                             "setTarget:",
-                             "setAction:", "setMinimumValueAccessory:",
-                             "setMaximumValueAccessory:",
-                             "setMinimumSliderWidth:",
-                             "setMaximumSliderWidth:"),
-    "+NSSliderAccessory": ("accessoryWithImage:",),
     "NSScrubber": ("initWithFrame:", "registerClass:forItemIdentifier:",
                    "setScrubberLayout:", "setDataSource:", "setDelegate:",
                    "setMode:", "setSelectionBackgroundStyle:",
@@ -215,10 +198,11 @@ class _Runtime:
             self._shapes[shape] = function
         return function(receiver, self.sel(selector), *args)
 
-    def missing(self) -> List[str]:
-        """Every needed message a class on this Mac does not answer."""
+    def missing(self, needed: Optional[dict] = None) -> List[str]:
+        """Every needed message a class on this Mac does not answer: the
+        Touch Bar's, or those of ``needed``, laid out as NEEDED is."""
         gaps = []
-        for name, selectors in NEEDED.items():
+        for name, selectors in (NEEDED if needed is None else needed).items():
             meta = name.startswith("+")
             found = self.cls(name.lstrip("+"))
             if not found:
@@ -228,11 +212,12 @@ class _Runtime:
             gaps += [f"{name}{selector}" for selector in selectors
                      if not self.objc.class_respondsToSelector(
                          target, self.sel(selector))]
-        for constant in SPACES.values():
-            try:
-                self.constant(constant)
-            except ValueError:
-                gaps.append(constant)
+        if needed is None:
+            for constant in SPACES.values():
+                try:
+                    self.constant(constant)
+                except ValueError:
+                    gaps.append(constant)
         return gaps
 
     @contextlib.contextmanager
@@ -378,9 +363,6 @@ class Renderer:
             raise RuntimeError("AppKit here lacks " + ", ".join(gaps[:6]))
         self.handler = _handler(self.rt)
         self._act = self.rt.sel("act:")
-        #: A held popover's slider item -> its slider, for a press that
-        #: arrives from the item rather than the slider. See _hold.
-        self._held: Dict[int, int] = {}
         #: sender -> (handle, key, kind, popover to close); one for lists.
         self._targets: Dict[int, tuple] = {}
         self._lists: Dict[int, list] = {}
@@ -443,10 +425,9 @@ class Renderer:
         return made
 
     def _polish(self, view) -> None:
-        """Round the knob of every slider under ``view`` and hide a held
-        slider's backing panel, which AppKit draws at half the bar's height
-        with square ends behind a knob taller than it: the system's own
-        sliders are a track and a rounded knob on the bar's black."""
+        """Round the knob of every slider under ``view``, which AppKit draws
+        on the bar as a sharp-cornered square: the system's own sliders have
+        a rounded knob."""
         rt = self.rt
         subviews = rt.send(view, "subviews") if view else None
         count = rt.send(subviews, "count", restype=_ulong) if subviews else 0
@@ -464,8 +445,6 @@ class Renderer:
                     rt.send(layer, "setCornerCurve:", rt.string("continuous"),
                             argtypes=[_id])
                     rt.send(layer, "setMasksToBounds:", True, argtypes=[_bool])
-            elif name.endswith("_NSSliderBackgroundView"):
-                rt.send(child, "setHidden:", True, argtypes=[_bool])
             self._polish(child)
 
     def _segments(self, handle: _Handle, labels, mode: int) -> int:
@@ -625,62 +604,11 @@ class Renderer:
             nested = self._new_bar(handle, inside)
             handle.nested[item.key] = nested
             made = self._popover(handle, ident, nested, item.label)
-            if getattr(item, "hold", None) is not None:
-                self._hold(handle, made, item.hold)
         else:
             raise ValueError(f"no such kind of item: {kind}")
         self._label(made, item)
         handle.items[item.key] = made
         return made
-
-    def _hold(self, handle: _Handle, popover: int, hold) -> None:
-        """A bar of one slider that opens under a finger held on the popover
-        and follows it as it drags, as the brightness control does. AppKit's
-        own slider item, which it can hand the touch to; a plain slider in a
-        custom item cannot take it.
-        """
-        rt = self.rt
-        ident = self._ident(handle, hold.key)
-        made = self._keep(handle, rt.send(
-            rt.send(rt.cls("NSSliderTouchBarItem"), "alloc"),
-            "initWithIdentifier:", ident, argtypes=[_id]), retain=False)
-        slider = rt.send(made, "slider")
-        rt.send(slider, "setContinuous:", True, argtypes=[_bool])
-        # What each end means, drawn at the ends as AppKit's own volume and
-        # brightness sliders are: a symbol on a rounded key, which a tap
-        # steps the value towards.
-        low, high = (self._symbol(symbol) for symbol in hold.ends)
-        if low:
-            rt.send(made, "setMinimumValueAccessory:", rt.send(
-                rt.cls("NSSliderAccessory"), "accessoryWithImage:", low,
-                argtypes=[_id]), argtypes=[_id])
-        if high:
-            rt.send(made, "setMaximumValueAccessory:", rt.send(
-                rt.cls("NSSliderAccessory"), "accessoryWithImage:", high,
-                argtypes=[_id]), argtypes=[_id])
-        rt.send(made, "setMinimumSliderWidth:", HOLD_LEAST, argtypes=[_double])
-        rt.send(made, "setMaximumSliderWidth:", HOLD_MOST, argtypes=[_double])
-        # Both the item and its slider report here: whichever AppKit uses.
-        rt.send(made, "setTarget:", self.handler, argtypes=[_id])
-        rt.send(made, "setAction:", self._act, argtypes=[_id])
-        rt.send(slider, "setTarget:", self.handler, argtypes=[_id])
-        rt.send(slider, "setAction:", self._act, argtypes=[_id])
-        bar = self._new_bar(handle, [made])
-        rt.send(bar, "setDefaultItemIdentifiers:", rt.array([ident]),
-                argtypes=[_id])
-        rt.send(popover, "setPressAndHoldTouchBar:", bar, argtypes=[_id])
-        handle.drawn[hold.key] = rt.send(made, "view")
-        handle.kinds[hold.key] = ("slider", "")
-        handle.items[hold.key] = made
-        handle.controls[hold.key] = slider
-        # A label nothing shows: the slider item is the slider alone, and
-        # an update writes the words it would have.
-        handle.labels[hold.key] = self._keep(handle, rt.send(
-            rt.cls("NSTextField"), "labelWithString:", rt.string(hold.label),
-            argtypes=[_id]))
-        self._held[made] = slider
-        self._targets[made] = (handle, hold.key, "slider", 0)
-        self._targets[slider] = (handle, hold.key, "slider", 0)
 
     def arrange(self, handle: _Handle, arranged) -> None:
         if handle.released:
@@ -733,8 +661,12 @@ class Renderer:
                         argtypes=[_double])
                 rt.send(slider, "setMaxValue:", float(state["maximum"]),
                         argtypes=[_double])
-                rt.send(slider, "setDoubleValue:", float(state["value"]),
-                        argtypes=[_double])
+                # A knob a finger left between two whole values already
+                # shows the one it rounds to: set, it would hop.
+                if abs(rt.send(slider, "doubleValue", restype=_double)
+                       - float(state["value"])) >= 0.5:
+                    rt.send(slider, "setDoubleValue:", float(state["value"]),
+                            argtypes=[_double])
                 rt.send(slider, "setEnabled:",
                         bool(state.get("enabled", True)), argtypes=[_bool])
                 # Every push, from the first: AppKit may draw them afresh.
@@ -779,6 +711,10 @@ class Renderer:
         if popover:
             rt.send(popover, "setCollapsedRepresentationLabel:",
                     rt.string(state.get("title") or ""), argtypes=[_id])
+            image = self._symbol(state.get("image"))
+            if image:
+                rt.send(popover, "setCollapsedRepresentationImage:", image,
+                        argtypes=[_id])
 
     def attach(self, handle: _Handle, window) -> bool:
         if handle.released:
@@ -807,7 +743,6 @@ class Renderer:
                 if entry[0] is handle:
                     rt.send(pointer, "setTarget:", None, argtypes=[_id])
                     del self._targets[pointer]
-                    self._held.pop(pointer, None)
             for pointer, entry in list(self._lists.items()):
                 if entry[0] is handle:
                     rt.send(pointer, "setDataSource:", None, argtypes=[_id])
@@ -837,8 +772,6 @@ class Renderer:
             return
         handle, key, kind, popover = entry
         rt = self.rt
-        # A held popover's slider item reports as itself; read its slider.
-        sender = self._held.get(sender, sender)
         if kind == "toggle":
             value = bool(rt.send(sender, "isSelectedForSegment:", 0,
                                  restype=_bool, argtypes=[_long]))

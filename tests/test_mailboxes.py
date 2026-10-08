@@ -1017,3 +1017,226 @@ class TestANewPeriod:
         window._mailboxes_changed(before)
         _settle(qtbot, window)
         assert len(window.model.items) == 2
+
+
+class TestAMessageCutShortIsReadWhole:
+    """A listing or a scan reads the first 64 KB of each message, which
+    stops partway through a long newsletter's HTML; the viewer showed that
+    much and no more, with nothing to say so."""
+
+    PAGE = ("<html><body>" + "<p>This week at the climbing club: the new "
+            "routes, the late opening and the kit sale.</p>" * 1200
+            + "<p>Booking for the trip closes on Friday.</p></body></html>")
+
+    @pytest.fixture
+    def cut(self, opened, qtbot, mime_factory):
+        window, server = opened
+        server.messages["4"] = mime_factory(subject="This week at the club",
+                                            plain=None, html=self.PAGE)
+        # Not the newest: the window opens on the newest, and this is to be
+        # chosen by hand.
+        server.internaldates["4"] = _days_ago(5)
+        window._open_mailboxes()
+        _settle(qtbot, window)
+        row = next(r for r, item in enumerate(window.model.items)
+                   if item.email.subject == "This week at the club")
+        assert window.model.items[row].email.truncated is True
+        assert "Booking for the trip" not in window.model.items[row].email.body_html
+        return window, server, row
+
+    def _select(self, window, row):
+        proxy_row = window.proxy.mapFromSource(window.model.index(row, 0)).row()
+        window.table.selectRow(proxy_row)
+
+    def test_shown_it_is_read_again_whole(self, cut, qtbot):
+        window, server, row = cut
+        self._select(window, row)
+        shown = window.preview.rich_view.toPlainText
+        assert "The rest is on its way" in shown()
+        qtbot.waitUntil(lambda: "Booking for the trip closes" in shown(),
+                        timeout=10000)
+        assert "start of the message" not in shown()
+        assert window.model.items[row].email.truncated is False
+        names = {name for name, _args in server.commands}
+        assert not names & {"UID STORE", "UID COPY", "EXPUNGE"}, "it was changed"
+        # Read once: shown again, it is not read again.
+        fetched = sum(1 for name, _a in server.commands if name == "UID FETCH")
+        window.table.clearSelection()
+        self._select(window, row)
+        _settle(qtbot, window)
+        assert sum(1 for name, _a in server.commands
+                   if name == "UID FETCH") == fetched
+
+    def test_its_window_is_given_the_rest_too(self, cut, qtbot):
+        window, _server, row = cut
+        window.open_message(row)
+        mail = [w for w in window._live_mail_windows()
+                if hasattr(w, "same_message")][0]
+        qtbot.waitUntil(lambda: "Booking for the trip closes"
+                        in mail.view.toPlainText(), timeout=10000)
+        mail.close()
+
+    def test_when_it_cannot_be_read_the_view_says_so(self, cut, qtbot,
+                                                      monkeypatch):
+        window, server, row = cut
+        del server.messages["4"]
+        self._select(window, row)
+        shown = window.preview.rich_view.toPlainText
+        qtbot.waitUntil(lambda: "could not be read" in shown(), timeout=10000)
+        assert "the server no longer has it" in shown()
+        # Not asked again at once; after a while, it is.
+        before = sum(1 for name, _a in server.commands if name == "UID FETCH")
+        window.table.clearSelection()
+        self._select(window, row)
+        _settle(qtbot, window)
+        assert sum(1 for name, _a in server.commands if name == "UID FETCH") == before
+        monkeypatch.setattr(type(window), "WHOLE_RETRY", 0.0)
+        window.table.clearSelection()
+        self._select(window, row)
+        _settle(qtbot, window)
+        assert sum(1 for name, _a in server.commands if name == "UID FETCH") > before
+
+
+class TestMovingAFolderInTheSidebar:
+    """Xxxxxx xxx Xxxxx xxxx xxxxxxx at the top level of the account, beside
+    the app's own two; the way to put them inside Sorted Mail is Mail's:
+    drag one onto it, or choose Move To from its menu."""
+
+    FOLDERS = ICLOUD_FOLDERS + ["Sorted Mail", "Sorted Mail/Receipts",
+                                "Church", "Notes"]
+
+    @pytest.fixture
+    def sidebar(self, qapp, settings):
+        from sidebar import MailboxList
+
+        made = MailboxList()
+        made.set_accounts(settings.accounts)
+        account = settings.accounts[0]
+        made.set_mailboxes(_found(account.id, self.FOLDERS, ICLOUD_SPECIAL))
+        made.resize(260, 600)
+        made.show()
+        yield made, account
+        made.close()
+
+    def test_it_may_go_anywhere_but_into_itself_or_a_server_mailbox(
+            self, sidebar):
+        made, account = sidebar
+        where = [folder for _title, folder in
+                 made.destinations(account.id, "Church")]
+        assert "Sorted Mail" in where and "Job Search/Interview" in where
+        assert "" not in where, "already at the top level"
+        assert not {"Church", "INBOX", "Drafts", "Sent Messages", "Junk",
+                    "Deleted Messages", "Archive"} & set(where)
+        inside = [folder for _title, folder in
+                  made.destinations(account.id, "Job Search")]
+        assert "Job Search/Interview" not in inside, "a folder inside it"
+        assert [title for title, folder in made.destinations(
+            account.id, "Sorted Mail/Receipts") if folder == ""] == ["Top Level"]
+        assert ("Job Search › Interview", "Job Search/Interview") in \
+            made.destinations(account.id, "Church")
+
+    def test_a_folder_dropped_on_another_goes_inside_it(self, sidebar):
+        from types import SimpleNamespace
+
+        from PySide6.QtCore import QPointF
+
+        from sidebar import Place
+
+        made, account = sidebar
+        items = {item.data(0, Qt.ItemDataRole.UserRole): item
+                 for item in made._walk()}
+        church = items[Place("folder", account.id, "Church")]
+        sorted_mail = items[Place("folder", account.id, "Sorted Mail")]
+        heading = next(item for item in made._walk()
+                       if item.data(0, Qt.ItemDataRole.UserRole + 1) == account.id)
+        inbox = next(item for item in made._walk() if item.text(0) == "Inbox")
+        made.setCurrentItem(church)
+
+        def at(item):
+            centre = made.visualItemRect(item).center()
+            return SimpleNamespace(position=lambda: QPointF(centre))
+
+        assert made._drop_target(at(sorted_mail))[1] == "Sorted Mail"
+        assert made._drop_target(at(inbox))[1] is None
+        assert made._drop_target(at(church))[1] is None
+        made.setCurrentItem(items[Place("folder", account.id, "Sorted Mail/Receipts")])
+        assert made._drop_target(at(heading))[1] == "", "the top level"
+        made.setCurrentItem(inbox)
+        assert made._drop_target(at(sorted_mail))[1] is None, "only folders move"
+
+    def test_a_drop_asks_and_never_rearranges_the_tree_itself(self, sidebar):
+        from PySide6.QtCore import QMimeData, QPointF
+        from PySide6.QtGui import QDropEvent
+
+        from sidebar import Place
+
+        made, account = sidebar
+        asked = []
+        made.moveRequested.connect(lambda *args: asked.append(args))
+        items = {item.data(0, Qt.ItemDataRole.UserRole): item
+                 for item in made._walk()}
+        notes = items[Place("folder", account.id, "Notes")]
+        made.setCurrentItem(notes)
+        before = [item.text(0) for item in made._walk()]
+        target = made.visualItemRect(items[Place("folder", account.id,
+                                                  "Sorted Mail")]).center()
+        # What the tree's own drag carries, which Qt's handling of a drop
+        # would act on.
+        carried = made.mimeData([notes])
+        assert isinstance(carried, QMimeData) and carried.formats()
+        event = QDropEvent(QPointF(target), Qt.DropAction.MoveAction, carried,
+                           Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+        made.dropEvent(event)
+        assert asked == [(account.id, "Notes", "Sorted Mail")]
+        assert [item.text(0) for item in made._walk()] == before
+
+
+class TestTheWindowMovesAFolder:
+    def test_moved_on_the_server_and_followed_in_the_window(
+            self, opened, qtbot, dialog_calls):
+        from sidebar import Place
+
+        window, server = opened
+        server.folders += ["Sorted Mail", "Church"]
+        window._open_mailboxes()
+        _settle(qtbot, window)
+        account = window.settings.accounts[0]
+        church = Place("folder", account.id, "Church")
+        window._chosen(church)
+        _settle(qtbot, window)
+        window._move_folder(account.id, "Church", "Sorted Mail")
+        moved = Place("folder", account.id, "Sorted Mail/Church")
+        qtbot.waitUntil(lambda: window.sidebar.place() == moved, timeout=10000)
+        assert "Sorted Mail/Church" in server.folders and "Church" not in server.folders
+        assert moved in window.sidebar.places() and church not in window.sidebar.places()
+        assert church not in window._elsewhere
+        assert "moved “Church” to “Sorted Mail/Church”" in window.log_view.toPlainText()
+        assert dialog_calls == []
+
+    def test_a_refusal_is_said_and_nothing_changes(self, opened, qtbot,
+                                                    dialog_calls):
+        window, server = opened
+        server.folders += ["Sorted Mail", "Sorted Mail/Church", "Church"]
+        window._open_mailboxes()
+        _settle(qtbot, window)
+        account = window.settings.accounts[0]
+        window._move_folder(account.id, "Church", "Sorted Mail")
+        qtbot.waitUntil(lambda: bool(dialog_calls), timeout=10000)
+        assert "already has a folder called “Church”" in str(dialog_calls[-1])
+        assert "Church" in server.folders
+
+    def test_in_the_demo_nothing_is_moved(self, qapp, tmp_path, monkeypatch):
+        from config import InMemoryCredentialStore, Settings
+        from gui import MainWindow
+
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        window = MainWindow(Settings(icloud_email="you@icloud.example").normalized(),
+                            InMemoryCredentialStore(), demo=True)
+        try:
+            window._move_folder(window.settings.accounts[0].id, "Church",
+                                "Sorted Mail")
+            assert "nothing was moved" in window._status_text
+            assert window._workers == []
+        finally:
+            window.close()
+            window.deleteLater()

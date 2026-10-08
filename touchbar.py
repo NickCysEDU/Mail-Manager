@@ -97,9 +97,10 @@ class Item:
     """One thing on a bar.
 
     ``when`` decides whether it is there at all; ``watch`` lists signals or
-    widgets whose changes can alter that. ``priority`` is high, normal or
-    low: what AppKit leaves out first when the bar is too narrow. Items with
-    ``default`` False are only offered when the bar is customised.
+    widgets whose changes can alter that. ``priority`` is high, normal,
+    lower or low: what AppKit leaves out first when the bar is too narrow,
+    low first. Items with ``default`` False are only offered when the bar is
+    customised.
     """
 
     kind = ""
@@ -349,8 +350,11 @@ class Choice(Item):
         current = options[index] if 0 <= index < len(options) else ""
         title = f"{self.label}: {current}" if self.named and current else (
             current or self.label)
-        return {"options": options, "index": index, "title": title,
-                "enabled": self._enabled()}
+        state = {"options": options, "index": index, "title": title,
+                 "enabled": self._enabled()}
+        if self.image is not None:
+            state["image"] = _read(self.image)
+        return state
 
     def act(self, value=None) -> None:
         if value is None or not self._enabled():
@@ -374,6 +378,8 @@ class Slider(Item):
 
     ``settle`` waits that many milliseconds after the last movement before
     acting, for a slider whose every step is expensive, as seeking is.
+    ``follow`` False keeps it on the bar while its control is hidden, for a
+    control that something else stands in for on screen.
     """
 
     kind = "slider"
@@ -382,12 +388,13 @@ class Slider(Item):
                  change: Optional[Callable[[int], None]] = None,
                  settle: int = 0, width: Optional[float] = None,
                  ends: Sequence = (None, None), title=None,
-                 **kwargs) -> None:
+                 follow: bool = True, **kwargs) -> None:
         super().__init__(key, label, **kwargs)
         self.source = source
         self.title = title
         self.change = change
         self.width = width
+        self.follow = follow
         #: SF Symbols at the two ends, as a quiet and a loud speaker.
         self.ends = tuple(ends)
         self._held: Optional[tuple] = None
@@ -402,7 +409,8 @@ class Slider(Item):
         return [self.source]
 
     def present(self) -> bool:
-        return super().present() and _shown(self.source)
+        return super().present() and (not self.follow
+                                      or _shown(self.source))
 
     def state(self) -> dict:
         value = self.source.value()
@@ -413,9 +421,11 @@ class Slider(Item):
                 "maximum": self.source.maximum(), "value": value,
                 "enabled": self.source.isEnabled()}
 
-    def act(self, value=None) -> None:
+    def act(self, value=None) -> bool:
+        """Take the value a finger moved the knob to. Returns whether it was
+        taken: a disabled control refuses it."""
         if value is None or not self.source.isEnabled():
-            return
+            return False
         wanted = int(round(max(self.source.minimum(),
                                min(self.source.maximum(), float(value)))))
         self._held = (wanted, time.monotonic())
@@ -423,6 +433,7 @@ class Slider(Item):
             self._settle.start()
         else:
             self._apply(wanted)
+        return True
 
     def _apply_held(self) -> None:
         if self._held is not None and _alive(self.source):
@@ -436,27 +447,19 @@ class Slider(Item):
 
 
 class Popover(Item):
-    """A button that opens onto more items.
-
-    ``hold`` is a Slider that a finger held on the button opens onto
-    instead, and that follows the finger as it drags, the way the
-    brightness control on a Mac's own bar does: faster than a tap to open
-    and a second touch to adjust. It mirrors the same control as a slider
-    inside the popover would, under a key of its own.
-    """
+    """A button that opens onto more items. A tap opens it; nothing else
+    does: a finger held on it and dragged is only a tap."""
 
     kind = "popover"
 
     def __init__(self, key: str, label: str, items: Sequence[Item], *,
-                 title=None, hold: Optional["Slider"] = None,
-                 **kwargs) -> None:
+                 title=None, **kwargs) -> None:
         super().__init__(key, label, **kwargs)
         self.items = list(items)
         self.title = title
-        self.hold = hold
 
     def children(self) -> List[Item]:
-        return self.items + ([self.hold] if self.hold is not None else [])
+        return list(self.items)
 
     def present(self) -> bool:
         return super().present() and any(item.present()
@@ -504,6 +507,11 @@ class Bar(QObject):
         self._pending.setSingleShot(True)
         self._pending.setInterval(0)
         self._pending.timeout.connect(self.refresh)
+        #: Once a slider stops ignoring its control, a look at it again.
+        self._let_go = QTimer(self)
+        self._let_go.setSingleShot(True)
+        self._let_go.setInterval(int(HELD_FOR * 1000) + 50)
+        self._let_go.timeout.connect(self.changed)
         self._poll = QTimer(self)
         self._poll.setInterval(POLL_MS)
         self._poll.timeout.connect(self.changed)
@@ -565,7 +573,6 @@ class Bar(QObject):
         out = {"": keys(self.items, True)}
         for item in self.flat.values():
             if item.kind == "popover":
-                # The held slider has a bar of its own; see Popover.hold.
                 out[item.key] = keys(item.items, False)
         return out
 
@@ -577,8 +584,6 @@ class Bar(QObject):
             if item.kind == "popover":
                 entry["items"] = [one(child) for child in item.items
                                   if child.present()]
-                entry["hold"] = (one(item.hold) if item.hold is not None
-                                 and item.hold.present() else None)
             return entry
 
         return [one(item) for item in self.items if item.present()]
@@ -588,20 +593,25 @@ class Bar(QObject):
         item = self.flat.get(key)
         if item is None or not item.present():
             return False
+        taken = False
         try:
-            item.act(value)
+            taken = item.act(value)
         except Exception:      # noqa: BLE001 - a press must never take the app down
             log.exception("Touch Bar item %s.%s failed", self.name, key)
             return False
         finally:
-            # AppKit has already moved the control under the finger, so its
-            # state is sent again even if the press changed nothing.
-            self._pushed.pop(key, None)
+            shown = self._pushed.get(key)
+            if item.kind == "slider" and taken and shown is not None:
+                # The finger put the knob there and may still be moving it.
+                # Sent back, the value arrives after the finger has moved on
+                # and pulls the knob to where it was: the knob stutters.
+                self._pushed[key] = dict(shown, value=item.state()["value"])
+                self._let_go.start()
+            else:
+                # AppKit has already moved the control under the finger, so
+                # its state is sent again even if the press changed nothing.
+                self._pushed.pop(key, None)
             self.changed()
-            if item.kind == "slider":
-                # And once more when the slider stops ignoring its control.
-                QTimer.singleShot(int(HELD_FOR * 1000) + 50, self,
-                                  self.changed)
         return True
 
     def changed(self, *_args) -> None:

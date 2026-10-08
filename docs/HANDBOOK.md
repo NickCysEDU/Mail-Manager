@@ -143,13 +143,21 @@ Down the left, the sidebar lists your mailboxes as Mail does: the inbox,
 Drafts, Sent, Junk, Trash and Archive, each gathering every account's, then
 each account's own folders. Choose one to see its mail: each time you do, it
 is looked at again, reading only what is new, and **View → Get New Mail**
-(⇧⌘N) looks again at the one on screen. The button at the left of the
-toolbar, or ⌃⌘S, hides the sidebar and brings it back. The window
+(⇧⌘N) looks again at the one on screen. Drag a folder onto another to move
+it inside, or onto the account's name for the top level; or right-click it
+and choose **Move To**. The folder moves on the server with everything in
+it; the inbox and the mailboxes the server keeps for itself stay put. The
+button at the left of the toolbar, or ⌃⌘S, hides the sidebar and brings it
+back. The window
 opens on the last month of your inbox, read without marking anything, so it
 is never empty. Until a scan reads them those rows say **Not sorted yet**,
 and a scan's verdicts then show over them: a message outside the scan's
 window stays as it was listed. Mail in any other mailbox can be read and
 answered there, but only mail in the inbox is filed.
+
+Right-click the app in the Dock for every window it has open, by title,
+the one in front ticked; choose one to bring it forward. **Show Mail
+Manager**, **Scan Now**, **Settings** and **New Message** are under them.
 
 Columns can be hidden and resized, and **View → Row height** sets how much of
 each summary shows. Dates read as a person would say them, with the exact time
@@ -173,23 +181,24 @@ passwords are not in it.
 | ⌘/ | This list, in the app |
 
 **Settings → Appearance** sets light or dark, contrast (normal, high or
-maximum) and spacing, and can tune the layout for reading. The ? at the top
-right explains whatever you hover over.
+maximum) and spacing, and can tune the layout for reading; turned off, the
+layout is as it was. The ? at the top right explains whatever you hover
+over.
 
 On a MacBook Pro with a Touch Bar, the bar has **Scan** (**Stop** while it
 works), **Apply**, **Undo**, **Show**, the category and the tick shortcuts.
 **More** has the visualiser, Briefing, Find, Links and the rest of the
 commands; the sliders icon has the time window, the model, hover help and
-Settings. Every window has its own: the visualiser's has play, the scenes,
-the strobe, the game's and the scope's settings and the picture's; Settings
-has its pages and their main choices; dialogs have their buttons. A button
-that opens onto a slider - the volume, the scope's glow, the game's effects,
-the strobe's sensitivity, and the seek bar while the picture is on - can be
-held instead: keep a finger on it and drag, as the volume and brightness
-controls do. The slider opens beside your finger, on the side of the bar
-with room, with what each end means drawn at either side (quiet and loud,
-dim and bright, less and more, start and end), and moves from where it was
-rather than jumping to your finger. Its knob is rounded, like the system's.
+Settings. Every window has its own; Settings has its pages and their main
+choices, and dialogs have their buttons. The visualiser's has play, the
+scene (tap it for the list), the strobe, the scene's own button (the game,
+the scope's beam, the meters' colours), **Picture**, **Seek**, the volume
+and full screen. Each does one thing when tapped; a button that opens onto
+more opens it, and nothing is held or dragged. Beside the Control Strip
+there is room for **Seek** or for a scene's own button, and Seek gives way;
+with the Control Strip hidden, everything fits. A slider's ends say what
+they mean (quiet and loud, less and more, start and end), and its knob is
+rounded, like the system's.
 
 ## Rules
 
@@ -224,8 +233,13 @@ sender. Patterns that could hang the app, such as `(a+)+`, are refused.
 
 Double-click a message, or press Return on it, and it opens in a window of
 its own with the whole message as sent, on its own light page whatever the
-app's look; a message with no dark design of its own has any pale text
-darkened so it can be read. Along the top: Reply (⌘R), Reply All
+app's look. Messages are drawn by WebKit, as in Mail, so a newsletter looks
+as its sender designed it; nothing in a message runs, and nothing loads but
+its pictures, when they are wanted. With pictures off, a message with no
+dark design of its own has any pale text darkened so it can be read. A scan
+reads the start of each message; one longer than that is read whole when
+it is shown, in the preview or its window, and until it arrives the
+message says it is only the start. Along the top: Reply (⌘R), Reply All
 (⌘⇧R), Forward (⌘⇧F), Mark as Read or Unread, Flag, Move to, Archive (⌘E),
 Junk and Delete (⌘⌫). ⌘↑ and ⌘↓ walk the table in the order it is shown.
 Opening a message marks it read, as it would anywhere else. The same actions
@@ -379,7 +393,7 @@ See [SECURITY.md](../SECURITY.md) for reporting a problem.
 ./dev dry      # scan for real, with moves disabled
 ./dev fake     # the pipeline in the terminal, offline
 ./dev scan     # the pipeline on real mail, read-only
-./dev test     # 5,178 tests (with the evaluation sets present)
+./dev test     # 5,254 tests (with the evaluation sets present)
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 
@@ -393,6 +407,8 @@ message.
 | `main.py` | Entry point, logging, `--self-test` |
 | `gui.py` | The main window |
 | `triage_table.py` | The table, its filters and the preview pane |
+| `webview_mac.py` | Messages drawn by WebKit, on a Mac |
+| `sidebar.py` | The mailboxes down the left, and moving folders |
 | `settings_dialog.py` | Settings |
 | `imap_engine.py` | IMAP: fetching, folders, moves |
 | `models.py` | Categories, validation and routing (no Qt, no network) |

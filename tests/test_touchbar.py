@@ -232,11 +232,10 @@ class TestItemsMirrorTheirControls:
         button.hide()
         assert not item.present()
 
-    def test_a_popover_held_opens_onto_a_slider_that_follows_the_finger(
-            self, qtbot, recorder):
-        """Hold and drag, as the brightness control: the held slider is an
-        item of its own, mirrored to the same control, kept out of the
-        popover's own bar."""
+    def test_a_slider_kept_on_the_bar_while_its_control_is_hidden(
+            self, qtbot):
+        """The waveform stands in for the seek bar on screen; the bar keeps
+        its slider, as nothing on the bar stands in for it."""
         from PySide6.QtCore import Qt
         from PySide6.QtWidgets import QSlider
 
@@ -244,23 +243,13 @@ class TestItemsMirrorTheirControls:
 
         window = _window(qtbot)
         slider = _add(window, QSlider(Qt.Orientation.Horizontal))
-        slider.setRange(0, 100)
-        held = touchbar.Slider("glow-held", "Glow", slider)
-        item = touchbar.Popover("beam", "Beam", [
-            touchbar.Slider("glow", "Glow", slider, width=140)], hold=held)
-        bar = touchbar.give(window, [item], "beam-test")
         window.show()
-        assert item.hold is held and held in item.children()
-        assert bar.arrangement()["beam"] == ["glow"], "the held one has its own bar"
-        described = bar.describe()[0]
-        assert described["hold"]["key"] == "glow-held"
-        assert [entry["key"] for entry in described["items"]] == ["glow"]
-        assert bar.press("glow-held", 42.4)
-        assert slider.value() == 42
-        slider.setValue(70)
-        qtbot.waitUntil(lambda: bool(recorder.updates("glow-held"))
-                        and recorder.updates("glow-held")[-1]["value"] == 70,
-                        timeout=2000)
+        kept = touchbar.Slider("seek", "", slider, follow=False)
+        plain = touchbar.Slider("volume", "", slider)
+        assert kept.present() and plain.present()
+        slider.hide()
+        assert kept.present(), "the seek bar left the bar with the window's"
+        assert not plain.present()
 
     def test_only_when_adds_to_an_items_own_condition(self, qapp):
         import touchbar
@@ -330,6 +319,74 @@ class TestABarKeepsInStep:
         combo.setCurrentIndex(1)
         qtbot.waitUntil(lambda: recorder.updates("pick")[-1]["index"] == 1,
                         timeout=1000)
+
+    def _slider(self, qtbot, recorder):
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QSlider
+
+        import touchbar
+
+        window = _window(qtbot)
+        slider = _add(window, QSlider(Qt.Orientation.Horizontal))
+        slider.setRange(0, 100)
+        slider.setValue(50)
+        bar = touchbar.give(window, [
+            touchbar.Slider("volume", "Volume", slider)], "drag")
+        window.show()
+        qtbot.waitUntil(lambda: bool(recorder.updates("volume")),
+                        timeout=1000)
+        return slider, bar
+
+    def test_a_knob_under_a_finger_is_not_sent_back_where_it_was(
+            self, qtbot, recorder):
+        """Each step of a drag arrives after AppKit has drawn it. Sent back,
+        it reached AppKit after the finger had moved on and pulled the knob
+        to where the finger had been: the knob stuttered behind it."""
+        import touchbar
+
+        slider, bar = self._slider(qtbot, recorder)
+        sent = len(recorder.updates("volume"))
+        for value in (52.4, 57.9, 63.2, 70.6):
+            assert bar.press("volume", value)
+            qtbot.wait(15)
+        assert slider.value() == 71
+        assert len(recorder.updates("volume")) == sent, "a step was sent back"
+        # Let go, and nothing moved it since: still nothing to send.
+        qtbot.wait(int(touchbar.HELD_FOR * 1000) + 150)
+        assert len(recorder.updates("volume")) == sent
+        # Moved from elsewhere, the knob follows.
+        slider.setValue(20)
+        qtbot.waitUntil(lambda: recorder.updates("volume")[-1]["value"] == 20,
+                        timeout=1000)
+
+    def test_a_value_changed_under_the_finger_is_sent_once_it_lets_go(
+            self, qtbot, recorder):
+        """While the knob is under a finger the control's own changes wait;
+        once it lets go, the knob is told where the control went."""
+        import touchbar
+
+        slider, bar = self._slider(qtbot, recorder)
+        bar._poll.stop()
+        assert bar.press("volume", 64.2)
+        slider.setValue(30)
+        qtbot.wait(20)
+        assert recorder.updates("volume")[-1]["value"] != 30, "pulled back"
+        qtbot.waitUntil(lambda: recorder.updates("volume")[-1]["value"] == 30,
+                        timeout=int(touchbar.HELD_FOR * 1000) + 1000)
+
+    def test_a_knob_moved_while_its_slider_is_off_goes_back(
+            self, qtbot, recorder):
+        slider, bar = self._slider(qtbot, recorder)
+        slider.setEnabled(False)
+        qtbot.waitUntil(
+            lambda: recorder.updates("volume")[-1]["enabled"] is False,
+            timeout=1000)
+        sent = len(recorder.updates("volume"))
+        bar.press("volume", 90.0)
+        assert slider.value() == 50
+        qtbot.waitUntil(lambda: len(recorder.updates("volume")) > sent,
+                        timeout=1000)
+        assert recorder.updates("volume")[-1]["value"] == 50
 
     def test_a_refused_press_is_sent_back(self, qtbot, recorder):
         window, box, combo, bar = self._bar(qtbot, recorder)
@@ -516,15 +573,35 @@ class TestTheViewersBar:
         assert "scene" not in keys and "picture" not in keys
         viewer.audio.enable_box.setChecked(True)
         keys = self._keys(viewer)
-        assert {"play", "scene", "strobe", "picture", "full", "sound"} <= set(keys)
+        assert {"play", "scene", "strobe", "picture", "where", "full",
+                "sound"} <= set(keys)
         assert "seek" not in keys
 
-    def test_the_volume_is_a_button_to_tap_or_hold_with_the_picture_off_or_on(
+    def test_the_seek_bar_stays_when_the_waveform_stands_in_for_it(
             self, viewer, qtbot):
-        """A plain slider on the bar jumps to where it is touched, which for
-        a volume can mean all the way up; the system's own volume is a
-        button that opens a slider and follows a held finger from where the
-        volume was."""
+        """Once the waveform is drawn it takes the seek bar's place in the
+        window, and the seek bar is hidden; the bar's seek went with it."""
+        import touchbar
+
+        qtbot.waitUntil(lambda: viewer.stack.currentWidget() is viewer.audio,
+                        timeout=3000)
+        audio = viewer.audio
+        bar = touchbar.of(viewer)
+        audio.enable_box.setChecked(True)
+        # As the track's waveform arriving does.
+        audio._show_scrubber(True)
+        assert audio.position.isHidden()
+        where = next(entry for entry in bar.describe()
+                     if entry["key"] == "where")
+        assert [child["key"] for child in where["items"]] == ["seek-in"]
+        audio.enable_box.setChecked(False)
+        audio._show_scrubber(True)
+        assert "seek" in self._keys(viewer)
+
+    def test_the_volume_is_a_button_that_opens_a_slider(self, viewer, qtbot):
+        """A slider on the bar jumps to where it is touched, which for a
+        volume can mean all the way up; the system's own volume is a button
+        that opens one, drawn with as many waves as the sound is loud."""
         import touchbar
 
         qtbot.waitUntil(lambda: viewer.stack.currentWidget() is viewer.audio,
@@ -534,11 +611,30 @@ class TestTheViewersBar:
             viewer.audio.enable_box.setChecked(picture)
             shown = {entry["key"]: entry for entry in bar.describe()}
             assert shown["sound"]["kind"] == "popover"
-            assert shown["sound"]["hold"]["key"] == "volume-held"
+            assert [child["key"] for child in shown["sound"]["items"]] == [
+                "volume-in"]
             plain = [key for key, entry in shown.items()
                      if entry["kind"] == "slider"
                      and bar.flat[key].source is viewer.audio.volume]
             assert plain == [], picture
+        for value, image in ((0, "speaker.slash.fill"),
+                             (20, "speaker.wave.1.fill"),
+                             (50, "speaker.wave.2.fill"),
+                             (90, "speaker.wave.3.fill")):
+            viewer.audio.volume.setValue(value)
+            assert bar.flat["sound"].state() == {"title": "", "image": image}
+
+    def test_what_gives_way_when_the_bar_is_full(self, viewer, qtbot):
+        """Beside the Control Strip there is room for the scene's own
+        button or the seek button, not both: the seek gives way, and the
+        viewer's own buttons before it."""
+        import touchbar
+
+        bar = touchbar.of(viewer)
+        assert bar.flat["where"].priority == "lower"
+        assert {key for key, item in bar.flat.items()
+                if item.priority == "low"} >= {"back", "forward", "add",
+                                               "info", "save"}
 
     def test_choosing_a_scene_turns_the_visualiser_on(self, viewer, qtbot):
         import touchbar

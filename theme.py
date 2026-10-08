@@ -21,7 +21,8 @@ from typing import Dict, Tuple
 
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import (
-    QColor, QFont, QImage, QPainter, QPainterPath, QPalette, QPen,
+    QColor, QFont, QFontDatabase, QImage, QPainter, QPainterPath, QPalette,
+    QPen,
 )
 from PySide6.QtWidgets import QProxyStyle, QStyle
 
@@ -670,14 +671,15 @@ def arrow_image(colour: str, direction: str = "down", size: int = 16) -> str:
     return str(target)
 
 
-def base_font(app, readable: bool) -> QFont:
-    """Type large enough to read without leaning in."""
-    font = QFont(app.font())
-    size = font.pointSizeF()
-    if size <= 0:
-        size = 13.0
-    font.setPointSizeF(size + 2.0 if readable else size)
+def base_font(readable: bool) -> QFont:
+    """The system's type, or in the reading layout type large enough to read
+    without leaning in. Made from the system's each time: made from the
+    application's, which the reading layout had already made larger, it was
+    larger again with each change and never came back."""
+    font = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)
     if readable:
+        size = font.pointSizeF()
+        font.setPointSizeF((size if size > 0 else 13.0) + 2.0)
         # A hair more tracking; the default is tight at larger sizes.
         font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 101.0)
     return font
@@ -712,6 +714,6 @@ def apply(app, mode: str = "system", contrast: str = "normal",
     if not isinstance(app.style(), ArrowStyle):
         app.setStyle(ArrowStyle(app.style()))
     app.setPalette(build_palette(colours))
-    app.setFont(base_font(app, readable))
+    app.setFont(base_font(readable))
     app.setStyleSheet(stylesheet(colours, readable, spacing=spacing))
     return colours

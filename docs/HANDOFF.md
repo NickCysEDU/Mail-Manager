@@ -10,6 +10,8 @@ describes the app itself.
   built-in sorter), `llm_engine.py` and `providers.py` (models), `models.py`
   (routing, no Qt), `gui.py`, `triage_table.py`, `settings_dialog.py`,
   `mail_window.py` (a message's window and the compose window),
+  `webview_mac.py` (messages drawn by WebKit), `sidebar.py` (the
+  mailboxes down the left),
   `format_bar.py` (the formatting bar over a rich editor, shared by the
   compose window and Settings' Signature page), `outgoing.py` (SMTP and the
   message as bytes), `icons.py` (every drawn icon).
@@ -30,6 +32,24 @@ describes the app itself.
 ## Rules that break things if forgotten
 
 ### Everywhere
+
+- **A model never says its rows moved without warning first.**
+  `layoutChanged` without `layoutAboutToBeChanged` freed the filter's map
+  while the table's current row pointed into it, and the next click on a
+  message crashed (`test_no_crashes`, which also checks the source).
+- **An application-wide event filter is one object for the application.**
+  One per window put every event through a filter for each window ever
+  made: the suite, which makes hundreds, crawled, and workers crashed in
+  app-wide font changes (`OpenWindows.serve`).
+- **A menu row the pointer rests on opens** (`widgets.RestingOpensMenus`,
+  installed in `main.py`): Qt's Mac menus lost the row after a visit to
+  another row's submenu, whatever the style hints said.
+- **The type comes from the system's font each time** (`theme.base_font`):
+  built on the application's, the reading layout grew it with every change
+  and never gave it back.
+- **A menu rebuilt from its own entry's signal frees the old entries
+  later** (`deleteLater`), and makes them its own children: made by the
+  window, forty actions and six menus were left behind on each rebuild.
 
 - **Every shortcut is unique.** Qt fires neither of two actions bound to the
   same keys. `test_no_two_actions_share_a_shortcut` checks the main window.
@@ -391,47 +411,98 @@ describes the app itself.
 - **Every AppKit message sent is listed in `touchbar_mac.NEEDED`,** checked
   before anything is drawn; a message a class does not answer ends the
   process. A test fails if the list and what is sent differ.
-- **No `NSPickerTouchBarItem`, and no `NSSliderTouchBarItem` on the bar
-  itself:** both log an AppKit layout complaint. Segmented controls and a
-  plain `NSSlider` beside a label do the same jobs. The one place AppKit's
-  slider item is used is a popover's press-and-hold bar (`Popover(hold=...)`,
-  `Renderer._hold`): AppKit hands a held finger only to its own item. It
-  logs one line of its own when it builds its slider
-  (`_NSLayoutConstraintNumberExceedsLimit`, seen with a bare item and
-  nothing of ours set); the native tests set that line aside and fail on
-  any other.
-- **A held slider works as the system's volume does.** AppKit carries the
-  held finger through a private transposer; the slider item's
-  (`NSTouchBarSliderPopoverTransposer`) moves the value by the finger's
-  movement (dx × range ÷ track width), never to the finger, and
-  `NSTouchBarItemOverlay.currentRecommendedOptions` opens the bar beside the
-  finger, on the side with more room, when its minimum width fits there.
-  Read from AppKit's own code, by disassembly; see `## Open`. So the slider
-  is never narrower than `HOLD_LEAST`, to fit either side, and up to
-  `HOLD_MOST` it stretches across its side, as the Control Strip's slider
-  container (941 points) does. It is not the principal item: that held it
-  to the middle and stopped it stretching. Both ends carry an
-  `NSSliderAccessory` symbol (`AudioPane.QUIET_LOUD` and its neighbours).
-- **AppKit draws its slider badly on this macOS's bar:** a grey panel of
-  half the bar's height with square ends, behind a square knob taller than
-  it. `Renderer._polish` hides `_NSSliderBackgroundView` and rounds every
-  `NSSliderKnob` (`KNOB_ROUNDING`, continuous corners), on every push of a
-  slider's state from the first, giving a knob its own layer first: a bar
-  not yet shown has none. Found by class name, so on a macOS without those
-  classes nothing changes. The visualiser's volume is always a button to tap
-  or hold: a plain slider jumps to where it is touched.
+- **No `NSPickerTouchBarItem` and no `NSSliderTouchBarItem`:** both log
+  an AppKit layout complaint, which the native tests fail on. Segmented
+  controls and a plain `NSSlider` beside a label do the same jobs.
+- **Nothing on a bar is held or dragged.** 1.9 had a popover's
+  press-and-hold bar (an `NSSliderTouchBarItem`, opened beside the finger
+  through AppKit's private overlay); it was taken out in 1.10 because a
+  held button drove something other than what it was named for, and its
+  slider stuttered. A popover opens on a tap; `test_touchbar_mac` checks
+  that none has a press-and-hold bar.
+- **A knob under a finger is never sent its value back.** Each step of a
+  drag reaches Python after AppKit has drawn it; sent back, the value
+  arrived after the finger had moved on and pulled the knob to where it had
+  been, so the knob stuttered behind the finger. `Bar.press` records what
+  AppKit shows instead of sending it, and the renderer leaves a knob alone
+  when it is within half a step of the value (a finger leaves it between
+  whole values). After `HELD_FOR` the bar looks again, once (`_let_go`).
+- **The visualiser's bar fits beside the Control Strip:** 685 points for
+  the app's items with the strip folded, 613 inside a popover once its close
+  button is in. Measured in AppKit's own bar appearance, in which a button
+  is never narrower than 72 points (`test_the_visualisers_bar_fits_beside_
+  the_control_strip`, every scene, windowed and full screen). What does not
+  fit gives way by priority: Seek is `lower`, between normal and low, so a
+  scene's own button keeps its place; back, forward and the viewer's own
+  buttons are low.
+- **AppKit draws a slider's knob on the bar as a square:**
+  `Renderer._polish` rounds every `NSSliderKnob` (`KNOB_ROUNDING`,
+  continuous corners) on every push of a slider's state, giving a knob its
+  own layer first: a bar not yet shown has none. Found by class name, so on
+  a macOS without the class nothing changes.
 - **The live bar can be read in-process** while the Touch Bar is awake
   (`+[NSFunctionRow isDynamicFunctionRowAvailable]`): item views sit in an
   `_NSFunctionRowPanel`, and `renderInContext:` of the root view's layer
   draws what is on the glass. Asleep, with nobody at the keyboard, nothing
-  is hosted. `tests/test_touchbar_mac.py` renders a held slider in
+  is hosted, and with the lid shut there is no bar at all.
+  `tests/test_touchbar_mac.py` renders a slider in
   `+[NSAppearance _functionRowAppearance]` in an off-screen window and
-  checks the knob's corners and the panel's place in the pixels.
+  checks the knob's corners in the pixels.
 - **ctypes callbacks cannot return structs,** so a scrubber's entries share
   one width (`_fit`). A scrubber keeps its count until `reloadData`.
 - **The suite cannot see the bar.** `tests/test_touchbar_mac.py` runs on the
   real platform, natively and under Rosetta, and checks what AppKit holds;
   `screencapture -b` needs Screen Recording permission.
+
+### Reading mail
+
+- **Messages are drawn by WebKit** (`webview_mac.MessageWebView`), in a
+  `WKWebView` put in the Qt window with `QWindow.fromWinId` and
+  `createWindowContainer`. `triage_table.message_view()` chooses it on the
+  Mac's own platform and falls back to Qt's `MailView` offscreen, in the
+  suite, or if WebKit will not start; both take the same calls. Qt's
+  engine knows little CSS: a newsletter came out with its phone and its
+  desktop layouts one under the other.
+- **What a message may do:** its HTML is sanitised first
+  (`sanitise_for_view`; with pictures on, `keep_urls` keeps a style's
+  pictures); page script is off (`allowsContentJavaScript`); a
+  Content-Security-Policy in the page lets in inline style and pictures
+  alone, and pictures only when wanted; the data store keeps nothing; link
+  previews are off (a firm press loads the page). Every navigation but the
+  app's own load, a reload and a jump within the page is cancelled; a link
+  clicked is handed to the app (`anchorClicked`), which shows where it goes.
+  Loads from `loadHTMLString` leave no history, so going back cannot show
+  another message (tested). A renderer that dies is redrawn once, then the
+  message is shown as text: a message built to crash WebKit would loop.
+- **The sanitiser never gives up on a message:** Python's parser raises on
+  a "<![" that opens no section it knows, so a second pass shows each as
+  text, and failing that the message's words are shown.
+- **A window's title is a sender's words** where it is a message's
+  subject: the Dock's list shows it on one line, shortened, with "&" as
+  itself (`OpenWindows.entry_for`).
+- **Blocks from ctypes:** a global block (`_BLOCK_IS_GLOBAL`) is made per
+  call and kept until it has returned; freed inside its own call, the
+  trampoline went with it and the process with that. The decision handler
+  is answered exactly once, whatever happens.
+- **The view is retained once and released on `destroyed`;** Qt keeps its
+  own hold on a foreign view for the container's life.
+- **The app's own script still runs** with page script off
+  (`evaluate`): it keeps the scroll place when more of a message arrives.
+- **A message cut short by the scan's 64 KB read is read whole when shown**
+  (`MainWindow.read_whole`, `IMAPEngine.fetch_whole`, up to `WHOLE_BYTES`,
+  read-only): about one HTML message in eight was cut. Once a message;
+  after a failure not again for `WHOLE_RETRY` seconds, and the view says
+  what is missing (`missing_from`).
+
+### Mailboxes
+
+- **A folder moves with one RENAME** (`IMAPEngine.move_folder`), refused
+  before anything is sent for the inbox and the special mailboxes, a move
+  into itself and a name already taken. The sidebar asks for it
+  (`moveRequested`) from a drop or **Move To**, and never rearranges its own
+  tree: the server's word redraws it. Qt only moves items itself when a
+  drag's source is the tree, which no test can make without a real drag,
+  so that the override stops it is unchecked by the suite.
 
 ### Timing
 
@@ -446,11 +517,22 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 5,178 tests
+./dev test                     # 5,254 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus
 ```
+
+`tests/test_monkey.py` is somebody who has never seen the app: hundreds
+of seeded random clicks, keys, filters, looks, menus, dialogs, message
+windows and visualiser changes on the demo, in a process of its own;
+`MONKEY_SEED` and `MONKEY_STEPS` replay or lengthen a run. `python
+tools/stress.py` throws hostile input at every parser, the viewer's
+sanitiser and the page WebKit is given included; it found the viewer
+showing nothing of a message with a stray `<![`.
+
+A test's subprocess has a timeout under the suite's own sixty seconds: one
+longer was left running, a core at full tilt, when pytest gave up first.
 
 `./dev playtest` reports where blocks land against their beats, the road's
 speed, and frame cost. Run it one record at a time. No song or frame of one is
@@ -522,8 +604,18 @@ About's security link is a 404 for everyone but the owner.
 - **The verdict cache ignores UIDVALIDITY changes;** `forget_mailbox` is
   unused.
 - **No test opens the built `.app`.**
-- **Frame pacing:** about one refresh in ten does not get exactly one frame.
-  A display link and a fixed 60 Hz schedule were both worse.
+- **Frame pacing:** the visualiser's clock (`Spectrum._frame`) sets the
+  timer each frame for the next sixtieth, gives a late frame the ticks it
+  missed, and never asks sooner than dear frames can be drawn. Measured on
+  the card by the gaps between `frameSwapped`, at full screen on this Mac,
+  idle: 98 to 100 per cent of frames a refresh apart in Vaporwave, Rave,
+  Ambience and the rider, against 85 to 95 with the old whole-millisecond
+  sixteen. In a small window behind other apps the readings swing from run
+  to run with either clock (Ambience between 52 and 100 per cent), so they
+  say little. Frames driven from `frameSwapped` came in pairs; a paint
+  straight after each tick (`repaint`) gained a per cent at full screen and
+  is not in. Syncing to the display's own refresh (`requestUpdate` on the
+  window) is the next thing to try.
 - **The difficulty levels want tuning by play.** They are one table,
   `rider_layout.DIFFICULTY`.
 - **The audio allowance is measured on built-in speakers only;** Bluetooth
@@ -533,10 +625,10 @@ About's security link is a 404 for everyone but the owner.
 - **Gatekeeper:** without a paid Developer ID, the first launch needs
   right-click, Open.
 - **The Touch Bar has not been checked by eye or with a finger.** Its
-  drawing is checked in pixels and its layout was read live once, but where
-  a held bar opens and how far it stretches come from AppKit's code: the bar
-  was asleep whenever it could have been measured. macOS's customise palette
-  for the main window's bar is untested.
+  drawing is checked in pixels and its room measured in AppKit's own
+  appearance, but the bar was asleep or the lid shut whenever it could have
+  been looked at. macOS's customise palette for the main window's bar is
+  untested.
 - **Other mailboxes are listed over the inbox's period** and read only:
   there is no paging beyond `workers.LIST_MOST`, no unread count in the
   sidebar, and no filing from them.

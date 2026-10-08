@@ -77,7 +77,8 @@ OpenAI-compatible service with your own key, in **Settings → Analysis**.
 
 ## Also
 
-- **Read and write** like any mail app: double-click a message for its own
+- **Read and write** like any mail app: messages are drawn by WebKit, as
+  Mail draws them, with nothing in them run; double-click one for its own
   window, then reply, reply all, forward, flag, archive, delete or move it.
   Replies and new messages are written with formatting, pictures and
   attachments under a sign-off of your own, go out through your own mailbox,
@@ -94,8 +95,7 @@ OpenAI-compatible service with your own key, in **Settings → Analysis**.
 - **Links** in a message are listed by where they really go, and the address
   is shown before anything opens.
 - **Touch Bar**: each window's controls are on it, on a MacBook Pro that has
-  one; a button that opens onto a slider can be held and dragged instead,
-  as the system's own volume is.
+  one.
 
 ## Privacy
 
@@ -108,7 +108,7 @@ turns that off. See [SECURITY.md](SECURITY.md).
 
 ```bash
 ./dev demo     # the app with sample mail, no setup
-./dev test     # 5,178 tests, about five minutes on four workers
+./dev test     # 5,254 tests, about five minutes on four workers
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 

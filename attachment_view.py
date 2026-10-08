@@ -1798,7 +1798,12 @@ class AudioPane(QWidget):
 
     def touch_bar_items(self, full=None) -> list:
         """The transport, the scenes, the strobe and the picture, for the
-        viewer's Touch Bar or, given ``full``, the full screen's."""
+        viewer's Touch Bar or, given ``full``, the full screen's.
+
+        Each item does one thing, on a tap. What does not fit beside the
+        Control Strip opens from a button, named for what it holds, rather
+        than being left off the bar for want of room.
+        """
         import touchbar
 
         on = self.enable_box.isChecked
@@ -1821,10 +1826,12 @@ class AudioPane(QWidget):
                             image="goforward.10", priority="low"),
         ]
         if full is None:
+            # The waveform stands in for the seek bar on screen once it is
+            # drawn; on the bar, the seek bar stays.
             items += [
                 touchbar.Slider("seek", "", self.position, settle=150,
                                 change=self._seek_to, width=240,
-                                when=lambda: not on(),
+                                follow=False, when=lambda: not on(),
                                 watch=[self.position.moved,
                                        self.enable_box.toggled]),
                 touchbar.Toggle("visualiser", "Visualiser", self.enable_box,
@@ -1833,8 +1840,8 @@ class AudioPane(QWidget):
         # What a scene brings with it is there while it is the scene, as the
         # window's own row of controls does.
         items += [
-            touchbar.Choice("scene", "Scene", self.scene_box, style="list",
-                            width=300, priority="high", when=shown,
+            touchbar.Choice("scene", "Scene", self.scene_box, style="popover",
+                            priority="high", when=shown,
                             watch=[self.enable_box.toggled]),
             touchbar.Toggle("strobe", "Strobe", self.strobe_box,
                             image="bolt.fill", when=shown,
@@ -1843,26 +1850,24 @@ class AudioPane(QWidget):
                             image="bolt.badge.clock", priority="low",
                             when=lambda: shown() and self.strobe_box.isChecked()),
             touchbar.Popover("game", "Game", [
-                touchbar.Choice("game-mode", "Game", self.game_box),
-                touchbar.Choice("level", "Level", self.level_box),
+                touchbar.Choice("game-mode", "Game", self.game_box,
+                                style="menu", named=True),
+                touchbar.Choice("level", "Level", self.level_box,
+                                style="menu", named=True),
                 touchbar.Toggle("sounds", "Sounds", self.sound_box,
                                 image="speaker.wave.2"),
                 touchbar.Slider("effects", "Effects", self.effects,
                                 width=110, ends=self.QUIET_LOUD),
             ], title=lambda: self.game_box.currentText(),
                 image="gamecontroller", when=scene("Music rider"),
-                watch=scenes,
-                hold=touchbar.Slider("effects-held", "Effects", self.effects,
-                                     ends=self.QUIET_LOUD)),
+                watch=scenes),
             touchbar.Popover("beam", "Beam", [
                 touchbar.Choice("beam-mode", "Beam", self.mode_box),
                 touchbar.Slider("glow", "Glow", self.decay, width=140,
                                 ends=self.DIM_BRIGHT),
             ], title=lambda: self.mode_box.currentText(),
                 image="waveform.path", when=scene("Oscilloscope"),
-                watch=scenes,
-                hold=touchbar.Slider("glow-held", "Glow", self.decay,
-                                     ends=self.DIM_BRIGHT)),
+                watch=scenes),
             touchbar.Button("colours", "Colours", self.colour_button,
                             image="paintpalette", when=scene("VU meters"),
                             watch=scenes),
@@ -1870,10 +1875,12 @@ class AudioPane(QWidget):
                 touchbar.Toggle("picture-on", "Visualiser", self.enable_box,
                                 image="waveform"),
                 touchbar.Choice("shape", "Shape", self.shape_box,
-                                style="list", width=190),
-                touchbar.Choice("change", "Scene change", self.change_box),
-                touchbar.Choice("source", "Listens to", self.strobe_source,
-                                style="list", width=190),
+                                style="popover", named=True),
+                touchbar.Choice("change", "Scene change", self.change_box,
+                                style="menu", named=True),
+                touchbar.Choice("source", "Strobe listens to",
+                                self.strobe_source, style="popover",
+                                named=True, priority="lower"),
                 touchbar.Slider("sense", "Sensitivity", self.sense,
                                 width=100, priority="low",
                                 title=lambda: caption(self.sense_box),
@@ -1882,32 +1889,25 @@ class AudioPane(QWidget):
                                 priority="low",
                                 title=lambda: caption(self.rate_box),
                                 ends=self.LESS_MORE),
-            ], image="photo", when=shown, watch=[self.enable_box.toggled],
-                hold=touchbar.Slider("sense-held", "Sensitivity", self.sense,
-                                     title=lambda: caption(self.sense_box),
-                                     ends=self.LESS_MORE)),
+            ], image="photo", when=shown, watch=[self.enable_box.toggled]),
             # With the picture on, the seek bar leaves the bar for the
-            # scene's controls; this brings it back under a finger: tap to
-            # open, or hold and drag. The volume is always such a button, as
-            # the system's own is: a plain slider jumps to where it is
+            # scene's controls; a tap brings it back. Beside the Control
+            # Strip there is room for it or for a scene's own button, which
+            # it gives way to. The volume is always such a button, as the
+            # system's own is: a slider on the bar jumps to where it is
             # touched, which for a volume can mean all the way up.
             touchbar.Popover("where", "Seek", [
                 touchbar.Slider("seek-in", "", self.position, settle=150,
                                 change=self._seek_to, width=260,
-                                watch=[self.position.moved],
+                                follow=False, watch=[self.position.moved],
                                 ends=self.START_END),
-            ], image="slider.horizontal.3", when=on,
-                watch=[self.enable_box.toggled],
-                hold=touchbar.Slider("seek-held", "", self.position,
-                                     settle=150, change=self._seek_to,
-                                     watch=[self.position.moved],
-                                     ends=self.START_END)),
+            ], image="timeline.selection", when=on, priority="lower",
+                watch=[self.enable_box.toggled]),
             touchbar.Popover("sound", "Volume", [
                 touchbar.Slider("volume-in", "", self.volume, width=200,
                                 ends=self.QUIET_LOUD),
-            ], image="speaker.wave.2",
-                hold=touchbar.Slider("volume-held", "", self.volume,
-                                     ends=self.QUIET_LOUD)),
+            ], title="", image=self._speaker,
+                watch=[self.volume.valueChanged]),
         ]
         if full is None:
             items += [
@@ -1923,6 +1923,16 @@ class AudioPane(QWidget):
                 image="arrow.down.right.and.arrow.up.left",
                 priority="high"))
         return items
+
+    def _speaker(self) -> str:
+        """The volume's button, as the system draws its own: a speaker with
+        as many waves as the sound is loud, or struck out when silent."""
+        value = self.volume.value()
+        if value <= 0:
+            return "speaker.slash.fill"
+        return ("speaker.wave.1.fill" if value < 34 else
+                "speaker.wave.2.fill" if value < 67 else
+                "speaker.wave.3.fill")
 
     #: What the two ends of a Touch Bar slider show, as SF Symbols: a sound
     #: quiet and loud, a light dim and bright, less and more, the start and
@@ -2404,8 +2414,9 @@ class AttachmentViewer(QDialog):
                             priority="low"),
             touchbar.Button("save", "Save", self.save_button, title="",
                             image="square.and.arrow.down", priority="low"),
+            # Given way to the visualiser's own items when the bar is full.
             touchbar.Button("add", "Add a track", self.add_button,
-                            title="Add", image="plus"),
+                            title="Add", image="plus", priority="low"),
         ], "viewer")
 
     def _add_tracks(self) -> None:

@@ -553,13 +553,31 @@ def _readable_css(css: str) -> str:
     return _COLOUR_DECL.sub(darken, css)
 
 
+#: A picture a style may name, where the view may load it: on the web, or
+#: carried in the message itself.
+_LOADABLE = re.compile(r"""url\s*\(\s*['"]?\s*(?:https?:|data:image/)""", re.I)
+
+
+def _css(css: str, keep_urls: bool) -> str:
+    """A style with nothing in it that can fetch or run: every ``url()``
+    gone, or, with ``keep_urls``, all but the pictures a view may load."""
+    if not keep_urls:
+        return _CSS_URL.sub("none", css)
+    return _CSS_URL.sub(
+        lambda found: found.group(0) if _LOADABLE.match(found.group(0)) else "none",
+        css)
+
+
 class _Cleaner(HTMLParser):
     """Writes the document back out with the dangerous parts left out."""
 
     def __init__(self, pictures: bool = False, families=None,
-                 dark_page: bool = False) -> None:
+                 dark_page: bool = False, keep_urls: bool = False) -> None:
         super().__init__(convert_charrefs=False)
         self.pictures = pictures
+        #: Whether styles keep the pictures they name: for a view that
+        #: draws them, with pictures wanted.
+        self.keep_urls = keep_urls
         self.families = families
         #: Whether the message paints its own dark background; without one it
         #: is shown on a light page, where its pale text would vanish.
@@ -603,7 +621,7 @@ class _Cleaner(HTMLParser):
             if name == "href" and not _safe_link(value):
                 continue
             if name == "style":
-                value = _known_fonts(_CSS_URL.sub("none", value), self.families)
+                value = _known_fonts(_css(value, self.keep_urls), self.families)
                 if not self.dark_page:
                     value = _readable_css(value)
             if name in ("color", "text") and not self.dark_page:
@@ -633,7 +651,7 @@ class _Cleaner(HTMLParser):
         if self._skipping:
             return
         if self._in_style:
-            data = _known_fonts(_CSS_URL.sub("none", data), self.families)
+            data = _known_fonts(_css(data, self.keep_urls), self.families)
             if not self.dark_page:
                 data = _readable_css(data)
         self.out.append(data)
@@ -682,16 +700,31 @@ def _image(attrs, pictures: bool = False) -> str:
 
 
 def sanitise_for_view(html: str, pictures: bool = False,
-                      families=None) -> str:
+                      families=None, keep_urls: bool = False) -> str:
     """The message's HTML with scripts, embeds, forms and every remote
-    reference taken out, for Qt's document engine to draw, bar the pictures
-    when they are wanted. Whatever is left can still not fetch anything of
-    its own: the view refuses every resource, and fetches the pictures
-    itself."""
-    cleaner = _Cleaner(pictures, families, dark_page=has_dark_background(html or ""))
-    cleaner.feed(defuse_stray_brackets(html or ""))
-    cleaner.close()
-    return "".join(cleaner.out)
+    reference taken out, bar the pictures when they are wanted. Whatever is
+    left can still not fetch anything of its own: Qt's view refuses every
+    resource and fetches the pictures itself, and WebKit's loads only
+    pictures. ``keep_urls`` keeps the pictures a style names too, for
+    WebKit, which draws them; pale text is then left as it is, since the
+    pictures it was written over are there."""
+    html = defuse_stray_brackets(html or "")
+    dark = keep_urls or has_dark_background(html)
+    for attempt in (html, html.replace("<![", "&lt;![")):
+        cleaner = _Cleaner(pictures, families, keep_urls=keep_urls,
+                           dark_page=dark)
+        try:
+            cleaner.feed(attempt)
+            cleaner.close()
+        except Exception:      # noqa: BLE001 - the parser's own assertions
+            # Python's parser gives up on a "<![" that opens no section it
+            # knows ("<![CDAT"), and the message was not shown at all.
+            # Shown again with every one of them as text; failing that, as
+            # its words.
+            continue
+        return "".join(cleaner.out)
+    return ('<div style="white-space:pre-wrap">'
+            + _attr(html_to_text(html).text) + "</div>")
 
 
 def html_to_text(html: str) -> ExtractedText:

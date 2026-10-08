@@ -1732,8 +1732,177 @@ class TestTheWindowComesBack:
                     if a.text() == "Show Mail Manager")
         show.trigger()
         assert window.isVisible()
+        qapp.processEvents()
         assert [a.text() for a in window.dock_menu.actions()] == [
-            "Show Mail Manager", "Scan Now", "Settings…", "New Message"]
+            window.windowTitle(), "", "Show Mail Manager", "Scan Now",
+            "Settings…", "New Message"]
+
+    def test_the_dock_menu_lists_the_windows_that_are_open(self, qapp,
+                                                          window, qtbot):
+        """As a Mac lists an app's windows in its Dock menu: each by its
+        title, in the order they opened, the one in front ticked; choosing
+        one brings it forward, minimised or not."""
+        import sys
+
+        from PySide6.QtWidgets import QApplication, QWidget
+
+        from attachment_view import AttachmentViewer
+
+        if sys.platform != "darwin":
+            pytest.skip("the Dock is macOS's")
+
+        def listed():
+            qapp.processEvents()
+            names = [a.text() for a in window.dock_menu.actions()]
+            return names[:names.index("Show Mail Manager")]
+
+        window.show()
+        viewer = AttachmentViewer([], "", window, library=True)
+        notes = QWidget()
+        notes.setWindowTitle("Notes")
+        try:
+            viewer.show()
+            notes.show()
+            assert listed() == [window.windowTitle(), "Visualiser", "Notes", ""]
+            # Settled, so the new title is all there is to follow.
+            qtbot.wait(100)
+            assert not window.open_windows._again.isActive()
+            notes.setWindowTitle("Notes, renamed")
+            assert listed()[2] == "Notes, renamed"
+            notes.activateWindow()
+            qtbot.waitUntil(lambda: QApplication.activeWindow() is notes,
+                            timeout=2000)
+            qapp.processEvents()
+            ticked = [a.text() for a in window.dock_menu.actions()
+                      if a.isChecked()]
+            assert ticked == ["Notes, renamed"]
+            viewer.showMinimized()
+            assert "Visualiser" in listed()
+            entry = next(a for a in window.dock_menu.actions()
+                         if a.text() == "Visualiser")
+            entry.trigger()
+            assert viewer.isVisible() and not viewer.isMinimized()
+            notes.close()
+            assert listed() == [window.windowTitle(), "Visualiser", ""]
+        finally:
+            notes.close()
+            notes.deleteLater()
+            viewer.close()
+            viewer.deleteLater()
+
+    def test_the_dock_is_given_the_windows(self):
+        """What AppKit hands the Dock when its icon is right-clicked, on
+        the Mac's own platform: the menu, windows first."""
+        import json
+        import os
+        import subprocess
+        import sys
+        import textwrap
+        from pathlib import Path
+
+        from test_gpu_canvas import real_platform_or_skip
+
+        if sys.platform != "darwin":
+            pytest.skip("the Dock is macOS's")
+        real_platform_or_skip()
+        root = Path(__file__).resolve().parents[1]
+        script = textwrap.dedent(f"""
+            import ctypes, json, os, sys, tempfile
+            os.environ["ICLOUD_TRIAGE_HOME"] = tempfile.mkdtemp()
+            sys.path.insert(0, {str(root)!r})
+            from PySide6.QtCore import QTimer
+            from PySide6.QtWidgets import QApplication, QWidget
+            app = QApplication([])
+            from config import InMemoryCredentialStore, Settings
+            from gui import MainWindow
+            window = MainWindow(Settings(icloud_email="you@icloud.example").normalized(),
+                                InMemoryCredentialStore(), demo=True)
+            window.show()
+            notes = QWidget()
+            notes.setWindowTitle("Notes")
+            notes.show()
+            from touchbar_mac import _Runtime, _id
+            rt = _Runtime()
+
+            def look():
+                nsapp = rt.send(rt.cls("NSApplication"), "sharedApplication")
+                menu = rt.send(rt.send(nsapp, "delegate"),
+                               "applicationDockMenu:", nsapp, argtypes=[_id])
+                items = rt.send(menu, "itemArray")
+                titles = [rt.text(rt.send(rt.send(items, "objectAtIndex:", i,
+                                                  argtypes=[ctypes.c_ulong]),
+                                          "title"))
+                          for i in range(rt.send(items, "count",
+                                                 restype=ctypes.c_ulong))]
+                print(json.dumps([window.windowTitle(), titles]), flush=True)
+                os._exit(0)
+
+            QTimer.singleShot(800, look)
+            QTimer.singleShot(20000, lambda: os._exit(1))
+            app.exec()
+        """)
+        env = {key: value for key, value in os.environ.items()
+               if key != "QT_QPA_PLATFORM"}
+        # Under the suite's own limit, so a hung script is ended with it
+        # rather than left running.
+        done = subprocess.run([sys.executable, "-c", script],
+                              capture_output=True, text=True, timeout=50,
+                              env=env, cwd=str(root))
+        lines = [line for line in done.stdout.splitlines()
+                 if line.startswith("[")]
+        assert done.returncode == 0 and lines, done.stderr[-2000:]
+        title, titles = json.loads(lines[-1])
+        assert titles[:2] == [title, "Notes"]
+        assert titles[3:] == ["Show Mail Manager", "Scan Now", "Settings…",
+                              "New Message"]
+
+    def test_a_title_written_by_a_sender_is_shown_as_it_reads(self, qapp):
+        """A message's window is called by its subject."""
+        from gui import OpenWindows
+
+        assert OpenWindows.entry_for("Tea & cake\n\ttomorrow") == \
+            "Tea && cake tomorrow"
+        long = OpenWindows.entry_for("Weekly news " * 40)
+        assert len(long) == OpenWindows.TITLE_MOST and long.endswith("…")
+
+    def test_one_list_serves_every_window(self, qapp, window, tmp_path,
+                                           monkeypatch):
+        """One filter for the application, whatever number of windows:
+        one per window put every event through a filter for each window
+        ever made, and the suite, which makes hundreds, crawled."""
+        import sys
+
+        from config import InMemoryCredentialStore, Settings
+        from gui import MainWindow
+
+        if sys.platform != "darwin":
+            pytest.skip("the Dock is macOS's")
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        others = [MainWindow(Settings(icloud_email="you@icloud.example").normalized(),
+                             InMemoryCredentialStore(), demo=True) for _ in range(3)]
+        try:
+            assert {id(other.open_windows) for other in others} == {
+                id(window.open_windows)}
+            assert qapp._open_windows is window.open_windows
+        finally:
+            for other in others:
+                other.close()
+                other.deleteLater()
+
+    def test_brought_back_a_full_screen_window_stays_so(self, qapp, window):
+        """Show Mail Manager used to make the window normal: brought back
+        from the Dock, a full screen window left full screen."""
+        from PySide6.QtCore import Qt
+
+        from gui import bring_forward
+
+        window.show()
+        window.setWindowState(Qt.WindowState.WindowFullScreen
+                              | Qt.WindowState.WindowMinimized)
+        bring_forward(window)
+        assert window.windowState() & Qt.WindowState.WindowFullScreen
+        assert not window.windowState() & Qt.WindowState.WindowMinimized
+        window.setWindowState(Qt.WindowState.WindowNoState)
 
     def test_a_click_on_the_dock_icon_reveals_it(self, qapp, window):
         from PySide6.QtCore import QEvent

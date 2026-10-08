@@ -341,13 +341,18 @@ class Plasma:
 
     COLUMNS = 36
     ROWS = 22
-    #: Frames between recomputes; the field moves over seconds.
+    #: Frames between recomputes, where the field is dim enough for its
+    #: steps not to show; the field moves over seconds.
     EVERY = 2
     #: How many times the grid is doubled before it is stretched: three
     #: takes 36 by 22 to 288 by 176, which costs a fraction of a millisecond.
     DOUBLINGS = 3
 
-    def __init__(self) -> None:
+    def __init__(self, every: int = EVERY) -> None:
+        #: Frames between recomputes. Every other, behind Ambience's ribbons,
+        #: moved in steps at half the frame rate, and the frames that
+        #: recomputed ran late against those that did not.
+        self.every = max(1, int(every))
         self._image = None
         #: The grid doubled up; see DOUBLINGS.
         self._smooth = None
@@ -373,15 +378,17 @@ class Plasma:
                 QPainter.RenderHint.SmoothPixmapTransform, True)
             painter.drawImage(rect, self._smooth)
             return
-        self._countdown = self.EVERY
+        self._countdown = self.every
         # Three clocks at different rates, turning waves in different
         # directions, make the field fold rather than scroll; the music drives
-        # their speed and depth. Bounded, because they accumulate.
+        # their speed and depth. Bounded, because they accumulate. Each moves
+        # by the frames since the last recompute, at the same speed however
+        # often that is.
         bass, mid, high = (bounded(state.bass), bounded(state.mid),
                            bounded(state.high))
-        pace = (0.55 + bass * 1.9 + mid * 0.8) * going
+        pace = (0.55 + bass * 1.9 + mid * 0.8) * going * self.every / 2.0
         self._drift_a += 0.016 * pace
-        self._drift_b -= 0.011 * pace + high * 0.02 * going
+        self._drift_b -= 0.011 * pace + high * 0.01 * going * self.every
         self._drift_c += 0.007 * pace
         hit = bounded(self.flash_of(state) if flash is None else flash)
         swell = 0.55 + bass * 0.8 + hit * 0.9
@@ -1726,7 +1733,8 @@ class Ambience(Scene):
     BLOOM_SHAPE = 0.16
 
     def __init__(self) -> None:
-        self._plasma = Plasma()
+        # Every frame: here the field is bright enough for its steps to show.
+        self._plasma = Plasma(every=1)
         self._bloom = 0.0
 
     def _ease(self, state) -> float:

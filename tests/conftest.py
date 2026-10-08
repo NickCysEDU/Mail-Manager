@@ -261,6 +261,7 @@ class FakeIMAP:
         self.logged_out = True
 
     def close(self):
+        self._record("CLOSE", ())
         self.closed = True
         self.selected = None
         return ("OK", [b"CLOSE completed"])
@@ -289,6 +290,22 @@ class FakeIMAP:
             return ("NO", [b"[ALREADYEXISTS] Mailbox already exists"])
         self.folders.append(name)
         return ("OK", [b"CREATE completed"])
+
+    def rename(self, old, new):
+        for raw in (old, new):
+            assert str(raw).startswith('"') and str(raw).endswith('"'), \
+                "mailbox names must be quoted"
+        source, target = self._unquote(old), self._unquote(new)
+        self._record("RENAME", (source, target))
+        if source not in self.folders:
+            return ("NO", [b"[NONEXISTENT] No such mailbox"])
+        if target in self.folders:
+            return ("NO", [b"[ALREADYEXISTS] Mailbox already exists"])
+        inside = source + self.delimiter
+        self.folders = [target + name[len(source):]
+                        if name == source or name.startswith(inside) else name
+                        for name in self.folders]
+        return ("OK", [b"RENAME completed"])
 
     def subscribe(self, mailbox):
         self.subscribed.append(self._unquote(mailbox))

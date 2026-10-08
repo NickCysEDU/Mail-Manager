@@ -110,7 +110,7 @@ class MessageWindow(QMainWindow):
 
     def __init__(self, owner, row: int, parent=None) -> None:
         super().__init__(parent)
-        from triage_table import MailView
+        from triage_table import message_view
 
         self._owner = owner
         self._row = row
@@ -128,7 +128,7 @@ class MessageWindow(QMainWindow):
         self.who.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse)
         self.who.setProperty("dim", "true")
-        self.view = MailView()
+        self.view = message_view()
         self.view.set_pictures(bool(owner.settings.show_images))
         self.view.anchorClicked.connect(self._link)
         self.attachments_button = QPushButton("Attachments")
@@ -339,6 +339,7 @@ class MessageWindow(QMainWindow):
             return
         self._key = self._key_of(item)
         message = item.email
+        self._owner.read_whole(item)
         self.setWindowTitle(message.subject_display or "(no subject)")
         self.heading.setText(f"<h2 style='margin:0'>{_html(message.subject_display)}</h2>")
         lines = [f"<b>From:</b> {_html(message.sender_display)}"]
@@ -351,11 +352,13 @@ class MessageWindow(QMainWindow):
             lines.append(f"<b>Mailbox:</b> {_html(message.account_label)}")
         self.who.setText("<br>".join(lines))
         names = message.attachments or ()
+        missing = self._owner.missing_from(item)
         if message.body_html and (message.body_text.strip()
                                   or "<img" in message.body_html.lower()):
-            self.view.show_message(message.body_html)
+            self.view.show_message(message.body_html, missing)
         elif message.body_text.strip():
-            self.view.setPlainText(message.body_text)
+            self.view.setPlainText(message.body_text
+                                   + (f"\n\n[{missing}]" if missing else ""))
         else:
             # An HTML shell with nothing in it, or no body at all: say so,
             # and what the message carries instead, rather than a blank page.

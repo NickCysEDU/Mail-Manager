@@ -94,6 +94,23 @@ class TestWhatFuzzingFound:
                      "192.168.1.1.example.com"):
             assert _is_local(host) is False
 
+    @pytest.mark.parametrize("doc, kept", [
+        ("<p>Booking closes Friday.</p><![CDAT x <b>bring boots</b>",
+         ["Booking closes Friday.", "<b>bring boots</b>", "&lt;![CDAT"]),
+        ("<![</head><p>See you there.</p>", ["<p>See you there.</p>"]),
+        ("<p>a</p><![if !mso]><p>b</p><![endif]>", ["<p>a</p>", "<p>b</p>"]),
+    ])
+    def test_a_section_the_parser_does_not_know_still_shows(self, doc, kept):
+        """Python's parser gives up on a "<![" that opens no section it
+        knows, and the viewer showed nothing at all of such a message."""
+        import html_utils
+
+        out = html_utils.sanitise_for_view(doc)
+        for piece in kept:
+            assert piece in out, (piece, out)
+        assert html_utils.sanitise_for_view(doc, pictures=True,
+                                            keep_urls=True) == out
+
     def test_a_folder_name_that_climbs(self):
         from models import sanitize_folder_component
         for evil in ("../../etc/passwd", "..", "....", "  ..  x  ", ".ssh"):
