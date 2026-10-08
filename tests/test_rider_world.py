@@ -81,6 +81,7 @@ def _bare_world():
     world._done_seen = set()
     world._taken = set()
     world._taken_now = []
+    world._missed = set()
     world._seen_pops = set()
     world._particles = array("f", [0.0] * (world.PARTICLES * 12))
     world._particle_next = 0
@@ -222,8 +223,9 @@ class TestEachLevelHasItsCraft:
 
 class TestWhatWasTaken:
     """The world draws a block as the game says it ended (taken or hit: gone;
-    missed: going on past), never worked out again from the craft's
-    position, which once drew a jumped prize going into the ship."""
+    a colour missed: breaking up where it is; a grey dodged: going on past),
+    never worked out again from the craft's position, which once drew a
+    jumped prize going into the ship."""
 
     @staticmethod
     def _met(scene, blocks, lane=1, **state):
@@ -244,9 +246,10 @@ class TestWhatWasTaken:
         world._notice(scene)
         assert id(taken) in world._taken
         assert id(missed) not in world._taken
+        assert id(missed) in world._missed, "the colour gone by did not break up"
         assert len(world._taken_now) == 1
 
-    def test_a_prize_jumped_over_goes_on_past(self, qapp):
+    def test_a_prize_jumped_over_breaks_up_under_it(self, qapp):
         scene = _rider()
         (under,) = self._met(scene, [(4.0, 1, "block", False, False)],
                              _air=0.5)
@@ -255,6 +258,7 @@ class TestWhatWasTaken:
         world._notice(scene)
         assert id(under) not in world._taken, (
             "a prize the craft jumped over was drawn going into it")
+        assert id(under) in world._missed
         assert world._taken_now == []
 
     def test_a_grey_hit_is_gone_and_so_is_one_straight_after(self, qapp):
@@ -273,25 +277,26 @@ class TestWhatWasTaken:
         world._notice(scene)
         assert id(again) in world._taken
 
-    @pytest.mark.parametrize("kind, grey, mode, shield, how", [
-        ("block", False, "Mono", 0.0, "taken"),
-        ("coin", False, "Mono", 0.0, "taken"),
-        ("power", False, "Mono", 0.0, "taken"),
-        ("block", False, "Puzzle", 0.0, "taken"),
-        ("block", True, "Mono", 1.0, "shatter"),
-        ("block", True, "Mono", 0.0, "hit"),
+    @pytest.mark.parametrize("kind, grey, mode, shield, how, away_how", [
+        ("block", False, "Mono", 0.0, "taken", "missed"),
+        ("coin", False, "Mono", 0.0, "taken", None),
+        ("power", False, "Mono", 0.0, "taken", None),
+        ("block", False, "Puzzle", 0.0, "taken", "missed"),
+        ("block", True, "Mono", 1.0, "shatter", None),
+        ("block", True, "Mono", 0.0, "hit", None),
     ])
     def test_the_game_says_what_it_did_with_each(self, qapp, kind, grey,
-                                                  mode, shield, how):
+                                                  mode, shield, how, away_how):
         scene = _rider()
         scene.set_mode(mode)
         (block,) = self._met(scene, [(4.0, 1, kind, False, grey)],
                              _shield=shield)
         assert scene.struck(block) == how
-        # And a lane away, nothing.
+        # A lane away: a colour breaks up as it goes by, and the rest goes
+        # on past.
         (away,) = self._met(scene, [(4.0, 0, kind, False, grey)],
                             _shield=shield, _sore=0.0)
-        assert scene.struck(away) is None
+        assert scene.struck(away) == away_how
 
     def test_the_record_goes_with_the_block(self, qapp):
         scene = _rider()

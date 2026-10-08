@@ -224,6 +224,8 @@ PUBLIC_PLATFORMS = {
     "icims.com", "taleo.net", "jobvite.com", "bamboohr.com", "ashbyhq.com",
     "smartrecruiters.com", "successfactors.com",
     "apple.com", "microsoft.com", "google.com", "calendly.com", "zoom.us",
+    # Assessment platforms the sorter recognises by name.
+    "hackerrank.com",
     "facebook.com", "instagram.com", "twitter.com", "x.com", "snapchat.com",
     "discord.gg", "youtube.com", "github.com", "aka.ms",
     "ups.com", "fedex.com", "usps.com", "dhl.com", "royalmail.com",
@@ -755,7 +757,7 @@ class TestNoEvaluationDataIsTracked:
 
         assert set(private_fixtures.PRIVATE) == {
             "labelled.json", "acknowledgements.json", "adversarial.json",
-            "holdout.json", "meetings.json", "oblique.json"}
+            "holdout.json", "meetings.json", "oblique.json", "retired_holdout.json"}
 
 
 class TestNobodyElsesMediaIsPublished:

@@ -404,9 +404,11 @@ class Plasma:
         painter.drawImage(rect, self._smooth)
 
     @classmethod
-    def doubled(cls, image):
-        """The grid doubled DOUBLINGS times, smoothly each time."""
-        for _ in range(cls.DOUBLINGS):
+    def doubled(cls, image, times: int = 0):
+        """``image`` doubled ``times`` times (DOUBLINGS if not given),
+        smoothly each time: each doubling smooths the last one's creases,
+        which one big stretch leaves in."""
+        for _ in range(times or cls.DOUBLINGS):
             image = image.scaled(image.width() * 2, image.height() * 2,
                                  Qt.AspectRatioMode.IgnoreAspectRatio,
                                  Qt.TransformationMode.SmoothTransformation)
@@ -422,6 +424,12 @@ class Vaporwave(Scene):
 
     name = "Vaporwave city"
     blurb = "a skyline that is the equaliser, with a grid and a sun"
+
+    def __init__(self) -> None:
+        #: Which patch of windows the last strobe hit lit, and whether the
+        #: strobe was lit last frame. See PATCH_LIT.
+        self._patch = 0
+        self._was_lit = False
 
     def paint(self, painter, rect, state) -> None:
         width, height = rect.width(), rect.height()
@@ -542,15 +550,14 @@ class Vaporwave(Scene):
         colour = QColor.fromHsvF((state.hue + 0.6) % 1.0, 0.7, 0.9, 0.16)
         painter.fillPath(path, colour)
 
-    #: Under a held strobe the windows flicker on and off, block by block,
-    #: this many times a second (a building losing and finding its lights),
-    #: and this share of them are lit at any moment.
-    FLICKER_HZ = 14.0
-    FLICKER_LIT = 3
+    #: Each strobe hit lights a different patch of windows, this share of
+    #: them (out of 5), so a run of hits is the city's windows strobing;
+    #: the steady key lights every window at once and holds them.
+    PATCH_LIT = 3
 
     def _skyline(self, painter, width, horizon, state) -> None:
-        """Towers, each one a band. A city that is also the equaliser. Under
-        a held strobe the windows strobe too: see FLICKER_HZ."""
+        """Towers, each one a band. A city that is also the equaliser. The
+        windows answer the strobe: see PATCH_LIT."""
         levels = state.levels
         count = len(levels)
         if not count:
@@ -559,8 +566,13 @@ class Vaporwave(Scene):
         windows = QPainterPath()
         mirrored = QPainterPath()
         roofs = QPainterPath()
-        held = self.flash(state) >= 0.9
-        tick = int(time.monotonic() * self.FLICKER_HZ) if held else 0
+        flash = self.flash(state)
+        steady = flash > 0.0 and getattr(state, "held", False)
+        lit = flash >= 0.5
+        if lit and not self._was_lit and not steady:
+            # A new hit, a new patch.
+            self._patch += 1
+        self._was_lit = lit
         flickering = QPainterPath()
         for index, value in enumerate(levels):
             tall = horizon * (0.10 + value * 0.42)
@@ -582,10 +594,11 @@ class Vaporwave(Scene):
                         top = horizon - tall + row * spacing + 3
                         deep = max(2.0, spacing * 0.3)
                         pane = QRectF(x + block * 0.22, top, block * 0.2, deep)
-                        # Held: this window is on or off by a hash of where
-                        # it is and the moment, so the city flickers in
-                        # patches rather than all at once.
-                        if held and (index * 7 + row * 13 + tick * 31) % 5 < self.FLICKER_LIT:
+                        # In this hit's patch by a hash of where it is, so the
+                        # city lights in patches rather than all at once.
+                        if steady or (flash > 0.02 and (
+                                index * 7 + row * 13 + self._patch * 31)
+                                % 5 < self.PATCH_LIT):
                             flickering.addRect(pane)
                         else:
                             windows.addRect(pane)
@@ -607,8 +620,9 @@ class Vaporwave(Scene):
         painter.fillPath(windows, QColor.fromHsvF(
             (state.hue + 0.6) % 1.0, 0.30 - self.flash(state) * 0.25, 1.0,
             0.42 + self.flash(state) * 0.45))
-        if held:
-            painter.fillPath(flickering, QColor(255, 255, 255, 245))
+        if not flickering.isEmpty():
+            painter.fillPath(flickering, QColor(
+                255, 255, 255, int(245 * min(1.0, flash))))
 
     #: How far the floor squashes what it reflects, and how much of a window's
     #: light survives; the same squash as the towers' reflection.
@@ -683,26 +697,26 @@ class Vaporwave(Scene):
 
 class Tunnel(Scene):
     """Rings receding down a corridor, each one a moment of the music. A
-    strobe hit throws a bright ring out of the middle; a held strobe throws
-    one after another, fast."""
+    strobe hit throws a bright ring out of the middle, so a run of hits
+    throws them one after another, fast; the steady key lights the corridor
+    and holds it lit."""
 
     name = "Neon tunnel"
     blurb = "rings falling away, wide when the bass hits"
 
     RINGS = 14
 
-    #: How long a thrown ring takes to leave the frame, and under a held
-    #: strobe how often another is thrown.
+    #: How long a thrown ring takes to leave the frame.
     SHOT_TIME = 0.38
-    HOLD_EVERY = 0.07
-    #: How hard the strobe has to be to count as held.
-    HELD = 0.9
+    #: What the steady key does to the corridor: how much light it adds to
+    #: each ring and how much colour it takes away.
+    LAMP_LIGHT = 0.55
+    LAMP_BLEACH = 0.55
 
     def __init__(self) -> None:
         #: When each thrown ring left the middle.
         self._shots: list = []
         self._was_lit = False
-        self._hold_at = 0.0
 
     def paint(self, painter, rect, state) -> None:
         width, height = rect.width(), rect.height()
@@ -710,9 +724,11 @@ class Tunnel(Scene):
         painter.fillRect(rect, QColor(6, 4, 14))
 
         # A hit fires one bright ring outwards, drawn after the corridor,
-        # rather than moving every ring at once; see _throw.
+        # rather than moving every ring at once; see _throw. The steady key
+        # is a lamp: it lights every ring, and holds.
         flash = self.flash(state)
         self._throw(flash)
+        lamp = flash if getattr(state, "held", False) else 0.0
         rush = 0.0
         for index in range(self.RINGS, 0, -1):
             t = ((index + state.scroll + rush) % self.RINGS) / self.RINGS
@@ -723,9 +739,11 @@ class Tunnel(Scene):
             radius = (14.0 + scale * max(width, height) * 0.62) * swell
             energy = state.levels[int(t * (len(state.levels) - 1))] if state.levels else 0.0
             shade = (state.hue + t * 0.5) % 1.0
-            alpha = (1.0 - t) * (0.35 + energy * 0.6)
-            painter.setPen(QPen(QColor.fromHsvF(shade, 0.7, 1.0, alpha),
-                                1.0 + energy * 4.0))
+            alpha = min(1.0, (1.0 - t) * (0.35 + energy * 0.6)
+                        + lamp * self.LAMP_LIGHT * (1.0 - t * 0.5))
+            painter.setPen(QPen(QColor.fromHsvF(
+                shade, 0.7 - lamp * self.LAMP_BLEACH, 1.0, alpha),
+                1.0 + energy * 4.0 + lamp * 1.5))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawEllipse(centre, radius, radius)
 
@@ -734,17 +752,12 @@ class Tunnel(Scene):
         self._sparks(painter, state)
 
     def _throw(self, flash: float) -> None:
-        """A ring on each hit, and one every HOLD_EVERY while the light is
-        held up (the hand strobe's hold key), so a held strobe is a stream
-        of rings leaving fast rather than one ring standing still."""
+        """A ring on each hit: the strobe key's run of hits is a stream of
+        rings leaving fast, and the steady key throws one as it comes on."""
         now = time.monotonic()
         lit = flash >= 0.5
         if lit and not self._was_lit:
             self._shots.append(now)
-            self._hold_at = now
-        elif flash >= self.HELD and now - self._hold_at >= self.HOLD_EVERY:
-            self._shots.append(now)
-            self._hold_at = now
         self._was_lit = lit
         self._shots = [born for born in self._shots
                        if now - born < self.SHOT_TIME]
@@ -2034,10 +2047,8 @@ class Rave(Scene):
     #: fall before the next one counts.
     SNARE_HIT = 0.85
     SNARE_REARM = 0.45
-    #: Under a held strobe (the hand strobe's hold key), a pulse every this
-    #: many seconds.
-    HOLD_EVERY = 0.09
-    HELD = 0.9
+    #: How hard the strobe has to be to count as a hit for a pulse.
+    STROBE_HIT = 0.5
 
     #: The rig's sweep is on the beat: this many beats for one sweep across
     #: and back at rest, and this many in a drop.
@@ -2047,10 +2058,26 @@ class Rave(Scene):
     #: the fan that fades over a beat or so.
     SNAP_JOLT = 0.55
     SNAP_FADE = 4.0
-    #: How hard the rig runs by the part of the track the room is in (see
-    #: trackstyle), over and above what the level says.
-    SECTION_DRIVE = {"drop": 1.0, "groove": 0.55, "build": 0.40,
-                     "break": 0.12, "intro": 0.08, "outro": 0.08}
+    #: The rig is for the drops and nothing else: it comes up over RIG_IN
+    #: seconds as one starts and goes over RIG_OUT beats at its end. Where a
+    #: drop is comes from the track's sections, the reading the rider's
+    #: arches are built on (see trackstyle.sections), which starts each part
+    #: on a downbeat.
+    RIG_IN = 0.06
+    RIG_OUT = 1.0
+    #: A drop runs on through the parts after it that keep its drums and
+    #: most of its weight: on real records the reading often names a drop's
+    #: second half a groove, a little quieter, and the rig went out half way.
+    DROP_CARRY = 0.7
+    #: The reading cuts parts on bar lines, and on real records it put a
+    #: drop's first bar a bar or two beats ahead of the music (a fill, a
+    #: shout, the third beat taken for the first). So each end is moved to
+    #: the beat within SNAP_BEATS where the loudness really rises or falls,
+    #: if that change is clearly bigger (SNAP_CLEAR) than the one on the bar
+    #: line. Changes are read over SNAP_SPAN beats either side.
+    SNAP_BEATS = 4
+    SNAP_SPAN = 2
+    SNAP_CLEAR = 0.08
 
     THUMP_RISE, THUMP_FALL = 0.34, 0.075
     CRACK_RISE, CRACK_FALL = 0.85, 0.22
@@ -2088,8 +2115,6 @@ class Rave(Scene):
         #: 1 while the track is going, 0 while it is paused.
         self._going = 1.0
         self._lunge_held = 1.0
-        self._peak = 0.0
-        self._quiet = None
         self._quick = 0.0
         self._calm = None
         self._loud = 0.0
@@ -2103,10 +2128,12 @@ class Rave(Scene):
         self._snap = 0.0
         self._beats_was = None
         self._d_beats = 0.0
-        self._hold_at = 0.0
-        #: The track's sections (see trackstyle), read once per track.
+        self._strobe_was = False
+        #: The track's sections (see trackstyle), read once per track, and
+        #: the stretches the rig runs for, as (start, end). See _drop_now.
         self._style = None
         self._styled_from = None
+        self._drop_runs: list = []
 
     def _beats_done(self, state) -> float:
         """How many beats have gone by, counting fractions: a running total,
@@ -2207,15 +2234,6 @@ class Rave(Scene):
             # a moment.
             self._calm = loud
         self._calm += (loud - self._calm) * self.CALM_RATE
-        # The loudest the room has been lately, from the eased level so one
-        # frame cannot set it.
-        self._peak = max(self._quick, self._peak * self.PEAK_FALL)
-        if self._quiet is None:
-            # Seeded from the frame's own loudness, so an intro does not read
-            # as a drop.
-            self._quiet = loud
-        self._quiet += (self._quick - self._quiet) * (
-            self.QUIET_DOWN if self._quick < self._quiet else self.QUIET_UP)
         self._ring_wait = max(0.0, self._ring_wait - step)
         self._heard_for += step
         return step
@@ -2237,30 +2255,93 @@ class Rave(Scene):
         import trackstyle
 
         beat = 60.0 / tempo if tempo > 0.0 else 0.0
+        # A beat's time, so the bars are counted from the beat rather than
+        # from the top of the file; the rider gives the same.
+        grid = (self._said + (1.0 - (getattr(state, "beat_at", 0.0) or 0.0))
+                * beat) if beat > 0.0 else None
         try:
             self._style = trackstyle.read(
-                chart, beat, None, contour, getattr(state, "harmony", None),
+                chart, beat, grid, contour, getattr(state, "harmony", None),
                 flux=getattr(state, "flux", None), rhythm_found=rhythm,
                 light=rhythm is None)
         except Exception:      # noqa: BLE001 - a picture, not the mail
             log.exception("The rave could not read the track's sections.")
             self._style = None
+        self._drop_runs = self._runs_of(self._style, contour)
 
-    def _drive(self):
-        """How hard the room is going by the part of the track it is in, 0
-        to 1 (see SECTION_DRIVE), climbing through a build; None where no
-        sections are known."""
-        style = self._style
-        if style is None or not style.sections:
+    @classmethod
+    def _runs_of(cls, style, contour=None) -> list:
+        """Each drop with the parts after it that carry it on (see
+        DROP_CARRY), as (start, end), each end on the beat the music changes
+        (see SNAP_BEATS): only from the drums' own reading."""
+        if style is None or not style.from_drums:
+            return []
+        runs = []
+        sections = style.sections
+        index = 0
+        while index < len(sections):
+            section = sections[index]
+            if section.kind != "drop":
+                index += 1
+                continue
+            end = section.end
+            index += 1
+            while (index < len(sections)
+                   and sections[index].kind in ("groove", "drop")
+                   and sections[index].drums
+                   and sections[index].level >= cls.DROP_CARRY):
+                end = sections[index].end
+                index += 1
+            runs.append(cls._snapped(section.start, end, style, contour))
+        return runs
+
+    @classmethod
+    def _snapped(cls, start: float, end: float, style, contour) -> tuple:
+        """``start`` and ``end`` moved to the beats where the loudness rises
+        and falls, within SNAP_BEATS of each."""
+        loud = list((contour or {}).get("loud") or ())
+        rate = float((contour or {}).get("rate") or 0.0)
+        if not loud or rate <= 0.0 or style.tempo <= 0.0:
+            return start, end
+        beat = 60.0 / style.tempo
+
+        def mean(a: float, b: float) -> float:
+            first, last = max(0, int(a * rate)), min(len(loud), int(b * rate))
+            return sum(loud[first:last]) / max(1, last - first)
+
+        span = cls.SNAP_SPAN * beat
+
+        def rise(at: float) -> float:
+            return mean(at, at + span) - mean(at - span, at)
+
+        def best(at: float, sign: float) -> float:
+            here = sign * rise(at)
+            chosen, most = at, here
+            for step in range(-cls.SNAP_BEATS, cls.SNAP_BEATS + 1):
+                there = at + step * beat
+                change = sign * rise(there)
+                if change > most:
+                    chosen, most = there, change
+            return chosen if most > here + cls.SNAP_CLEAR else at
+
+        first = best(start, 1.0)
+        last = best(end, -1.0)
+        if last - first < beat * 4:
+            return start, end
+        return first, last
+
+    def _drop_now(self):
+        """The drop the room is in, as (start, end), or None: none until the
+        track's sections are read from the drums' own reading
+        (state.rhythm), which finds the bar's first beat from where the
+        loudness changes. Read without it, the bar could start on the third
+        beat, and the rig came in two beats ahead of the drop."""
+        if self._per_beat <= 0.0:
             return None
-        section = style.section_at(self._said)
-        if section is None:
-            return None
-        drive = self.SECTION_DRIVE.get(section.kind, 0.5)
-        if section.kind == "build" and section.length > 0.0:
-            through = (self._said - section.start) / section.length
-            drive += 0.55 * max(0.0, min(1.0, through))
-        return min(1.0, drive)
+        for start, end in self._drop_runs:
+            if start <= self._said < end:
+                return start, end
+        return None
 
     def _big_moment(self) -> float:
         """How much of a moment this frame is, 0 to 1: zero unless the room is
@@ -2309,6 +2390,9 @@ class Rave(Scene):
     #: How big the haze is painted before being stretched over the frame: a
     #: gradient has no detail to lose, and a full-frame one costs fill rate.
     HAZE = 128
+    #: How many times the haze is doubled before it is stretched: twice
+    #: takes it to 512 across, a quarter of a millisecond a rebuild.
+    HAZE_DOUBLINGS = 2
 
     def _haze(self, painter, rect, horizon, bass, synth, flash) -> None:
         """The air in the room, lit from the far end."""
@@ -2425,8 +2509,11 @@ class Rave(Scene):
         finally:
             into.end()
         self._haze_key = key
-        self._haze_image = image
-        return image
+        # Doubled up before it is stretched: stretched from 128 pixels the
+        # air showed the tile's blocks in a window-sized strip, forty rows
+        # tall. See HAZE_DOUBLINGS.
+        self._haze_image = Plasma.doubled(image, self.HAZE_DOUBLINGS)
+        return self._haze_image
 
     def _project(self, horizon, focal, x: float, y: float, z: float):
         """One point of the world, on the glass."""
@@ -2715,20 +2802,19 @@ class Rave(Scene):
     def _pulses_now(self, painter, rect, horizon, focal, step, hue,
                     hit) -> None:
         """A thin ring from the far end on every snare, crossing the room in
-        a beat so it lands on the next; and one every HOLD_EVERY while the
-        strobe is held by hand. Brighter the harder the room is going.
+        a beat so it lands on the next; and one, faster, on every strobe
+        hit, so the strobe key's run of hits sends them streaming. Brighter
+        the harder the room is going.
         """
         lit = self._lasers_lit()
         if self._snared and self._heard_for >= self.RING_SETTLE:
             self._pulses.append([self.FAR * 0.9, 0.45 + 0.55 * lit,
                                  self._crossing(self.PULSE_BEATS, 0.5)])
-        if hit >= self.HELD:
-            now = time.monotonic()
-            if now - self._hold_at >= self.HOLD_EVERY:
-                self._hold_at = now
-                self._pulses.append([self.FAR * 0.9, 1.0,
-                                     self._crossing(self.PULSE_BEATS, 0.5)
-                                     * 1.5])
+        struck = hit >= self.STROBE_HIT
+        if struck and not self._strobe_was:
+            self._pulses.append([self.FAR * 0.9, 1.0,
+                                 self._crossing(self.PULSE_BEATS, 0.5) * 1.5])
+        self._strobe_was = struck
         if not self._pulses:
             return
         alive = []
@@ -2771,43 +2857,23 @@ class Rave(Scene):
     FAN_BLEACH = 0.45
     #: Below this there is no rig at all, so a quiet passage has none.
     FAN_FAINT = 0.03
-    #: Seconds of listening before the rig can come on.
-    FAN_SETTLE = 2.0
-
-    #: A drop is a level, not a change: the rig reads where the room sits
-    #: between its usual quiet and the loudest it has been, ``(now - quiet) /
-    #: (loudest - quiet)``, which holds for the length of a drop. The loudest
-    #: decays slowly.
-    PEAK_FALL = 0.9996
-    PEAK_SPAN = 0.08
-
-    #: The quiet the track keeps coming back to: follows the room down quickly
-    #: and climbs back slowly, so it stays near the verse through a drop.
-    QUIET_DOWN = 0.02
-    QUIET_UP = 0.0004
 
     def _lasers_lit(self) -> float:
-        """How hard the rig is running, 0 to 1: held for as long as the passage
-        is loud (see PEAK_FALL), with the hats adding to it in proportion,
-        and the part of the track the room is in having its say (see
-        SECTION_DRIVE): a drop runs it full, a break pulls it down.
+        """How hard the rig is running, 0 to 1: on in a drop and off
+        everywhere else (see RIG_IN), up on the drop's first downbeat and
+        out over its last beat, a little brighter with the hats.
         """
-        if self._heard_for < self.FAN_SETTLE:
+        drop = self._drop_now()
+        if drop is None:
             return 0.0
-        quiet = self._quiet
-        level = 0.0
-        if quiet is not None and self._peak >= self.RING_QUIET:
-            span = self._peak - quiet
-            if span >= self.PEAK_SPAN:
-                level = max(0.0, min(1.0, (self._quick - quiet) / span))
-        lit = min(1.0, level * 0.85 + self._fizz * 0.5 * level)
-        drive = self._drive()
-        if drive is not None:
-            if drive >= 0.4:
-                lit = max(lit, drive)
-            else:
-                lit = min(lit, drive + 0.2)
-        return max(0.0, min(1.0, lit))
+        start, end = drop
+        into = self._said - start
+        left = end - self._said
+        if into < 0.0 or left <= 0.0:
+            return 0.0
+        up = min(1.0, into / self.RIG_IN)
+        down = min(1.0, left / (self.RIG_OUT * self._per_beat))
+        return max(0.0, min(1.0, up * down * (0.82 + 0.18 * self._fizz)))
 
     def _beams_now(self, painter, rect, horizon, focal, hats, step, hue,
                    bass, flash=0.0):
@@ -3160,8 +3226,17 @@ class Rider(Scene):
         self._cells = [[] for _ in range(self.CELLS_WIDE)]
         self._fuse = 0.0
         self._fused = 0
-        self._stunned = 0.0
         self._cleared = 0
+        #: Greys broken by a clear beside them, and columns overfilled.
+        self._dug = 0
+        self._overfills = 0
+        #: What the grid is showing happen, on the track's clock: blocks on
+        #: their way in from the craft, [colour, column, row, sent at];
+        #: clears, [[(column, row, colour)...], at]; and burst columns,
+        #: [column, [colours], at].
+        self._landing: list = []
+        self._clears: list = []
+        self._bursts: list = []
         #: Mono or Puzzle. See MODES.
         self._mode = self.MODES[0]
         self._score = 0
@@ -3377,7 +3452,7 @@ class Rider(Scene):
                 "air": self._air, "airs": self._airs,
                 "best_air": self._best_air,
                 "coin_run": self._coin_run, "coin_best": self._coin_best,
-                "stunned": self._stunned > 0.0,
+                "overfills": self._overfills, "dug": self._dug,
                 "cells": [list(pile) for pile in self._cells]}
 
     #: Which drum makes which shape, in the order they win a slot.
@@ -4626,6 +4701,8 @@ class Rider(Scene):
             for block in self._blocks:
                 if not block[3] and self._heard >= block[0]:
                     block[3] = True
+                    if not block[4] and block[2] not in ("coin", "power"):
+                        self._record(block, "missed")
             return
         for block in self._blocks:
             when, lane, kind, done, grey = block
@@ -4699,6 +4776,9 @@ class Rider(Scene):
                 self._slow = self.SLOW
                 self._hurt = 1.0
                 self._burst(self._lane_at(lane))
+                if self._mode == "Puzzle":
+                    # And into the grid it goes, as clutter: see GREY_CELL.
+                    self._drop(self.GREY_CELL, lane)
                 # Say what it cost, when a long chain went.
                 self._pop("hit", hue=0.0, sat=0.95,
                           strength=1.0 + min(0.5, lost / 80.0)
@@ -4711,14 +4791,13 @@ class Rider(Scene):
             elif on_it:
                 if self._mode == "Puzzle":
                     # Worth nothing on its own: it goes in the grid.
-                    if self._stunned <= 0.0:
-                        self._record(block, "taken")
-                        self._note(when, "taken")
-                        self._taken += 1
-                        self._drop(self._tier_of(when), lane)
-                        self._got = 1.0
-                        self._burst(self._lane_at(lane), prize=True)
-                        self._pop("prize", strength=0.8)
+                    self._record(block, "taken")
+                    self._note(when, "taken")
+                    self._taken += 1
+                    self._drop(self._tier_of(when), lane)
+                    self._got = 1.0
+                    self._burst(self._lane_at(lane), prize=True)
+                    self._pop("prize", strength=0.8)
                 else:
                     # A prize. See CHAIN_FIRST.
                     before = self._chain
@@ -4741,7 +4820,11 @@ class Rider(Scene):
                               + self.COMBO_LIFT * min(4, combo - 1))
                     self._milestone(before, self._chain)
             else:
+                # A colour gone by: it breaks up beside the craft rather than
+                # sliding through it (see struck).
                 self._note(when, "missed")
+                self._record(block, "missed")
+                self._fizzle(self._lane_at(lane))
 
     #: The puzzle grid: collected blocks drop into three columns, six deep, and
     #: three or more of a colour touching clear and pay.
@@ -4755,22 +4838,52 @@ class Rider(Scene):
     #: its colour joins it: the window that grows three into nine.
     FUSE = 0.75
 
-    #: An overfilled column locks the grid for this long and breaks the chain.
-    STUN = 3.0
+    #: A grey hit in Puzzle goes into the grid as clutter: it matches nothing,
+    #: and breaks when a cluster beside it clears.
+    GREY_CELL = -1
+
+    #: A block into a full column overfills it: the column bursts and
+    #: empties, each block lost costs this much, the chain breaks, and play
+    #: goes on. It used to lock the grid instead, and blocks went through
+    #: the craft until it wore off.
+    OVERFILL_COST = 40
+
+    #: How long a block takes to fly from the craft into the grid, and how
+    #: long a clear or a burst takes to fade.
+    FLY = 0.32
+    FADE = 0.55
+
+    #: How long a colour that went by takes to break up beside the craft, on
+    #: the track's clock: it used to slide on through the craft, darkening.
+    DISSOLVE = 0.24
 
     def _drop(self, colour: int, column: int) -> None:
         """Put a collected block into the grid, and see what it does."""
         column = max(0, min(self.CELLS_WIDE - 1, column))
         pile = self._cells[column]
         if len(pile) >= self.CELLS_DEEP:
-            # An eighth block in a column of seven. The grid locks.
-            self._stunned = self.STUN
-            self._chain = 0
-            self._streak = 0
-            self._shake = min(1.0, self._shake + 0.6)
-            self._hurt = max(self._hurt, 0.7)
+            self._overfill(column)
             return
         pile.append(colour)
+        self._landing.append([colour, column, len(pile) - 1, self._heard])
+        self._fuse_up()
+
+    def _overfill(self, column: int) -> None:
+        """A block into a full column: see OVERFILL_COST."""
+        lost = self._cells[column]
+        self._cells[column] = []
+        self._landing = [flying for flying in self._landing
+                         if flying[1] != column]
+        self._bursts.append([column, list(lost), self._heard])
+        self._score = max(0, self._score
+                          - self._paid(self.OVERFILL_COST * max(1, len(lost))))
+        self._overfills += 1
+        self._chain = 0
+        self._streak = 0
+        self._shake = min(1.0, self._shake + 0.6)
+        self._hurt = max(self._hurt, 0.7)
+        self._pop("overfill", hue=0.0, sat=0.9, strength=1.2,
+                  text="OVERFILL")
         self._fuse_up()
 
     def _clusters(self) -> list:
@@ -4784,6 +4897,8 @@ class Rider(Scene):
                 if (column, row) in seen:
                     continue
                 colour = self._cells[column][row]
+                if colour == self.GREY_CELL:
+                    continue
                 group = []
                 edge = [(column, row)]
                 seen.add((column, row))
@@ -4823,9 +4938,7 @@ class Rider(Scene):
 
     def _burn(self, step: float) -> None:
         """Run the fuse down, and clear what it was holding."""
-        if self._stunned > 0.0:
-            self._stunned = max(0.0, self._stunned - step)
-            return
+        self._age_grid()
         if self._fuse <= 0.0:
             return
         self._fuse -= step
@@ -4849,12 +4962,37 @@ class Rider(Scene):
                   text=(f"CLEAR {biggest}" if biggest >= 5 else ""))
         self._double = 1.0
         going_cells = {at for _colour, group in going for at in group}
+        # A grey beside a clear breaks with it: the way to dig clutter out.
+        broken = set()
+        for column, row in going_cells:
+            for step_across, step_up in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                near = (column + step_across, row + step_up)
+                if (near not in going_cells
+                        and 0 <= near[0] < self.CELLS_WIDE
+                        and 0 <= near[1] < len(self._cells[near[0]])
+                        and self._cells[near[0]][near[1]] == self.GREY_CELL):
+                    broken.add(near)
+        self._dug += len(broken)
+        gone = going_cells | broken
+        self._clears.append([[(column, row, self._cells[column][row])
+                              for column, row in sorted(gone)], self._heard])
         for column in range(self.CELLS_WIDE):
             self._cells[column] = [
                 colour for row, colour in enumerate(self._cells[column])
-                if (column, row) not in going_cells]
+                if (column, row) not in gone]
+        self._landing = []
         # And anything left standing falls, which may match again.
         self._fuse_up()
+
+    def _age_grid(self) -> None:
+        """Let go of what the grid has finished showing."""
+        now = self._heard
+        self._landing = [flying for flying in self._landing
+                         if now - flying[3] < self.FLY]
+        self._clears = [clear for clear in self._clears
+                        if now - clear[1] < self.FADE]
+        self._bursts = [burst for burst in self._bursts
+                        if now - burst[2] < self.FADE]
 
     def _tier_of(self, when: float) -> int:
         """Which colour a block laid at this moment is."""
@@ -4891,6 +5029,18 @@ class Rider(Scene):
                 * (0.26 if prize else 0.16),
                 math.sin(angle * 1.7) * self.SPARK_GO * 0.12,
                 1.0])
+
+    def _fizzle(self, across: float) -> None:
+        """A few pieces off a colour that went by: lighter than a take."""
+        how_many = max(3, self.SPARKS // 3)
+        for index in range(how_many):
+            angle = (index / how_many) * math.tau + self._at * 1.7
+            self._sparks.append([
+                across, -0.2, self.RIDER_AT,
+                math.cos(angle) * self.SPARK_GO * 0.10,
+                -abs(math.sin(angle)) * self.SPARK_GO * 0.18,
+                self.SPARK_GO * 0.05,
+                0.7])
 
     def _drift_sparks(self, step: float) -> None:
         """Move the pieces on and drop the ones that have gone out."""
@@ -5216,6 +5366,7 @@ class Rider(Scene):
             "hits": self._hits, "saves": self._saves,
             "clean": self._clean, "mode": self._mode,
             "airs": self._airs, "cleared": self._cleared,
+            "overfills": self._overfills,
             "whole": self._whole, "difficulty": self._difficulty,
         }
 
@@ -5386,39 +5537,130 @@ class Rider(Scene):
                       self.CELLS_DEEP * step)
 
     def _matrix(self, painter, rect) -> None:
-        """The puzzle grid in the corner, drawn from the bottom up."""
+        """The puzzle grid in the corner, drawn from the bottom up: blocks
+        flying in from the craft, a cluster pulsing on its fuse, clears and
+        bursts going up in light."""
         side = min(rect.width(), rect.height()) * self.CELL_SIDE
         step = side * (1.0 + self.CELL_GAP)
         box = self.matrix_box(rect)
         left = box.left()
         floor = box.bottom()
+        now = self._heard
+
+        def cell(column, row) -> QRectF:
+            return QRectF(left + column * step, floor - (row + 1) * step,
+                          side, side)
+
+        painter.save()
         painter.setPen(Qt.PenStyle.NoPen)
-        # The well first, so an empty column still reads as a column.
-        stunned = self._stunned > 0.0
-        # Flashing while locked.
-        lit = stunned and int(self._stunned * 12) % 2 == 0
-        well = (QColor(255, 60, 60, 90) if lit
-                else QColor(255, 255, 255, 28 if stunned else 16))
-        painter.setBrush(well)
+        # The wells first, so an empty column still reads as a column; one
+        # that has just burst flashes red as it empties.
+        burst_at = {burst[0]: now - burst[2] for burst in self._bursts}
         for column in range(self.CELLS_WIDE):
+            age = burst_at.get(column)
+            red = (0.0 if age is None
+                   else max(0.0, 1.0 - age / self.FADE))
+            painter.setBrush(QColor(255, int(255 - 195 * red),
+                                    int(255 - 195 * red),
+                                    int(16 + 90 * red)))
             for row in range(self.CELLS_DEEP):
-                painter.drawRect(QRectF(
-                    left + column * step,
-                    floor - (row + 1) * step, side, side))
+                painter.drawRect(cell(column, row))
+
+        flying = {(column, row): (colour, now - sent)
+                  for colour, column, row, sent in self._landing
+                  if now - sent < self.FLY}
+        going = self._fuse > 0.0
         for column in range(self.CELLS_WIDE):
             for row, colour in enumerate(self._cells[column]):
-                # A cluster about to go pulses.
-                going = self._fuse > 0.0
-                shade = QColor.fromHsvF(
-                    self.TIERS[min(colour, len(self.TIERS) - 1)],
-                    0.85, 1.0,
-                    0.95 if not going else 0.55 + 0.45
-                    * abs(math.sin(self._fuse * 14.0)))
-                painter.setBrush(shade)
-                painter.drawRect(QRectF(
-                    left + column * step,
-                    floor - (row + 1) * step, side, side))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
+                if (column, row) in flying:
+                    continue
+                self._block_in_grid(painter, cell(column, row), colour,
+                                    pulse=(going and colour != self.GREY_CELL))
+
+        # On their way in: from the craft, in an arc, landing in their cell.
+        start = QPointF(
+            rect.center().x() + self._lane_here / max(1e-6, self.LANE_WIDE)
+            * rect.width() * 0.17,
+            rect.bottom() - rect.height() * 0.18)
+        def flight(column, row, through):
+            """Where a block is on its way in, and how big."""
+            eased = 1.0 - (1.0 - through) ** 3
+            target = cell(column, row)
+            x = start.x() + (target.center().x() - start.x()) * eased
+            y = (start.y() + (target.center().y() - start.y()) * eased
+                 - math.sin(through * math.pi) * rect.height() * 0.10)
+            return QPointF(x, y), side * (1.6 - 0.6 * eased)
+
+        for (column, row), (colour, age) in flying.items():
+            through = max(0.0, min(1.0, age / self.FLY))
+            here, grow = flight(column, row, through)
+            hue = (self.TIERS[max(0, min(colour, len(self.TIERS) - 1))]
+                   if colour != self.GREY_CELL else 0.0)
+            # A trail of where it has just been, fading, and a soft glow
+            # round it: a block of light thrown into the grid.
+            for back in (0.24, 0.16, 0.08):
+                then = max(0.0, through - back)
+                was, size = flight(column, row, then)
+                painter.setBrush(QColor.fromHsvF(
+                    hue, 0.6, 1.0, 0.35 * (1.0 - back / 0.3) * (1.0 - through)))
+                painter.drawEllipse(was, size * 0.35, size * 0.35)
+            halo = QRadialGradient(here, grow * 1.2)
+            halo.setColorAt(0.0, QColor.fromHsvF(hue, 0.45, 1.0,
+                                                 0.55 * (1.0 - through * 0.5)))
+            halo.setColorAt(1.0, QColor.fromHsvF(hue, 0.45, 1.0, 0.0))
+            painter.setBrush(halo)
+            painter.drawEllipse(here, grow * 1.2, grow * 1.2)
+            self._block_in_grid(painter, QRectF(here.x() - grow / 2.0,
+                                                here.y() - grow / 2.0,
+                                                grow, grow), colour,
+                                glow=1.0 - through * 0.6)
+
+        # Clears and bursts: the cells that went, swelling and fading, and
+        # a burst column's flung up out of the well.
+        for gone, at in self._clears:
+            through = max(0.0, min(1.0, (now - at) / self.FADE))
+            for column, row, colour in gone:
+                where = cell(column, row)
+                grow = side * (1.0 + through * 1.2)
+                painter.setBrush(QColor(255, 255, 255,
+                                        int(220 * (1.0 - through) ** 2)))
+                painter.drawRect(QRectF(where.center().x() - grow / 2.0,
+                                        where.center().y() - grow / 2.0,
+                                        grow, grow))
+        for column, lost, at in self._bursts:
+            through = max(0.0, min(1.0, (now - at) / self.FADE))
+            for row, colour in enumerate(lost):
+                where = cell(column, row)
+                spread = (row - len(lost) / 2.0) * 0.35
+                flung = where.translated(
+                    spread * step * through * 2.0,
+                    -through * step * (2.0 + row * 0.6))
+                painter.setOpacity(max(0.0, 1.0 - through))
+                self._block_in_grid(painter, flung, colour, red=True)
+                painter.setOpacity(1.0)
+        painter.restore()
+
+    def _block_in_grid(self, painter, where, colour, pulse=False, glow=0.0,
+                       red=False) -> None:
+        """One block of the grid: its colour, or a grey of dark metal edged
+        in red, as the obstacles on the road are."""
+        if colour == self.GREY_CELL:
+            painter.setBrush(QColor(58, 58, 66, 240))
+            painter.drawRect(where)
+            painter.setPen(QPen(QColor(255, 70, 50, 200),
+                                max(1.0, where.width() * 0.08)))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(where.adjusted(1, 1, -1, -1))
+            painter.setPen(Qt.PenStyle.NoPen)
+            return
+        hue = self.TIERS[max(0, min(colour, len(self.TIERS) - 1))]
+        alpha = (0.55 + 0.45 * abs(math.sin(self._fuse * 14.0)) if pulse
+                 else 0.95)
+        shade = QColor.fromHsvF(hue if not red else 0.0,
+                                max(0.0, 0.85 - glow * 0.5),
+                                1.0, alpha)
+        painter.setBrush(shade)
+        painter.drawRect(where)
 
     def _wash(self, painter, rect) -> None:
         """What a hit does to the whole picture: the frame goes red and dark
@@ -5640,7 +5882,7 @@ class Rider(Scene):
     PRIZE_LIT = 1.00
 
     def _blocks_of(self, painter, rect, horizon, focal, hue, flash,
-                   kind, grey_now, edge, tall) -> None:
+                   kind, grey_now, edge_at, tall_at) -> None:
         """One shape of one kind, as one batch of paths."""
         if grey_now:
             shade = (hue + self.BLOCK_HUE[kind]) % 1.0
@@ -5650,17 +5892,25 @@ class Rider(Scene):
             shade = hue
             wet = max(0.0, self.PRIZE_SAT - flash * 0.4)
             lit = self.PRIZE_LIT
-        # A shade bigger than the block, for the dark it is drawn on.
-        wider = edge * self.BACKING
-        taller = tall * self.BACKING
         faces = QPainterPath()
         rims = QPainterPath()
         backs = QPainterPath()
         edges = QPainterPath()
-        for when, lane, shape, _done, grey in self._blocks:
+        for block in self._blocks:
+            when, lane, shape, done, grey = block
             if shape != kind or grey is not grey_now:
                 continue
             at = self._where(when)
+            # A colour gone by breaks up beside the craft: see DISSOLVE.
+            breaking = 0.0
+            edge, tall = edge_at, tall_at
+            if done and not grey and self.struck(block) == "missed":
+                breaking = max(0.0, (self._heard - when) / self.DISSOLVE)
+                if breaking >= 1.0:
+                    continue
+                at = max(at, self.RIDER_AT - 0.2)
+                grow = (1.0 - breaking) ** 0.5
+                edge, tall = edge_at * grow, tall_at * grow
             # Gone once it is behind the rider; clamped to NEAR instead,
             # everything already passed piled up at the bottom of the frame.
             if at < self.GONE or at > self.FAR:
@@ -5672,6 +5922,9 @@ class Rider(Scene):
             seen = self.FOG_LEAST + (1.0 - self.FOG_LEAST) * min(
                 1.0, near / max(1e-6, self.FOG))
             across = self._lane_at(lane)
+            # A shade bigger than the block, for the dark it is drawn on.
+            wider = edge * self.BACKING
+            taller = tall * self.BACKING
             foot_l = self._eye(horizon, focal, across - edge, 0.0, at)
             foot_r = self._eye(horizon, focal, across + edge, 0.0, at)
             top_r = self._eye(horizon, focal, across + edge, -tall, at)
@@ -5716,7 +5969,8 @@ class Rider(Scene):
             # One path per block, since each is a different distance into the
             # fog.
             painter.fillPath(faces, QColor.fromHsvF(
-                shade, wet, lit, 0.90 * seen))
+                shade, wet * (1.0 - 0.7 * breaking), min(1.0, lit + breaking),
+                0.90 * seen * (1.0 - breaking * 0.5)))
             self._beam(painter, rims, QColor.fromHsvF(
                 shade, max(0.0, wet - 0.45), 1.0,
                 min(1.0, (0.85 + flash * 0.15) * seen)))
@@ -5758,6 +6012,7 @@ class Rider(Scene):
         "air":       (0.50, 0.45, 0.40, 0.90, 1.2),
         "clear":     (0.55, 0.50, 0.45, 0.95, 1.4),
         "hit":       (0.55, 0.60, 0.65, 1.00, 2.4),
+        "overfill":  (0.60, 0.55, 0.60, 1.00, 2.0),
         "milestone": (0.95, 0.95, 0.80, 1.00, 1.8),
         "finish":    (2.20, 1.10, 0.60, 1.00, 2.0),
     }
@@ -6312,6 +6567,9 @@ class Rider(Scene):
             if result["mode"] == "Puzzle":
                 parts.append(((f"{result['cleared']}", True),
                               (" cleared", False)))
+                if result.get("overfills"):
+                    parts.append(((f"{result['overfills']}", True),
+                                  (" overfilled", False)))
             if result["offered"]:
                 parts.append(((f"{result['taken']}", True),
                               (f" of {result['offered']} taken", False)))

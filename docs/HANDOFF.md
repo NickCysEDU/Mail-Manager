@@ -62,9 +62,67 @@ describes the app itself.
   working context, or a friend arranging a drink reads as an interview.
   Every reader and pattern was ablated on all five sets; two that changed
   nothing were removed. Do the same for anything added.
+- **The sorter also reads statements** (`statements.py`): the decline, the
+  offer, the step asked for, the meeting arranged and the acknowledgement,
+  each a short list of patterns over one normalised sentence, with the
+  quoted history of a reply dropped first. Guards: a condition before the
+  match (`_CONDITION`), a hedge ("may be", `_HEDGE`), a negation governing
+  the verb (at most two words before it, `_NEGATED`), and a feedback survey
+  within three sentences of a request (`_FEEDBACK`). In `classify`, a stated
+  category gets `STATED_WEIGHT` (decisive), but only where a hiring word
+  besides "application" is present and the sender is not a university, court
+  or landlord (`hiring_said`); a stated invitation also needs a hiring anchor
+  (`anchored`), and an unanchored meeting is capped at
+  `SOFT_EVIDENCE_CEILING`. What is stated outranks what phrases suggest in
+  the precedence contest (not Unsolicited, which is about origin); the thanks
+  an acknowledgement is does not rival a stated later stage
+  (`_ABSORB_THE_THANKS`); a lone stated reading is as sure as the rules get,
+  unless a rival still qualifies once the message is read again without its
+  conditions and hedges (`classify(..., _rereading=True)` on
+  `statements.unconditional`). On a one-way video platform the step asked for
+  is the interview (`VIDEO_INTERVIEW_DOMAINS`, as the model prompt defines
+  it). A talent network's list is judged on its words without the stated
+  weight. Every guard was broken on purpose and a test failed; keep it so.
+- **Patterns in `statements.py` must hold on mail nobody applied for.**
+  `python tools/corpus.py` runs 4,150 genuine messages from a newsletter-era
+  corpus; "ham filed as job mail" must stay at 0. Three loose patterns were
+  found there ("not considered a deterrent", "when the program is closed",
+  "our new publishing schedule"), each now a test.
+- **A message is cut short only when its text is** (`imap_engine._text_was_cut`):
+  the bytes run out in the last part the parser saw, so a logo or PDF after
+  the text leaves it whole; a readable part the server describes in
+  BODYSTRUCTURE but never sent means text is missing. Marking every message
+  over 64 KB cut capped most applicant-tracking mail below the threshold.
+  `tests/conftest.py`'s fake server honours `BODY.PEEK[]<0.N>` like a real one.
+- **Transactional topics weigh a long body's last 40% at half**
+  (`_head_and_footer`, `FOOTER_SHARE`): "your statement can be viewed any
+  time" is under every receipt a payment service sends. Not other topics:
+  a parish bulletin is about the parish to its last line.
+- **Context, after each message is read alone:** `workers.read_with_the_thread`
+  (a conversation) and `workers.read_with_the_correspondent` (a calendar
+  invitation from a person you are in a hiring process with). Both carry only
+  to weak readings and hold them below the threshold.
+- **Labels are never moved toward the engine.** The sets disagree in places,
+  and the disagreements are left as they are: job-board blasts are
+  Promotions in the older sets and Newsletters in the real-mail ones; a
+  one-way video interview reminder is Next Steps in `labelled.json` and
+  Interview by the model prompt's definition. Each shows up as a miss on one
+  side, and goes to review, which is the safe outcome.
 - **Anonymising is checked by re-scoring.** If a score moves, a signal was
   keyed on somebody's name. `tests/test_privacy.py` fails on any address that
   could be a real person's.
+- **Run from a terminal, the app has no menu bar until it is activated
+  again:** macOS gives an unbundled process the bar only on a later
+  activation. `macname.MenuBarWaker` (from `main.py`, never in the built app)
+  hands the focus to the Dock once on the first activation and takes it back
+  `BACK_AFTER_MS` later, only if the Dock still has it, so it never takes
+  focus back from another app; it gives up after `ROUND_TRIP_MS`. The Mac's
+  file panel had its sidebar greyed out for the same reason, so
+  `AttachmentViewer.add_tracks_when_ready` opens it once the window is active
+  (`PANEL_WAIT_MS` at most).
+- **Hover help waits in some windows** (`helpmode.PATIENT` on the message,
+  compose and viewer windows): with the ? off, a control explains itself
+  after the pointer has rested on it for `PATIENT_DELAY`; with it on, at once.
 - **Every window of its own carries a menu bar** (`mail_window._app_menus`).
   On a Mac the menu bar belongs to the active window, and a window without
   one leaves the main window's up, whose key equivalents Cocoa fires
@@ -183,6 +241,21 @@ describes the app itself.
   by a share of their distance in `RING_BEATS`, so they are seen growing
   evenly. A held hand strobe streams pulses there, rings in the tunnel
   (`Tunnel._throw`) and flickers the city's windows.
+- **Two hand strobe keys, two meanings:** G holds the light on until it is
+  let go (`hold_flash` sets `SpectrumState.held`, which scenes read as a
+  steady light: the city's windows all lit, the tunnel's corridor lit), H
+  flashes as fast as it can (`spam_flash`); neither ticks the strobe box.
+  Rings and pulses are thrown on a rising edge only, or a held key
+  machine-gunned them.
+- **The rave's lasers are for the drops** (`Rave._drop_runs`, from
+  `trackstyle` sections once the drums have been read, `style.from_drums`;
+  `DROP_CARRY` decides which sections count). Each run is snapped to where
+  the loudness really rises and falls (`_snapped`), since the sections came
+  up to a bar early on real records; the rig comes up over `RIG_IN` seconds
+  and goes over `RIG_OUT` beats. Nothing is lit before the drums are read.
+- **The bloom's halo is softened before it is added** (`PostProcess._soften`,
+  `SOFTEN` passes): drawn from an eighth-size buffer it showed blocks in a
+  window, which is where the rave looked worst.
 - **Scene changes** fade over the last frame on the GPU (`_GpuCanvas.hold`,
   `cover`); a change during a change folds the two frames first. The CPU path
   fades from the background.
@@ -232,6 +305,11 @@ describes the app itself.
   beat's pace (`Rider._falling`), under the level's least warning as ever.
 - **A run's log** (`Rider._log`) records each block's outcome until the
   finish; the strip at the end draws it.
+- **Puzzle:** a grey hit drops in as clutter (`GREY_CELL`), broken by a clear
+  beside it; a block into a full column bursts it and costs `OVERFILL_COST`.
+  A colour that goes by is recorded "missed" and dissolves before the craft
+  (`DISSOLVE`, `rider_gl._missed`) rather than passing through it dark. The
+  game chosen is kept across tracks (`AudioPane.GAME_PREF`).
 - **Sounds:** bump `rider_sound.VERSION` when a sound changes, or the cached
   file is played. Notes are put off with the pane's own timers.
 - **The road is read on a curve** (Catmull-Rom through four samples, in
@@ -277,6 +355,12 @@ describes the app itself.
   (`_NSLayoutConstraintNumberExceedsLimit`, seen with a bare item and
   nothing of ours set); the native tests set that line aside and fail on
   any other.
+- **A held slider looks like the brightness control's:** both ends carry an
+  `NSSliderAccessory` with a symbol (quiet and loud, dim and bright, less and
+  more, start and end: `AudioPane.QUIET_LOUD` and its neighbours), its width
+  is held between
+  `HOLD_LEAST` and `HOLD_MOST`, and it is the bar's principal item, so it
+  sits in the middle rather than running to the right edge.
 - **ctypes callbacks cannot return structs,** so a scrubber's entries share
   one width (`_fit`). A scrubber keeps its count until `reloadData`.
 - **The suite cannot see the bar.** `tests/test_touchbar_mac.py` runs on the
@@ -296,7 +380,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 4,915 tests
+./dev test                     # 5,076 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus
@@ -318,13 +402,25 @@ of 300 records, outside the repository; only counts are recorded here.
 The beat being half a beat out (19 records) is unchanged: no rule tried held
 up on held-out records.
 
-Sorter, from `./dev eval` and `tools/corpus.py`:
+Sorter, from `./dev eval`, `tools/adversarial.py` and `tools/corpus.py`:
 
-| Set | Job vs not | Exact category |
-|---|---|---|
-| labelled (102) | 99.0% | 87.3% |
-| adversarial (39) | 87.2% | 59.0% |
-| held out (24) | 70.8% | 37.5% |
+| Set | Job vs not | Exact category | Filed, of those right |
+|---|---|---|---|
+| labelled (102, dev) | 100% | 94.1% | 71 of 72 |
+| adversarial (39, dev) | 100% | 97.4% | 5 of 5 |
+| retired held-out (34) | 91.2% | 82.4% | 11 of 12 |
+| held out (39, measured once) | 92.3% | 87.2% | 20 of 21 |
+
+A private set from a real inbox, split before anything was read into 508 to
+study and 292 held out, labelled by hand before the sorter ran on it, lives
+outside the repository with the scripts that score it the way a scan does
+(`~/.mail-manager-eval/inbox/score.py`). Held out, measured once against the
+version before: exact category 72.3% to 88.7%, job mail filed without asking
+92 to 137 of 152, none of it into the wrong folder either time. Three
+everyday messages were taken for job mail at full confidence; two were a
+talent community's invitations, read as an interview and an offer by
+patterns that have since been tightened, so the held-out figure after that
+(89.4%) is not a clean one.
 
 On the SpamAssassin corpus, none of 4,150 genuine messages is filed as job
 mail. That must stay at zero.
@@ -343,16 +439,18 @@ About's security link is a 404 for everyone but the owner.
 
 ## Open
 
-- **The sorter's scores** (exact category): labelled 96.1%, meetings 93.3%,
-  acknowledgements 100%, adversarial 97.4%, oblique 100% - all dev sets now,
-  tuned against. The held-out set (`holdout.json`, 34 messages, written
-  fresh on 7 October 2026 and never tuned against): 79.4% exact, 91.2% job
-  against not, and everything it filed above the threshold was right. That
-  is the number to quote for how it does on mail it has not seen. What is
-  left on the dev sets is mislabelled or an artefact of anonymising (a
-  social network's mail from an `example` domain reads as impersonation).
-  `./dev tune --corrections` lists real gaps.
-- **Nothing learns from a whole conversation;** each message is read alone.
+- **The sorter's scores** (exact category): labelled 94.1%, meetings 93.3%,
+  acknowledgements 100%, adversarial 97.4%, oblique 100%, retired held-out
+  82.4% - all dev sets now. The held-out set (`holdout.json`, 39 messages,
+  written fresh on 7 October 2026 and measured once): 87.2% exact, 92.3% job
+  against not, 20 of the 21 it filed right. That is the number to quote for
+  mail it has not seen. Its one wrong filing, and the retired set's, are the
+  two confident mistakes left that the version before did not make: onboarding
+  paperwork after an accepted offer read as Next Steps, and a person's "we
+  got your CV" read as an interview. Do not fix them against those sets;
+  write the next set first. `./dev tune --corrections` lists real gaps.
+- **A conversation is read together only after the fact** (the two
+  `workers.read_with_*` passes); each message is still classified alone.
 - **Corrections only learn folders,** not that a sender is job-related.
 - **`workers._grouped()` opens one connection per account and folder.**
 - **The verdict cache ignores UIDVALIDITY changes;** `forget_mailbox` is

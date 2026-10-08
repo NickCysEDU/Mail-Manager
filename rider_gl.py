@@ -1509,10 +1509,12 @@ class RiderWorld:
         self._trim_colour = (1.0, 1.0, 1.0)
         self._bloom_bump = 0.0
         self._screen_ship = (0.5, 0.3)
-        #: Blocks seen finished, and which of those the craft took.
+        #: Blocks seen finished, which of those the craft took, and when each
+        #: colour that went by was seen going (see DISSOLVE).
         self._done_seen = set()
         self._taken = set()
         self._taken_now = []
+        self._missed: set = set()
 
     def _build(self, half: float) -> None:
         if self._half == half:
@@ -2047,9 +2049,18 @@ class RiderWorld:
             when, lane, kind, done, grey = block
             z = scene._where(when)
             if done and id(block) in self._taken:
-                # Taken: it went into the ship. One not taken goes on past and
-                # out of the picture. See _notice.
+                # Taken: it went into the ship. See _notice.
                 continue
+            gone = done and id(block) in self._missed
+            breaking = 0.0
+            if gone:
+                # A colour gone by breaks up where it is: white-hot, turning
+                # and shrinking, and gone in the scene's DISSOLVE, on the
+                # track's clock.
+                breaking = max(0.0, (float(scene._heard) - when)
+                               / scene.DISSOLVE)
+                if breaking >= 1.0:
+                    continue
             if z < scene.RIDER_AT - 4.0 or z > far + 0.5:
                 continue
             # Grown in out of the fog over the last stretch, rather than
@@ -2108,6 +2119,23 @@ class RiderWorld:
                 # Colour in the faces and light in the edges: lit brightly all
                 # over, tone mapping turned the blocks milky.
                 glow = 0.85 + beat * 0.55
+                if gone:
+                    # Held at the craft while it breaks, so it never passes
+                    # through it.
+                    z = max(z, scene.RIDER_AT - 0.2)
+                    left = 1.0 - breaking
+                    grow = left ** 0.5 * (1.0 + 0.35 * breaking)
+                    glow *= 1.0 + 2.5 * left
+                    colour = tuple(c + (1.0 - c) * 0.6 * left for c in colour)
+                    wide *= grow
+                    tall *= grow
+                    self._put(p, (across, tall * 0.5 + 0.02 + breaking * 0.5,
+                                  z),
+                              (wide, tall, wide * 0.8),
+                              (breaking * 2.0, breaking * 1.3, 0.0),
+                              tuple(c * glow for c in colour), 0.7, 3.6, 0.0)
+                    self.cube.draw(self.gl, p)
+                    continue
                 if done:
                     # Gone past: darkening as it leaves, so a miss does not
                     # smear light across the frame's edge.
@@ -2422,12 +2450,23 @@ class RiderWorld:
             how = scene.struck(block)
             if how is None:
                 continue
+            if how == "missed":
+                # Broken up where it is, beside the craft or under it,
+                # rather than going on through it darkening.
+                self._missed.add(id(block))
+                colour = self._colour_of(scene, block)
+                self._spawn(26, (scene._lane_at(block[1]), 0.30,
+                                 scene.RIDER_AT + float(scene._at)),
+                            3.5, tuple(c * 2.5 for c in colour), 0.40, 0.50,
+                            up=0.8)
+                continue
             self._taken.add(id(block))
             if how == "taken":
                 self._taken_now.append(
                     (block[2], block[4], self._colour_of(scene, block)))
         self._done_seen &= alive
         self._taken &= alive
+        self._missed &= alive
 
     def _events(self, scene) -> None:
         import colorsys
@@ -2461,6 +2500,12 @@ class RiderWorld:
                 self._spawn(40, at, 6.0, (0.9, 0.9, 1.0), 0.6, 0.9)
                 self._spawn(int(34 * hard), nose, 5.5, (3.2, 0.35, 0.22),
                             1.0, 1.1, spread=1.3, up=1.1)
+            elif kind == "overfill":
+                # A column of the grid burst: a red knock, lighter than a hit.
+                self._shock, self._shock_hard = 0.0, 0.8
+                self._shock_at = self._screen_ship
+                self._knock = 0.6
+                self._spawn(90, at, 7.0, (4.0, 0.6, 0.35), 0.5, 0.8)
             elif kind == "shatter":
                 self._shock, self._shock_hard = 0.0, 0.6
                 self._shock_at = self._screen_ship

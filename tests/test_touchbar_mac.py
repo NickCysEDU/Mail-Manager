@@ -148,7 +148,8 @@ BAR = """
         touchbar.Popover("more", "More", [
             touchbar.Slider("volume", "Volume", slider,
                             ends=("speaker.fill", "speaker.wave.3.fill"))],
-            hold=touchbar.Slider("volume-held", "Volume", slider)),
+            hold=touchbar.Slider("volume-held", "Volume", slider,
+                                 ends=("speaker.fill", "speaker.wave.3.fill"))),
     ], "probe")
     window.show()
     spin(400)
@@ -236,6 +237,12 @@ def test_a_held_popover_opens_onto_its_own_slider(arch):
         held = rt.send(popover, "pressAndHoldTouchBar")
         out["has_bar"] = bool(held)
         out["idents"] = renderer.identifiers(held) if held else []
+        out["principal"] = rt.text(rt.send(held, "principalItemIdentifier")) if held else ""
+        item = handle.items["volume-held"]
+        out["ends"] = [bool(rt.send(item, "minimumValueAccessory")),
+                       bool(rt.send(item, "maximumValueAccessory"))]
+        out["widths"] = [rt.send(item, "minimumSliderWidth", restype=ctypes.c_double),
+                         rt.send(item, "maximumSliderWidth", restype=ctypes.c_double)]
         out["popover_idents"] = renderer.identifiers(handle.nested["more"])
         knob = handle.controls["volume-held"]
         out["knob_was"] = rt.send(knob, "doubleValue", restype=ctypes.c_double)
@@ -256,6 +263,12 @@ def test_a_held_popover_opens_onto_its_own_slider(arch):
     """)
     assert result["has_bar"], "no press-and-hold bar on the popover"
     assert result["idents"] == ["com.mailmanager.probe.volume-held"]
+    # In the middle of the bar, between its two end icons, at a set width.
+    assert result["principal"] == "com.mailmanager.probe.volume-held"
+    assert result["ends"] == [True, True]
+    import touchbar_mac
+
+    assert result["widths"] == [touchbar_mac.HOLD_LEAST, touchbar_mac.HOLD_MOST]
     assert result["popover_idents"] == ["com.mailmanager.probe.volume"]
     assert result["knob_was"] == 70.0
     assert result["value"] == 25

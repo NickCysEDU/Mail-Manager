@@ -8,7 +8,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtCore import QEvent, Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication, QLabel, QMessageBox  # noqa: E402
 
 import accounts as accounts_module  # noqa: E402
@@ -1485,10 +1485,51 @@ class TestTheLibraryOpensItsPanelOnceItIsUp:
         try:
             assert viewer is not None and viewer.isVisible()
             assert calls == [], "the panel came up before the window"
+            deadline = time.monotonic() + viewer.PANEL_WAIT_MS / 1000.0 + 1.0
+            while not calls and time.monotonic() < deadline:
+                qapp.processEvents()
+            assert len(calls) == 1
+            # Once: the window coming forward again later asks nothing.
+            viewer.changeEvent(QEvent(QEvent.Type.ActivationChange))
             qapp.processEvents()
             assert len(calls) == 1
         finally:
             viewer.close()
+
+    def test_a_window_already_in_front_is_offered_the_panel_at_once(
+            self, qapp, monkeypatch):
+        from attachment_view import AttachmentViewer
+
+        viewer = AttachmentViewer([], "", library=True)
+        calls = []
+        monkeypatch.setattr(viewer, "_add_tracks", lambda: calls.append(1))
+        monkeypatch.setattr(viewer, "isActiveWindow", lambda: True)
+        try:
+            viewer.add_tracks_when_ready()
+            qapp.processEvents()
+            assert calls == [1]
+        finally:
+            viewer.deleteLater()
+
+    def test_coming_forward_offers_it_before_the_wait_is_up(self, qapp,
+                                                           monkeypatch):
+        from attachment_view import AttachmentViewer
+
+        viewer = AttachmentViewer([], "", library=True)
+        calls = []
+        active = [False]
+        monkeypatch.setattr(viewer, "_add_tracks", lambda: calls.append(1))
+        monkeypatch.setattr(viewer, "isActiveWindow", lambda: active[0])
+        try:
+            viewer.add_tracks_when_ready()
+            qapp.processEvents()
+            assert calls == []
+            active[0] = True
+            viewer.changeEvent(QEvent(QEvent.Type.ActivationChange))
+            qapp.processEvents()
+            assert calls == [1]
+        finally:
+            viewer.deleteLater()
 
 
 class TestThePreviewKeepsItsSize:

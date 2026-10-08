@@ -1381,6 +1381,11 @@ class MainWindow(QMainWindow):
         self.density_note.setText(blurb)
         self._preview_appearance()
 
+    def set_help(self, on: bool) -> None:
+        """Help on or off from another window's ?, as if this one's were
+        pressed: the setting is kept here."""
+        self.help_button.setChecked(bool(on))
+
     def _toggle_help(self, on: bool) -> None:
         """Turn the explanations on or off, and remember which."""
         self.settings.help_mode = bool(on)
@@ -3628,9 +3633,11 @@ class MainWindow(QMainWindow):
         self._visualiser_window = window
         window.finished.connect(lambda *_: self._forget_visualiser())
         window.show()
-        # Once the window is up: a file panel opened before its window was on
-        # the screen came up with its sidebar dead.
-        QTimer.singleShot(0, window, window._add_tracks)
+        window.raise_()
+        window.activateWindow()
+        # Once the window is in front: a file panel opened before then came
+        # up with its sidebar dead.
+        window.add_tracks_when_ready()
 
     def _forget_visualiser(self) -> None:
         self._visualiser_window = None

@@ -854,6 +854,36 @@ class TestEachLevelKeepsItsOwnBest:
         finally:
             again.deleteLater()
 
+    def test_a_new_window_shows_the_game_being_played(self, qapp):
+        """The rider is one scene for the session and keeps its game, so a
+        second window opened on Mono over a game of Puzzle."""
+        import visualizers
+        from attachment_view import AudioPane
+
+        rider = visualizers.by_name("Music rider")
+        pane = AudioPane()
+        try:
+            pane.game_box.setCurrentText("Puzzle")
+            assert rider.mode == "Puzzle"
+        finally:
+            pane.deleteLater()
+        again = AudioPane()
+        try:
+            assert again.game_box.currentText() == "Puzzle"
+            assert rider.mode == "Puzzle"
+            again.game_box.setCurrentText("Mono")
+            assert rider.mode == "Mono"
+        finally:
+            again.deleteLater()
+        # And the box wins over a scene left in another game.
+        rider.set_mode("Ninja")
+        third = AudioPane()
+        try:
+            assert third.game_box.currentText() == "Mono"
+            assert rider.mode == "Mono"
+        finally:
+            third.deleteLater()
+
     def test_it_is_there_only_for_the_game(self, qapp):
         from attachment_view import AudioPane
 

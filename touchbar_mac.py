@@ -62,6 +62,13 @@ STRIP_MOST = 640.0
 #: A slider's width when its item does not say.
 SLIDER_WIDTH = 180.0
 
+#: The press-and-hold slider: centred on the bar, between its two end
+#: icons, never narrower or wider than these, in points. Edge to edge it
+#: read as a gauge rather than a control; sized to its own item it sat
+#: hard against the right end of the bar.
+HOLD_LEAST = 300.0
+HOLD_MOST = 460.0
+
 #: Every message sent, by class; "+" for messages to the class itself.
 NEEDED = {
     "+NSApplication": ("sharedApplication",),
@@ -78,6 +85,7 @@ NEEDED = {
     "NSTouchBar": ("init", "setDefaultItemIdentifiers:", "setTemplateItems:",
                    "setCustomizationIdentifier:",
                    "setCustomizationAllowedItemIdentifiers:",
+                   "setPrincipalItemIdentifier:",
                    "defaultItemIdentifiers"),
     "+NSButtonTouchBarItem": (
         "buttonTouchBarItemWithIdentifier:title:target:action:",),
@@ -101,7 +109,11 @@ NEEDED = {
                               "setPressAndHoldTouchBar:",
                               "dismissPopover:", "setCustomizationLabel:"),
     "NSSliderTouchBarItem": ("initWithIdentifier:", "slider", "setTarget:",
-                             "setAction:"),
+                             "setAction:", "setMinimumValueAccessory:",
+                             "setMaximumValueAccessory:",
+                             "setMinimumSliderWidth:",
+                             "setMaximumSliderWidth:"),
+    "+NSSliderAccessory": ("accessoryWithImage:",),
     "NSScrubber": ("initWithFrame:", "registerClass:forItemIdentifier:",
                    "setScrubberLayout:", "setDataSource:", "setDelegate:",
                    "setMode:", "setSelectionBackgroundStyle:",
@@ -597,6 +609,20 @@ class Renderer:
             "initWithIdentifier:", ident, argtypes=[_id]), retain=False)
         slider = rt.send(made, "slider")
         rt.send(slider, "setContinuous:", True, argtypes=[_bool])
+        # What each end means, drawn at the ends as AppKit's own volume and
+        # brightness sliders are: a symbol on a rounded key, which a tap
+        # steps the value towards.
+        low, high = (self._symbol(symbol) for symbol in hold.ends)
+        if low:
+            rt.send(made, "setMinimumValueAccessory:", rt.send(
+                rt.cls("NSSliderAccessory"), "accessoryWithImage:", low,
+                argtypes=[_id]), argtypes=[_id])
+        if high:
+            rt.send(made, "setMaximumValueAccessory:", rt.send(
+                rt.cls("NSSliderAccessory"), "accessoryWithImage:", high,
+                argtypes=[_id]), argtypes=[_id])
+        rt.send(made, "setMinimumSliderWidth:", HOLD_LEAST, argtypes=[_double])
+        rt.send(made, "setMaximumSliderWidth:", HOLD_MOST, argtypes=[_double])
         # Both the item and its slider report here: whichever AppKit uses.
         rt.send(made, "setTarget:", self.handler, argtypes=[_id])
         rt.send(made, "setAction:", self._act, argtypes=[_id])
@@ -605,6 +631,8 @@ class Renderer:
         bar = self._new_bar(handle, [made])
         rt.send(bar, "setDefaultItemIdentifiers:", rt.array([ident]),
                 argtypes=[_id])
+        # In the middle of the bar, the way a principal item is.
+        rt.send(bar, "setPrincipalItemIdentifier:", ident, argtypes=[_id])
         rt.send(popover, "setPressAndHoldTouchBar:", bar, argtypes=[_id])
         handle.kinds[hold.key] = ("slider", "")
         handle.items[hold.key] = made

@@ -774,6 +774,9 @@ class SoundBoard:
             return [(0.0, f"shake{min(7, run)}", 1.0)]
         if kind == "hit":
             return [(0.0, "hit", 1.0)]
+        if kind == "overfill":
+            # A column of the grid bursting: a knock and breaking glass.
+            return [(0.0, "hit", 0.75), (0.04, "glass", 0.8)]
         if kind == "air":
             return [(0.0, "landing", 1.0)]
         if kind == "shatter":

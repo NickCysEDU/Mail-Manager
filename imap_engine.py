@@ -374,8 +374,16 @@ def extract_body(message: Message) -> Tuple[html_utils.ExtractedText, Tuple[str,
     a one-line "view this email in your browser" fallback next to the real
     HTML body), in which case the HTML alternative is used.
     """
+    extracted, attachments, html, _read = _extract(message)
+    return extracted, attachments, html
+
+
+def _extract(message: Message) -> Tuple[html_utils.ExtractedText, Tuple[str, ...], str, list]:
+    """:func:`extract_body`, plus the parts the text was read from."""
     plain_parts: List[str] = []
     html_parts: List[str] = []
+    plain_from: list = []
+    html_from: list = []
     attachments: List[str] = []
 
     for part in message.walk():
@@ -393,18 +401,23 @@ def extract_body(message: Message) -> Tuple[html_utils.ExtractedText, Tuple[str,
             # Some ATS mail sends a full HTML document as text/plain.
             if html_utils.looks_like_html(text):
                 html_parts.append(text)
+                html_from.append(part)
             else:
                 plain_parts.append(text)
+                plain_from.append(part)
         elif content_type == "text/html":
             html_parts.append(_part_text(part))
+            html_from.append(part)
         elif content_type == "text/calendar":
             invitation = _calendar_text(_part_text(part))
             if invitation:
                 plain_parts.append(invitation)
+                plain_from.append(part)
 
     plain = "\n\n".join(p for p in plain_parts if p).strip()
     html = "\n\n".join(p for p in html_parts if p).strip()
 
+    read_from = plain_from
     if plain and len(plain) >= 40 and not html_utils.looks_like_html(plain):
         extracted = html_utils.plain_to_text(plain)
         if html:
@@ -419,12 +432,43 @@ def extract_body(message: Message) -> Tuple[html_utils.ExtractedText, Tuple[str,
             )
     elif html:
         extracted = html_utils.html_to_text(html)
+        read_from = html_from
         if plain and not extracted.text:
             extracted = html_utils.plain_to_text(plain)
+            read_from = plain_from
     else:
         extracted = html_utils.plain_to_text(plain)
 
-    return extracted, tuple(dict.fromkeys(attachments)), html
+    return extracted, tuple(dict.fromkeys(attachments)), html, read_from
+
+
+def _text_was_cut(message: Message, read_from: Sequence, structure: Sequence[dict]) -> bool:
+    """Whether a message downloaded only in part lost any of the text that
+    was read from it.
+
+    The bytes run out in whatever part was being sent, which is the last one
+    the parser saw. When that is a logo or an attached PDF after the text,
+    the text arrived whole, and a verdict on it can be as sure as on any
+    other message: most applicant-tracking mail carries a logo, and marking
+    all of it cut sent every acknowledgement to Needs Review. When it is the
+    text itself, or the server describes a readable part that never
+    arrived, some of what a person would read is missing.
+    """
+    leaves = [part for part in message.walk() if not part.is_multipart()]
+    if not leaves or not read_from:
+        return True
+    if any(part is leaves[-1] for part in read_from):
+        return True
+    kinds = {(part.get_content_type() or "").lower() for part in read_from}
+
+    def readable(content_type: str, disposition: str) -> bool:
+        return content_type.lower() in kinds and disposition.lower() != "attachment"
+
+    described = sum(1 for part in structure
+                    if readable(part.get("content_type") or "", part.get("disposition") or ""))
+    received = sum(1 for part in leaves
+                   if readable(part.get_content_type() or "", part.get_content_disposition() or ""))
+    return described > received
 
 
 def parse_message(
@@ -434,8 +478,15 @@ def parse_message(
     flags: Sequence[str] = (),
     size: int = 0,
     source_folder: str = "INBOX",
+    cut: bool = False,
+    structure: Sequence[dict] = (),
 ) -> EmailMessage:
-    """Turn raw RFC 822 bytes into an :class:`~models.EmailMessage`."""
+    """Turn raw RFC 822 bytes into an :class:`~models.EmailMessage`.
+
+    ``cut`` says only the start of the message was downloaded, and
+    ``structure`` is the server's description of its parts, which together
+    say whether any of the text was lost.
+    """
     try:
         message = email.message_from_bytes(raw, policy=email.policy.compat32)
     except Exception as exc:  # pragma: no cover - defensive
@@ -469,7 +520,7 @@ def parse_message(
         except (TypeError, ValueError):
             date = None
 
-    extracted, attachments, html = extract_body(message)
+    extracted, attachments, html, read_from = _extract(message)
 
     return EmailMessage(
         uid=uid,
@@ -479,6 +530,8 @@ def parse_message(
         date=date,
         body_text=extracted.text,
         body_html=html,
+        truncated=bool(cut) and _text_was_cut(message, read_from, structure),
+        original_length=size if cut else 0,
         message_id=_decode_header_value(message.get("Message-ID")),
         in_reply_to=_decode_header_value(message.get("In-Reply-To")),
         references=_decode_header_value(message.get("References")),
@@ -1184,6 +1237,10 @@ class IMAPEngine:
                 for flag in (flags_match.group(1).split() if flags_match else ())
             )
             true_size = int(size_match.group(1)) if size_match else len(raw)
+            structure = parse_bodystructure(bytes(prefix))
+            # Only part of the message was downloaded. Whether that cost any
+            # of its text is the parser's to say, and the classifier is told,
+            # rather than left believing it saw everything.
             message = parse_message(
                 bytes(raw),
                 uid=uid,
@@ -1191,13 +1248,10 @@ class IMAPEngine:
                 flags=flags,
                 size=true_size,
                 source_folder=mailbox,
+                cut=max_bytes > 0 and true_size > len(raw),
+                structure=structure,
             )
-            if max_bytes > 0 and true_size > len(raw):
-                # Only part of the message was downloaded; say so rather than
-                # letting the classifier believe it saw everything.
-                message.truncated = True
-                message.original_length = true_size
-            described = attachment_names(parse_bodystructure(bytes(prefix)))
+            described = attachment_names(structure)
             if described:
                 # The server's own list beats whatever survived the cut.
                 message.attachments = described

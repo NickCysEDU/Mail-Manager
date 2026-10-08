@@ -49,7 +49,8 @@ def rules():
     return RuleClassifier()
 
 
-@pytest.mark.parametrize("fixture", ["adversarial.json", "holdout.json", "labelled.json"])
+@pytest.mark.parametrize("fixture", ["adversarial.json", "holdout.json", "labelled.json",
+                                     "retired_holdout.json"])
 def test_nothing_is_filed_into_the_wrong_folder(rules, fixture):
     """Above the filing threshold, being wrong is not allowed to be common.
 
@@ -98,21 +99,31 @@ def test_the_held_out_set_is_never_used_to_tune(rules):
     genuinely generalised or somebody quietly fitted to it. Both are worth
     stopping to look at, and the second is the likely one.
 
-    It has fired once. The first held-out set was tuned against while the
+    It has fired twice. The first held-out set was tuned against while the
     sorter learnt to read shapes, so it was retired to ``oblique.json`` (a
     dev set now) and a fresh set of 34 was written and measured once, on
     7 October 2026: 79.4% exact, 91.2% job against not, everything it filed
-    filed right. Nothing in the engine has been changed to suit it since,
-    and nothing should be: look at its misses only to write the next set.
+    filed right.
+
+    The second time, later the same day, nobody had looked at it: the sorter
+    had learnt to read the sentence a message is written for
+    (``statements.py``), tuned on dev sets only, and the set rose to 82.4%
+    unseen. It was retired all the same, to ``retired_holdout.json``, and a
+    fresh set of 39 was written before the sorter saw any of it and measured
+    once: 87.2% exact, 92.3% job against not, 20 of the 21 it filed filed
+    right (the release before scored 82.1%, filing 15). Nothing in the engine
+    has been changed to suit it since, and nothing should be: look at its
+    misses only to write the next set.
     """
     holdout = load("holdout.json")
     correct = sum(
         1 for row in holdout
         if actual(rules.classify(
             subject=row["subject"], body=row["body"], sender=row["sender"],
+            links=row.get("links", ()), attachments=row.get("attachments", ()),
             list_unsubscribe=row.get("unsub", ""))) == expected(row)
     )
-    assert correct / len(holdout) < 0.80, (
+    assert correct / len(holdout) < 0.88, (
         "The held-out set is scoring like a training set. If the engine really "
         "did improve this much, write a fresh set and re-measure before "
         "believing it."

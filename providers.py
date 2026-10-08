@@ -866,6 +866,9 @@ class RulesProvider(Provider):
             links=message.links,
             list_unsubscribe=message.list_unsubscribe,
             truncated=message.truncated,
+            # An invitation's .ics is half of what makes a bare calendar
+            # message an interview.
+            attachments=message.attachments,
         )
         return Completion(
             text=_json.dumps(verdict.to_payload()),

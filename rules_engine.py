@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import lexicon
+import statements
 from models import Category, OtherCategory
 
 #: The most confidence this engine gives: even a textbook rejection could be
@@ -46,6 +47,9 @@ QUALIFY_SCORE_UNSOLICITED = 3.5
 DWARFED = 0.4
 #: Multiplier applied when a phrase matched only with words inserted into it.
 GAPPED_PENALTY = 0.75
+#: What a decision, step, meeting or acknowledgement stated in so many words
+#: is worth: decisive, since one sentence is how hiring mail says what it is.
+STATED_WEIGHT = 3.2
 
 #: What "next steps" is worth, and so what comes off when every mention is a
 #: promise rather than a request.
@@ -152,6 +156,45 @@ def normalize(text: str) -> str:
     result = _GAP_RUN.sub(" ", result)
     result = _SPACED_OUT.sub(lambda m: m.group(0).replace(" ", ""), result)
     return re.sub(r"\s+", " ", result).strip()
+
+
+#: Where the footer of a long message is taken to begin, as a share of it,
+#: and how long a body must be to have one.
+FOOTER_STARTS = 0.6
+FOOTER_MIN_BODY = 800
+#: What a topic phrase found only in the footer is worth.
+FOOTER_SHARE = 0.5
+
+
+def _head_and_footer(body: str) -> Tuple[str, str]:
+    """A long normalised body split where its footer is taken to begin, at a
+    word; a short one is all head."""
+    if len(body) < FOOTER_MIN_BODY:
+        return body, ""
+    cut = body.rfind(" ", 0, int(len(body) * FOOTER_STARTS))
+    if cut <= 0:
+        return body, ""
+    return body[:cut], body[cut:]
+
+
+#: Where an applicant-tracking system starts echoing back the form you filled
+#: in: what follows is your own answers and its questions ("When are you
+#: available to start?"), not anything it asks of you now.
+_ECHO = re.compile(
+    r"(?i)\b(?:here(?:'|\u2019)?s|here is|below is|attached is|we(?:'|\u2019)?ve "
+    r"included|you(?:'|\u2019)?ll find) a copy of (?:your|the) (?:application|answers|"
+    r"responses|submission)|\b(?:a )?copy of your application(?: data)? for "
+    r"(?:safekeeping|your records)")
+
+
+def _without_the_echo(body: str) -> str:
+    """The body up to and including the sentence that introduces a copy of
+    your own application, without the copy."""
+    found = _ECHO.search(body or "")
+    if not found:
+        return body
+    end = re.search(r"[.!?\n]", body[found.end():])
+    return body[:found.end() + (end.end() if end else 0)]
 
 
 def tighten(text: str) -> str:
@@ -380,13 +423,19 @@ REJECTION_SIGNALS: Tuple[Signal, ...] = (
 )
 
 OFFER_SIGNALS: Tuple[Signal, ...] = (
-    Signal("pleased to offer you", 3.0),
-    Signal("delighted to offer you", 3.0),
-    Signal("happy to offer you", 3.0),
-    Signal("we would like to offer you", 3.0),
+    # Supporting, not decisive: "happy to offer you a place in our talent
+    # network" is a mailing list. What is offered being the job is read by
+    # statements.py, which makes a real offer decisive.
+    Signal("pleased to offer you", 1.6),
+    Signal("delighted to offer you", 1.6),
+    Signal("happy to offer you", 1.6),
+    Signal("we would like to offer you", 1.6),
     Signal("extend an offer", 3.0),
     Signal("extending an offer", 3.0),
-    Signal("offer of employment", 3.0),
+    # Decisive as a subject; in a body it is as often "any offer of employment
+    # is contingent on", in the footer of everything an employer sends.
+    Signal("offer of employment", 3.0, field="subject"),
+    Signal("offer of employment", 1.4, field="body"),
     Signal("offer letter", 2.8),
     Signal("your offer", 1.6),
     Signal("employment agreement", 2.0),
@@ -684,6 +733,25 @@ SCHEDULING_LINK_DOMAINS: Tuple[str, ...] = (
     "hirevue.com", "sparkhire.com", "spark.hire", "willo.video",
     "modernhire.com", "vidcruiter.com", "loom.com",
 )
+#: The words a hiring process cannot be written without. A meeting proposed
+#: with none of them is about work, but not a step of anybody's application.
+_HIRING_ANCHOR = re.compile(
+    r"\b(?:interview\w*|positions?|roles?|openings?|vacanc\w+|jobs?|applications?|"
+    r"apply|applied|applying|candidate\w*|candidacy|recruit\w*|hiring|hire|resume|cv|"
+    r"requisition|req|talent acquisition|phone screen|screening call|offer)\b")
+
+#: The same, less the words a university or a lender uses too.
+_HIRING_WORDS = re.compile(
+    r"\b(?:interview\w*|positions?|roles?|openings?|vacanc\w+|jobs?|candidate\w*|"
+    r"candidacy|recruit\w*|hiring|hire|resume|cv|requisition|req|talent acquisition|"
+    r"employment|employer|career\w*)\b")
+
+#: One-way video interview platforms: an employer's questions, recorded
+#: answers. What they ask for is an interview, however the reminder words it.
+VIDEO_INTERVIEW_DOMAINS: Tuple[str, ...] = (
+    "hirevue.com", "modernhire.com", "sparkhire.com", "spark.hire", "willo.video",
+    "vidcruiter.com", "myinterview.com", "hireflix.com",
+)
 ASSESSMENT_LINK_DOMAINS: Tuple[str, ...] = (
     "hackerrank.com", "codesignal.com", "codility.com", "karat.com",
     "coderbyte.com", "devskiller.com", "testgorilla.com", "woven.teams",
@@ -925,6 +993,12 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("your subscription will renew", 2.8), Signal("renewal notice", 2.4),
         Signal("auto renew", 2.4), Signal("refund has been issued", 3.0),
         Signal("refund processed", 2.8), Signal("return has been received", 2.6),
+        # A payment already made to a merchant, as payment services word it.
+        Signal("you sent a payment", 3.0), Signal("your payment was processed", 2.8),
+        Signal("payment has been processed", 2.6), Signal("you paid", 2.6),
+        Signal("you authorized", 2.2),
+        Signal("your payment to", 1.8), Signal("payment details", 1.2),
+        Signal("merchant", 1.0),
         Signal("stripe.com", 2.4, field="sender", label="a payment processor"),
         Signal("squareup.com", 2.2, field="sender", label="a payment processor"),
     ),
@@ -2174,6 +2248,11 @@ _MONEY = re.compile(r"(?:[$£€]\s?\d[\d,]*(?:\.\d{2})?)|(?:\b\d[\d,]*\.\d{2}\s
 _SPENT = re.compile(
     r"\b(?:we[\W_]?ve|we have|weve)?\s*(?:taken|charged|debited|deducted|"
     r"refunded|credited|put\s+\S+\s+back|paid)\b")
+_MONEY_IN = re.compile(
+    r"\b(?:sent you|paid you|you(?:'ve| have)? received|requested) "
+    r"(?:[$\u00a3\u20ac]\s?)?\d")
+_SPENT_AT = re.compile(
+    r"\byou spent (?:[$\u00a3\u20ac]\s?)?\d[\d,]*(?:\.\d{2})?(?:\s?(?:usd|gbp|eur))? at\b")
 #: Money that has not gone yet.
 _OWED = re.compile(
     r"\b(?:due|owing|outstanding|payable|will (?:be )?(?:taken|collected|leave)|"
@@ -2259,6 +2338,15 @@ _SUBJECT_ALONE = {
     "a subject announcing an application update": (Category.APPLICATION_RECEIVED, 1.8),
     "a subject of the form 'Your application for ...'": (Category.APPLICATION_RECEIVED, 1.8),
 }
+#: What a one-time code is called, and how long the message around one runs.
+_ONE_TIME_CODE = re.compile(
+    r"\b(?:one[\W_]?time (?:pass ?code|passcode|password|code|pin)|verification code|"
+    r"security code|sign[\W_]?in code|log[\W_]?in code|confirmation code|"
+    r"(?:confirm|verify) your identity)\b")
+ONE_TIME_CODE_BODY = 900
+#: The code itself, introduced as one: "pass code: 731904." A bare number
+#: would also be a year at the end of a sentence.
+_NAMED_CODE = re.compile(r"\b(?:code|passcode|pin|otp)\b[^.!?\d]{0,20}\d{4,8}\b")
 _VERIFY_SUBJECT = re.compile(
     r"\b(?:account verification|verify your (?:account|email)|activate your account|"
     r"complete your (?:profile|registration))\b")
@@ -2349,6 +2437,25 @@ def _robot_sender(sender: str) -> bool:
     return bool(_ROBOT_SENDER.search(local))
 
 
+_TERMS_CHANGE = re.compile(
+    r"\b(?:changes? to|updat\w+(?: to)?|revis\w+(?: to)?)\s+(?:our|the|its)\s+(?:legal "
+    r"agreements?|user agreement|terms(?: of (?:service|use))?|privacy (?:policy|statement|"
+    r"notice)|customer agreement|account agreement)\b")
+_BOUNCER = re.compile(r"\b(?:mailer[\W_]?daemon|postmaster|mail delivery (?:system|subsystem))\b")
+_BOUNCED = re.compile(
+    r"\b(?:undeliver\w+|delivery status notification|returned to sender|could not be "
+    r"delivered|delivery (?:has )?failed|message not delivered|address not found)\b")
+#: A tenant of a shared service whose name is a jumble: digits run into
+#: letters, or five consonants in a row.
+_BORROWED_TENANT = re.compile(
+    r"@(?=[a-z0-9-]*(?:\d{3}|[bcdfghjklmnpqrstvwxz]{5}))[a-z0-9-]+\."
+    r"(?:atlassian\.net|zendesk\.com|freshdesk\.com|myshopify\.com|wixsite\.com|"
+    r"weebly\.com|webflow\.io|notion\.site|sharepoint\.com|helpscoutdocs\.com)\b")
+_LURE = re.compile(
+    r"\b(?:bonus|gifts?|prizes?|rewards?|winner|you(?:'ve| have)? won|claim|free spins|"
+    r"jackpot|cash ?out|picked up)\b")
+
+
 def structural_topic_scores(
     subject: str, body: str, sender: str, list_unsubscribe: str = "",
     links: Sequence[str] = (),
@@ -2429,6 +2536,20 @@ def structural_topic_scores(
         add(OtherCategory.SECURITY, 3.0 if expiring else 1.6,
             "a short code in a short message")
 
+    # The terms of an account changing: a notice to every customer, and
+    # still the account's business rather than an advert.
+    if _TERMS_CHANGE.search(blob):
+        add(OtherCategory.SECURITY, 2.4, "a change to the terms of an account")
+
+    # Mail that never arrived, reported by the system that tried to send it.
+    if _BOUNCER.search(sender) and _BOUNCED.search(blob):
+        add(OtherCategory.OTHER, 3.4, "a delivery failure notice")
+
+    # A shared service's tenant with a name nobody chose, offering a prize:
+    # a helpdesk or tracker borrowed to send spam past the filters.
+    if _BORROWED_TENANT.search(sender) and _LURE.search(blob):
+        add(OtherCategory.SPAM, 3.2, "a prize offered from a borrowed service")
+
     # An account changed: a new primary email, a password, a sign-in method.
     if re.search(r"\b(?:your (?:email|email address|address|password|details|phone number) "
                  r"(?:has been|have been|was|were) (?:updated|changed)|primary email|"
@@ -2450,8 +2571,14 @@ def structural_topic_scores(
     if _MONEY.search(blob) or plain_money:
         if _SPENT.search(blob):
             add(OtherCategory.RECEIPT, 2.6, "an amount already taken")
+        # A purchase names where; a month's summary names when.
+        if _SPENT_AT.search(blob):
+            add(OtherCategory.RECEIPT, 2.4, "an amount spent at a merchant")
         if _OWED.search(blob):
             add(OtherCategory.FINANCE, 2.6, "an amount still owed")
+        # Money coming in is the account's news, not a purchase.
+        if _MONEY_IN.search(blob):
+            add(OtherCategory.FINANCE, 2.8, "money sent to you")
         if not _SPENT.search(blob) and not _OWED.search(blob):
             add(OtherCategory.FINANCE, 0.8, "an amount of money")
 
@@ -2510,10 +2637,14 @@ _ACTION_PATTERNS: Tuple[Tuple[re.Pattern, float, str], ...] = tuple(
         (r"\bthe next step (?:in|of) the (?:application|hiring|interview) process\b",
          3.0, "names an explicit next step"),
         (r"\bthe next steps? (?:is|are) to\b", 3.0, "names an explicit next step"),
-        (r"\byou (?:must|need to|will need to|are required to)\b", 2.6, "tells you to act"),
+        # A step after it, not a portal note: "you must sign in with the
+        # address you applied from" asks nothing of the application.
+        (r"\byou (?:must|need to|will need to|are required to) (?:complete|submit|provide|"
+         r"upload|fill|schedule|book|sign(?! (?:in|up|on|into)\b)|take|finish|send|return|"
+         r"confirm|respond|reply|record|answer|attend|register)\b", 2.6, "tells you to act"),
         (r"\bwe (?:ask|require|request) that you\b", 2.6, "tells you to act"),
         (r"\bwe recommend that you complete\b", 2.6, "tells you to act"),
-        (r"\bplease (?:complete|submit|provide|upload|fill|confirm|schedule|book|sign|review|respond|reply|verify|click)\b",
+        (r"\bplease (?:complete|submit|provide|upload|fill|confirm|schedule|book|sign(?! (?:in|up|on|into)\b)|review|respond|reply|verify|click)\b",
          2.4, "asks you to do something"),
         (r"\bplease (?:complete|submit|provide|upload|fill in|sign|schedule|book)\b",
          2.2, "asks you to do something"),
@@ -2669,6 +2800,11 @@ def _topic_rank(topic: "OtherCategory") -> int:
         return len(_TOPIC_PRECEDENCE)
 
 
+#: The stages whose message opens with the thanks an acknowledgement is.
+_ABSORB_THE_THANKS = frozenset({
+    Category.OFFER, Category.INTERVIEW, Category.NEXT_STEPS, Category.NOT_INTERESTED,
+})
+
 _PRECEDENCE: Tuple[Category, ...] = (
     Category.UNSOLICITED,
     Category.OFFER,
@@ -2779,9 +2915,10 @@ class RuleClassifier:
         list_unsubscribe: str = "",
         truncated: bool = False,
         attachments: Sequence[str] = (),
+        _rereading: bool = False,
     ) -> RuleVerdict:
         subject = (subject or "")[:2000]
-        body = (body or "")[:MAX_SCANNED_CHARS]
+        body = _without_the_echo((body or "")[:MAX_SCANNED_CHARS])
         subject_n, subject_t = normalize(subject), tighten(subject)
         body_n, body_t = normalize(body), tighten(body)
         sender_n = normalize(sender)
@@ -2859,6 +2996,49 @@ class RuleClassifier:
         call, call_why = call_score(subject_n, body_n, attachments)
         if call and (person or from_hiring):
             read.append((Category.INTERVIEW, call, call_why, 2.4))
+        # What the message states in so many words: a decision, a step asked
+        # for, a meeting arranged, an application acknowledged. Stated plainly
+        # each is decisive, and each still needs the sender or the process
+        # behind it: a bank also receives applications.
+        stated = statements.read(subject, body)
+        said: Dict[Category, List[str]] = {}
+        # A university, a lender and a landlord all receive applications and
+        # turn them down; a statement is a hiring one when something besides
+        # the word "application" says hiring, and nothing says another world.
+        hiring_said = bool(
+            from_hiring or named_process
+            or any(domain in link_blob or domain in sender_n for domain in ATS_LINK_DOMAINS)
+            or (_HIRING_WORDS.search(f"{subject_n} {body_n}")
+                and not other_world_sender(sender_n)[0]))
+        if not hiring_said:
+            stated = statements.Reading()
+        if stated.declines and (person or from_hiring or working):
+            said[Category.NOT_INTERESTED] = stated.moves("declines")
+        if stated.offers and (person or from_hiring or working):
+            said[Category.OFFER] = stated.moves("offers")
+        if stated.requests and (from_hiring or working or (person and in_process)):
+            said[Category.NEXT_STEPS] = stated.moves("requests")
+        # A meeting stated with nothing about hiring in it - no role, no
+        # application, no interview, nobody whose job is hiring - may be a
+        # career conversation or a facilitator's coffee. What else the message
+        # holds may still read it as an interview; the statement alone does
+        # not make it one.
+        anchored = bool(from_hiring or named_process
+                        or _HIRING_ANCHOR.search(f"{subject_n} {body_n}")
+                        # A job title in the subject of a call is the role.
+                        or _TITLE_WORDS.search(subject_n)
+                        or any(domain in sender_n for domain in VIDEO_INTERVIEW_DOMAINS))
+        if stated.invitations and anchored and (
+                working or (in_process and (person or from_hiring))):
+            said[Category.INTERVIEW] = stated.moves("invitations")
+        if stated.acknowledged and (from_hiring or (working and (
+                not person or stated.names_an_application))):
+            said[Category.APPLICATION_RECEIVED] = stated.moves("acknowledgements")
+        for category, moves in said.items():
+            read.append((category, STATED_WEIGHT, ["it states " + move for move in moves],
+                         2.0))
+        # Readings by shape or by link, rather than by phrase.
+        shaped = {category for category, _w, _why, _c in read}
         read_context = 0.0
         read_notes: List[str] = []
         for category, weight, why, carries in read:
@@ -2891,6 +3071,7 @@ class RuleClassifier:
                 scores[Category.INTERVIEW] += 3.0
                 strongest[Category.INTERVIEW] = max(strongest[Category.INTERVIEW], 3.0)
                 matches[Category.INTERVIEW].append("a scheduling link")
+                shaped.add(Category.INTERVIEW)
             else:
                 # Kept as a weak hint: still a meeting, just nobody's job
                 # search.
@@ -2901,6 +3082,23 @@ class RuleClassifier:
             scores[Category.NEXT_STEPS] += 3.0
             strongest[Category.NEXT_STEPS] = max(strongest[Category.NEXT_STEPS], 3.0)
             matches[Category.NEXT_STEPS].append("an assessment-platform link")
+            shaped.add(Category.NEXT_STEPS)
+        # On a one-way video platform the step asked for is the interview:
+        # recording answers to an employer's questions is how it interviews,
+        # and the reminder to finish it is a reminder of an interview.
+        on_the_platform = any(domain in sender_n for domain in VIDEO_INTERVIEW_DOMAINS)
+        if on_the_platform or ((working or from_hiring) and any(
+                domain in link_blob for domain in VIDEO_INTERVIEW_DOMAINS)):
+            scores[Category.INTERVIEW] += scores[Category.NEXT_STEPS]
+            strongest[Category.INTERVIEW] = max(strongest[Category.INTERVIEW],
+                                                strongest[Category.NEXT_STEPS])
+            matches[Category.INTERVIEW].extend(
+                ["a one-way video interview"] + matches[Category.NEXT_STEPS][:2])
+            scores[Category.NEXT_STEPS] = 0.0
+            strongest[Category.NEXT_STEPS] = 0.0
+            shaped.add(Category.INTERVIEW)
+            if Category.NEXT_STEPS in said:
+                said.setdefault(Category.INTERVIEW, []).extend(said.pop(Category.NEXT_STEPS))
         if meeting and working:
             # Neither half is worth much alone ("let's find 20 minutes", "the
             # team"); together they are someone proposing to talk about your
@@ -3065,13 +3263,29 @@ class RuleClassifier:
                      if qualifies(category)
                      and (scores[category] >= top * DWARFED
                           or strongest[category] >= DECISIVE_WEIGHT)]
+        # What the message states outranks what its phrases suggest: "any offer
+        # of employment is contingent on" is in the footer of a rejection, and
+        # "please sign in to see your status" in an acknowledgement. Not
+        # unsolicited mail, which is told by where it came from, not by what
+        # it says.
+        if any(category in said for category in qualified):
+            qualified = [category for category in qualified
+                         if category in said or category in shaped
+                         or category is Category.UNSOLICITED]
         if qualified:
             best_category = qualified[0]
         else:
             best_category = max(_PRECEDENCE, key=lambda c: (scores[c], -_PRECEDENCE.index(c)))
         best_score = scores[best_category]
+        # Every later stage opens by thanking you for applying, so where the
+        # message states its decision, step or meeting, the acknowledgement
+        # in it is part of that and not a rival reading of the message.
+        absorbed = (Category.APPLICATION_RECEIVED
+                    if best_category in said and best_category in _ABSORB_THE_THANKS
+                    else None)
         runner_up = max(
-            (score for category, score in scores.items() if category is not best_category),
+            (score for category, score in scores.items()
+             if category is not best_category and category is not absorbed),
             default=0.0,
         )
 
@@ -3100,11 +3314,25 @@ class RuleClassifier:
         # A talent network keeping its mailing list is a list, whatever it
         # asks you to click.
         network = len(set(_TALENT_NETWORK.findall(f"{subject_n} {body_n}")))
+        # Judged on the words alone: a list inviting you to "join our talent
+        # community" states an invitation of a kind, and is still a list.
+        worded = max((score - (STATED_WEIGHT if category in said else 0.0)
+                      for category, score in raw_scores.items()), default=0.0)
         if ((network >= 2 or (network and list_unsubscribe.strip()))
-                and max(raw_scores.values(), default=0.0) < QUALIFY_SCORE):
+                and worded < QUALIFY_SCORE):
             job_evidence = 0.0
             non_job_score += 3.0
             non_job_matches.append("a talent network keeping its mailing list")
+
+        # A one-time code is the account's business whoever sends it: a
+        # careers site confirming who is signing in has asked nothing of the
+        # application, and the code is wanted in the inbox, now.
+        if (len(body_n) < ONE_TIME_CODE_BODY
+                and _ONE_TIME_CODE.search(f"{subject_n} {body_n}")
+                and _NAMED_CODE.search(f"{subject_n} {body_n}")):
+            job_evidence = 0.0
+            non_job_score += 3.0
+            non_job_matches.append("a one-time code, which is the account's business")
 
         elsewhere, elsewhere_why = other_world_context(subject_n, body_n)
         if elsewhere:
@@ -3169,9 +3397,49 @@ class RuleClassifier:
                 matched=tuple(job_matches[:6]),
             )
 
-        confidence = self._confidence(
-            best_score, runner_up, truncated, strongest[best_category]
-        )
+        # A meeting with nothing about hiring in it - no role, no
+        # application, no interview, nobody whose job is hiring - may be a
+        # career conversation or a facilitator's coffee: read as an
+        # interview, and looked at before it is filed as one.
+        unanchored = best_category is Category.INTERVIEW and not anchored
+        rivals_stated = set(said) - {best_category, absorbed}
+        if best_category in said and not rivals_stated:
+            # One thing stated in so many words, and nothing else stated: as
+            # sure as the rules get, unless a rival reading is strong enough
+            # to be one. A category below its qualifying score is not a
+            # reading of the message, only words that appear in it; nor is
+            # one whose words are all in conditions ("if a role arises, we
+            # will be in touch to arrange a call").
+            plain: Optional[Dict[str, float]] = None
+            rival = 0.0
+            for category, score in scores.items():
+                if category in (best_category, absorbed) or score < QUALIFY_SCORE:
+                    continue
+                if category not in shaped and not _rereading:
+                    # Read again without the sentences that only might
+                    # happen: whatever the rival still scores is what the
+                    # message means by it.
+                    if plain is None:
+                        again = self.classify(
+                            subject=subject,
+                            body=statements.unconditional(subject, body),
+                            sender=sender, list_unsubscribe=list_unsubscribe,
+                            truncated=truncated, attachments=attachments,
+                            _rereading=True)
+                        plain = dict(again.scores) if again.is_job_related else {}
+                    score = min(score, plain.get(category.value, 0.0))
+                    if score < QUALIFY_SCORE:
+                        continue
+                rival = max(rival, score)
+            confidence = self._confidence(
+                max(best_score, SATURATION), rival,
+                truncated, max(strongest[best_category], STATED_WEIGHT))
+        else:
+            confidence = self._confidence(
+                best_score, runner_up, truncated, strongest[best_category]
+            )
+        if unanchored:
+            confidence = min(confidence, SOFT_EVIDENCE_CEILING)
         matched = matches[best_category]
         return RuleVerdict(
             is_job_related=True,
@@ -3195,10 +3463,28 @@ class RuleClassifier:
         topic_scores: Dict[OtherCategory, float] = {}
         topic_matches: Dict[OtherCategory, List[str]] = {}
         topic_peak: Dict[OtherCategory, float] = {}
+        # What a long transactional message is about is said at the top; the
+        # bottom is the service notice every message from that sender carries
+        # ("your statement can be viewed any time" under each receipt,
+        # "we will never ask for your password" under each statement). A
+        # transactional phrase found only there counts for half. Not other
+        # topics: a parish bulletin is about the parish to its last line.
+        head_n, tail_n = _head_and_footer(body_n)
+        head_t = tighten(head_n) if tail_n else body_t
         for topic, table in TOPIC_SIGNALS.items():
+            footed = bool(tail_n) and topic in TRANSACTIONAL_TOPICS
             score, matched, peak = self._score_detail(
-                table, subject_n, subject_t, body_n, body_t, sender_n
+                table, subject_n, subject_t, head_n if footed else body_n,
+                head_t if footed else body_t, sender_n
             )
+            if footed:
+                whole, whole_matched, whole_peak = self._score_detail(
+                    table, subject_n, subject_t, body_n, body_t, sender_n)
+                if whole > score:
+                    score += (whole - score) * FOOTER_SHARE
+                    matched = matched + [why + " (in the footer)" for why in whole_matched
+                                         if why not in matched]
+                    peak = max(peak, whole_peak * FOOTER_SHARE)
             topic_scores[topic] = score
             topic_matches[topic] = matched
             topic_peak[topic] = peak

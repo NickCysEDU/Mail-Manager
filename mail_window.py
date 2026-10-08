@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (QComboBox, QCompleter, QFileDialog,
                                QTextEdit, QToolBar, QToolButton, QVBoxLayout,
                                QWidget)
 
+import helpmode
 import icons
 import outgoing
 from format_bar import DEFAULT_SIZE, FormatBar, tip
@@ -222,6 +223,11 @@ class MessageWindow(QMainWindow):
         bar.addWidget(spacer)
         bar.addAction(self.previous_action)
         bar.addAction(self.next_action)
+        # The buttons are icons: their names come up on a long rest, or at
+        # once with help on.
+        self.setProperty(helpmode.PATIENT, True)
+        self.help_button = helpmode.button_for(owner)
+        bar.addWidget(self.help_button)
         self.addToolBar(bar)
         self.toolbar = bar
         for action in (self.close_action,):
@@ -745,6 +751,15 @@ class ComposeWindow(QMainWindow):
         bar.addAction(self.draft_action)
         bar.addAction(self.attach_action)
         bar.addAction(self.copies_action)
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding,
+                             QSizePolicy.Policy.Preferred)
+        bar.addWidget(spacer)
+        # The buttons are icons: their names come up on a long rest, or at
+        # once with help on.
+        self.setProperty(helpmode.PATIENT, True)
+        self.help_button = helpmode.button_for(self._owner)
+        bar.addWidget(self.help_button)
         self.addToolBar(bar)
         self.toolbar = bar
         self._build_menus()

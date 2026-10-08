@@ -26,7 +26,9 @@ How the app works, how to use it, and how to build it. The
 1. **Scan.** Connects to each mailbox over IMAP and TLS and fetches the
    messages in the chosen window (past 24 hours, 3 days, 7 days or a custom
    range) with `BODY.PEEK`, so nothing is marked as read. Only the first 64 KB
-   of each message is fetched, which keeps the text and skips attachments.
+   of each message is fetched, which keeps the text and skips attachments. A
+   message is marked cut short only when its text was: a logo or a PDF after
+   the text does not count, so the sorter can still be sure of it.
 2. **Read.** HTML is reduced to the text a person would see. Link targets are
    kept.
 3. **Sort.** Each message gets a category, a summary, a confidence score and
@@ -55,10 +57,28 @@ rules finish the scan; a rejected key is reported instead.
 
 ### The built-in rules
 
-`rules_engine.py` scores 1,088 weighted signals: phrases, senders, links and
+`rules_engine.py` scores 1,097 weighted signals: phrases, senders, links and
 the shape of a message. It copes with messy text (mojibake, accents, smart
 quotes, zero-width characters, look-alike letters, spaced-out words) and has
 phrases in Spanish, French, German and Portuguese for the commonest verdicts.
+
+It also reads the sentence a message is written for (`statements.py`): the
+decision ("we will not be moving you forward"), the step asked for ("we ask
+that you complete a short questionnaire"), the meeting arranged, the offer
+made, the application acknowledged. A grammar covers the ways each is put,
+and the context that undoes one: a condition ("if we decide not to move
+forward"), a hedge ("you may be invited to"), somebody else's step
+("applicants who reach the last round give references"), a quoted reply, or
+a feedback survey after a decision. A plain statement is decisive, and the
+thanks every rejection opens with is not read as a rival to it. A statement
+counts only where something besides the word "application" says hiring, so
+a university or a bank receiving an application is not job mail.
+
+Context counts too. Within a conversation, a weak reading takes the
+conversation's category, and a calendar invitation from the person you are
+already in a hiring process with (a recruiter's "Invitation: Rowan / Sam")
+joins that process, though calendars send it as a new message. Both are held
+just below the filing threshold, so somebody looks first.
 
 Field overlays add vocabulary for Software, Healthcare, Finance, Academia,
 Legal, Sales, Trades, Government, Design and Teaching: 275 extra signals across
@@ -70,9 +90,12 @@ a receipt that never says what it is. These hints rank; they never decide on
 their own, and anything resting mainly on them stays below the filing
 threshold.
 
-On 102 real messages it agreed with a language model on job versus not job
-99% of the time and on the exact category 96%. Its confidence is capped, and a
-message that fits two categories lands in Needs Review.
+On 292 messages from a real inbox that it had never seen, labelled by hand
+before it ran, it named the exact category for 89% (the version before: 72%)
+and filed 137 of the 152 job messages without asking, none of them into the
+wrong folder (the version before filed 92). On a hand-written held-out set it
+scores 87% exact. Its confidence is capped, and a message that fits two
+categories lands in Needs Review.
 
 ### Confidence and Needs Review
 
@@ -149,7 +172,9 @@ has its pages and their main choices; dialogs have their buttons. A button
 that opens onto a slider - the scope's glow, the game's effects, the
 strobe's sensitivity, and the seek bar and the volume while the picture is
 on - can be held instead: keep a finger on it and drag, as the brightness
-control does, and the slider follows without opening.
+control does, and the slider follows without opening, with what each end
+means drawn at either side (quiet and loud, dim and bright, less and more,
+start and end).
 
 ## Rules
 
@@ -191,7 +216,10 @@ Junk and Delete (⌘⌫). ⌘↑ and ⌘↓ walk the table in the order it is sh
 Opening a message marks it read, as it would anywhere else. The same actions
 are in the **Message** menu and on a right-click in the table, where
 **Archive now** and **Delete now** act at once; **File in…** still waits for
-Apply. A quick move is undoable like any filing.
+Apply. A quick move is undoable like any filing. Rest the pointer on any
+control for five seconds and it explains itself; the ? at the end of the
+bar explains whatever you point at straight away, as it does in the main
+window and the viewer.
 
 A reply opens addressed, with the message quoted under your sign-off, and
 goes out through the mailbox it arrived in - any of yours, from the From
@@ -254,11 +282,20 @@ strobe is off by default; at its fastest it can trigger photosensitive
 epilepsy. The strobe set to Bass follows the drums' own beat once the
 track has been read, and the game's road is a curve that winds more in the
 quiet parts; kicks are told from bass notes by how they arrive. The rave's
-lasers sweep on the beat, slow in a break and a sweep a beat in a drop, and
-its rings cross the room in two beats; a held strobe (the hand strobe's hold
-key) streams rings out of the Neon tunnel and the rave and flickers the
-city's windows. In full screen, [ and ] set how long one scene takes to
-give way to the next.
+lasers come in only for a drop, read from the drums once the track has been
+read and placed where the loudness really rises, and sweep a beat at a time
+until it ends; its rings cross the room in two beats. The hand strobe has
+two keys: hold G and the light stays on until you let go; hold H and it
+flashes as fast as it can. A held light also streams rings out of the Neon
+tunnel and the rave and lights the city's windows. In full screen, [ and ]
+set how long one scene takes to give way to the next. **Visualize an Audio
+File** turns the picture on with the first track.
+
+In the game's Puzzle, colours you collect drop into a grid three wide, and
+three or more of a colour touching clear and score. A grey you hit drops in
+as clutter, broken by a clear beside it; a column that overflows bursts and
+costs points. A coloured block you let pass dissolves before it reaches you.
+The game you chose stays chosen from one track to the next.
 
 **Links** lists every link in a message by the site it really goes to, to open
 or copy. Opening one, from there or from the analysis, first shows the site and
@@ -318,7 +355,7 @@ See [SECURITY.md](../SECURITY.md) for reporting a problem.
 ./dev dry      # scan for real, with moves disabled
 ./dev fake     # the pipeline in the terminal, offline
 ./dev scan     # the pipeline on real mail, read-only
-./dev test     # 4,915 tests (with the evaluation sets present)
+./dev test     # 5,076 tests (with the evaluation sets present)
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 

@@ -680,16 +680,83 @@ class TestPartialFetch:
         engine.fetch_window(datetime(2026, 8, 1, tzinfo=UTC), max_bytes=16384)
         assert all("BODY.PEEK" in a[1] for name, a in server.commands if name == "UID FETCH")
 
-    def test_a_partially_downloaded_message_is_marked_truncated(self, engine_factory):
-        """The classifier must not believe it saw a whole message."""
-        big = build_mime(plain="x" * 50_000)
-        engine, server = engine_factory(messages={"1": big})
+    @staticmethod
+    def _fetch(engine_factory, raw, max_bytes, structure=""):
+        engine, server = engine_factory(
+            messages={"1": raw}, structures={"1": structure} if structure else None)
         engine.connect("you@icloud.example", "app-specific")
-        # The fake server returns the whole body, so shrink what it reports as
-        # downloaded by asking for a size the real server would honour.
-        message = engine._fetch_batch(["1"], "INBOX", max_bytes=0)[0]
+        return engine._fetch_batch(["1"], "INBOX", max_bytes=max_bytes)[0]
+
+    def test_a_whole_download_is_never_truncated(self, engine_factory):
+        big = build_mime(plain="x" * 50_000)
+        message = self._fetch(engine_factory, big, 0)
         assert message.truncated is False
         assert message.size == len(big)
+
+    def test_text_cut_short_is_marked_truncated(self, engine_factory):
+        """The classifier must not believe it saw a whole message."""
+        big = build_mime(plain="We have received your application. " * 2000)
+        message = self._fetch(engine_factory, big, 4096)
+        assert message.truncated is True
+        assert message.original_length == len(big)
+        assert message.size == len(big)
+
+    def test_html_that_was_read_and_cut_is_truncated(self, engine_factory):
+        page = "<html><body>" + "<p>Thank you for applying.</p>" * 3000 + "</body></html>"
+        message = self._fetch(engine_factory, build_mime(plain=None, html=page), 8192)
+        assert "Thank you for applying" in message.body_text
+        assert message.truncated is True
+
+    def test_text_ahead_of_a_logo_arrived_whole(self, engine_factory):
+        """An acknowledgement with its logo attached, cut inside the logo:
+        every word arrived. Calling it cut held the sorter below the filing
+        threshold on most applicant-tracking mail, which carries a logo."""
+        import os
+
+        raw = build_mime(plain="Thank you for applying. We have received your application.",
+                         attachment=("logo.png", os.urandom(90_000)))
+        message = self._fetch(engine_factory, raw, 65536)
+        assert "received your application" in message.body_text
+        assert message.truncated is False
+        assert message.original_length == len(raw)
+
+    def test_plain_text_read_whole_while_its_html_twin_was_cut(self, engine_factory):
+        raw = build_mime(plain="Thank you for applying. We have received your application.",
+                         html="<p>" + "Thank you for applying. " * 4000 + "</p>")
+        message = self._fetch(engine_factory, raw, 8192)
+        assert message.body_text.startswith("Thank you for applying. We have received")
+        assert message.truncated is False
+
+    def test_a_readable_part_the_server_described_but_never_sent(self, engine_factory):
+        """Text, a photograph, then more text: cut inside the photograph, the
+        second text never arrived, and the server's description says so."""
+        import os
+        from email.mime.image import MIMEImage
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+
+        outer = MIMEMultipart("mixed")
+        outer["Subject"] = "Your application"
+        outer["From"] = "Dana Reyes <dana@northwind.example>"
+        outer.attach(MIMEText("Thank you for applying. Please read the note below.", "plain"))
+        photo = MIMEImage(os.urandom(90_000), "png")
+        photo.add_header("Content-Disposition", "inline", filename="team.png")
+        outer.attach(photo)
+        outer.attach(MIMEText("We have decided not to move forward.", "plain"))
+        structure = (
+            '(("text" "plain" ("charset" "us-ascii") NIL NIL "7bit" 52 1 NIL NIL NIL NIL)'
+            '("image" "png" ("name" "team.png") NIL NIL "base64" 121000 NIL '
+            '("inline" ("filename" "team.png")) NIL NIL)'
+            '("text" "plain" ("charset" "us-ascii") NIL NIL "7bit" 36 1 NIL NIL NIL NIL)'
+            ' "mixed" ("boundary" "xyz") NIL NIL NIL)'
+        )
+        raw = outer.as_bytes()
+        message = self._fetch(engine_factory, raw, 65536, structure=structure)
+        assert "Please read the note below" in message.body_text
+        assert "move forward" not in message.body_text
+        assert message.truncated is True
+        # Without the server's word for it, nothing says more text was coming.
+        assert self._fetch(engine_factory, raw, 65536).truncated is False
 
     def test_the_true_size_is_kept_even_when_partially_fetched(self, engine_factory):
         engine, server = engine_factory(messages=_messages(1))

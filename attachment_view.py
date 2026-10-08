@@ -413,7 +413,9 @@ class AudioPane(QWidget):
         "Wakeboard": "Mono, but the up arrow jumps off the road. A jump "
                      "where the road crests is worth the most.",
         "Puzzle": "Colours drop into a grid three wide. Three or more of a "
-                  "colour touching clear and score; greys clutter it.",
+                  "colour touching clear and score. A grey you hit drops in "
+                  "as clutter, broken by a clear beside it; a full column "
+                  "bursts and costs you.",
     }
 
     def __init__(self) -> None:
@@ -542,8 +544,18 @@ class AudioPane(QWidget):
             "Wakeboard: Mono, but the up arrow leaves the road. A jump "
             "taken where the road crests is worth the most.\n\n"
             "Puzzle: a colour is worth nothing until three of them touch "
-            "in the grid, and the grid is three columns deep by six.")
-        self.game_box.currentTextChanged.connect(self.spectrum.set_scope_mode)
+            "in the grid, three columns of six. A grey you hit lands in it "
+            "as clutter and breaks when a clear goes beside it; a block "
+            "into a full column bursts the column, at a cost.")
+        # Remembered, and told to the rider now: the rider is one scene for
+        # the session and keeps its game across tracks, so a new window
+        # showing Mono over a game of Puzzle was a box out of step with the
+        # game it named.
+        kept = _viewer_prefs().get(self.GAME_PREF)
+        self.game_box.setCurrentText(kept if kept in _vis.by_name(
+            "Music rider").MODES else _vis.by_name("Music rider").MODES[0])
+        _vis.by_name("Music rider").set_mode(self.game_box.currentText())
+        self.game_box.currentTextChanged.connect(self._game_chosen)
         # Not hidden itself: its holder comes and goes, and a combo hidden
         # inside a shown holder stays hidden.
         self.game_box_holder = _labelled("Game", self.game_box)
@@ -1389,6 +1401,16 @@ class AudioPane(QWidget):
         _vis.by_name("Music rider").set_difficulty(name)
         _keep_viewer_pref("difficulty", name)
 
+    #: The game last chosen, kept between windows as the level is.
+    GAME_PREF = "game"
+
+    def _game_chosen(self, name: str) -> None:
+        import visualizers as _vis
+
+        _vis.by_name("Music rider").set_mode(name)
+        _keep_viewer_pref(self.GAME_PREF, name)
+        self.spectrum.update()
+
     def _duck(self, depth: float, seconds: float) -> None:
         """The music, down by ``depth`` and back over ``seconds``."""
         if self._audio is None:
@@ -1548,11 +1570,9 @@ class AudioPane(QWidget):
             return True
         if action in ("flash", "unflash", "spam", "unspam"):
             wants = action in ("flash", "spam")
-            # The strobe key with the strobe switched off did nothing, since
-            # scenes ask the master switch before they light up; reaching for
-            # the light ticks the box.
-            if wants and not self.strobe_box.isChecked():
-                self.strobe_box.setChecked(True)
+            # The hand keys light the scene with the strobe switched off, and
+            # leave it off: the switch is for the music's strobe, which went
+            # on running after the key came up.
             if action in ("spam", "unspam"):
                 self.spectrum.spam_flash(wants)
             else:
@@ -1827,18 +1847,21 @@ class AudioPane(QWidget):
                 touchbar.Toggle("sounds", "Sounds", self.sound_box,
                                 image="speaker.wave.2"),
                 touchbar.Slider("effects", "Effects", self.effects,
-                                width=110),
+                                width=110, ends=self.QUIET_LOUD),
             ], title=lambda: self.game_box.currentText(),
                 image="gamecontroller", when=scene("Music rider"),
                 watch=scenes,
-                hold=touchbar.Slider("effects-held", "Effects", self.effects)),
+                hold=touchbar.Slider("effects-held", "Effects", self.effects,
+                                     ends=self.QUIET_LOUD)),
             touchbar.Popover("beam", "Beam", [
                 touchbar.Choice("beam-mode", "Beam", self.mode_box),
-                touchbar.Slider("glow", "Glow", self.decay, width=140),
+                touchbar.Slider("glow", "Glow", self.decay, width=140,
+                                ends=self.DIM_BRIGHT),
             ], title=lambda: self.mode_box.currentText(),
                 image="waveform.path", when=scene("Oscilloscope"),
                 watch=scenes,
-                hold=touchbar.Slider("glow-held", "Glow", self.decay)),
+                hold=touchbar.Slider("glow-held", "Glow", self.decay,
+                                     ends=self.DIM_BRIGHT)),
             touchbar.Button("colours", "Colours", self.colour_button,
                             image="paintpalette", when=scene("VU meters"),
                             watch=scenes),
@@ -1852,31 +1875,37 @@ class AudioPane(QWidget):
                                 style="list", width=190),
                 touchbar.Slider("sense", "Sensitivity", self.sense,
                                 width=100, priority="low",
-                                title=lambda: caption(self.sense_box)),
+                                title=lambda: caption(self.sense_box),
+                                ends=self.LESS_MORE),
                 touchbar.Slider("rate", "Rate", self.flash, width=100,
                                 priority="low",
-                                title=lambda: caption(self.rate_box)),
+                                title=lambda: caption(self.rate_box),
+                                ends=self.LESS_MORE),
             ], image="photo", when=shown, watch=[self.enable_box.toggled],
                 hold=touchbar.Slider("sense-held", "Sensitivity", self.sense,
-                                     title=lambda: caption(self.sense_box))),
+                                     title=lambda: caption(self.sense_box),
+                                     ends=self.LESS_MORE)),
             # With the picture on, the seek bar and the volume leave the bar
             # for the scene's controls; these bring them back under a
             # finger: tap to open, or hold and drag.
             touchbar.Popover("where", "Seek", [
                 touchbar.Slider("seek-in", "", self.position, settle=150,
                                 change=self._seek_to, width=260,
-                                watch=[self.position.moved]),
+                                watch=[self.position.moved],
+                                ends=self.START_END),
             ], image="slider.horizontal.3", when=on,
                 watch=[self.enable_box.toggled],
                 hold=touchbar.Slider("seek-held", "", self.position,
                                      settle=150, change=self._seek_to,
-                                     watch=[self.position.moved])),
+                                     watch=[self.position.moved],
+                                     ends=self.START_END)),
             touchbar.Popover("sound", "Volume", [
                 touchbar.Slider("volume-in", "", self.volume, width=200,
-                                ends=("speaker.fill", "speaker.wave.3.fill")),
+                                ends=self.QUIET_LOUD),
             ], image="speaker.wave.2", when=on,
                 watch=[self.enable_box.toggled],
-                hold=touchbar.Slider("volume-held", "", self.volume)),
+                hold=touchbar.Slider("volume-held", "", self.volume,
+                                     ends=self.QUIET_LOUD)),
         ]
         if full is None:
             items += [
@@ -1886,7 +1915,7 @@ class AudioPane(QWidget):
                                 when=on, watch=[self.enable_box.toggled],
                                 priority="high"),
                 touchbar.Slider("volume", "", self.volume, width=130,
-                                ends=("speaker.fill", "speaker.wave.3.fill"),
+                                ends=self.QUIET_LOUD,
                                 when=lambda: not on()),
             ]
         else:
@@ -1895,6 +1924,14 @@ class AudioPane(QWidget):
                 image="arrow.down.right.and.arrow.up.left",
                 priority="high"))
         return items
+
+    #: What the two ends of a Touch Bar slider show, as SF Symbols: a sound
+    #: quiet and loud, a light dim and bright, less and more, the start and
+    #: the end of the track.
+    QUIET_LOUD = ("speaker.fill", "speaker.wave.3.fill")
+    DIM_BRIGHT = ("sun.min", "sun.max")
+    LESS_MORE = ("minus", "plus")
+    START_END = ("backward.end.fill", "forward.end.fill")
 
     def _seek_to(self, value: int) -> None:
         """Go to ``value``, as dragging the seek bar there does."""
@@ -2136,6 +2173,11 @@ class AttachmentViewer(QDialog):
         # The same window serves as a music library: it gains a way to add
         # tracks and loses the ones for saving a message's parts.
         self.library = bool(library)
+        #: Whether the picture was switched off by hand in this window, after
+        #: which adding a track leaves it off.
+        self._picture_refused = False
+        #: Whether the file panel is waiting for this window to be in front.
+        self._panel_due = False
         self.setWindowTitle("Visualiser" if library else "Attachments")
         # Narrower than the attachment window may be, so the visualiser works
         # on a small screen; tall enough for the picture once the transport and
@@ -2180,6 +2222,7 @@ class AttachmentViewer(QDialog):
 
         self.image = ImagePane()
         self.audio = AudioPane()
+        self.audio.enable_box.clicked.connect(self._picture_switched)
         self.text = TextPane()
         self.pdf = PdfPane()
         self.meta = MetadataPane()
@@ -2241,6 +2284,13 @@ class AttachmentViewer(QDialog):
         actions.addWidget(self.save_all)
         actions.addWidget(self.copy_button)
         actions.addStretch(1)
+        # What each control does comes up on a long rest, or at once with
+        # help on, as in the other windows.
+        import helpmode
+
+        self.setProperty(helpmode.PATIENT, True)
+        self.help_button = helpmode.button_for(parent)
+        actions.addWidget(self.help_button)
         actions.addWidget(buttons)
 
 
@@ -2405,6 +2455,12 @@ class AttachmentViewer(QDialog):
         if refused:
             QMessageBox.information(
                 self, "Some files were not added", "\n".join(refused))
+        if (self.library and len(refused) < len(chosen)
+                and not self._picture_refused):
+            # Music added to the visualiser's own window is there to be
+            # watched: the picture comes on with it, unless it was switched
+            # off here by hand.
+            self.audio.enable_box.setChecked(True)
         if self.list.count() and self.list.currentRow() < 0:
             self.list.setCurrentRow(0)
 
@@ -2754,6 +2810,35 @@ class AttachmentViewer(QDialog):
 
     #: The size the visualiser opens at, where the screen has room for it.
     OPENS_AT = QSize(1120, 800)
+
+    def _picture_switched(self, on: bool) -> None:
+        """The visualiser switched by hand, which _add_files respects."""
+        self._picture_refused = not on
+
+    #: The longest a file panel waits for its window to be in front.
+    PANEL_WAIT_MS = 800
+
+    def add_tracks_when_ready(self) -> None:
+        """Offer the file panel once this window is the active one: a panel
+        opened while its window was still coming forward had its sidebar
+        greyed out. Waits PANEL_WAIT_MS at most."""
+        if self.isActiveWindow():
+            QTimer.singleShot(0, self, self._add_tracks)
+            return
+        self._panel_due = True
+        QTimer.singleShot(self.PANEL_WAIT_MS, self, self._panel_now)
+
+    def _panel_now(self) -> None:
+        if self._panel_due:
+            self._panel_due = False
+            self._add_tracks()
+
+    def changeEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        super().changeEvent(event)
+        if (event.type() == QEvent.Type.ActivationChange
+                and self.isActiveWindow() and self._panel_due):
+            # After this event has been handled, not inside it.
+            QTimer.singleShot(0, self, self._panel_now)
 
     def showEvent(self, event) -> None:      # noqa: N802 - Qt's name
         """The first time: never narrower than the controls, and big enough for

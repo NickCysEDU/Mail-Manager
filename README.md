@@ -62,11 +62,13 @@ Proton works through its Bridge. **Help → Add or Link Mailboxes** adds more.
 
 The built-in sorter is a rule set that runs on your Mac: instant, free, and no
 message text leaves the machine. It reads a message by what it does, not
-only by the phrases in it: an offer by its terms, a rejection by its
-consolations, a second interview by the days offered. On 102 real messages
-it agreed with a language model on job versus not job 99% of the time, and
-on the exact category 96%. On a set it had never seen, 79% exact, and every
-message it was sure enough to file, it filed right.
+only by the phrases in it: the sentence that turns you down, asks for a
+step or arranges a call, an offer by its terms, a second interview by the
+days offered, with conditions ("if we decide not to...") and quoted replies
+read for what they are. A calendar invitation from a recruiter you are
+already talking to joins that conversation. On 292 messages from a real inbox
+that it had never seen, it named the exact category for 89% and filed 137 of
+the 152 job messages itself, none of them into the wrong folder.
 
 You can use a model instead: Ollama on your Mac, or Gemini, Claude or an
 OpenAI-compatible service with your own key, in **Settings → Analysis**.
@@ -103,7 +105,7 @@ turns that off. See [SECURITY.md](SECURITY.md).
 
 ```bash
 ./dev demo     # the app with sample mail, no setup
-./dev test     # 4,915 tests, about five minutes on four workers
+./dev test     # 5,076 tests, about five minutes on four workers
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 

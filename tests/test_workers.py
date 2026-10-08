@@ -165,3 +165,81 @@ class TestReadingWithTheThread:
         items = [self._item("1", "x", category=Category.UNCLASSIFIED_OTHER, confidence=0.5),
                  self._item("2", "x", category=Category.INTERVIEW, confidence=0.7)]
         assert read_with_the_thread(items) == 0
+
+
+class TestReadingWithTheCorrespondent:
+    """A calendar invitation from the person the interview is with is part of
+    that interview, though calendars send it as a new message."""
+
+    def _item(self, uid, subject, sender="sam.okafor@northwind.example", body="",
+              job=True, category=Category.INTERVIEW, confidence=0.9,
+              other=OtherCategory.NOT_APPLICABLE, unsub="", links=()):
+        from models import EmailMessage, TriageItem
+
+        return TriageItem(
+            email=EmailMessage(uid=uid, subject=subject, sender_email=sender,
+                               body_text=body, list_unsubscribe=unsub, links=tuple(links)),
+            classification=Classification(
+                summary="s", is_job_related=job, category=category, other_category=other,
+                confidence_score=confidence, reasoning="r", model="rules"),
+            folders=FolderPlan())
+
+    def _event(self, uid, subject, **kwargs):
+        return self._item(uid, subject, job=False, category=Category.UNCLASSIFIED_OTHER,
+                          other=OtherCategory.EVENT, confidence=0.77, **kwargs)
+
+    def test_an_invitation_takes_the_stage_of_the_persons_other_mail(self):
+        from workers import read_with_the_correspondent
+
+        lead = self._item("1", "Re: Followup: your application status", confidence=0.96)
+        invite = self._event("2", "Invitation: Northwind: Elena/Sam (Zoom) @ Wed 11am")
+        assert read_with_the_correspondent([lead, invite]) == 1
+        found = invite.classification
+        assert found.is_job_related and found.category is Category.INTERVIEW
+        assert found.confidence_score == 0.78
+        assert "correspondent" in found.adjustments
+        assert "same person" in found.reasoning
+
+    def test_a_meeting_link_is_the_shape_too(self):
+        from workers import read_with_the_correspondent
+
+        lead = self._item("1", "Screening call", confidence=0.95)
+        linked = self._event("2", "Thursday", links=("https://zoom.us/j/123456",))
+        assert read_with_the_correspondent([lead, linked]) == 1
+
+    def test_only_meeting_shaped_weak_readings_from_the_same_person(self):
+        from workers import read_with_the_correspondent
+
+        lead = self._item("1", "Interview next week", confidence=0.96)
+        chat = self._event("2", "Lunch on Friday?")                       # not a calendar's
+        sure = self._item("3", "Invitation: dinner", job=False,
+                          category=Category.UNCLASSIFIED_OTHER,
+                          other=OtherCategory.PERSONAL, confidence=0.95)  # sure of itself
+        stranger = self._event("4", "Invitation: team sync",
+                               sender="maria.lopez@elsewhere.example")
+        assert read_with_the_correspondent([lead, chat, sure, stranger]) == 0
+        assert not chat.classification.is_job_related
+        assert not sure.classification.is_job_related
+        assert not stranger.classification.is_job_related
+
+    def test_a_mailbox_or_a_list_says_nothing_about_which_process(self):
+        from workers import read_with_the_correspondent
+
+        lead = self._item("1", "Interview", sender="recruiting@northwind.example",
+                          confidence=0.96)
+        invite = self._event("2", "Invitation: interview",
+                             sender="recruiting@northwind.example")
+        listed = [self._item("3", "Interview", sender="sam.kerr@list.example",
+                             confidence=0.96, unsub="<mailto:u@list.example>"),
+                  self._event("4", "Invitation: webinar", sender="sam.kerr@list.example",
+                              unsub="<mailto:u@list.example>")]
+        assert read_with_the_correspondent([lead, invite] + listed) == 0
+
+    def test_no_sure_hiring_stage_carries_nothing(self):
+        from workers import read_with_the_correspondent
+
+        unsure = self._item("1", "Interview?", confidence=0.7)
+        received = self._item("2", "Thanks for applying",
+                              category=Category.APPLICATION_RECEIVED, confidence=0.96)
+        invite = self._event("3", "Invitation: coffee")
+        assert read_with_the_correspondent([unsure, received, invite]) == 0

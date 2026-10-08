@@ -8,6 +8,7 @@ from __future__ import annotations
 import email.message
 import imaplib
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -176,6 +177,7 @@ class FakeIMAP:
         password: str = "app-specific",
         internaldates: Optional[Dict[str, str]] = None,
         post_auth_capabilities: Optional[Sequence[str]] = None,
+        structures: Optional[Dict[str, str]] = None,
     ) -> None:
         self.folders: List[str] = list(folders or ["INBOX", "Sent Messages", "Archive"])
         self.messages: Dict[str, bytes] = dict(messages or {})
@@ -189,6 +191,9 @@ class FakeIMAP:
         self.delimiter = delimiter
         self.password = password
         self.internaldates = dict(internaldates or {})
+        #: BODYSTRUCTURE per UID, for the tests that need the server's own
+        #: description of a message's parts.
+        self.structures: Dict[str, str] = dict(structures or {})
         self.deleted: set = set()
         self.copies: List[Tuple[str, str]] = []
         #: UIDs handed out to copies, so no two collide.
@@ -310,16 +315,23 @@ class FakeIMAP:
 
     def _uid_fetch(self, uid_set, spec):
         response = []
+        # A partial fetch is honoured the way a real server honours it: the
+        # first N bytes, labelled as such, with the true size alongside.
+        partial = re.search(r"BODY\.PEEK\[\]<0\.(\d+)>", str(spec))
         for uid in str(uid_set).split(","):
             raw = self.messages.get(uid)
             if raw is None:
                 continue
             internaldate = self.internaldates.get(uid, "04-Sep-2026 12:34:56 -0700")
+            sent = raw[:int(partial.group(1))] if partial else raw
+            structure = self.structures.get(uid, "")
             prefix = (
                 f'1 (UID {uid} INTERNALDATE "{internaldate}" '
-                f"RFC822.SIZE {len(raw)} FLAGS (\\Seen) BODY[] {{{len(raw)}}}"
+                f"RFC822.SIZE {len(raw)} FLAGS (\\Seen) "
+                + (f"BODYSTRUCTURE {structure} " if structure else "")
+                + (f"BODY[]<0> {{{len(sent)}}}" if partial else f"BODY[] {{{len(sent)}}}")
             ).encode()
-            response.append((prefix, raw))
+            response.append((prefix, sent))
             response.append(b")")
         return ("OK", response)
 

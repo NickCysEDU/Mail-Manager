@@ -733,3 +733,21 @@ class TestTransportSafety:
         with pytest.raises(ProviderError) as excinfo:
             provider.complete(SYSTEM_PROMPT, "p", CLASSIFICATION_SCHEMA)
         assert "sk-super-secret-value" not in str(excinfo.value)
+
+
+class TestTheOfflineEngineSeesTheWholeMessage:
+    def test_attachments_reach_the_rules(self):
+        """A calendar invitation attached to a bare "Teams call" message is half of
+        what makes it an interview; the scan has to hand the name over."""
+        import json
+
+        from models import EmailMessage
+        from providers import RulesProvider
+
+        message = EmailMessage(
+            uid="1", subject="Rowan Avery - Platform Engineer - Teams Call",
+            sender_name="Sofia Lindgren", sender_email="sofia.lindgren@corvid.example",
+            body_text="Calendar invitation: Rowan Avery - Platform Engineer - Teams Call",
+            attachments=("invite.ics",))
+        payload = json.loads(RulesProvider().complete("", "", {}, message=message).text)
+        assert "calendar invitation attached" in " ".join(payload["signals"])

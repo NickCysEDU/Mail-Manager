@@ -663,6 +663,13 @@ def main(argv: Optional[list] = None) -> int:
     # rather than ending it; Quit is what ends it.
     app.setQuitOnLastWindowClosed(not settings.menu_bar_icon)
 
+    # From source, the menu bar and the file panels need the app to lose the
+    # focus once and take it back; see macname.wake_menu_bar.
+    if not getattr(sys, "frozen", False):
+        import macname
+        # Owned by the application, which keeps it until it has done its job.
+        macname.wake_menu_bar(app)
+
     if settings.start_in_menu_bar and window.menu_bar.visible():
         log.info("Starting in the menu bar; the window is available from it.")
     else:

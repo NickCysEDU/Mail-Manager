@@ -14,6 +14,71 @@ import pytest
 import attachment_meta
 
 
+class WrittenTrack:
+    """A track written out part by part, as the analysis would hand it to a
+    scene: loudness (the contour), the kit's hits (the chart) and a tempo,
+    so a scene that reads the track's sections finds these parts. Each part
+    is (seconds, loudness, drums); at 120 a minute a bar is two seconds.
+    """
+
+    def __init__(self, parts, tempo=120.0, rate=20.0):
+        self.parts = list(parts)
+        self.tempo = tempo
+        beat = 60.0 / tempo
+        loud, kicks, snares, hats = [], [], [], []
+        at = 0.0
+        for seconds, level, drums in self.parts:
+            loud += [level] * int(round(seconds * rate))
+            count = int(round(seconds / beat))
+            for number in range(count):
+                when = round(at + number * beat, 4)
+                if drums:
+                    kicks.append(when)
+                    if number % 2 == 1:
+                        snares.append(when)
+                    hats.append(round(when + beat / 2, 4))
+            at += seconds
+        self.length = at
+        self.contour = {"loud": loud, "rate": rate}
+        self.chart = {"Kick": kicks, "Snare": snares, "Hats": hats}
+        self.rhythm = None
+
+    def read_drums(self):
+        """The drums' own reading, as the analysis hands it over a moment
+        after the rest (see trackstyle.rhythm_of)."""
+        import trackstyle
+
+        kit = {name: trackstyle._Kept(
+            trackstyle.envelope_from(times, 60.0, self.length), 60.0)
+            for name, times in self.chart.items()}
+        self.rhythm = trackstyle.rhythm_of(kit, tempo=self.tempo)
+        return self
+
+    def level(self, at):
+        start = 0.0
+        for seconds, level, _drums in self.parts:
+            if at < start + seconds:
+                return level
+            start += seconds
+        return self.parts[-1][1]
+
+    def put(self, state, at):
+        """The state a scene would be handed at ``at`` seconds."""
+        beat = 60.0 / self.tempo
+        state.tempo = self.tempo
+        state.at = at
+        state.beat_at = (at / beat) % 1.0
+        state.contour = self.contour
+        state.chart = self.chart
+        state.rhythm = self.rhythm
+        loud = self.level(at)
+        state.bass = loud
+        state.mid = loud * 0.9
+        state.high = loud * 0.8
+        state.synth = 0.3
+        return state
+
+
 def png(width: int = 8, height: int = 6) -> bytes:
     def chunk(tag: bytes, body: bytes) -> bytes:
         piece = tag + body
@@ -3453,14 +3518,30 @@ class TestTheKeysThatPlayIt:
             pane.spectrum._tick()
         assert pane.spectrum._state.hit == 0.0, "the light stayed on"
 
-    def test_reaching_for_the_strobe_switches_it_on(self, qtbot):
-        """The strobe key ticks the strobe on: the scenes ask the tick box
-        before they light up."""
+    def test_reaching_for_the_light_lights_it_and_leaves_the_strobe_off(
+            self, qtbot):
+        """The hand keys light the scene with the strobe switched off, and
+        leave it off: ticking the box for them left the music's strobe
+        running after the key came up, which read as the key strobing."""
+        import visualizers
+
         pane, window = self._full(qtbot)
+        self._feed(pane.spectrum)
         pane.strobe_box.setChecked(False)
+        state = pane.spectrum._state
         self._press(window, self._flash_key())
-        assert pane.strobe_box.isChecked()
-        assert pane.spectrum._state.strobe
+        assert not pane.strobe_box.isChecked()
+        assert state.strobe and state.held
+        for _ in range(20):
+            pane.spectrum._tick()
+            assert visualizers.Scene.flash(state) > 0.9
+        self._press(window, self._flash_key(), release=True)
+        assert not state.strobe and not state.held
+        # And the music, which is loud on every fourth frame, sets nothing off.
+        for _ in range(60):
+            pane.spectrum._tick()
+            assert visualizers.Scene.flash(state) == 0.0
+        assert not pane.strobe_box.isChecked()
 
     def test_holding_a_key_down_is_not_a_stream_of_presses(self, qtbot):
         """The keyboard repeats a held key; a held light must not switch itself
@@ -6182,15 +6263,12 @@ class TestTheRaveRigFiresIntoTheRoom:
         image = QImage(900, 500, QImage.Format.Format_ARGB32_Premultiplied)
         painter = QPainter(image)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        # Eight seconds of verse, then the drop: the rig is for drops.
+        track = WrittenTrack([(8.0, 0.16, False), (8.0, 0.78, True)]).read_drums()
         try:
             for frame in range(frames):
                 clock[0] += 1 / 60.0
-                # Eight seconds of verse, then the drop.
-                loud = 0.16 if frame < 8 * 60 else 0.78
-                state.bass = loud
-                state.mid = loud * 0.9
-                state.high = loud * 0.8
-                state.synth = 0.3
+                track.put(state, frame / 60.0)
                 state.kit = {"Kick": 0.1, "Snare": 0.1,
                              "Hats": 0.9 if frame % 10 == 0 else 0.05,
                              "Synth": 0.3}
@@ -6613,31 +6691,23 @@ class TestLeavingFullScreenLeavesNothingBehind:
 
 class TestTheLaserRigRunsThroughTheDrop:
     """The rave's lasers are a rig, not random lines: a fan of eleven beams a
-    side from one lamp, sweeping together, long enough to read as 3D and
-    steady through a drop.
+    side from one lamp, sweeping together, long enough to read as 3D, and
+    on for the drops and nothing else. On the room's loudness alone it came
+    in during grooves and builds, ahead of the drop.
     """
 
     FPS = 60
     _runs: dict = {}
 
-    @staticmethod
-    def _arrangement(second):
-        """Intro, build, drop, breakdown, second drop."""
-        if second < 8:
-            return 0.16
-        if second < 14:
-            return 0.16 + (second - 8) * 0.10
-        if second < 28:
-            return 0.78
-        if second < 33:
-            return 0.18
-        return 0.80
+    #: Intro, build, drop, breakdown, second drop: four bars each.
+    TRACK = [(8.0, 0.16, False), (8.0, 0.45, True), (8.0, 0.80, True),
+             (8.0, 0.18, False), (8.0, 0.82, True)]
+    DROPS = ((16.0, 24.0), (32.0, 40.0))
 
     def _played(self, seconds=40):
         """How hard the rig runs each frame, and how many beams it draws."""
         if seconds in self._runs:
-            return self._runs[seconds]
-
+            return self._runs[seconds][0]
 
         from PySide6.QtCore import QRectF
         from PySide6.QtGui import QColor, QImage, QPainter
@@ -6652,6 +6722,7 @@ class TestTheLaserRigRunsThroughTheDrop:
         scene._last = None
         state = SpectrumState()
         state.levels = [0.4] * 48
+        track = WrittenTrack(self.TRACK).read_drums()
 
         watching = [False]
         real = visualizers.Rave._project
@@ -6682,11 +6753,7 @@ class TestTheLaserRigRunsThroughTheDrop:
             for frame in range(int(seconds * self.FPS)):
                 clock[0] += 1 / self.FPS
                 at = frame / self.FPS
-                loud = self._arrangement(at)
-                state.bass = loud
-                state.mid = loud * 0.9
-                state.high = loud * 0.8
-                state.synth = 0.3
+                track.put(state, at)
                 beat = frame % 30
                 state.kit = {"Kick": 0.9 if beat == 0 else 0.1,
                              "Snare": 0.9 if beat == 15 else 0.05,
@@ -6709,36 +6776,132 @@ class TestTheLaserRigRunsThroughTheDrop:
             visualizers.Rave._project = real
             visualizers.Rave._beams_now = beams
             visualizers.time.monotonic = was
-        self._runs[seconds] = rows
+        self._runs[seconds] = (rows, scene)
         return rows
 
+    def _sections(self):
+        self._played()
+        _rows, scene = self._runs[40]
+        return [(round(s.start, 2), round(s.end, 2), s.kind)
+                for s in scene._style.sections]
+
+    def test_the_drops_are_where_the_track_has_them(self):
+        """The test's own premise: the room reads the parts as written."""
+        found = self._sections()
+        drops = [(start, end) for start, end, kind in found if kind == "drop"]
+        assert drops == list(self.DROPS), found
+
     def test_it_stays_on_for_the_whole_drop(self):
-        """The rig stays on through the drop; the rings' measure reads a change
-        and dies about two seconds in."""
         rows = self._played()
-        drop = [lit for at, lit, _n, _l in rows if 15 <= at <= 27]
-        assert drop, "the arrangement has no drop in it"
+        for start, end in self.DROPS:
+            # Up within a tenth of a second, and fading only in the last beat.
+            drop = [lit for at, lit, _n, _l in rows if start + 0.1 <= at <= end - 0.5]
+            assert drop, "the arrangement has no drop in it"
+            assert min(drop) > 0.8, (
+                f"the rig fell to {min(drop):.2f} during the drop at {start}s")
+
+    def test_it_is_off_everywhere_else(self):
+        """Not in the intro, not in the build before the drop (where it came
+        in early), not in the breakdown."""
+        rows = self._played()
+        for at, lit, count, _l in rows:
+            if any(start <= at < end for start, end in self.DROPS):
+                continue
+            assert lit == 0.0 and count == 0, (
+                f"the rig ran at {lit:.2f} at {at:.2f}s, outside a drop")
+
+    def test_a_drop_carries_on_through_its_second_half(self):
+        """On real records the reading names a drop's quieter second half a
+        groove, and the rig went out half way through the drop. It runs on
+        through the parts that keep the drop's drums and most of its
+        weight, and goes for the breakdown."""
         import visualizers
 
-        out = [lit for lit in drop if lit < visualizers.Rave.FAN_FAINT]
-        assert not out, (
-            f"the rig went out for {len(out)} of {len(drop)} frames of the "
-            f"drop, the dimmest at {min(drop):.2f}")
-        assert min(drop) > 0.5, (
-            f"the rig fell to {min(drop):.2f} during the drop")
+        track = WrittenTrack([(8.0, 0.16, False), (8.0, 0.85, True),
+                              (8.0, 0.72, True), (8.0, 0.15, False),
+                              (8.0, 0.85, True)]).read_drums()
+        scene = visualizers.Rave()
+        from attachment_widgets import SpectrumState
 
-    def test_it_is_off_for_the_verse(self):
-        """Otherwise it is not marking anything."""
-        rows = self._played()
-        quiet = [lit for at, lit, _n, _l in rows if 2 <= at <= 7]
-        assert max(quiet) < 0.05, (
-            f"the rig ran at {max(quiet):.2f} during the intro")
+        state = track.put(SpectrumState(), 0.0)
+        scene._per_beat = 0.5
+        scene._read_style(state)
+        kinds = [section.kind for section in scene._style.sections]
+        assert kinds[1:3] == ["drop", "groove"], (
+            f"the premise: the second half reads as a groove: {kinds}")
+        assert scene._drop_runs == [(8.0, 24.0), (32.0, 40.0)]
 
-    def test_it_goes_out_again_in_the_breakdown(self):
+    def test_a_groove_before_a_drop_does_not_light_it(self):
+        """A part with drums that has not dropped yet is not carried by
+        anything: the rig waits for the drop."""
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        track = WrittenTrack([(8.0, 0.16, False), (8.0, 0.55, True),
+                              (8.0, 0.88, True)]).read_drums()
+        scene = visualizers.Rave()
+        scene._per_beat = 0.5
+        scene._read_style(track.put(SpectrumState(), 0.0))
+        assert all(start >= 16.0 for start, _end in scene._drop_runs), (
+            scene._drop_runs)
+
+    def test_a_drop_read_a_bar_early_starts_with_the_music(self):
+        """On real records the reading put a drop's first bar a bar ahead of
+        the music, and the rig came in early: each end is moved to the
+        beat where the loudness really changes, if it is near."""
+        import visualizers
+
+        class Style:
+            tempo = 120.0
+
+        rate = 20.0
+        loud = ([0.2] * int(20 * rate) + [0.9] * int(16 * rate)
+                + [0.2] * int(8 * rate))
+        contour = {"loud": loud, "rate": rate}
+        start, end = visualizers.Rave._snapped(18.0, 37.0, Style, contour)
+        assert start == pytest.approx(20.0) and end == pytest.approx(36.0)
+        # Already on the change: left where it is.
+        assert visualizers.Rave._snapped(20.0, 36.0, Style, contour) == (20.0, 36.0)
+        # Further than a bar from any change: left on the bar line.
+        assert visualizers.Rave._snapped(14.0, 36.0, Style, contour)[0] == 14.0
+
+    def test_nothing_before_the_drums_are_read(self):
+        """Read without the drums' own reading, the bar could start on its
+        third beat and the drop two beats early: the rig waits for it."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        clock = [1000.0]
+        was = visualizers.time.monotonic
+        visualizers.time.monotonic = lambda: clock[0]
+        scene = visualizers.Rave()
+        state = SpectrumState()
+        state.levels = [0.4] * 48
+        track = WrittenTrack(self.TRACK)
+        image = QImage(160, 90, QImage.Format.Format_ARGB32_Premultiplied)
+        painter = QPainter(image)
+        try:
+            for frame in range(60):
+                clock[0] += 1 / 60.0
+                track.put(state, 18.0 + frame / 60.0)
+                state.kit = {"Kick": 0.5, "Snare": 0.1, "Hats": 0.1,
+                             "Synth": 0.3}
+                scene.paint(painter, QRectF(0, 0, 160, 90), state)
+                assert scene._lasers_lit() == 0.0
+        finally:
+            painter.end()
+            visualizers.time.monotonic = was
+
+    def test_it_comes_in_on_the_drop(self):
+        """On its first downbeat: not a bar later either."""
         rows = self._played()
-        gone = [lit for at, lit, _n, _l in rows if 30 <= at <= 32]
-        assert max(gone) < 0.05, (
-            f"the rig stayed at {max(gone):.2f} through the breakdown")
+        for start, _end in self.DROPS:
+            first = next(at for at, lit, _n, _l in rows if lit > 0.5 and at >= start - 1.0)
+            assert start <= first <= start + 0.1, (
+                f"the rig came in at {first:.2f}s for a drop at {start}s")
 
     def test_there_are_enough_of_them_to_read_as_a_rig(self):
         """More beams: one line per hat was two on screen at a time."""
@@ -6940,6 +7103,20 @@ class TestTheTwoStrobeKeys:
             pane.spectrum._tick()
         assert pane.spectrum._state.hit == 0.0, "the light stayed on"
 
+    def test_the_steady_key_is_steady_with_the_music_strobe_on_too(self, qtbot):
+        """Outside Manual, with the music's strobe running, the held key is
+        still a lamp: the light stays up rather than falling and firing."""
+        from attachment_widgets import Spectrum
+
+        pane = self._pane(qtbot)
+        pane.spectrum.set_strobe_source("Kick")
+        pane.strobe_box.setChecked(True)
+        seen = self._seconds(pane, 0.6, before=lambda: pane.vj("flash", 1))
+        assert min(seen) > 0.99, f"the held light dipped to {min(seen):.2f}"
+        pane.vj("unflash", 1)
+        assert pane.spectrum._state.strobe, "the strobe switch was left on"
+        assert pane.spectrum._strobe_source != Spectrum.BY_HAND
+
     def test_the_rapid_key_fires_over_and_over(self, qtbot):
         """As if somebody were hitting the key as fast as they could."""
         pane = self._pane(qtbot)
@@ -7006,8 +7183,8 @@ class TestTheScenesStartFresh:
         scene = visualizers.Rave()
         fresh = dict(vars(scene))
         scene._z = 412.0
-        scene._quiet = 0.9
-        scene._peak = 0.9
+        scene._styled_from = ("an old track",)
+        scene._pulses = [[3.0, 1.0, 1.0]]
         scene._rings = [[3.0, 1.0]]
         scene._fan = 9.0
         scene.reset()
@@ -7039,9 +7216,9 @@ class TestTheScenesStartFresh:
         rave = visualizers.by_name("Rave")
         pane.set_scene(rave)
         rave._z = 412.0
-        rave._peak = 0.9
+        rave._styled_from = ("the last track",)
         pane.clear()
-        assert rave._z == 0.0 and rave._peak == 0.0, (
+        assert rave._z == 0.0 and rave._styled_from is None, (
             "a new track got the room as the last one left it")
 
     def test_every_scene_can_be_reset(self):
@@ -7607,6 +7784,51 @@ class TestThePolishPassIsOneBlit:
         finally:
             onto.end()
         return out
+
+    def test_a_thin_line_glows_smoothly(self, qapp, monkeypatch):
+        """Shrunk eightfold and stretched straight back, a thin line's glow
+        was a row of steps eight pixels long, and the picture read as low
+        resolution. Measured along the glow beside a slanted line, as how
+        much it wavers, with the blur and without."""
+        from PySide6.QtCore import QPointF, QRectF, QSize
+        from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
+
+        from attachment_widgets import PostProcess
+
+        def glow(passes):
+            monkeypatch.setattr(PostProcess, "SOFTEN", passes)
+            buffer = QPixmap(QSize(640, 360))
+            buffer.setDevicePixelRatio(1.0)
+            buffer.fill(QColor(0, 0, 0))
+            inner = QPainter(buffer)
+            inner.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            inner.setPen(QPen(QColor(255, 255, 255), 1.0))
+            inner.drawLine(QPointF(0, 120), QPointF(640, 200))
+            inner.end()
+            out = QImage(640, 360, QImage.Format.Format_ARGB32_Premultiplied)
+            out.fill(QColor(0, 0, 0))
+            post = PostProcess()
+            post._allow = 99
+            post._settle = 10_000
+            post._area = 640 * 360
+            onto = QPainter(out)
+            try:
+                post.apply(onto, QRectF(0, 0, 640, 360), buffer,
+                           {"bloom": 0.9})
+            finally:
+                onto.end()
+            # Six pixels below the line, all the way along it.
+            seen = [out.pixelColor(x, int(120 + x * 80 / 640 + 6)).valueF()
+                    for x in range(40, 600)]
+            steps = [abs(b - a) for a, b in zip(seen, seen[1:])]
+            return sum(steps) / len(steps), sum(seen) / len(seen)
+
+        rough, lit_rough = glow(0)
+        smooth, lit_smooth = glow(PostProcess.SOFTEN or 2)
+        assert lit_smooth > 0.01, "there is no glow to measure"
+        assert smooth < rough * 0.5, (
+            f"the glow wavers by {smooth:.4f} a pixel along the line, and "
+            f"{rough:.4f} without the blur")
 
     def test_the_fringing_still_happens(self, qapp):
         """The fringing still happens: measured on the picture, since it now
@@ -11488,43 +11710,78 @@ class TestThePuzzleGrid:
         assert scene._cells == [[], [], []]
         assert scene._cleared == 6
 
-    def test_an_eighth_block_locks_the_grid(self, qapp):
-        """A column overfilled locks the grid; six deep here, so the seventh
-        does it."""
+    def test_a_full_column_bursts_and_costs(self, qapp):
+        """A block into a full column bursts it: the column empties, each
+        block lost costs OVERFILL_COST, the chain breaks, and the grid goes
+        on taking blocks. It used to lock instead, with nothing to show,
+        and blocks went through the craft until it wore off."""
         import visualizers
 
         scene = self._grid()
-        for step in range(visualizers.Rider.CELLS_DEEP):
-            scene._drop(step % 2, 0)
-        assert scene._stunned == 0.0
-        deep = list(scene._cells[0])
-        scene._drop(0, 0)
-        assert scene._stunned == pytest.approx(visualizers.Rider.STUN)
-        assert scene._cells[0] == deep, (
-            "the block that overfilled the column went in anyway")
-
-    def test_the_lock_breaks_the_chain_and_wears_off(self, qapp):
-        import visualizers
-
-        scene = self._grid()
+        scene._score = 1000
         scene._chain = 9
         scene._streak = 5
-        for step in range(visualizers.Rider.CELLS_DEEP + 1):
+        for step in range(visualizers.Rider.CELLS_DEEP):
             scene._drop(step % 2, 0)
+        assert len(scene._cells[0]) == visualizers.Rider.CELLS_DEEP
+        scene._drop(0, 0)
+        assert scene._cells[0] == [], "the full column is still there"
+        cost = visualizers.Rider.OVERFILL_COST * visualizers.Rider.CELLS_DEEP
+        assert scene._score == 1000 - scene._paid(cost)
         assert scene._chain == 0 and scene._streak == 0
-        scene._burn(visualizers.Rider.STUN + 0.1)
-        assert scene._stunned == 0.0
+        assert scene._overfills == 1
+        assert [pop[5] for pop in scene._pops] == ["OVERFILL"]
+        assert scene._bursts and scene._bursts[0][0] == 0
+        scene._drop(2, 0)
+        assert scene._cells[0] == [2], "the grid stopped taking blocks"
 
-    def test_nothing_is_collected_while_it_is_locked(self, qapp):
+    def test_an_overfill_never_takes_the_score_below_nothing(self, qapp):
+        scene = self._grid([[0, 1, 0, 1, 0, 1], [], []])
+        scene._score = 10
+        scene._drop(1, 0)
+        assert scene._score == 0
+
+    def test_blocks_always_go_into_the_grid(self, qapp):
+        """No lock: a colour on the craft's lane is always collected."""
         scene = self._grid()
-        scene._stunned = 2.0
         scene._lane = 1
         scene._lane_here = scene._lane_at(1)
         scene._heard = 100.0
         scene._blocks = [[10.0, 1, "block", False, False]]
         scene._collide()
-        assert scene._cells == [[], [], []], (
-            "a block was collected while the grid was locked")
+        assert sum(len(pile) for pile in scene._cells) == 1
+
+    def test_a_grey_hit_lands_in_the_grid_as_clutter(self, qapp):
+        import visualizers
+
+        scene = self._grid()
+        scene._shield = 0.0
+        scene._lane = 2
+        scene._lane_here = scene._lane_at(2)
+        scene._heard = 100.0
+        scene._blocks = [[10.0, 2, "block", False, True]]
+        scene._collide()
+        assert scene._cells == [[], [], [visualizers.Rider.GREY_CELL]]
+
+    def test_greys_match_nothing(self, qapp):
+        import visualizers
+
+        grey = visualizers.Rider.GREY_CELL
+        scene = self._grid([[grey], [grey], [grey]])
+        assert scene._clusters() == []
+
+    def test_a_clear_breaks_the_greys_beside_it(self, qapp):
+        """The way to dig clutter out: a grey touching a cluster as it goes
+        breaks with it; one further away stays."""
+        import visualizers
+
+        grey = visualizers.Rider.GREY_CELL
+        scene = self._grid([[2, grey, grey], [2], [2]])
+        scene._fuse_up()
+        scene._burn(visualizers_fuse() + 0.1)
+        assert scene._cells == [[grey], [], []], f"left {scene._cells}"
+        assert scene._dug == 1
+        assert scene._cleared == 3
 
     def test_the_grid_is_only_used_in_puzzle(self, qapp):
         import visualizers
@@ -14307,6 +14564,33 @@ class TestAddingTracks:
         assert viewer.list.currentRow() == 0
         assert said and "note.txt" in said[0]
 
+    def test_the_picture_comes_on_with_the_music(self, qtbot, tmp_path):
+        """The visualiser's own window is for watching: the switch was left
+        off until ticked by hand."""
+        viewer = self._viewer(qtbot)
+        assert not viewer.audio.enable_box.isChecked()
+        viewer._add_files([self._wav(tmp_path)])
+        assert viewer.audio.enable_box.isChecked()
+
+    def test_switched_off_by_hand_it_stays_off(self, qtbot, tmp_path):
+        viewer = self._viewer(qtbot)
+        viewer._add_files([self._wav(tmp_path)])
+        viewer.audio.enable_box.click()
+        assert not viewer.audio.enable_box.isChecked()
+        viewer._add_files([self._wav(tmp_path)])
+        assert not viewer.audio.enable_box.isChecked()
+
+    def test_nothing_added_leaves_it_alone(self, qtbot, tmp_path, monkeypatch):
+        from PySide6.QtWidgets import QMessageBox
+
+        monkeypatch.setattr(QMessageBox, "information",
+                            staticmethod(lambda *a: None))
+        note = tmp_path / "note.txt"
+        note.write_text("not music")
+        viewer = self._viewer(qtbot)
+        viewer._add_files([str(note)])
+        assert not viewer.audio.enable_box.isChecked()
+
     def test_files_dropped_on_the_window_are_added(self, qtbot, tmp_path):
         from PySide6.QtCore import QMimeData, QUrl
 
@@ -14419,3 +14703,253 @@ class TestTheBassStrobeFollowsTheDrums:
         spectrum.set_rhythm({"tempo": 110.0, "phase": 0.1, "faster": 1, "beats": times})
         found = spectrum._beats["Bass"]
         assert [round(b.at, 3) for b in found.beats] == [round(t, 3) for t in times]
+
+
+class TestTheStrobeKeysInEachScene:
+    """G is a lamp: on while the key is down, steady, and out when it comes
+    up. H is a strobe: a run of hits. In the tunnel, the rave and the city
+    the held light streamed rings and flickered windows, so both keys
+    strobed there."""
+
+    #: The frame-by-frame light of the rapid key outside Manual: up to full
+    #: on the hit and falling as Spectrum.HIT_FALL drops it, five frames a
+    #: hit.
+    STROBE = (1.0, 0.776, 0.588, 0.430, 0.297)
+
+    @staticmethod
+    def _state():
+        from attachment_widgets import SpectrumState
+
+        state = SpectrumState()
+        state.levels = [0.6] * 27
+        state.peaks = [0.7] * 27
+        state.bass = state.mid = state.high = 0.4
+        state.synth = 0.3
+        state.kit = {"Kick": 0.1, "Snare": 0.0, "Hats": 0.1, "Synth": 0.3,
+                     "Bass": 0.4}
+        state.strobe = True
+        return state
+
+    def _run(self, scene, how, frames=60, size=(480, 270), clock=True,
+             watch=None):
+        """Paint ``frames`` frames under ``how`` ("none", "lamp" or
+        "strobe"), the clock moving a sixtieth a frame unless ``clock`` is
+        False; returns each frame and whatever ``watch`` reads after it."""
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+
+        now = [5000.0]
+        was = visualizers.time.monotonic
+        visualizers.time.monotonic = lambda: now[0]
+        state = self._state()
+        shots, watched = [], []
+        try:
+            for frame in range(frames):
+                if clock:
+                    now[0] += 1 / 60.0
+                on = frame >= 5
+                if how == "lamp":
+                    state.hit, state.held = (1.0 if on else 0.0), on
+                elif how == "strobe":
+                    state.hit = self.STROBE[frame % 5] if on else 0.0
+                    state.held = False
+                else:
+                    state.hit, state.held = 0.0, False
+                image = QImage(size[0], size[1],
+                               QImage.Format.Format_ARGB32_Premultiplied)
+                image.fill(QColor(0, 0, 0))
+                painter = QPainter(image)
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                scene.paint(painter, QRectF(0, 0, *size), state)
+                painter.end()
+                shots.append(image)
+                if watch is not None:
+                    watched.append(watch(scene))
+        finally:
+            visualizers.time.monotonic = was
+        return shots, watched
+
+    @staticmethod
+    def _light(image) -> float:
+        """How bright a frame is on average, 0 to 1, never quite nothing."""
+        total = count = 0
+        for y in range(0, image.height(), 2):
+            for x in range(0, image.width(), 2):
+                colour = image.pixelColor(x, y)
+                total += colour.redF() + colour.greenF() + colour.blueF()
+                count += 3
+        return max(1e-3, total / count)
+
+    @staticmethod
+    def _change(a, b) -> float:
+        """The mean change between two frames, 0 to 1."""
+        total = count = 0
+        for y in range(0, a.height(), 2):
+            for x in range(0, a.width(), 2):
+                p, q = a.pixelColor(x, y), b.pixelColor(x, y)
+                total += (abs(p.redF() - q.redF()) + abs(p.greenF() - q.greenF())
+                          + abs(p.blueF() - q.blueF()))
+                count += 3
+        return total / count
+
+    def test_the_lamp_holds_still_in_every_scene(self, qapp):
+        """With the scene's own movement held (no clock), a lamp changes
+        nothing from one frame to the next once it is on and a scene's eased
+        light has risen to it."""
+        import visualizers
+
+        for scene in visualizers.SCENES:
+            if scene.name == "Music rider":
+                continue
+            fresh = type(scene)()
+            moving, _ = self._run(type(scene)(), "none", frames=60, clock=False)
+            lamp, _ = self._run(fresh, "lamp", frames=60, clock=False)
+            # As a share of how bright the frame is: a scene that moves on its
+            # own moves brighter under a lamp, and that is not a strobe.
+            alone = max(self._change(a, b) / self._light(b)
+                        for a, b in zip(moving[45:], moving[46:]))
+            lit = max(self._change(a, b) / self._light(b)
+                      for a, b in zip(lamp[45:], lamp[46:]))
+            assert lit <= alone * 1.25 + 0.001, (
+                f"{scene.name} changes by {lit:.4f} a frame under the lamp, "
+                f"and {alone:.4f} without it: the held light is strobing")
+
+    def test_the_tunnel_throws_a_ring_a_hit_and_one_for_the_lamp(self, qapp):
+        import visualizers
+
+        def thrown(how):
+            counted = []
+
+            def watch(scene):
+                counted.append(len(scene._shots))
+                return len(scene._shots)
+
+            self._run(visualizers.Tunnel(), how, frames=65, watch=watch)
+            return sum(1 for a, b in zip([0] + counted, counted) if b > a)
+
+        assert thrown("lamp") == 1, "the held light threw more than one ring"
+        hits = sum(1 for frame in range(5, 65) if frame % 5 == 0)
+        assert thrown("strobe") == hits, "a strobe hit threw no ring"
+
+    def test_the_tunnel_lamp_lights_the_corridor(self, qapp):
+        import visualizers
+
+        dark, _ = self._run(visualizers.Tunnel(), "none", frames=12,
+                            clock=False)
+        lit, _ = self._run(visualizers.Tunnel(), "lamp", frames=12,
+                           clock=False)
+
+        def light(image):
+            return sum(image.pixelColor(x, y).valueF()
+                       for y in range(0, image.height(), 3)
+                       for x in range(0, image.width(), 3))
+
+        assert light(lit[-1]) > light(dark[-1]) * 1.15
+
+    def test_the_rave_sends_a_pulse_a_hit_and_one_for_the_lamp(self, qapp):
+        import visualizers
+
+        def sent(how):
+            scene = visualizers.Rave()
+            counted = []
+
+            def watch(scene):
+                counted.append(len(scene._pulses))
+                return len(scene._pulses)
+
+            self._run(scene, how, frames=45, watch=watch)
+            return sum(max(0, b - a) for a, b in zip([0] + counted, counted))
+
+        assert sent("lamp") == 1, "the held light sent a stream of pulses"
+        assert sent("strobe") >= 8, "the strobe's hits sent no pulses"
+
+    def test_the_city_lights_every_window_for_the_lamp_and_a_patch_a_hit(
+            self, qapp):
+        import visualizers
+
+        _, lamp = self._run(visualizers.Vaporwave(), "lamp", frames=40,
+                            watch=lambda scene: scene._patch)
+        assert len(set(lamp)) == 1, "the held light kept changing the windows"
+        _, strobe = self._run(visualizers.Vaporwave(), "strobe", frames=40,
+                              watch=lambda scene: scene._patch)
+        assert strobe[-1] - strobe[0] >= 6, "the windows did not answer the hits"
+
+
+class TestAColourGoneByBreaksUp:
+    """A colour the craft did not take broke up nowhere: it slid on through
+    the craft, darkening. It is marked missed, throws a few pieces and is
+    gone within Rider.DISSOLVE, held beside the craft while it goes."""
+
+    @staticmethod
+    def _rider():
+        import visualizers
+
+        scene = visualizers.Rider()
+        scene._lane = 0
+        scene._lane_here = scene._lane_at(0)
+        return scene
+
+    def test_it_is_marked_missed_and_throws_pieces(self, qapp):
+        scene = self._rider()
+        block = [10.0, 2, "block", False, False]
+        scene._blocks = [block]
+        scene._heard = 10.01
+        scene._collide()
+        assert scene.struck(block) == "missed"
+        assert scene._sparks, "it went without a piece"
+
+    def test_a_grey_gone_by_is_not_broken_up(self, qapp):
+        """Dodged obstacles go on past, as obstacles do."""
+        scene = self._rider()
+        block = [10.0, 2, "block", False, True]
+        scene._blocks = [block]
+        scene._heard = 10.01
+        scene._collide()
+        assert scene.struck(block) is None
+
+    def test_jumped_over_it_breaks_up_too(self, qapp):
+        scene = self._rider()
+        block = [10.0, 0, "block", False, False]
+        scene._blocks = [block]
+        scene._air = 0.5
+        scene._heard = 10.01
+        scene._collide()
+        assert scene.struck(block) == "missed"
+
+    def test_it_is_drawn_smaller_and_then_not_at_all(self, qapp):
+        from PySide6.QtCore import QPointF, QRectF
+        from PySide6.QtGui import QImage, QPainter
+
+        scene = self._rider()
+        block = [10.0, 2, "block", True, False]
+        scene._blocks = [block]
+        scene._record(block, "missed")
+        # The craft level with it, where it was missed.
+        scene._at = scene._flat(10.0)
+        image = QImage(320, 180, QImage.Format.Format_ARGB32_Premultiplied)
+        painter = QPainter(image)
+        widths = []
+        real = scene._eye
+
+        def spy(horizon, focal, x, y, at):
+            point = real(horizon, focal, x, y, at)
+            spied.append(point.x())
+            return point
+
+        try:
+            for share in (0.0, 0.6, 1.1):
+                spied = []
+                scene._eye = spy
+                scene._heard = 10.0 + scene.DISSOLVE * share
+                scene._blocks_of(painter, QRectF(0, 0, 320, 180),
+                                 QPointF(160, 60), 200.0, 0.3, 0.0,
+                                 "block", False, 0.5, 0.4)
+                widths.append(max(spied) - min(spied) if spied else 0.0)
+        finally:
+            painter.end()
+            scene._eye = real
+        assert widths[0] > 0.0, "it was not drawn as it went by"
+        assert widths[1] < widths[0], "it did not shrink as it broke up"
+        assert widths[2] == 0.0, "it was still there after it broke up"

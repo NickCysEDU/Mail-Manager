@@ -182,7 +182,8 @@ class SpectrumState:
                  "trace", "vector", "calibration", "history",
                  "trace_history", "vector_history", "kit", "tempo",
                  "beat_at", "at", "chart", "moving", "contour", "harmony",
-                 "flux", "rhythm", "playing", "jumps", "rhythm_due")
+                 "flux", "rhythm", "playing", "jumps", "rhythm_due",
+                 "held")
 
     def __init__(self) -> None:
         self.levels: List[float] = []
@@ -193,6 +194,9 @@ class SpectrumState:
         self.phase = 0.0
         self.scroll = 0.0
         self.strobe = False
+        #: Whether the steady-light key is down: the light is a lamp switched
+        #: on, not a run of hits, and a scene shows it steady.
+        self.held = False
         self.sparks: List[List[float]] = []
         self.labels: List[str] = []
         self.trace = None
@@ -645,6 +649,8 @@ class Spectrum(QWidget):
         #: Whether the manual key is being held down.
         self._holding = False
         self._spamming = False
+        #: The strobe switch; see set_strobe.
+        self._strobe_on = False
         #: What the two sliders mean in Manual (see HAND_SLOWEST and HAND_ON),
         #: kept apart from the automatic pair so switching mode carries nothing
         #: over.
@@ -995,7 +1001,13 @@ class Spectrum(QWidget):
             self._crossing = self._swap_pending = False
 
     def set_strobe(self, on: bool) -> None:
-        self._state.strobe = bool(on)
+        """The strobe switch: whether the music sets the light off. The hand
+        keys light the scene whatever it says (see _hand_lit)."""
+        self._strobe_on = bool(on)
+        self._state.strobe = self._strobe_on or self._hand_lit()
+
+    def _hand_lit(self) -> bool:
+        return self._holding or self._spamming
 
     def set_post(self, on: bool) -> None:
         """Turn the polish pass off, for a slower machine."""
@@ -1125,19 +1137,32 @@ class Spectrum(QWidget):
         self.update()
 
     def hold_flash(self, on: bool) -> None:
-        """Keep the light up while the key is down. ``spam_flash`` is the other
-        key: one holds a light, the other strobes.
+        """Keep the light up while the key is down, steady, and put it out
+        when the key comes up. ``spam_flash`` is the other key: one is a
+        lamp, the other a strobe. Neither switches the automatic strobe on.
         """
         self._holding = bool(on)
-        if on:
-            self.flash(self.HAND_HIT)
+        self._state.held = self._holding
+        self._hand_changed(on)
 
     def spam_flash(self, on: bool) -> None:
         """Fire over and over for as long as the key is down."""
         self._spamming = bool(on)
         self._spam_at = _time.monotonic() if on else None
+        self._hand_changed(on)
+
+    def _hand_changed(self, on: bool) -> None:
+        state = self._state
+        state.strobe = self._strobe_on or self._hand_lit()
         if on:
             self.flash(self.HAND_HIT)
+        elif not self._hand_lit():
+            # Let go: out, now, rather than fading or leaving the music's
+            # strobe running.
+            self._hand_want = 0.0
+            if not self._strobe_on:
+                state.hit = 0.0
+        self.update()
 
     def cycle_strobe_source(self, step: int = 1) -> str:
         """Move to the next thing the strobe listens to, and say which."""
@@ -2622,6 +2647,10 @@ class FullScreenSpectrum(QWidget):
         super().__init__(None)
         self.setWindowTitle("Visualiser")
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        # Its controls explain themselves on a long rest, as the window's do.
+        import helpmode
+
+        self.setProperty(helpmode.PATIENT, True)
         self.setMouseTracking(True)
         # Near black, not the theme's colour: a scene that does not fill the
         # screen shows this at the sides.
@@ -3495,12 +3524,40 @@ class PostProcess:
     #: How much of the halo each offset copy adds, for the fringing.
     FRINGE = 0.16
 
+    #: The halo is blurred at its own size before it is stretched over the
+    #: frame. Shrunk eightfold and stretched straight back, a thin line's
+    #: glow was a row of steps eight pixels long, which read as a picture
+    #: drawn at low resolution, most of all in a window, where the lines
+    #: are much of the picture. Passes of a three-by-three binomial, added
+    #: with Plus; a few tenths of a millisecond on a halo.
+    SOFTEN = 2
+    SOFTEN_KERNEL = ((0, 0, 4), (1, 0, 2), (-1, 0, 2), (0, 1, 2), (0, -1, 2),
+                     (1, 1, 1), (-1, 1, 1), (1, -1, 1), (-1, -1, 1))
+
+    def _soften(self, halo):
+        """The halo, blurred: see SOFTEN."""
+        for _ in range(self.SOFTEN):
+            out = QPixmap(halo.size())
+            out.fill(QColor(0, 0, 0, 0))
+            inner = QPainter(out)
+            try:
+                inner.setCompositionMode(
+                    QPainter.CompositionMode.CompositionMode_Plus)
+                for dx, dy, weight in self.SOFTEN_KERNEL:
+                    inner.setOpacity(weight / 16.0)
+                    inner.drawPixmap(dx, dy, halo)
+            finally:
+                inner.end()
+            halo = out
+        return halo
+
     def _glow(self, halo, amount: float, shift: float):
         """The halo plus its two offset copies, composed at the halo's own size
         and put up once: one full-size blit instead of three (at 1512x982
         the blit alone is 1.92 ms). Added with Plus either way round, so
         composing small only changes where the result clips at white.
         """
+        halo = self._soften(halo)
         wide = QPixmap(halo.size())
         wide.fill(QColor(0, 0, 0, 0))
         inner = QPainter(wide)

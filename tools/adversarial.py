@@ -8,7 +8,9 @@ features, so it is a dev set: it flatters the thing it shaped.
 
 ``holdout.json`` was written after that work was finished and is scored once.
 Nothing has been added to the engine because of anything in it. If that ever
-changes it stops measuring anything and a third set is needed.
+changes it stops measuring anything and a further set is needed: it is the
+third, written on 7 October 2026 when the sorter learnt to read the sentence a
+message is written for, and the second is kept as ``retired_holdout.json``.
 
 Neither is a headline figure. ``tools/evaluate.py`` runs against real collected
 mail, and that is the number that describes ordinary use, because ordinary
@@ -34,6 +36,7 @@ from rules_engine import RuleClassifier  # noqa: E402
 THRESHOLD = 0.95
 SETS = (
     ("adversarial.json", "dev set", "guided the structural work, so it flatters it"),
+    ("retired_holdout.json", "retired", "held out until the sorter outgrew it"),
     ("holdout.json", "held out", "written afterwards, never tuned against"),
 )
 

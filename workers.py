@@ -9,6 +9,7 @@ of 200 messages can spend minutes in the model backend.
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 import threading
 import traceback
@@ -606,6 +607,10 @@ class ScanWorker(_BaseWorker):
             if carried:
                 self._log(f"{carried} message(s) read with the rest of their "
                           "conversation.")
+            invited = read_with_the_correspondent(outcome.items)
+            if invited:
+                self._log(f"{invited} calendar message(s) read with the other mail "
+                          "from the same person.")
 
         # Last, so a rule overrides both the sorter and the memory: it is the
         # most explicit statement of intent.
@@ -668,6 +673,74 @@ def read_with_the_thread(items) -> int:
                            f"which is about {category.label.lower()}: "
                            f"\u201c{lead.email.subject_display[:60]}\u201d."),
                 adjustments=tuple(found.adjustments) + ("conversation",))
+            carried += 1
+    return carried
+
+
+#: A message shaped like a calendar's: the subject a calendar system gives an
+#: invitation or a reply to one, its text, or a meeting link.
+_MEETING_SHAPED = re.compile(
+    r"^\s*(?:invitation|updated invitation|new event|event invitation|accepted|declined|"
+    r"tentatively accepted|canceled|cancelled|rescheduled)\s*(?:event)?\s*:|"
+    r"\bcalendar invitation\b|zoom\.us/j/|teams\.microsoft\.com/(?:l/meetup-join|meet)/|"
+    r"meet\.google\.com/", re.I)
+#: The stages a calendar invitation can belong to.
+_MEETING_STAGES = (Category.INTERVIEW, Category.NEXT_STEPS, Category.OFFER)
+
+
+def read_with_the_correspondent(items) -> int:
+    """A calendar invitation from the recruiter you have been writing to is
+    the interview you have been writing about, though it shares no thread
+    with it: calendars send invitations as new messages, titled "Invitation:
+    Rowan / Sam" with nothing about a job. So a meeting-shaped message the
+    sorter read weakly takes the hiring stage of a message it was sure about
+    from the same person in the same scan, held below the filing threshold
+    so somebody still looks. Only from a person's own address: a mailbox
+    that writes for many processes, or to a list, says nothing about which
+    one an invitation belongs to. Returns how many were carried.
+    """
+    from dataclasses import replace
+
+    from rules_engine import looks_like_a_person
+
+    by_person: Dict[str, list] = {}
+    for item in items:
+        address = (item.email.sender_email or "").strip().lower()
+        if (address and looks_like_a_person(address)
+                and not (item.email.list_unsubscribe or "").strip()):
+            by_person.setdefault(address, []).append(item)
+    carried = 0
+    for group in by_person.values():
+        leads = [item for item in group
+                 if item.classification.error is None
+                 and item.classification.is_job_related
+                 and item.classification.category in _MEETING_STAGES
+                 and item.classification.confidence_score >= THREAD_LEAD]
+        if not leads:
+            continue
+        lead = max(leads, key=lambda item: item.classification.confidence_score)
+        category = lead.classification.category
+        for item in group:
+            found = item.classification
+            if found.error is not None or item is lead:
+                continue
+            shaped = (_MEETING_SHAPED.search(item.email.subject or "")
+                      or _MEETING_SHAPED.search(item.email.body_text or "")
+                      or any(_MEETING_SHAPED.search(link) for link in item.email.links))
+            weak = ((found.is_job_related
+                     and (found.category is Category.UNCLASSIFIED_OTHER
+                          or found.confidence_score < 0.60))
+                    or (not found.is_job_related and found.confidence_score < 0.92))
+            if not shaped or not weak:
+                continue
+            item.classification = replace(
+                found, is_job_related=True, category=category,
+                other_category=OtherCategory.NOT_APPLICABLE,
+                confidence_score=min(THREAD_CARRIED, lead.classification.confidence_score),
+                reasoning=(found.reasoning + " Read with the other mail from the same "
+                           f"person, which is about {category.label.lower()}: "
+                           f"\u201c{lead.email.subject_display[:60]}\u201d."),
+                adjustments=tuple(found.adjustments) + ("correspondent",))
             carried += 1
     return carried
 
