@@ -2600,7 +2600,10 @@ class MainWindow(QMainWindow):
             # read the dialog.
             dialog.deleteLater()
         if outcome != QDialog.DialogCode.Accepted:
-            self.apply_appearance()      # undo any live preview
+            # Undo a live preview, if there was one: restyling the whole app
+            # for nothing made every Cancel take a moment.
+            if dialog.previewed:
+                self.apply_appearance()
             return
         new_settings = dialog.collect()
         try:

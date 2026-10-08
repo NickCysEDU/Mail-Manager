@@ -179,6 +179,11 @@ describes the app itself.
   `_scan_on_open` says in the log what it lacked. Auto scan is the launch's,
   run once (`_scanned_at_launch`): `main.py` starts it with no window when
   the app opens in the menu bar.
+- **Restyling the app costs about a third of a second** (`theme.apply` sets
+  the stylesheet on every live widget). Settings previews a look as it is
+  chosen, but not while it fills itself in (`_loading`), and Cancel puts the
+  look back only if something was previewed (`previewed`): it opened in a
+  second before, and every model chosen without a key opens it.
 - **Hover help waits in some windows** (`helpmode.PATIENT` on the message,
   compose and viewer windows): with the ? off, a control explains itself
   after the pointer has rested on it for `PATIENT_DELAY`; with it on, at once.
@@ -447,7 +452,15 @@ describes the app itself.
   is hosted, and with the lid shut there is no bar at all.
   `tests/test_touchbar_mac.py` renders a slider in
   `+[NSAppearance _functionRowAppearance]` in an off-screen window and
-  checks the knob's corners in the pixels.
+  checks the knob's corners in the pixels. On the hosted runner (macOS 14)
+  AppKit says it "did not get back knob metrics" for that look and draws no
+  knob at all, its own sliders' included; the test skips there only when a
+  slider AppKit made itself has no knob either. Whether a real macOS 14 bar
+  draws the knob is not known: no such Mac has been tried.
+- **A hosted runner draws the visualiser very slowly** (each step of the
+  bar's measurement took over five seconds, against a fifth of one here).
+  A test that measures the bar stops the picture's frame clock, and
+  `_run` reports what the probe last said when it runs out of time.
 - **ctypes callbacks cannot return structs,** so a scrubber's entries share
   one width (`_fit`). A scrubber keeps its count until `reloadData`.
 - **The suite cannot see the bar.** `tests/test_touchbar_mac.py` runs on the
@@ -517,7 +530,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 5,254 tests
+./dev test                     # 5,272 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus
@@ -582,11 +595,33 @@ a build signed with the same certificate as the running copy, with the same
 bundle ID and the version the release says, and checks the download against
 the size and SHA-256 GitHub reports.
 
+The image's window layout must name nothing of the Mac that built it, and
+Finder's own records it with the working image's path, the start-up disk's
+name and a disk UUID. `tools/dmg_layout.py` cleans it and checks the finished
+image; `build_dmg.sh` removes an image that fails. Finder ignores a
+`.DS_Store` written afresh by ds_store (a record-for-record copy came up with
+default icons and window), so the cleaning edits Finder's file in place and
+then zeroes every byte the file does not use: Finder's earlier copies of the
+records lie in its freed blocks. After changing either, open the image and
+look: the window's size, the icons' places and the background picture.
+Finder reads the picture through the alias alone; its access time moves
+when the window opens, and does not without one.
+
+The build's label is the bare commit (`git describe --exclude='*'`): with
+tags, every build after an annotated tag was named from that tag.
+
 Private vulnerability reporting must be on in the repository's settings, or
 About's security link is a 404 for everyone but the owner.
 
 ## Open
 
+- **One viewer test fails now and then in a full local run**
+  (`test_viewer_window.py`, `test_when_the_words_under_the_controls_change_length`):
+  about one run in three or four on 6 and 8 October, never alone, never in
+  twelve runs with four cores kept busy, never on CI. The controls end 18
+  pixels short with 27 to spare under them, and `_budget_settled` reads the
+  budget as already right, so nothing asks again. Some state an earlier
+  test leaves in the same worker; not found yet.
 - **The sorter's scores** (exact category): labelled 94.1%, meetings 93.3%,
   acknowledgements 100%, adversarial 97.4%, oblique 100%, retired held-out
   82.4% - all dev sets now. The held-out set (`holdout.json`, 39 messages,

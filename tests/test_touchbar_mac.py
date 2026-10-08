@@ -95,8 +95,20 @@ def _run(arch: str, *parts: str) -> dict:
     command = [sys.executable, "-c", script]
     if arch != os.uname().machine:
         command = ["arch", f"-{arch}"] + command
-    done = subprocess.run(command, capture_output=True, text=True,
-                          timeout=120, env=env, cwd=str(ROOT))
+    late = None
+    try:
+        done = subprocess.run(command, capture_output=True, text=True,
+                              timeout=120, env=env, cwd=str(ROOT))
+    except subprocess.TimeoutExpired as caught:
+        late = caught
+    if late is not None:
+        # What it had said by then, which is where it was: the command
+        # line alone says nothing.
+        said = late.stderr or ""
+        if isinstance(said, bytes):
+            said = said.decode(errors="replace")
+        pytest.fail(f"no answer in {late.timeout:.0f} s; it last said:\n"
+                    f"{said[-3000:]}")
     lines = [line for line in done.stdout.splitlines() if line.startswith("{")]
     assert done.returncode == 0 and lines, done.stderr[-3000:]
     result = json.loads(lines[-1])
@@ -484,20 +496,41 @@ def test_a_slider_draws_with_a_rounded_knob_on_black(arch):
                        argtypes=[NSRect, _id])
             return [got.x, got.y, got.width, got.height]
 
-        knobs = [frame(view) for view in views(item)
-                 if name_of(view).endswith("NSSliderKnob")
-                 and not rt.send(view, "isHidden", restype=ctypes.c_bool)
-                 and frame(view)[2] > 4]
-        x, y, w, h = max(knobs, key=lambda box: box[2] * box[3])
-        out["knob"] = [x, y, w, h]
-        out["middle"] = brightness(x + w / 2, y + h / 2)
-        inset = 0.75
-        out["corners"] = [brightness(x + inset, y + inset),
-                          brightness(x + w - inset, y + inset),
-                          brightness(x + inset, y + h - inset),
-                          brightness(x + w - inset, y + h - inset)]
+        def knobs_of(view):
+            return [frame(each) for each in views(view)
+                    if name_of(each).endswith("NSSliderKnob")
+                    and not rt.send(each, "isHidden", restype=ctypes.c_bool)
+                    and frame(each)[2] > 4]
+
+        knobs = knobs_of(item)
+        out["knob"] = []
+        if knobs:
+            x, y, w, h = max(knobs, key=lambda box: box[2] * box[3])
+            out["knob"] = [x, y, w, h]
+            out["middle"] = brightness(x + w / 2, y + h / 2)
+            inset = 0.75
+            out["corners"] = [brightness(x + inset, y + inset),
+                              brightness(x + w - inset, y + inset),
+                              brightness(x + inset, y + h - inset),
+                              brightness(x + w - inset, y + h - inset)]
+        # A slider AppKit makes itself, which the app has not touched, in the
+        # same window: whether this Mac draws a knob in the bar's look at all.
+        own = rt.send(rt.send(rt.cls("NSSlider"), "alloc"), "initWithFrame:",
+                      NSRect(10, 0, 184, 30), argtypes=[NSRect])
+        rt.send(host, "addSubview:", own, argtypes=[_id])
+        rt.send(host, "layoutSubtreeIfNeeded")
+        spin(300)
+        out["appkit_knob"] = bool(knobs_of(own))
         rt.send(window, "orderOut:", None, argtypes=[_id])
     """)
+    if not result["knob"]:
+        # macOS 14 on a hosted runner says it "did not get back knob
+        # metrics" for the bar's look, and draws none.
+        assert not result["appkit_knob"], (
+            "AppKit draws a knob on a slider of its own here, but none on "
+            "the bar's", result)
+        pytest.skip("this Mac draws no knob on a slider in the Touch Bar's "
+                    "look, AppKit's own included")
     assert result["middle"] > 230, result
     assert max(result["corners"]) < 140, result
 
@@ -558,6 +591,7 @@ def test_the_visualisers_bar_fits_beside_the_control_strip(arch):
 
         def measure(bar, state):
             spin(200)
+            sys.stderr.write(f"measuring {state}\\n")
             handle = bar._handle
             for key, keys in bar.arrangement().items():
                 kept = [k for k in keys if bar.flat[k].kind != "space"
@@ -569,6 +603,11 @@ def test_the_visualisers_bar_fits_beside_the_control_strip(arch):
 
         GAP = 8.0
         audio = viewer.audio
+        # The bar is measured, not the picture, whose frames a hosted
+        # runner's graphics drew slowly enough to stall every measurement:
+        # the clock that draws them, borrowed by full screen too, is
+        # stopped.
+        audio.spectrum._timer.timeout.disconnect()
         audio.enable_box.setChecked(False)
         measure(touchbar.of(viewer), "picture off")
         audio.enable_box.setChecked(True)

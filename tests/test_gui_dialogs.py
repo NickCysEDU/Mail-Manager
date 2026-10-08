@@ -297,6 +297,92 @@ class TestSettingsDialog:
         assert offered == {member.value for member in NonJobRouting}
 
 
+class TestSettingsLeaveTheLookAlone:
+    """Settings restyled the whole app as it filled itself in, up to three
+    times, and once more on Cancel, for a look that had not changed: about
+    a second every time it was opened, and every time a model without a key
+    was chosen."""
+
+    @pytest.fixture
+    def window(self, qapp, tmp_path, monkeypatch):
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        # The window paints the whole application in its look, which every
+        # later test in this process would otherwise be measured in.
+        was = (qapp.font(), qapp.palette(), qapp.styleSheet())
+        # Not the first density, and readable: each control changes as the
+        # dialog fills in.
+        settings = Settings(icloud_email="you@icloud.example",
+                            density="compact", readable=True)
+        window = MainWindow(settings, InMemoryCredentialStore())
+        yield window
+        window.close()
+        qapp.setFont(was[0])
+        qapp.setPalette(was[1])
+        qapp.setStyleSheet(was[2])
+
+    @pytest.fixture
+    def restyles(self, monkeypatch):
+        import theme
+
+        calls = []
+        real = theme.apply
+
+        def counted(app, *look):
+            calls.append(look)
+            return real(app, *look)
+
+        monkeypatch.setattr(theme, "apply", counted)
+        return calls
+
+    def _open(self, window, monkeypatch, then):
+        """Open Settings, do ``then`` while it is up, and Cancel."""
+        def shown(dialog):
+            then(dialog)
+            return QDialog.DialogCode.Rejected
+
+        monkeypatch.setattr(QDialog, "exec", shown)
+        window.open_settings()
+
+    def test_opening_and_cancelling_restyle_nothing(self, window, restyles,
+                                                     monkeypatch):
+        import theme
+
+        notes = []
+        self._open(window, monkeypatch,
+                   lambda dialog: notes.append(dialog.density_note.text()))
+        assert restyles == []
+        # What the density does is still said.
+        assert notes == [next(blurb for name, _label, blurb in theme.DENSITIES
+                              if name == "compact")]
+
+    def test_a_look_tried_in_settings_is_put_back_on_cancel(
+            self, window, restyles, monkeypatch):
+        def try_dense(dialog):
+            dialog.density_combo.setCurrentIndex(
+                dialog.density_combo.findData("dense"))
+
+        self._open(window, monkeypatch, try_dense)
+        assert restyles[0][3] == "dense"
+        assert restyles[-1] == ("system", "normal", True, "compact")
+        assert window.settings.density == "compact"
+
+    def test_help_switched_on_in_settings_goes_off_again_on_cancel(
+            self, window, qapp, monkeypatch):
+        import helpmode
+
+        helpmode.install(qapp, False)
+        during = []
+
+        def switch_on(dialog):
+            dialog.help_button.setChecked(True)
+            during.append(qapp._help_filter.enabled)
+
+        self._open(window, monkeypatch, switch_on)
+        assert during == [True]
+        assert qapp._help_filter.enabled is False
+        assert not window.help_button.isChecked()
+
+
 class TestColorCoding:
     def test_every_job_category_gets_its_own_colour(self):
         from gui import category_color

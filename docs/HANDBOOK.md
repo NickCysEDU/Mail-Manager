@@ -393,7 +393,7 @@ See [SECURITY.md](../SECURITY.md) for reporting a problem.
 ./dev dry      # scan for real, with moves disabled
 ./dev fake     # the pipeline in the terminal, offline
 ./dev scan     # the pipeline on real mail, read-only
-./dev test     # 5,254 tests (with the evaluation sets present)
+./dev test     # 5,272 tests (with the evaluation sets present)
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 
@@ -439,6 +439,12 @@ again. It does not satisfy Gatekeeper; that needs a paid Developer ID.
 
 The build runs the app's `--self-test` on the finished bundle and will not
 ship one that fails.
+
+Finder lays out the disk image's window, and records the background picture
+with the path of the image it laid out, on this Mac. `build_dmg.sh` takes that
+out of the layout (`tools/dmg_layout.py clean`), then mounts the finished image
+and removes it if anything outside the app still names this Mac: the home
+folder, the user name, the start-up disk or a disk's UUID.
 
 To release: set `APP_VERSION` in `models.py`, build and sign with the same
 certificate as the last release (the updater refuses anything else), tag

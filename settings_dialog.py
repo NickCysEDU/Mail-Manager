@@ -552,6 +552,11 @@ class SettingsDialog(QDialog):
         self._store = store
         self._worker: Optional[ConnectionTestWorker] = None
         self._loading_models = False
+        #: While the settings are being put into the controls.
+        self._loading = False
+        #: Whether the app's look or help mode was changed from here, so
+        #: Cancel knows whether there is anything to put back.
+        self.previewed = False
         self._provider_seen = ""
         #: Working copies. Nothing is written until OK.
         self._accounts: List[Account] = []
@@ -2614,6 +2619,7 @@ class SettingsDialog(QDialog):
     def _toggle_help(self, on: bool) -> None:
         """Mirror the window's switch, and keep the checkbox in step."""
         helpmode.install(QApplication.instance(), on)
+        self.previewed = True
         if self.help_check.isChecked() != on:
             self.help_check.blockSignals(True)
             self.help_check.setChecked(on)
@@ -2643,8 +2649,11 @@ class SettingsDialog(QDialog):
 
     def _preview_appearance(self) -> None:
         app = QApplication.instance()
-        if app is None:
+        # Not while loading: the look on screen is already the one being
+        # loaded, and each preview restyles every widget in the app.
+        if app is None or self._loading:
             return
+        self.previewed = True
         theme.apply(app,
                     self.mode_combo.currentData() or "system",
                     self.contrast_combo.currentData() or "normal",
@@ -2871,6 +2880,13 @@ class SettingsDialog(QDialog):
                 f"The corrections file could not be written:\n\n{exc}")
 
     def _load_values(self) -> None:
+        self._loading = True
+        try:
+            self._fill_controls()
+        finally:
+            self._loading = False
+
+    def _fill_controls(self) -> None:
         settings = self._settings
         self._load_accounts(settings)
         self._load_rules(settings)

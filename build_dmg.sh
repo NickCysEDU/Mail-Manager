@@ -24,11 +24,26 @@ fi
 say()  { printf '%s==>%s %s\n' "$G" "$N" "$*" >&2; }
 die()  { printf '%serror:%s %s\n' "$R" "$N" "$*" >&2; exit 1; }
 
+# Finder would lay out whichever disk has the name, and the layout is
+# cleaned at the path the image mounts on.
+[[ -e "/Volumes/$VOLUME" ]] && die "eject the mounted “${VOLUME}” first"
+
 if [[ "${1:-}" != "--skip-build" ]]; then
   say "Building the app"
   ./build_app.sh --skip-tests
 fi
 [[ -d "$APP" ]] || die "$APP not found. Run ./build_app.sh first."
+
+# The layout Finder writes is cleaned and checked in Python, with the
+# libraries for reading and writing it.
+LAYOUT_PY=""
+for candidate in .venv-universal/bin/python .venv/bin/python; do
+  if [[ -x "$candidate" ]] && "$candidate" -c "import ds_store, mac_alias" 2>/dev/null; then
+    LAYOUT_PY="$candidate"
+    break
+  fi
+done
+[[ -n "$LAYOUT_PY" ]] || die "ds_store and mac_alias are needed: .venv/bin/python -m pip install -r requirements-dev.txt"
 
 # Report what is being packaged, since an app built for one architecture looks
 # identical to one built for both until somebody on the other kind opens it.
@@ -128,10 +143,38 @@ chmod -Rf go-w "$MOUNT" 2>/dev/null || true
 sync
 hdiutil detach "$MOUNT" >/dev/null
 
+# Finder records the background picture with the path of this working image,
+# the name of the disk it is on and that disk's UUID. Mounted again where
+# Finder does not look, so it cannot write the layout back over the cleaning.
+say "Keeping this Mac out of the installer window"
+MOUNT="$(hdiutil attach -readwrite -noverify -noautoopen -nobrowse "$DMG.tmp.dmg" |
+         grep -Eo '/Volumes/.*$' | head -1)"
+[[ -n "$MOUNT" ]] || die "could not mount the staged image again"
+if ! "$LAYOUT_PY" tools/dmg_layout.py clean "$MOUNT"; then
+  hdiutil detach "$MOUNT" >/dev/null
+  die "could not clean the installer window's layout"
+fi
+sync
+hdiutil detach "$MOUNT" >/dev/null
+
 say "Compressing $DMG"
 hdiutil convert "$DMG.tmp.dmg" -format UDZO -imagekey zlib-level=9 -o "$DMG" >/dev/null
 rm -f "$DMG.tmp.dmg"
 rm -rf "$STAGING"
+
+# The finished image, as it will be downloaded: nothing outside the app may
+# name this Mac, and an image that does is not left lying where it could be
+# uploaded.
+say "Checking the image names nothing of this Mac"
+MOUNT="$(hdiutil attach -readonly -noverify -noautoopen -nobrowse "$DMG" |
+         grep -Eo '/Volumes/.*$' | head -1)"
+[[ -n "$MOUNT" ]] || die "could not mount $DMG to check it"
+if ! "$LAYOUT_PY" tools/dmg_layout.py check "$MOUNT"; then
+  hdiutil detach "$MOUNT" >/dev/null
+  rm -f "$DMG"
+  die "$DMG named this Mac, so it has been removed"
+fi
+hdiutil detach "$MOUNT" >/dev/null
 SIZE="$(du -h "$DMG" | cut -f1)"
 say "Done. $DMG ($SIZE)"
 echo
