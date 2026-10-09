@@ -154,9 +154,9 @@ class TestLinkEvidence:
         """With something to say the conversation is a working one."""
         result = verdict(
             rules, "Chat?",
-            "X xxx xxx xxxxxxxx xxxx and would xxxx xx xxxx xxxxx xxxx "
-            "xxxxxxxxxx. Grab whatever slot suits you.",
-            "dana@acme.example",
+            "I manage the analytics group and would love to learn more about "
+            "your experience. Choose any time that fits.",
+            "ruth@acme.example",
             links=("https://calendly.com/acme/30min",),
         )
         assert result.category is Category.INTERVIEW
@@ -468,18 +468,19 @@ class TestReading:
 
     def test_an_offer_is_known_by_its_terms(self, rules):
         found = verdict(
-            rules, "Papers", "Contract attached: 52k, 00 xxxx xxxx xxxx xxxxxxxx, "
-            "xxxxx xxxx flexible xxxxx xxx xxx xx xxx xxxxx. Xxxx xxxx you are ready "
-            "and shout with questions.", "Xx Xxxxxxxxx <jo@xxxxxxxxx.example>")
+            rules, "Paperwork", "The contract is attached: 48k a year, 27 days annual "
+            "leave, and a start date to suit you within six weeks. Sign it whenever you "
+            "like and ring me with anything you want to ask.",
+            "Kit Albrey <kit@fallowmere.example>")
         assert found.category is Category.OFFER
         assert any("read as" in m for m in found.matched)
 
     def test_a_gentle_no_is_still_a_no(self, rules):
         found = verdict(
-            rules, "Where we got to", "Xxxxxx xxx xxxxxx xx xx Xxxxxx, xxx xxxx "
-            "xxxxxxx xx. We have decided to go with someone who has xxxx xxxx xx xxx "
-            "xxxxx-xx xxxx. Do keep in touch; another role opens in the spring.",
-            "Xxxx Xxxxx <x.xxxxx@xxxxxxxxxx.xxxxxxx>")
+            rules, "Where things landed", "Thank you for coming in on Wednesday; we "
+            "enjoyed meeting you. We have decided to go with somebody who has led more "
+            "projects like ours. Please stay in touch, as a similar post opens in the "
+            "autumn.", "Remy Calder <r.calder@quillbank.example>")
         assert found.category is Category.NOT_INTERESTED
 
     def test_thanks_and_an_open_door_alone_are_not_a_no(self):
@@ -489,10 +490,10 @@ class TestReading:
 
     def test_a_second_interview_is_arranged_in_plain_words(self, rules):
         found = verdict(
-            rules, "Following our chat", "Xx xxx xxxx xx xxxx xx Xxxxxxx. Xxx xxxxx "
-            "xxxxx xxxx xx xxx xxx xxxxx, xxxx xxxx xxxx the head of platform. Xxx xxx "
-            "xxxxxx Xxxxxxxx xx Xxxxxx xxxxxxxxx?",
-            "Xxxxxx Xxxxx <x.xxxxx@xxxxxx-xxxx.xxxxxxx>")
+            rules, "After Monday", "Thanks for your time on Monday. The panel would "
+            "love to see you again soon, and our engineering director will join. Are "
+            "you around on Wednesday or Thursday morning?",
+            "Ines Moreau <i.moreau@tallowfield.example>")
         assert found.category is Category.INTERVIEW
 
     def test_a_next_step_is_not_a_meeting(self, rules):
@@ -503,43 +504,43 @@ class TestReading:
 
     def test_a_step_asked_for_before_the_last_stage(self, rules):
         found = verdict(
-            rules, "One more thing before Friday", "Xxxxx xxx xxxx xxx xxxxxxxxxx, x "
-            "xxxxxxx xxx xxxxxxx xxx xxxxxx xxxxxxxxx? Xxxx xxxxx xxx xx xx xxx xxxx "
-            "xx xxx xxxx xxxxx.", "People Ops <people@xxxxxxxxx.example>")
+            rules, "One last thing by Thursday", "Could you send us the names of two "
+            "referees, ideally a former manager and a colleague? As soon as they arrive "
+            "we can go on to the final stage.", "People Team <people@fallowmere.example>")
         assert found.category is Category.NEXT_STEPS
 
     def test_please_note_asks_for_nothing(self, rules):
         found = verdict(
-            rules, "Application Received for Xxxxxxx Xxxxxxx", "Thank xxx xxx xxxxxxxx "
-            "xxx xxx xxxx xx Xxxxxxx Xxxxxxx. We are xxxxxxxxxx xxxx xxxxxxxxxxx xxx "
-            "xxxx xx xx xxxxxxx xx xxx xxxxxx. Xxxxxx xxxx xxxx xx xxxx xxxxxx xxxx "
-            "xxxxxxx xx xxxx xxx xxxxxx xxxxxxxxx.", "careers@xxxx.xxxxxxx")
+            rules, "Application Received: Payroll Assistant", "Thank you for applying "
+            "for the Payroll Assistant vacancy. Please note that we keep applicants' "
+            "details on file for twelve months. Your application is being processed and "
+            "we will contact you in due course.", "careers@tallowfield.example")
         assert found.category is Category.APPLICATION_RECEIVED
 
     def test_an_acknowledgement_that_never_says_application(self, rules):
         found = verdict(
-            rules, "Received", "Xx xxxx xxxx XX. Xxxxxxx xx xxx xxxxxx xx xxxx xxxxxxx "
-            "xxxxxx xx xxxx xx xxxx xxxxxxx, xxxxxxx xxxxxx xxxxx xxxxx.",
-            "no-reply <careers@xxxxxxxxx.example>")
+            rules, "Got it", "Your CV is with us. Given the volume of applications, we "
+            "only reply to people we take forward, normally within two weeks.",
+            "no-reply <jobs@brindlecote.example>")
         assert found.category is Category.APPLICATION_RECEIVED
 
     def test_a_stranger_sounding_you_out(self, rules):
         found = verdict(
-            rules, "Xxx xxx xxxx xx x xxxx?", "Not a role I am xxxxxxx xxxxx xxx, xxx "
-            "X xxxx x xxxxx xxxx xxx xxxxxxxx xxxx xxx xxxxxxxx xxxxxxx xx xxx xxx.",
-            "Dee <dee@xxxxxxxxxxxxx.example>")
+            rules, "Open to a conversation?", "Not something I'm hiring for right now. "
+            "I do keep a long list for remote data roles and could add you to it if you "
+            "like.", "Quinn <quinn@quillpartners.example>")
         assert found.category is Category.UNSOLICITED
 
     def test_a_hiring_event_is_an_invitation_to_talk(self, rules):
         found = verdict(
-            rules, "You're Invited! Virtual Hiring Event", "I would xxxx xx xxxxxxxxxx "
-            "xxxxxx xxx xx our virtual hiring event on the 5th. Chat with our leaders "
-            "xxx xxxxxxx xxxxx xxxx xxxxx xxxx xxxxxxxxxx.",
-            "Xxxxxxx Xxxxxx Xxxxxxxxxxx <talent@marlowe.example>")
+            rules, "Join us: Online Hiring Event", "We would like to invite you to our "
+            "online hiring event next Thursday. Talk to our managers and see which "
+            "openings suit your experience.",
+            "Copperfold Recruiting <recruiting@copperfold.example>")
         assert found.category is Category.INTERVIEW
 
     def test_a_subject_with_nothing_under_it_is_read_as_the_formula(self, rules):
-        received = verdict(rules, "Xxxxx Xxx xxx Xxxx Xxxxxxxxxxx - Xxxxxxx X", "",
+        received = verdict(rules, "Thank You for Your Application - Logistics Coordinator", "",
                            "Workday <noreply@workday.example>")
         assert received.category is Category.APPLICATION_RECEIVED
         assert received.confidence < 0.95, "filed as what it is, and still looked at"
@@ -549,82 +550,82 @@ class TestReading:
 
     def test_a_courts_interview_is_not_a_job_interview(self, rules):
         found = verdict(
-            rules, "Interview slot - jury service", "Xxx xxx xxxxx xx xxxxxx xxx xx "
-            "xxxxxxxxx xxxxxxxxx xxxx xxxxxxxx xxxxxxx xx xxx 00xx xx 00:00.",
-            "HMCTS <no-reply@hmcts.example>")
+            rules, "Interview slot - your summons", "Please attend an interview about "
+            "your request to change the date on your summons, on the 9th at 11:30.",
+            "Court Service <no-reply@courts.example>")
         assert not found.is_job_related
         assert found.other_category is OtherCategory.OTHER
 
     def test_a_careers_office_at_a_university_still_hires(self):
         found = RuleClassifier().classify(
-            subject="Your application", body="Thank you for applying. We have received "
-            "your application xxx xxxx xx xx xxxxx xx xxxx background is a match.",
+            subject="Your application", body="Thanks for applying. Your application is "
+            "in, and we will get back to you if your experience suits the post.",
             sender="Careers <careers@university.example>")
         assert found.is_job_related
 
     def test_family_congratulating_you_is_family(self, rules):
         found = verdict(
-            rules, "Congratulations on your new role", "Xxx xxxx xx xxx xxxx! Xxxx "
-            "xxxxx xx xxx. Xxx xxx xxxxx xx xx xx xxx xxxx xxx?",
-            "Xxxx Xxx <bev@talktalk.example>")
+            rules, "Congratulations on your new role", "Gran just told me! So pleased "
+            "for you. Will you be moving nearer to us?",
+            "Cousin Frankie <frankie@homemail.example>")
         assert not found.is_job_related
         assert found.other_category is OtherCategory.PERSONAL
 
     def test_a_talent_network_keeping_its_list_is_a_list(self, rules):
         found = verdict(
-            rules, "Time to rejoin our Careers Community", "Confirm you would like to "
-            "continue receiving xxxxxx xxxxxxxxxxxxx, xxxxxxxxxx xxxxxx xxx xxxxxx "
-            "xxxxxxxx. Xx xxxxxx xxxxxx xx xxx xxxxxx, we ask that you review your "
-            "preferences.", "Careers <careers@ashgrove.example>",
-            list_unsubscribe="<mailto:leave@ashgrove.example>")
+            rules, "Still interested in hearing from us?", "Tell us if you would like "
+            "to keep receiving news of openings and recruiting events. To stay on our "
+            "list, please check your email preferences.",
+            "Careers <careers@brindlecote.example>",
+            list_unsubscribe="<mailto:leave@brindlecote.example>")
         assert not found.is_job_related
 
     def test_a_scam_in_a_couriers_words_is_a_scam(self, rules):
         found = verdict(
-            rules, "URGENT - parcel held at customs", "Xxx xxxxxx xx xxxx xx xxxxxxx. "
-            "X xxx xx 0.00 XXX xx xxxxxxx xxxxxx 00 xxxxx xx xxxx xxxx xx xxxxxx xx "
-            "xxxxxx. Xxxxx xxxx xx xxx xxx.",
-            "XXX Xxxxxxxx <xxxxxxx@xxx-xxxxxx-xxxxxxxxx.xxxxxxx>")
+            rules, "FINAL NOTICE - parcel stopped at customs", "Dear customer, we has "
+            "stop your parcel at customs. A fee of 1.45 GBP must be paid in 48 hours or "
+            "it goes back. Click here to pay.",
+            "DHL Express <help@dhl-delivery-fees.example>")
         assert found.other_category is OtherCategory.SPAM
 
     def test_a_fortune_from_a_stranger_is_not_personal(self, rules):
         found = verdict(
-            rules, "Re: our conversation", "Xxxx xxx. X xxxxx xx xxx xx xxxxxxxxxx "
-            "xxxxxxxxx x xxx xx xxxxxx xxxxxxx xxxxxxx xxxx xx xx xxxx xxxxxxx. X "
-            "xxxxxxx xxxx x xxxxxxxxxxx xxxxxxx. Reply for details.",
-            "Mrs Grace <xxxxx000@fastmail.example>")
+            rules, "Re: your reply", "Good day. I contact you in strict confidence "
+            "about a fund of nine million euros left by my late father, and I need an "
+            "honest partner to receive it. Kindly confirm your interest and I will "
+            "release the funds.", "Mr Daniel <daniel77@fastmail.example>")
         assert found.other_category is OtherCategory.SPAM
 
     def test_the_systems_of_a_workplace(self, rules):
         found = verdict(
-            rules, "[XXXX] xxxxxxxx-xxx x00 xxxxx xxxxxxxxx", "Xxxxxxx xxxxxxx 000xx "
-            "xx 00:00 xxx has not xxxxxxxxx. Xxxxxxx xx xxxxxx. Xxx xx xx xxxx xxxxxxx.",
-            "Chartline <alerts@grafana.example>")
+            rules, "[PROD] payments-db replica lag over threshold", "Replication lag "
+            "passed 45s at 03:20 and is still rising. See the runbook; the pager is with "
+            "Remy this week.", "Pagerline <alerts@monitoring.example>")
         assert found.other_category is OtherCategory.WORK
-        sync = verdict(rules, "Xxxxx xxxx xx xxx X0 xxxxxxx", "Xxx xx xxxx 00 xxxxxxx "
-                       "xxxxxxxx xx xx xxxxxxx xxx X0 xxxxxxxx xxxxxx xxx xxxxx xxxx "
-                       "xxxx xxx?", "Xxxx Xxxxxxxxx <dana@currentemployer.example>")
+        sync = verdict(rules, "Budget and roadmap", "Have you got half an hour on "
+                       "Thursday to walk through the budget and the roadmap before they "
+                       "go to the directors?", "Hal Brecken <hal@currentemployer.example>")
         assert sync.other_category is OtherCategory.WORK
 
     def test_a_social_networks_notification(self, rules):
         found = verdict(
-            rules, "Xxx xxxxxxxx xx 0 xxxxxxxx", "Xxxxxx xxxxxxxxxx xx xxxxxxxxx. "
-            "Xxxxx xxxxxx xxxxxx xx xxxx xxxxxxx xxxxx.",
+            rules, "6 people viewed your profile", "Most of them work in retail. One "
+            "of them came back three times this week.",
             "LinkedIn <notify@linkedin.example>",
             list_unsubscribe="<https://linkedin.example/leave>")
         assert found.other_category is OtherCategory.SOCIAL
 
     def test_a_group_writing_to_its_members(self, rules):
         found = verdict(
-            rules, "Thanks for Saturday", "Xxxxxx-xxx xxxxxx xxxxxx xx xxx xxx xxxxx "
-            "xxx xxxx xx xxxx. Xxxx xxxx xxx xx xxx 00xx, xxxx xxxx, xxxxx xxxxxx.",
-            "Xxxx Xxxx Xxxxxxxxxx <xxx@xxxxxxxx.xxxxxxx>")
+            rules, "Thank you for Sunday", "Thanks to everyone who sang on Sunday; the "
+            "hall was full. Next rehearsal is on the 7th, same time, and subs are due.",
+            "Larchway Singers <secretary@larchwaysingers.example>")
         assert found.other_category is OtherCategory.PERSONAL
 
     def test_money_without_a_sign_is_still_money(self, rules):
-        found = verdict(rules, "We've refunded you", "Xxx 00:00 xxx xxxxxxxxx xx we "
-                        "have xxxx 00.00 xxxx xx xxx xxxx xxx xxxx xxxx.",
-                        "Railhop <no-reply@xxxxxxxxx.xxxxxxx>")
+        found = verdict(rules, "Your refund is on its way", "Your 18:15 service did not "
+                        "run, so the 12.80 you paid is on its way back to your card.",
+                        "Linewise <no-reply@linewise.example>")
         assert found.other_category is OtherCategory.RECEIPT
 
     def test_a_note_with_nothing_in_it_from_a_person(self, rules):
@@ -634,26 +635,26 @@ class TestReading:
 
 
 class TestReadingRealShapes:
-    """Xxxxxx x xxxx xxxxx xxx that the readers missed: a recruiter's
-    calendar call, a job board passing a recruiter on, and an
-    acknowledgement with one incidental instruction in it."""
+    """Shapes the readers once missed: a recruiter's calendar call, a job
+    board passing a recruiter on, and an acknowledgement with one incidental
+    instruction in it."""
 
     def test_a_recruiters_calendar_call_is_an_interview(self, rules):
         invite = verdict(
-            rules, "Xxxxxx - XX Xxxxxxx - Xxxxx Xxxx (xxxxxxxxxxx)",
-            "Xxxxxxxxx Xxxxx xxxxxxx. Xxxx: xxxxx://teams.example/meet/1 Meeting ID: "
-            "000 000 Xxxxxxxx: xX0 Dial in by phone.",
-            "Xxxxxx Xxxxx <xxxxxx.xxxxx@xxxxxxxxxx.example>")
+            rules, "Rescheduled: Robin Hale - Warehouse Associate - Teams Call",
+            "Microsoft Teams meeting. Join: https://teams.example/meet/1 Meeting ID: "
+            "111 222 Passcode: aB1 Dial in by phone.",
+            "Casey Ostler <casey.ostler@fieldway.example>")
         assert invite.category is Category.INTERVIEW
-        bare = rules.classify(subject="Xxxxxx - XX Xxxxxxx - Teams Call (rescheduled)",
-                              body="", sender="Xxxxxx Xxxxx <xxxxxx.xxxxx@xxxxxxxxxx.example>",
+        bare = rules.classify(subject="Rescheduled: Robin Hale - Warehouse Associate - Teams Call",
+                              body="", sender="Casey Ostler <casey.ostler@fieldway.example>",
                               attachments=("invite.ics",))
         assert bare.category is Category.INTERVIEW
         moved = verdict(
-            rules, "RE: Event accepted: Xxxxxx - XX Xxxxxxx - Teams Call",
-            "Xx xxxxx xxxx xxxx xxx xxxxxx xxxxxx xxx xxxx xxxx xxxx xx X xxxxxx xxxx "
-            "xxxx xxx 00 xxxxxxx, X xxxx xxxx xx xx. Xxxxxx Xxxxx, Recruiter",
-            "Xxxxxx Xxxxx <xxxxxx.xxxxx@xxxxxxxxxx.example>")
+            rules, "RE: Event accepted: Robin Hale - Warehouse Associate - Teams Call",
+            "They have a clash at that hour, so I moved your slot back by half an hour; "
+            "hope that still suits. Casey Ostler, Recruiter",
+            "Casey Ostler <casey.ostler@fieldway.example>")
         assert moved.category is Category.INTERVIEW
 
     def test_a_teams_link_from_a_dentist_is_not_an_interview(self, rules):
@@ -665,29 +666,29 @@ class TestReadingRealShapes:
 
     def test_a_job_board_passing_a_recruiter_on(self, rules):
         found = verdict(
-            rules, "Rowan at Xxxxxx Xxxxxxxxx is interested in talking to you",
-            "Xxx xxxx x xxx xxxxxxx xx xxxx Xxxxxxx xxxxx xxxx Rowan at Xxxxxx Xxxxxxxxx: "
-            "\"xx xxx xxxxxxxxxx xx xxxx xxxxxx xxx xxxxx xxxx xx xxxxx x Xxxxxxxxx "
-            "Xxxxxxx Xxxxxxxxxx...\" Xxx xxx xxxxxxxxx Xxxxxxx xxxxxxxxxxxx xxxxxx.",
+            rules, "A recruiter at Fieldway Freight sent you a message",
+            "A message from Robin at Fieldway Freight is waiting on Monster: \"Your CV "
+            "caught our eye for a Warehouse Planner opening...\" You get these emails "
+            "because Monster messages are switched on.",
             "no-reply@messages.monster.example",
             list_unsubscribe="<mailto:leave@monster.example>")
         assert found.category is Category.UNSOLICITED
 
     def test_an_acknowledgement_with_one_instruction_stays_one(self, rules):
         found = verdict(
-            rules, "You have successfully submitted your job application - Analyst",
-            "Thank xxx xxx xxxxxxxx xx xxx xxxx xx Analyst at Acme. Xxxx xx xxxxxx xxxx: "
-            "xxxxxxxxx xx xxx xxxx, xxx xxx xx xxxxxxxx xxx xxxxx xx xxx xxxx 0 xxxx xx "
-            "xxxxxxxx 0-0 xxxxxxxxxxx. Xxxxxxxx xxxxxxxxxx xxxx xxxx xxxxxxx xx xxx "
-            "xxxxxxxxx xxxxx. Visit our careers page for tips on acing your interview.",
+            rules, "Your job application has been successfully submitted - Parts Advisor",
+            "Thank you for applying to the Parts Advisor role at Acme. What happens now: you "
+            "may get an email within a week asking you to complete one or two short tests. "
+            "Shortlisted candidates then go on to interviews. Our careers page has advice "
+            "on preparing.",
             "Acme Talent Acquisition <talent@acme.example>")
         assert found.category is Category.APPLICATION_RECEIVED
         reviewing = verdict(
-            rules, "Xxxxxx XX Xxxxxxxx - Acme Books",
-            "Thank xxx xxx xxxxxxxx xxx xxx xxxxxxxx xx Xxxxxx XX Xxxxxxxx. Xx xxxxxxxxxx "
-            "xxx xxxx xxx xxxx xx xxxxxx xxxx xxxxxxxxxxx. Xx xxx xxxxxxxxx xxxxxxxxx "
-            "xxxxxxxxxxxx xxx xxxx xx xx xxxxx xx xxxx xxxxxxx xx xxxxxxxx xxx xxx xxxx "
-            "xxxxx xx xxx xxxxxxx.", "notification@recruitersuite.example")
+            rules, "Graduate Surveyor - Acme Books",
+            "Thank you for applying for the Graduate Surveyor position. We value the "
+            "time you took to complete your application. We're currently reviewing "
+            "applications, and if you are chosen for the next stage we will be in touch.",
+            "notification@recruitersuite.example")
         assert reviewing.category is Category.APPLICATION_RECEIVED
 
     def test_a_name_with_a_role_word_inside_it_is_still_a_person(self):
@@ -702,19 +703,18 @@ class TestReadingRealShapes:
 
     def test_a_job_description_mailed_to_yourself_is_not_a_step(self, rules):
         found = verdict(
-            rules, "Xxx xxx xxxxxx", "Job description. Acme is a xxxxxxx xxxxxxxx "
-            "xxxxxxxx. Xxx Xxxx Xxxx Xxxxxxxxxx xxxxxxxx xxxxx xxxx xxxxxxx by telephone "
-            "and email. Xxxxxx xxx Xxxxxxxxxxxxxxxx: xxxxxxx xxxxx xxxxxxxx xxx xxxxxxx "
-            "calls; create tickets. Qualifications: 1+ years of experience. Apply by "
-            "Friday.", "Me <me.myself@icloud.example>")
+            rules, "role to look at", "Job description. Fieldway is a regional haulier. "
+            "The Fleet Planner schedules drivers and routes. Responsibilities: plan daily "
+            "routes; keep the tracking sheet up to date. Qualifications: 2+ years of "
+            "experience. Apply by Thursday.", "Me <me.myself@icloud.example>")
         assert found.is_job_related
         assert found.category is not Category.NEXT_STEPS
 
     def test_a_primary_email_change_is_about_the_account(self, rules):
         found = verdict(
-            rules, "Your email has been updated", "To help you stay connected, we've made "
-            "you@icloud.example xxxx xxxxxxx xxxxx. Xxx xxx xxxxxx xx xxxxxxx xx xxxx "
-            "xxxxxxx xxxxxxxx.", "Meetboard <notice@m.meetboard.example>")
+            rules, "Your sign-in email has changed", "Your email address has been changed. "
+            "From now on we will write to you@icloud.example; you can change it back in "
+            "your profile settings.", "Meetboard <notice@m.meetboard.example>")
         assert found.other_category is OtherCategory.SECURITY
 
 
@@ -724,33 +724,33 @@ class TestStatedReadings:
 
     def test_a_decision_stated_plainly_is_filed(self, rules):
         found = verdict(
-            rules, "Xx Xxxxxx xx Xxxx Xxxxxxxxxxx xx Lumen",
-            "Thanks for your interest in the Xxxxxxx Xxxxxxx post. Having looked at "
-            "everyone who applied, we have made the decision not to move you forward. "
-            "This says nothing about what you can do.",
-            "Lumen Talent Acquisition <lumen@myworkday.example>")
+            rules, "An Update on Your Brindlecote Application",
+            "Thank you for your interest in the Lab Technician post. After reading every "
+            "application, we have reached the decision not to progress your application. "
+            "None of this is a judgement on what you can do.",
+            "Brindlecote Talent Acquisition <brindlecote@myworkday.example>")
         assert found.category is Category.NOT_INTERESTED
         assert found.confidence >= 0.95
 
     def test_the_thanks_a_rejection_opens_with_is_not_a_rival(self, rules):
         found = verdict(
-            rules, "Thank You for Your Interest in Xxxxxx Xxxxxx",
-            "Hello Elena, xxxxxx xxx xxxxxxxx xx xxx Xxxxxxxx Xxxxxxxx post at Xxxxxx "
-            "Xxxxxx. Having weighed everything, we will not be taking you forward for this "
-            "post. Any other roles you applied to will be answered separately. Thank you "
+            rules, "Thank You for Your Interest in Copperfold Foods",
+            "Hello Jamie, thanks for applying to the Junior Estimator post at Copperfold "
+            "Foods. After weighing everything, we will not be taking you further for this "
+            "post. Other roles you applied for will be answered on their own. Thank you "
             "for your time.",
-            "Xxxxxx Xxxxxx <harbor@myworkday.example>")
+            "Copperfold Foods <copperfold@myworkday.example>")
         assert found.category is Category.NOT_INTERESTED
         assert found.confidence >= 0.95
 
     def test_an_offer_in_the_small_print_is_not_an_offer(self, rules):
         found = verdict(
-            rules, "Xxxxxxx: Xxxxx xxx xxx xxxx xxxx xxx xxxxxxxx",
-            "Thank you for applying for the Platform Engineer post. You impressed us, but "
-            "we chose other applicants whose experience fits the brief more closely. Any "
-            "offer of employment from us depends on a background check, as our candidate "
-            "guide explains.",
-            "Xxxxxxxx HR <careers@xxxxxxxx.example>")
+            rules, "Your application: thank you for your time",
+            "Thank you for applying for the Print Technician role. It was a close call, "
+            "but we have chosen other applicants whose skills match the role more closely. "
+            "Any offer of employment we make is subject to a background check, as our "
+            "applicant guide explains.",
+            "Fallowmere HR <careers@fallowmere.example>")
         assert found.category is Category.NOT_INTERESTED
 
     def test_an_offer_of_employment_in_the_subject_is_still_one(self, rules):
@@ -758,7 +758,7 @@ class TestStatedReadings:
             rules, "Offer of Employment - Data Analyst",
             "Hi Elena, we are delighted to offer you the position of Data Analyst. Your "
             "offer letter is attached; please sign and return it by Friday.",
-            "Xxxxx Xxxxx <xxxxx.xxxxx@northwind.example>")
+            "Hollis Garrow <hollis.garrow@northwind.example>")
         assert found.category is Category.OFFER
 
     def test_a_one_way_video_interview_is_an_interview(self, rules):
@@ -773,9 +773,9 @@ class TestStatedReadings:
 
     def test_a_university_application_is_not_a_job(self, rules):
         found = verdict(
-            rules, "Your placement application",
-            "Xxxx xxxxxxxxxxx xxx xxx xxxxxxxxxx xxxxxxxxx xxxx xxx xxxx xxxxxxxx xxx "
-            "xxxx xx xxxxxxxx xx xxx xxxxxxxxxx xx Xxxxxxx.",
+            rules, "Your exchange application",
+            "We have your application to spend a semester abroad, and the faculty will "
+            "review it in November.",
             "Admissions <admissions@uni.example>")
         assert not (found.is_job_related and found.confidence >= 0.95)
 
@@ -783,12 +783,12 @@ class TestStatedReadings:
         """Applicant-tracking systems echo the form back; its questions are the
         ones you already answered."""
         found = verdict(
-            rules, "Thanks for applying to Xxxxxxxx Xxx",
-            "Thanks! Your application for the Xxxxxxxx Xxxxxxxxxx job has been received. "
+            rules, "Thanks for applying to Fieldway Freight",
+            "Thanks! Your application for the Fleet Planner job has been received. "
             "Below is a copy of your answers for your records.\n\n"
             "ABOUT YOU\nName: Elena Example\n"
-            "Xxxx xxx xxx xxxxxxxxx xx xxxxx? Xxxxxxxxxxx\n"
-            "Xxxxxx xxxxxxx xxxxxxxxxx xxxxxxx xxx xxx xxxx xxxx xxxxx: Acme, 2021-2026",
+            "When are you available, if offered the job? In four weeks\n"
+            "Please provide your work history for the last three years: Acme, 2023-2026",
             "Workable <noreply@candidates.workablemail.example>")
         assert found.category is Category.APPLICATION_RECEIVED
         assert found.confidence >= 0.95
@@ -796,12 +796,12 @@ class TestStatedReadings:
 
     def test_what_might_happen_later_does_not_rival_the_decision(self, rules):
         found = verdict(
-            rules, "Application Status Update",
-            "Thank you for applying to the Xxxxxxxx Xxxxxxxx xxxx. With so many strong "
-            "applicants xx xxx xxxxxx xx xxxx xxx xxxxxxx xx xxx xxxx round. If another "
-            "opening comes up, our team will reach out to ask about your availability for "
-            "a call.",
-            "Campus Recruiting <careers@xxxxxxx.xxxxxxx>")
+            rules, "Update on your application",
+            "Thank you for applying to the Stock Controller role. We had a great many strong "
+            "candidates, and so we are unable to move your application forward. Should a "
+            "similar opening arise, our team may contact you to check your availability "
+            "for a call.",
+            "Graduate Recruiting <careers@tallowfield.example>")
         assert found.category is Category.NOT_INTERESTED
         assert found.confidence >= 0.95
 
@@ -817,11 +817,11 @@ class TestStatedReadings:
 
     def test_a_meeting_with_nothing_about_hiring_in_it_is_not_certain(self, rules):
         found = verdict(
-            rules, "Fellowship call",
-            "Hello Elena, Jo here; I look after Xxx'x xxxxx. You told us you would like to "
-            "hear more about the fellowship, and Sam would love to meet you online xxx "
-            "xxxxx xxxx xxxxx xxx. Xxxxxx book a 20-minute call with the link below.",
-            "Xx Xxxxxxx <jo.brennan@xxxxxx.xxxxxxx>",
+            rules, "Programme call",
+            "Hi Jamie, this is Kim; I manage Lee's calendar. You mentioned you'd like to know "
+            "more about the residency programme, and Lee would be glad to meet online and "
+            "hear about you. Book a 15-minute slot using the link below.",
+            "Kim Arden <kim.arden@residency.example>",
             links=("https://calendar.app.google/abc",))
         assert found.confidence < 0.95
 
@@ -829,12 +829,12 @@ class TestStatedReadings:
         """What the message states (it arrived) outranks what one of its phrases
         suggests ("please review your profile")."""
         found = verdict(
-            rules, "We've received your application",
-            "Xxxxx Xxxxx, xxxxx xxx xxx xxxxxxxx xx the Platform Engineer role. We have "
-            "received your application xxx xxx xxxxxxxxxx xxxx xxxx xxxxxx xx shortly. "
-            "To see where things stand at any time, please review your candidate profile "
-            "and confirm your contact details in the careers portal.",
-            "Careers <careers@northwind.example>")
+            rules, "We've got your application",
+            "Hi Jamie, thank you for applying to the Records Clerk role. We have "
+            "received your application. Our recruiting team will review your details soon. "
+            "You can follow its progress at any time; please review your candidate profile "
+            "and check your contact details in our careers portal.",
+            "Careers <careers@quillbank.example>")
         assert found.category is Category.APPLICATION_RECEIVED
 
     def test_a_friend_reading_your_cv_is_not_an_acknowledgement(self, rules):
@@ -848,19 +848,19 @@ class TestStatedReadings:
 
 
     @pytest.mark.parametrize("subject,body", [
-        ("Join the Northwind talent network",
-         "Xx Xxxxx, xxxxxx xxx xxxx xxxxxxxx xx Northwind! We're happy to offer you a place "
-         "in our talent network, where you'll hear about career opportunities and company "
-         "news first. Join today to be first to hear about new jobs."),
+        ("Join the Copperfold talent network",
+         "Hi Jamie, thank you for your interest in Copperfold! We are pleased to offer you a "
+         "spot in our talent network, where you will be first to hear about openings and "
+         "company news. Sign up today so you never miss a new role."),
         ("Stay in touch - join our talent network",
-         "Hi Elena, xxxxxx xxx xxxxxxxx xxx xxxxxxx xxxx! We would xxxx xx xxxxxx xxx xx "
-         "xxxx xxx xxxxxx xxxxxxx. Xxxxxxx xxxx xxxxx xxx xxxxxx xxxxxxxxxxxxx xxxx xxxxx "
-         "their skills. Stay connected with Northwind."),
+         "Hi Jamie, glad you stopped by our careers site! Why not join our talent network? "
+         "Its members hear first of career opportunities that fit their skills. Stay "
+         "connected with Copperfold."),
     ])
     def test_a_talent_communitys_invitation_is_its_mailing_list(self, rules, subject, body):
         found = verdict(rules, subject, body,
-                        "Northwind <careeropportunities@careeralerts.northwind.example>",
-                        list_unsubscribe="<https://careeralerts.northwind.example/unsub>")
+                        "Copperfold <careeropportunities@careeralerts.copperfold.example>",
+                        list_unsubscribe="<https://careeralerts.copperfold.example/unsub>")
         assert not (found.is_job_related and found.confidence >= 0.95)
         assert found.category is not Category.OFFER
 
@@ -880,10 +880,10 @@ class TestStatedReadings:
 class TestEverydayTopicsByWhatTheyState:
     def test_a_receipt_is_read_from_its_top_not_its_footer(self, rules):
         body = (
-            "Hello, Elena Example. Xxxx xxxxxxx xxx xxxxxxxxx. Xxx xxxx x xxxxxxx xx "
-            "$00.00 USD on 0 Xxxxx 0000 to Pinecrest Rides Ltd. You may get more than one "
+            "Hello, Elena Example. Here is your receipt: you paid $42.15 USD on 12 May "
+            "2026 to Pinecrest Rides Ltd. You may get more than one "
             "note like this while the merchant completes the order. Payment details. "
-            "Merchant: Pinecrest Rides Ltd. Reference: QX-0000-1. Amount: $00.00 USD. "
+            "Merchant: Pinecrest Rides Ltd. Reference: QX-0000-1. Amount: $42.15 USD. "
             "It will show on your card as PINECREST. Questions about the charge go to the "
             "merchant. Merchant contact: help@pinecrest.example, 555-0100. "
             + "Your statement is ready to view any time you sign in, along with your "

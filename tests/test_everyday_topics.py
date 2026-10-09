@@ -123,7 +123,7 @@ CASES = [
     ),
     (
         # A newsletter in form, and church mail to the person reading it.
-        "xXxxx xxxx xxx xxxxxx - 4 September",
+        "Bulletin from the parish - 11 October",
         "Grace and peace to you all. In this week's bulletin: Sunday school "
         "begins again, the choir is looking for two more voices, and the "
         "Methodist church nearby has invited us to its harvest supper.",
@@ -178,9 +178,9 @@ class TestTellingSimilarMailApart:
         rather than the label.
         """
         metaphor = sort(
-            rules, "Welcome to Sunpeak Academy. Xxxxx-xx xx xxx xxxx.",
-            "Xxxx xxxx xxxxxx xxxxx. Xxxxx xx xx xxx xxxx xxx xxx xxx xxxxxx, "
-            "and there is a room booked for you on the leaderboard.",
+            rules, "Your trip with Sunpeak Academy starts now",
+            "Pack your bags: our new course departs today, and there is a seat for you "
+            "on the leaderboard.",
             "hello@learning.example", unsub="unsubscribe")
         assert metaphor.confidence < 0.95      # held for review, not filed
 

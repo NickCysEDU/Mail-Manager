@@ -72,9 +72,9 @@ class TestAcknowledgementScore:
 
     def test_a_long_winded_acknowledgement_is_recognised(self):
         body = normalize(
-            "Thank xxx xxxx xxxx xxx xxxx xxxxxx xxxxxxxxxxx xx xxx "
-            "Xxxxxxxxx Xxxxxxx position. Your details xxxx xx xxxxxxxx xx "
-            "xxx xxxxxx team, and we will contact you in due course.")
+            "Many thanks for your recent application for the Stores "
+            "Supervisor vacancy. Our hiring team will be reviewing your "
+            "details, and we will be in contact in due course.")
         score, why = acknowledgement_score("", body)
         assert score >= 2.4 and len(why) >= 2
 
@@ -85,8 +85,8 @@ class TestAcknowledgementScore:
         "opening, we will be in touch.",
         "Thanks for applying! We are reviewing applications now and someone "
         "will contact you if you are selected.",
-        "This confirms you have submitted an employment application, which "
-        "xxxx xx xxxxxxxx xx xxx xxxxxx office.",
+        "This message confirms you have submitted an application, and our "
+        "hiring team will review it.",
     ])
     def test_the_family_is_covered_however_it_is_worded(self, body):
         assert acknowledgement_score("", normalize(body))[0] >= 2.4
@@ -106,10 +106,10 @@ class TestAcknowledgementScore:
 
 class TestPromisedNextSteps:
     @pytest.mark.parametrize("text", [
-        "we will reach out to discuss next steps",
-        "if it looks like a xxx, xx xxxx xxxxxxx xxx xxxxx xxxx xxxxx",
-        "should you be shortlisted, xx xxxx xx xx xxxxx xxxx xxxx xxxxx",
-        "xxx will receive an email with next steps",
+        "we will reach out soon to discuss next steps",
+        "if your profile fits, we will contact you shortly about next steps",
+        "should you make the shortlist, we'll be in touch soon with next steps",
+        "you will receive an email with next steps",
         "someone will contact you regarding next steps",
     ])
     def test_a_promise_is_not_a_request(self, text):
@@ -119,7 +119,7 @@ class TestPromisedNextSteps:
         "Next steps: please complete the assessment below",
         "Here are your next steps. Upload your documents by Friday.",
         "Please review the next steps and confirm your availability",
-        "xx xxxx xxxxxxx xxx xxxxx xxxx xxxxx. Separately, next steps "
+        "we will contact you later about next steps. Separately, next steps "
         "require you to sign the form.",
     ])
     def test_a_request_still_reads_as_one(self, text):
@@ -131,10 +131,10 @@ class TestPromisedNextSteps:
     def test_an_acknowledgement_is_not_turned_into_an_action(self, sorter):
         got = sorter.classify(
             subject="We have received your application",
-            body="Thank you for your interest in the Xxxxxxxxx Xxxxxxx "
-                 "position. Xx xxxx xxxxxxxx xxxx xxxxxxxxxxx. Xx xxxx "
-                 "background matches what the team xxxxx, xx xxxx xxxxx "
-                 "xxx xx discuss next steps.",
+            body="Thank you for your interest in the Stores Supervisor "
+                 "vacancy. Your application has reached us. If your "
+                 "experience matches what we are looking for, someone from "
+                 "the team will be in touch about next steps.",
             sender="careers@northgate.example")
         assert got.category.value == "APPLICATION_RECEIVED"
         assert got.confidence >= 0.95

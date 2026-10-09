@@ -179,7 +179,7 @@ DEMO_MESSAGES: Tuple[DemoMessage, ...] = (
         subject="Update on your application",
         body=(
             "Dear Alex,\n\n"
-            "Thank you for xxxxxx xxx xxxx xx xxxxx xxx xxx Xxxxxxxx Engineer position.\n\n"
+            "Thank you for your application for the Platform Engineer position.\n\n"
             "After careful consideration we have decided to move forward with other "
             "candidates whose experience more closely matches our current needs. We wish "
             "you the very best in your search.\n\n"

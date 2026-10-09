@@ -59,7 +59,7 @@ class TestTheWholeSet:
 
 class TestMeetingRequests:
     @pytest.mark.parametrize("text", [
-        "xxx xxx xxxx xxxxx xx xxxxxxxx x 00-xxxxxx xxxxx xxxx xxxx Xxxx",
+        "pick a slot from the link below for a 25-minute video call with Quinn",
         "could we set up a short 10 min catch-up chat on Monday",
         "shall we book a 40 minute Zoom chat later this week",
         "are you free to hop on a quick Teams call on Wednesday?",

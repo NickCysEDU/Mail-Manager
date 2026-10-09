@@ -18,28 +18,27 @@ def moves(subject, body, kind):
 class TestDeclines:
     @pytest.mark.parametrize("body", [
         "We have decided to move forward with other candidates.",
-        "After reading every application, we xxxx xxx xxxxxxxx xx xxx xxxx xxx xxxxxxx "
-        "this time.",
+        "Having gone through every application, we took the decision to not progress "
+        "you this time.",
         "Unfortunately we will not be moving forward with your application.",
-        "I'm sorry to say we won't be moving forward with further rounds at this time.",
-        "There were many strong applicants, and xx xxx xxxxxx xx xxxx xxx xxxxxxx xx xxx "
-        "xxxx round.",
+        "I'm afraid we won't be progressing to further interviews at this stage.",
+        "With so much strong interest, we are not able to take you on to the final "
+        "stage.",
         "We have now filled the open places for this role.",
         "We have since filled the junior platform engineer position.",
-        "Timing was against us: xx xxxx xxxxxx xxx xxxxxxxx xxx xxxxxxx xxx.",
-        "A quick note to say xxxx xxxxxxxx xx xx xxxxxx xxxx.",
+        "Bad timing, sadly: we have just filled the vacancy you went for.",
+        "Just letting you know that this opening has now closed.",
         "The role has been filled.",
         "We have chosen to focus on other candidates for this one.",
-        "Xx xxxx xx xxxxxx xxxxxxx xxxx xxxxxxxxxx xxxxx xxxxxxxxxxxxxx xxxx xxxxxxx "
-        "xxxxx xxx xxxxx.",
-        "You have xxx xxxx xxxxxxxx xxx xxxx xxxxxxxx.",
+        "We are proceeding with applicants whose experience lines up more closely with "
+        "what the team needs.",
+        "You have not been chosen for this opening.",
         "The panel did not select you for the shortlist.",
         "Your profile does not meet the minimum qualifications we set for this post.",
         "Unfortunately the role is not the right match for you.",
         "Thanks for telling us of your decision to withdraw your candidacy.",
-        "Xxx xxx xx xxxxxx xxxxx xxxxxxxxxx xxx the analyst post.",
-        "We xxx xxxxxx xx xxxxx xxx xxxx xxxxxxxx xx present, but we hope to stay in "
-        "touch.",
+        "Your candidacy for the analyst post is no longer under consideration.",
+        "We cannot offer you the job just now, though we would like to keep in touch.",
     ])
     def test_a_decision_in_the_ways_it_is_written(self, body):
         assert moves("Your application", body, "declines"), body
@@ -58,7 +57,7 @@ class TestDeclines:
         "application.",
         "Your answers may not fully match the preferred qualifications, so we may take a "
         "second look later.",
-        "Xx xxx xxx xx xxxx xx xxxxxxx xx xxxxx xxxxxxxxx personally.",
+        "It may not be possible to reply to each applicant in person.",
         # Found on a newsletter archive, where nobody applied for anything.
         "The difficulties were not considered a deterrent by the settlers.",
         "When the program is closed, so is the emulator.",
@@ -75,13 +74,13 @@ class TestDeclines:
 
 class TestAcknowledgements:
     @pytest.mark.parametrize("subject,body", [
-        ("Thank you for applying", "We have xxxxxxxx xxxx xxxxxxxxxxx xxx xxxx xxxxxx xx "
-         "xxxxxxx."),
+        ("Thank you for applying", "Your application has reached us and our team will "
+         "review it soon."),
         ("Application received", "Hello, your application has been successfully submitted."),
-        ("Your application", "This email confirms that xxx xxxx xxxxxxxxx xx xxxxxxxxxxx "
-         "xxx the following role."),
-        ("Thanks for applying to Northwind", "Thank you for applying to Northwind. Xx xxxx "
-         "xxxxxxxxxx xx x xxxxx, xxxxxxx xxxx xxx xxxx xxxx xx xx xxxxx."),
+        ("Your application", "This is to confirm that your application for the role below "
+         "has been submitted."),
+        ("Thanks for applying to Northwind", "Thanks for applying to Northwind. Should your "
+         "background fit, we will contact you."),
     ])
     def test_an_application_acknowledged(self, subject, body):
         assert statements.read(subject, body).acknowledged
@@ -98,8 +97,8 @@ class TestAcknowledgements:
 
     def test_a_promise_is_read_though_it_is_conditional(self):
         found = statements.read(
-            "Xxxxx xxx xxx xxxxxxxx", "Xxxxx xxx xxx applying for the analyst role. If your "
-            "skills are a strong match, xxx xxxx xxxx xxxx xxx xxxxxx team.")
+            "Thank you for applying", "Thanks for applying for the analyst role. If your "
+            "skills fit what we need, our talent team will get back to you.")
         assert found.acknowledged
 
     def test_a_friend_thanking_you_for_your_cv_is_not_an_application(self):
@@ -116,8 +115,7 @@ class TestRequests:
         "We ask that you spend a moment telling us about your goals by completing a short "
         "survey.",
         "The next step in our hiring process is to complete the form below.",
-        "Northwind xxxxxxx xxx xx xxxx xx xx xxxxx xxxxxxxxxxx xxxx xxxxxxxxx xxxx "
-        "application.",
+        "Northwind asks you to complete a short diversity form about your application.",
         "Following up on my note asking about your availability to complete the online "
         "tests.",
         "Sending the coding exercise over now; shout if it does not arrive.",
@@ -150,7 +148,7 @@ class TestRequests:
 class TestInvitations:
     @pytest.mark.parametrize("body", [
         "Use the link below to book a time that suits you.",
-        "We xxxxx xxxx xx xxxxx xxxx xxxxx your background on a short call.",
+        "We'd love to talk more about your experience on a short call.",
         "Could you let me know your availability for a call this week?",
         "I've scheduled your phone interview for Tuesday at 10am.",
         "I'm sending you a calendar invitation for Thursday morning.",
@@ -163,11 +161,11 @@ class TestInvitations:
 
     @pytest.mark.parametrize("body", [
         "Find tips for your interview on our careers blog.",
-        "If selected, xx xxxx xxxxxxx xxx xx xxxxxxxx an interview.",
+        "If you are shortlisted, we will get in touch to arrange an interview.",
         "Our process typically involves a resume review and an interview with the team.",
         "We will not be scheduling interviews for this role.",
         "You may be invited to schedule a call with a recruiter.",
-        "We would xxxx xx xxxxxx xxx xx xxxx xxx xxxxxx network.",
+        "You're warmly invited to sign up to our talent network.",
         "This new publishing schedule means I'll have more time to get out and meet "
         "readers.",
     ])
@@ -197,8 +195,8 @@ class TestOffers:
 class TestUnconditional:
     def test_conditions_and_hedges_are_dropped(self):
         text = statements.unconditional(
-            "Update", "Xx xxx xxxxxx xx xxxx xxx xxxxxxx. If another opening comes up, "
+            "Update", "We cannot take your application further. If a similar role opens, "
             "we will get in touch to check your availability. You may be contacted again.")
-        assert "xxxxxx xx xxxx xxx xxxxxxx" xx text
+        assert "cannot take your application further" in text
         assert "check your availability" not in text
         assert "contacted again" not in text

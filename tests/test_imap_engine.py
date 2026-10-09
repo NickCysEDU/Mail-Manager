@@ -924,18 +924,18 @@ class TestACalendarInvitationIsRead:
         import email.message
 
         message = email.message.EmailMessage()
-        message["Subject"] = "Xxxxxx - XX Xxxxxxx - Teams Call"
-        message["From"] = "Xxxxxx Xxxxx <xxxxxx.xxxxx@xxxxxxxxxx.example>"
+        message["Subject"] = "Robin Hale - Warehouse Associate - Teams Call"
+        message["From"] = "Casey Ostler <casey.ostler@fieldway.example>"
         message["To"] = "you@icloud.example"
         message.set_content("")
         message.add_alternative("<html><body><div><br></div></body></html>", subtype="html")
         calendar = (
             "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\n"
-            "SUMMARY:Xxxxxx - XX Xxxxxxx - Teams\r\n  Call\r\n"
-            "DTSTART;TZID=Xxxxxxx/Xxxxxxx:00000000X000000\r\n"
-            "DTEND;TZID=Xxxxxxx/Xxxxxxx:00000000X000000\r\n"
+            "SUMMARY:Robin Hale - Warehouse Associate - Teams\r\n  Call\r\n"
+            "DTSTART;TZID=Europe/Lisbon:20261117T093000\r\n"
+            "DTEND;TZID=Europe/Lisbon:20261117T100000\r\n"
             "LOCATION:Microsoft Teams\r\n"
-            "ORGANIZER;CN=Xxxxxx Xxxxx:mailto:xxxxxx.xxxxx@xxxxxxxxxx.example\r\n"
+            "ORGANIZER;CN=Casey Ostler:mailto:casey.ostler@fieldway.example\r\n"
             f"DESCRIPTION:{description}\r\n"
             "END:VEVENT\r\nEND:VCALENDAR\r\n")
         message.add_attachment(calendar.encode("utf-8"), maintype="text", subtype="calendar",
@@ -946,11 +946,12 @@ class TestACalendarInvitationIsRead:
         from imap_engine import parse_message
 
         found = parse_message(self._invite(), "7")
-        assert found.body_text.startswith("Calendar invitation: Xxxxxx - XX Xxxxxxx - Teams Call")
-        assert "When: 0000-00-00 00:00" in found.body_text
-        assert "Until: 0000-00-00 00:00" in found.body_text
+        assert found.body_text.startswith(
+            "Calendar invitation: Robin Hale - Warehouse Associate - Teams Call")
+        assert "When: 2026-11-17 09:30" in found.body_text
+        assert "Until: 2026-11-17 10:00" in found.body_text
         assert "Where: Microsoft Teams" in found.body_text
-        assert "From: xxxxxx.xxxxx@xxxxxxxxxx.example" in found.body_text
+        assert "From: casey.ostler@fieldway.example" in found.body_text
         assert "Microsoft Teams meeting" in found.body_text
         assert "Join: https://teams.example/x" in found.body_text
         assert found.attachments == ()
@@ -996,7 +997,7 @@ class TestMovingAFolder:
     Mail: one RENAME, which takes everything inside it along."""
 
     FOLDERS = ["INBOX", "Sent Messages", "Deleted Messages", "Drafts", "Junk",
-               "Archive", "Sorted Mail", "Sorted Mail/Receipts", "Church",
+               "Archive", "Sorted Mail", "Sorted Mail/Receipts", "Recipes",
                "Clubs", "Clubs/Climbing", "Job Search"]
 
     @pytest.fixture
@@ -1011,10 +1012,10 @@ class TestMovingAFolder:
 
     def test_into_another_folder(self, engine):
         engine, server = engine
-        assert engine.move_folder("Church", "Sorted Mail") == "Sorted Mail/Church"
-        assert "Sorted Mail/Church" in server.folders and "Church" not in server.folders
-        assert self._renames(server) == [("Church", "Sorted Mail/Church")]
-        assert "Sorted Mail/Church" in server.subscribed
+        assert engine.move_folder("Recipes", "Sorted Mail") == "Sorted Mail/Recipes"
+        assert "Sorted Mail/Recipes" in server.folders and "Recipes" not in server.folders
+        assert self._renames(server) == [("Recipes", "Sorted Mail/Recipes")]
+        assert "Sorted Mail/Recipes" in server.subscribed
 
     def test_with_everything_inside_it(self, engine):
         engine, server = engine
@@ -1024,9 +1025,9 @@ class TestMovingAFolder:
 
     def test_back_to_the_top_level(self, engine):
         engine, server = engine
-        engine.move_folder("Church", "Sorted Mail")
-        assert engine.move_folder("Sorted Mail/Church", "") == "Church"
-        assert "Church" in server.folders
+        engine.move_folder("Recipes", "Sorted Mail")
+        assert engine.move_folder("Sorted Mail/Recipes", "") == "Recipes"
+        assert "Recipes" in server.folders
 
     @pytest.mark.parametrize("folder, into, says", [
         ("INBOX", "Sorted Mail", "keeps for itself"),
@@ -1047,9 +1048,9 @@ class TestMovingAFolder:
         from imap_engine import IMAPError
 
         engine, server = engine
-        server.folders.append("Sorted Mail/Church")
-        with pytest.raises(IMAPError, match="already has a folder called “Church”"):
-            engine.move_folder("Church", "Sorted Mail")
+        server.folders.append("Sorted Mail/Recipes")
+        with pytest.raises(IMAPError, match="already has a folder called “Recipes”"):
+            engine.move_folder("Recipes", "Sorted Mail")
         assert self._renames(server) == []
 
     def test_a_name_with_quotes_and_backslashes_is_sent_as_one_name(
@@ -1065,8 +1066,8 @@ class TestMovingAFolder:
 
     def test_a_folder_open_on_the_connection_is_shut_first(self, engine):
         engine, server = engine
-        engine.select("Church", readonly=True)
-        engine.move_folder("Church", "Sorted Mail")
+        engine.select("Recipes", readonly=True)
+        engine.move_folder("Recipes", "Sorted Mail")
         names = [name for name, _args in server.commands]
         assert names.index("CLOSE") < names.index("RENAME")
-        engine.select("Sorted Mail/Church", readonly=True)
+        engine.select("Sorted Mail/Recipes", readonly=True)
