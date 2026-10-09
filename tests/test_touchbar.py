@@ -761,7 +761,7 @@ class TestDialogs:
         assert "Cancel" in titles
         assert any(title in ("Next", "Continue") for title in titles), titles
 
-    def test_settings_shows_each_pages_choices(self, qtbot):
+    def test_settings_shows_each_pages_choices(self, qtbot, qapp):
         from config import InMemoryCredentialStore, Settings
         from settings_dialog import SettingsDialog
 
@@ -775,8 +775,16 @@ class TestDialogs:
         dialog.tabs.setCurrentIndex(5)
         assert {"pages", "mode", "contrast", "density"} <= keys()
         assert "provider" not in keys()
-        bar.press("mode", 2)
-        assert dialog.mode_combo.currentText() == "Always dark"
+        # Choosing a look shows it on the whole app at once, which every
+        # later test in this process would otherwise be run in.
+        was = (qapp.font(), qapp.palette(), qapp.styleSheet())
+        try:
+            bar.press("mode", 2)
+            assert dialog.mode_combo.currentText() == "Always dark"
+        finally:
+            qapp.setFont(was[0])
+            qapp.setPalette(was[1])
+            qapp.setStyleSheet(was[2])
         bar.press("pages", 1)
         assert dialog.tabs.currentIndex() == 1
         assert "provider" in keys() and "mode" not in keys()

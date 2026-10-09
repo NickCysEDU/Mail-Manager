@@ -3,6 +3,8 @@ track is read, and how one scene gives way to the next."""
 
 from __future__ import annotations
 
+import contextlib
+
 import json
 import math
 import os
@@ -257,6 +259,50 @@ class TestThePictureTakesTheRoomThereIs:
                                                              qapp):
         """Nothing calls for the share to be worked out again here: the
         layout changing has to be enough."""
+        self._words_change_length(qtbot, qapp)
+
+    @staticmethod
+    @contextlib.contextmanager
+    def _in_the_look(qapp, mode):
+        """The app's own look, as it always has one, then the one before."""
+        import theme
+
+        was = (qapp.font(), qapp.palette(), qapp.styleSheet())
+        try:
+            theme.apply(qapp, mode, "normal", False, "comfortable")
+            yield
+        finally:
+            qapp.setFont(was[0])
+            qapp.setPalette(was[1])
+            qapp.setStyleSheet(was[2])
+
+    def test_and_in_the_dark_look(self, qtbot, qapp):
+        """Where the buttons are a few pixels wider. The window's minimum,
+        taken before the visualiser's row of controls appeared, let the
+        window be narrower than that row: the words under it were measured
+        at the row's width and laid out at the window's, a line short."""
+        with self._in_the_look(qapp, "dark"):
+            self._words_change_length(qtbot, qapp)
+
+    @pytest.mark.parametrize("mode", ["light", "dark"])
+    def test_the_window_is_never_narrower_than_its_controls(self, qtbot,
+                                                             qapp, mode):
+        """However they come: the visualiser's row arrives with a track,
+        after the window was first shown."""
+        with self._in_the_look(qapp, mode):
+            viewer = _viewer(qtbot)
+            pane = viewer.audio
+            pane.enable_box.setChecked(True)
+            pane.scene_box.setCurrentText("Music rider")
+            _open(pane, qapp)
+            viewer.resize(viewer.minimumSize())
+            qapp.processEvents()
+            holder = pane.visual_holder
+            assert viewer.minimumWidth() >= viewer.minimumSizeHint().width()
+            assert holder.width() >= holder.minimumSizeHint().width()
+            viewer._sweep()
+
+    def _words_change_length(self, qtbot, qapp):
         viewer = _viewer(qtbot)
         pane = viewer.audio
         pane.enable_box.setChecked(True)

@@ -539,7 +539,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 5,272 tests
+./dev test                     # 5,277 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus
@@ -644,13 +644,16 @@ About's security link is a 404 for everyone but the owner.
 - **`test_the_towers_stay_upright_whatever_the_road_does` failed once** in
   about a dozen runs of its file here (the towers ahead differed by more
   than 1%); never alone in eight. Not looked into.
-- **One viewer test fails now and then in a full local run**
-  (`test_viewer_window.py`, `test_when_the_words_under_the_controls_change_length`):
-  about one run in three or four on 6 and 8 October, never alone, never in
-  twelve runs with four cores kept busy, never on CI. The controls end 18
-  pixels short with 27 to spare under them, and `_budget_settled` reads the
-  budget as already right, so nothing asks again. Some state an earlier
-  test leaves in the same worker; not found yet.
+- **The visualiser window keeps its minimum in step with its controls**
+  (`AttachmentViewer._keep_room_for_controls`, on every layout request).
+  Taken once, at the first showing, it left out the visualiser's row of
+  controls, which arrives with a track: the window could be made narrower
+  than that row (by 11 to 15 pixels), and a box layout measures a
+  height-for-width item at its own minimum width, so the words under the
+  row were measured wider than they were laid out and came out a line
+  short. The dark look's slightly wider buttons made it show; a Touch Bar
+  test that chose Always dark in Settings and never put the look back made
+  later tests in the same worker dark, which is why it came and went.
 - **The sorter's scores** (exact category): labelled 94.1%, meetings 93.3%,
   acknowledgements 100%, adversarial 97.4%, oblique 100%, retired held-out
   82.4% - all dev sets now. The held-out set (`holdout.json`, 39 messages,

@@ -2848,14 +2848,31 @@ class AttachmentViewer(QDialog):
             # After this event has been handled, not inside it.
             QTimer.singleShot(0, self, self._panel_now)
 
+    def event(self, incoming) -> bool:
+        handled = super().event(incoming)
+        # Not before the first showing, nor while it is still being made.
+        if (incoming.type() == QEvent.Type.LayoutRequest
+                and getattr(self, "_sized", False)):
+            self._keep_room_for_controls()
+        return handled
+
+    def _keep_room_for_controls(self) -> None:
+        """Never narrower than the controls, as they come and go and as the
+        look changes their size. Taken once, at the first showing, the
+        minimum left out the visualiser's row, which appears with a track:
+        the window could then be narrower than that row, which was squeezed,
+        and the words under it cut short."""
+        least = self._least.expandedTo(QSize(self.minimumSizeHint().width(), 0))
+        if least != self.minimumSize():
+            self.setMinimumSize(least)
+
     def showEvent(self, event) -> None:      # noqa: N802 - Qt's name
         """The first time: never narrower than the controls, and big enough for
         the picture. A smaller minimum let the clock overlap the seek bar.
         """
         if not self._sized:
             self._sized = True
-            self.setMinimumSize(self._least.expandedTo(
-                QSize(self.minimumSizeHint().width(), 0)))
+            self._keep_room_for_controls()
             screen = self.screen()
             room = screen.availableGeometry() if screen is not None else None
             # Unless it was given a size before it was shown.
