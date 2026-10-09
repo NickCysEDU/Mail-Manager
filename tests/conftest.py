@@ -622,6 +622,35 @@ def hdiutil_alone():
             fcntl.flock(lock, fcntl.LOCK_UN)
 
 
+#: The lock held while a test's windows are on the real screen.
+_SCREEN: dict = {}
+
+
+def take_the_screen() -> None:
+    """Show windows on the real screen with no other test worker doing so,
+    until this test ends. A window another worker brings forward takes the
+    focus: an open menu closes, and a pointer moved over it opens nothing."""
+    if "lock" in _SCREEN:
+        return
+    import fcntl
+    import tempfile
+
+    lock = open(Path(tempfile.gettempdir()) / "mail-manager-tests-screen.lock", "a")
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    _SCREEN["lock"] = lock
+
+
+@pytest.fixture(autouse=True)
+def _screen_given_back():
+    yield
+    lock = _SCREEN.pop("lock", None)
+    if lock is not None:
+        import fcntl
+
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        lock.close()
+
+
 #: The repository root, for git calls that must run from inside it.
 GIT_ROOT = Path(__file__).resolve().parents[1]
 
