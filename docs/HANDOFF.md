@@ -655,7 +655,9 @@ The image carries no extended attribute but Finder's, and no record of its
 writes. macOS marks every file a build writes with where it came from
 (`com.apple.provenance`), and no process started by the build may take the
 mark off; `build_dmg.sh` has launchd run the removal (`unmark`), last of
-all. `.fseventsd/no_log` is staged, so fseventsd never records what is
+all, with `xattr -s` so that links lose theirs too and what a link points
+at (the Mac's own Applications folder) is never touched; without it the
+image's links kept the mark. `.fseventsd/no_log` is staged, so fseventsd never records what is
 written to the image (without it the image carried the build's record).
 `dmg_layout.py check` fails on either.
 

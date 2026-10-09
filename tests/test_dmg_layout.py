@@ -356,4 +356,5 @@ class TestTheBuildUsesIt:
         compressed = script.index("hdiutil convert")
         assert staged < created < cleaned < unmarked < compressed
         body = script[script.index("unmark() {"):script.index("\n}\n", script.index("unmark() {"))]
-        assert "launchctl submit" in body and "xattr -rd com.apple.provenance" in body
+        # -s: links themselves too, and never what they point at.
+        assert "launchctl submit" in body and "xattr -rsd com.apple.provenance" in body

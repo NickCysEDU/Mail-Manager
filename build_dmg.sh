@@ -26,13 +26,15 @@ die()  { printf '%serror:%s %s\n' "$R" "$N" "$*" >&2; exit 1; }
 
 # macOS marks every file this build writes with where it came from
 # (com.apple.provenance), and no process started from here may take the mark
-# off; a job that launchd runs may. Takes them off everything under $1.
+# off; a job that launchd runs may. Takes them off everything under $1, links
+# included: -s acts on a link itself, never on what it points at (the image's
+# Applications link points at the Mac's own).
 unmark() {
   local done_file label
   done_file="$(mktemp -u "${TMPDIR:-/tmp}/mail-manager-unmark.XXXXXX")"
   label="mail-manager.unmark.$$"
   launchctl submit -l "$label" -- /bin/sh -c \
-    '/usr/bin/xattr -rd com.apple.provenance "$0" 2>/dev/null; /usr/bin/touch "$1"' \
+    '/usr/bin/xattr -rsd com.apple.provenance "$0" 2>/dev/null; /usr/bin/touch "$1"' \
     "$1" "$done_file" || return 1
   for _ in $(seq 1 120); do
     [[ -e "$done_file" ]] && break
