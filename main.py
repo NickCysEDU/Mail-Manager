@@ -190,6 +190,8 @@ def self_test(offline: bool = False) -> int:
     import config
 
     ok = True
+    #: What the checks make and must outlive them, the application among it.
+    kept: list = []
 
     def check(label: str, fn) -> None:
         nonlocal ok
@@ -321,6 +323,13 @@ def self_test(offline: bool = False) -> int:
         # on the spec's exclude list while an import check said they were
         # present.
         working = ["images", "text"]
+        # The player belongs to an application: made without one, it is only
+        # half made and says so, which proves less than it seems to. Off
+        # screen, as a check is not a window.
+        from PySide6.QtWidgets import QApplication
+        if QApplication.instance() is None:
+            os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+            kept.append(QApplication([]))
         from PySide6.QtMultimedia import QAudioDecoder, QMediaPlayer
         player = QMediaPlayer()
         decoder = QAudioDecoder()

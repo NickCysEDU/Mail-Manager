@@ -90,6 +90,29 @@ class TestSelfTest:
         for label in ("PySide6", "Qt platform plugins", "anthropic SDK", "keyring backend"):
             assert label in output
 
+    @pytest.mark.timeout(240)
+    def test_qt_has_nothing_to_complain_of(self, tmp_path):
+        """Run as the bundle runs it, with no application yet: the media
+        player was made without one, half made, and Qt said so (and that it
+        had been handed a null object to connect to)."""
+        import os
+        import subprocess
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[1]
+        env = {key: value for key, value in os.environ.items()
+               if key != "QT_QPA_PLATFORM"}
+        env["ICLOUD_TRIAGE_HOME"] = str(tmp_path)
+        done = subprocess.run([sys.executable, str(root / "main.py"),
+                               "--self-test", "--offline"], cwd=str(root),
+                              capture_output=True, text=True, timeout=200,
+                              env=env)
+        assert "All checks passed." in done.stdout, done.stdout[-2000:]
+        said = done.stdout + done.stderr
+        for complaint in ("requires a QCoreApplication",
+                          "invalid nullptr parameter"):
+            assert complaint not in said, said[-2000:]
+
     def test_reports_a_broken_dependency_without_raising(self, tmp_path, monkeypatch, capsys):
         monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
         monkeypatch.setattr(
