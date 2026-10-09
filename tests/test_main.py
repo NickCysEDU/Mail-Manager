@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -225,6 +227,31 @@ class TestMainEntry:
     def test_reset_settings_on_a_clean_install_is_not_an_error(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
         assert main_module.main(["--reset-settings", "--print-paths"]) == 0
+
+    def test_the_background_scan_can_verify_a_server(self, monkeypatch, capsys):
+        """launchd starts the scan with nothing set, on a Mac without the
+        bundle Python was built to look for: it has to use the app's own,
+        as the window does."""
+        import ssl
+
+        import certs
+        import scheduler
+
+        for name in ("SSL_CERT_FILE", "SSL_CERT_DIR"):
+            monkeypatch.setenv(name, "")    # so whatever the scan sets is undone
+            monkeypatch.delenv(name)
+        monkeypatch.setattr(certs, "compiled_bundle", lambda: None)
+        seen = {}
+
+        def scan():
+            seen["bundle"] = os.environ.get("SSL_CERT_FILE")
+            seen["authorities"] = ssl.create_default_context().cert_store_stats()["x509_ca"]
+            return scheduler.RunRecord(finished="2026-01-01T00:00:00+00:00")
+
+        monkeypatch.setattr(scheduler, "run_once", scan)
+        assert main_module.main(["--scan-once"]) == 0
+        assert seen["bundle"] and Path(seen["bundle"]).is_file()
+        assert seen["authorities"] > 0
 
 
 class TestTheSelfTestHearsAndCounts:

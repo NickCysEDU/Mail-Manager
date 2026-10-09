@@ -193,6 +193,14 @@ describes the app itself.
   regardless of Qt's shortcut context: ⌘R would scan from a message window,
   ⌘↩ would file from the compose window. The bar needs the app roles too
   (Settings, About, Quit), or the app menu loses them.
+- **The background scan finds its own certificates** (`main.py`,
+  `--scan-once` calls `certs.ensure()`): launchd starts it with nothing
+  set, and the bundle Python was built to look for exists only where it
+  was built, so without it the agent could verify no server.
+- **The agent's job follows the app's home** (`scheduler.agent_plist_path`):
+  with `ICLOUD_TRIAGE_HOME` set it is written there and launchd is never
+  asked. launchd starts a job without the moved home, so one written from a
+  test would scan the real account every day (`tests/test_scheduler.py`).
 
 ### Mail going out
 
@@ -587,7 +595,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 5,304 tests
+./dev test                     # 5,311 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus

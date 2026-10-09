@@ -587,8 +587,12 @@ def main(argv: Optional[list] = None) -> int:
     if args.self_test:
         return self_test(offline=args.offline)
     if args.scan_once:
+        import certs
         import scheduler
 
+        # The background scan connects as the window does, so it needs the
+        # same certificates; without them it could verify no server at all.
+        certs.ensure()
         record = scheduler.run_once()
         print(record.describe())
         return 1 if record.error else 0

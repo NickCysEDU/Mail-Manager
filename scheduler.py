@@ -125,7 +125,11 @@ def write_status(record: RunRecord) -> None:
 
 
 def agent_plist_path() -> Path:
-    return Path.home() / "Library" / "LaunchAgents" / f"{LAUNCH_AGENT_LABEL}.plist"
+    """Where the job is written: beside the app's home when it has been
+    moved, as the tests move it, and launchd is then never told of it."""
+    moved = os.environ.get("ICLOUD_TRIAGE_HOME")
+    base = Path(moved).expanduser() if moved else Path.home() / "Library"
+    return base / "LaunchAgents" / f"{LAUNCH_AGENT_LABEL}.plist"
 
 
 def agent_command() -> List[str]:
@@ -205,6 +209,10 @@ def remove_agent() -> Tuple[bool, str]:
 
 
 def _launchctl(action: str) -> Tuple[bool, str]:
+    if os.environ.get("ICLOUD_TRIAGE_HOME"):
+        # launchd starts a job without the moved home, so a job registered
+        # from one would scan the real account instead, every day.
+        return True, ""
     domain = f"gui/{os.getuid()}"
     path = agent_plist_path()
     command = (
