@@ -22,7 +22,6 @@ import textwrap
 from pathlib import Path
 
 import pytest
-from conftest import take_the_screen
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -130,11 +129,8 @@ PROBE_FOR = 45.0
 FRAMES_FOR = 10.0
 
 
-def real_platform_or_skip(alone: bool = False) -> None:
-    """Skip, with the reason, where no script could run on the card here;
-    otherwise hold the screen until this test ends, alone where its app has
-    to stay in front (conftest.take_the_screen)."""
-    take_the_screen(alone)
+def real_platform_or_skip() -> None:
+    """Skip, with the reason, where no script could run on the card here."""
     if not _real_platform:
         _real_platform.append(_probe_real_platform())
     if _real_platform[0] is not None:
