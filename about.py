@@ -13,7 +13,7 @@ from typing import Optional
 from PySide6.QtCore import QUrl, Qt
 from PySide6.QtGui import QDesktopServices, QGuiApplication, QPixmap
 from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QHBoxLayout, QLabel,
-                               QPushButton, QSizePolicy, QVBoxLayout, QWidget)
+                               QPushButton, QVBoxLayout, QWidget)
 
 import buildinfo
 from models import APP_DISPLAY_NAME
@@ -28,13 +28,7 @@ THIRD_PARTY_URL = f"{REPOSITORY}/blob/main/THIRD-PARTY-LICENSES.md"
 LEGAL_URL = f"{REPOSITORY}/blob/main/LEGAL.md"
 HANDBOOK_URL = f"{REPOSITORY}/blob/main/docs/HANDBOOK.md"
 
-#: Required disclosure, shown in full rather than behind a link.
-AI_DISCLOSURE = (
-    "During development and campaign preparation, the Mail Manager team used "
-    "AI-assisted tools in a limited supporting role, including coding "
-    "assistance, copy editing, and the preparation of some sample display "
-    "content."
-)
+ICON_SIZE = 56
 
 
 def _link(url: str, text: str) -> str:
@@ -47,29 +41,18 @@ class AboutDialog(QDialog):
     def __init__(self, settings, store, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setWindowTitle(f"About {APP_DISPLAY_NAME}")
-        # Wide enough for the four buttons to show their whole labels. At 520
-        # they were clipped to "t a security con" and "iew the source".
-        self.setMinimumWidth(660)
         self._settings = settings
         self._store = store
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(14)
+        layout.setContentsMargins(20, 18, 20, 16)
+        layout.setSpacing(10)
         layout.addLayout(self._heading())
-        layout.addWidget(self._what_it_does())
-        layout.addWidget(self._separator())
         layout.addWidget(self._where_your_data_goes())
-        layout.addWidget(self._separator())
         layout.addWidget(self._this_build())
-        layout.addWidget(self._separator())
-        layout.addWidget(self._disclosure())
+        layout.addSpacing(4)
         layout.addLayout(self._actions())
 
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        buttons.rejected.connect(self.reject)
-        buttons.accepted.connect(self.accept)
-        self._placed = False
-        layout.addWidget(buttons)
         import touchbar
 
         security, issues, source, copy = self._links
@@ -81,12 +64,19 @@ class AboutDialog(QDialog):
                             title="Copy details"),
             *touchbar.button_items(self),
         ], "about")
+        self._placed = False
+        self._fit()
 
-        # Word-wrapped labels report their height from their width, and a
-        # layout only learns the final width once. Without this the first
-        # paragraph came up one line short and clipped its own last sentence.
+    def _fit(self) -> None:
+        """As wide as the row of buttons, and exactly as tall as the words
+        need at that width. A wrapped label guesses its height from a width
+        of its own choosing, which left a gap under every paragraph."""
+        layout = self.layout()
         layout.activate()
-        self.adjustSize()
+        margins = layout.contentsMargins()
+        width = max(layout.minimumSize().width(),
+                    self._button_row.sizeHint().width() + margins.left() + margins.right())
+        self.setFixedSize(width, layout.totalHeightForWidth(width))
 
     def showEvent(self, event) -> None:      # noqa: N802 - Qt's name
         """On the screen, whole: centred over the window that opened it, and
@@ -99,13 +89,10 @@ class AboutDialog(QDialog):
         if screen is None:
             return
         room = screen.availableGeometry()
-        self.adjustSize()
         # The frame round the window counts: a title bar's worth below the
         # screen's edge is still off the screen.
         shell = self.frameGeometry().size() - self.size()
-        size = self.size().boundedTo(room.size() - shell)
-        self.resize(size)
-        outer = size + shell
+        outer = self.size().boundedTo(room.size() - shell) + shell
         anchor = self.parentWidget().frameGeometry() if self.parentWidget() else room
         x = anchor.center().x() - outer.width() // 2
         y = anchor.center().y() - outer.height() // 2
@@ -121,28 +108,24 @@ class AboutDialog(QDialog):
         pixmap = self._icon()
         if pixmap is not None:
             icon.setPixmap(pixmap)
-            icon.setFixedSize(pixmap.size())
+            icon.setFixedSize(pixmap.size() / pixmap.devicePixelRatio())
             row.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
 
         titles = QVBoxLayout()
         titles.setSpacing(2)
-        name = QLabel(f"<span style='font-size:19px'><b>{APP_DISPLAY_NAME}</b></span>")
+        name = QLabel(f"<span style='font-size:17px'><b>{APP_DISPLAY_NAME}</b></span>")
         name.setTextFormat(Qt.TextFormat.RichText)
         version = QLabel(buildinfo.short())
         version.setProperty("dim", "true")
         version.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse)
-        licence = QLabel(
-            f"MIT licensed, with no warranty. "
-            f"{_link(LICENCE_URL, 'Read the licence')}. "
-            f"Qt is included under the LGPL v3; "
-            f"{_link(THIRD_PARTY_URL, 'third-party notices')}, "
-            f"{_link(LEGAL_URL, 'legal notices')}.")
-        licence.setOpenExternalLinks(True)
-        licence.setProperty("dim", "true")
+        what = self._body(
+            "Sorts your inbox into folders. <b>Nothing moves until you press "
+            f"Apply.</b> {_link(HANDBOOK_URL, 'How it decides')}")
         titles.addWidget(name)
         titles.addWidget(version)
-        titles.addWidget(licence)
+        titles.addSpacing(4)
+        titles.addWidget(what)
         row.addLayout(titles, 1)
         return row
 
@@ -155,10 +138,9 @@ class AboutDialog(QDialog):
             if candidate.exists():
                 pixmap = QPixmap(str(candidate))
                 if not pixmap.isNull():
-                    ratio = self.devicePixelRatioF() if hasattr(
-                        self, "devicePixelRatioF") else 1.0
+                    ratio = self.devicePixelRatioF()
                     scaled = pixmap.scaled(
-                        int(72 * ratio), int(72 * ratio),
+                        int(ICON_SIZE * ratio), int(ICON_SIZE * ratio),
                         Qt.AspectRatioMode.KeepAspectRatio,
                         Qt.TransformationMode.SmoothTransformation)
                     scaled.setDevicePixelRatio(ratio)
@@ -175,41 +157,19 @@ class AboutDialog(QDialog):
         label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextBrowserInteraction)
         label.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        label.setSizePolicy(label.sizePolicy().horizontalPolicy(),
-                            QSizePolicy.Policy.MinimumExpanding)
         return label
-
-    def _separator(self) -> QWidget:
-        line = QWidget()
-        line.setFixedHeight(1)
-        line.setStyleSheet("background: palette(mid);")
-        return line
-
-    def _what_it_does(self) -> QLabel:
-        return self._body(
-            "Reads a window of your inbox over IMAP, works out what each "
-            "message is, and shows you a table with a summary, a category, a "
-            "destination folder and a confidence score for every row. You "
-            "tick what you want filed. "
-            "<b>Nothing moves until you press Apply.</b><br><br>"
-            f"{_link(HANDBOOK_URL, 'The handbook')} explains how it decides."
-        )
 
     def _where_your_data_goes(self) -> QLabel:
         provider = self._settings.provider_label
-        on_device = self._on_device()
-        if on_device:
+        if self._on_device():
             where = (f"<b>{provider}</b> runs on this Mac. No message text "
                      "leaves the machine.")
         else:
-            where = (f"Message text is sent to <b>{provider}</b> so it can be "
-                     "classified. Attachments are never uploaded, only their "
-                     "filenames.")
+            where = (f"Message text is sent to <b>{provider}</b> to be sorted. "
+                     "Attachments are never uploaded, only their filenames.")
         return self._body(
-            f"<b>Where your mail goes.</b> {where}<br>"
-            "Passwords and API keys are stored in the macOS Keychain, never "
-            "in a file. Messages are fetched without being marked as read."
-            f"<br>{self._at_rest()}"
+            f"{where} Passwords and API keys stay in the macOS Keychain, and "
+            f"messages are fetched without being marked as read. {self._at_rest()}"
         )
 
     def _at_rest(self) -> str:
@@ -237,16 +197,13 @@ class AboutDialog(QDialog):
             keychain = self._store.backend_name()
         except Exception:      # noqa: BLE001
             keychain = "unavailable"
-        return self._body(
-            "<b>This build.</b><br>"
-            f"Sorter: <code>{settings.provider_label}</code> · "
-            f"<code>{settings.model}</code><br>"
-            f"Files at: {settings.confidence_threshold * 100:.0f}% confidence<br>"
-            f"Keychain: <code>{keychain}</code>"
-        )
-
-    def _disclosure(self) -> QLabel:
-        label = self._body(f"<i>{AI_DISCLOSURE}</i>")
+        label = self._body(
+            f"{_html(settings.provider_label)} · {_html(settings.model)} · files at "
+            f"{settings.confidence_threshold * 100:.0f}% confidence · "
+            f"Keychain: {_html(keychain)}<br>"
+            f"MIT licence, no warranty: {_link(LICENCE_URL, 'licence')}, "
+            f"{_link(THIRD_PARTY_URL, 'third-party notices')} (Qt is LGPL v3), "
+            f"{_link(LEGAL_URL, 'legal notices')}")
         label.setProperty("dim", "true")
         return label
 
@@ -271,15 +228,19 @@ class AboutDialog(QDialog):
         source.clicked.connect(lambda: self._open(REPOSITORY))
         row.addWidget(source)
 
-        row.addStretch(1)
-
         copy = QPushButton("Copy build details")
         copy.setToolTip(
             "Copies the version, the commit and this Mac's details, which is "
             "what a bug report needs.")
         copy.clicked.connect(self._copy_build)
         row.addWidget(copy)
+        row.addStretch(1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        row.addWidget(buttons)
         self._links = (security, issues, source, copy)
+        self._button_row = row
         return row
 
     def _open(self, url: str) -> None:

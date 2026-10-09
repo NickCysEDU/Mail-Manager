@@ -474,5 +474,3 @@ certificate as the last release (the updater refuses anything else), tag
 During development and campaign preparation, the Mail Manager team used
 AI-assisted tools in a limited supporting role, including coding assistance,
 copy editing, and the preparation of some sample display content.
-
-It is also shown in the app, under **Help → About Mail Manager**.

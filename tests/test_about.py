@@ -62,24 +62,21 @@ class TestWhatItSays:
         assert "Local rules" in body
 
 
-class TestTheDisclosure:
-    def test_it_is_shown_in_full(self, dialog):
-        assert about.AI_DISCLOSURE in text_of(dialog).replace("<i>", "").replace("</i>", "")
-
-    def test_it_says_what_it_is_meant_to_say(self):
-        for phrase in ("AI-assisted tools", "limited supporting role",
-                       "coding assistance", "copy editing",
-                       "sample display content"):
-            assert phrase in about.AI_DISCLOSURE, phrase
+class TestTheAINotice:
+    def test_the_window_does_not_carry_it(self, dialog):
+        assert "AI-assisted" not in text_of(dialog)
 
     def test_the_docs_carry_the_same_words(self):
+        """LEGAL.md's is the notice; the README and the handbook repeat it."""
         from pathlib import Path
         root = Path(__file__).resolve().parent.parent
+        legal = (root / "LEGAL.md").read_text(encoding="utf-8")
+        notice = " ".join(legal.split("## AI tools", 1)[1].split("\n## ", 1)[0].split())
+        assert "AI-assisted tools" in notice
         for name in ("README.md", "docs/HANDBOOK.md"):
-            text = (root / name).read_text(encoding="utf-8")
             # The docs wrap it; compare on collapsed whitespace.
-            assert " ".join(about.AI_DISCLOSURE.split()) in \
-                " ".join(text.split()), name
+            text = " ".join((root / name).read_text(encoding="utf-8").split())
+            assert notice in text, name
 
 
 class TestTheLinks:
@@ -190,6 +187,33 @@ class TestItSaysWhatIsKeptAndHow:
         blanked = entry.to_dict(with_text=False)
         assert blanked["payload"]["summary"] == ""
         assert "About" in blanked["payload"]["reasoning"]
+
+
+class TestItIsCompact:
+    """It was 849 points tall, most of it gaps under paragraphs that had
+    guessed their height at some other width."""
+
+    def test_it_is_short(self, dialog, qapp):
+        dialog.show()
+        qapp.processEvents()
+        assert dialog.height() <= 320, dialog.size()
+        assert dialog.width() <= 720, dialog.size()
+
+    def test_no_paragraph_is_cut_short(self, dialog, qapp):
+        from PySide6.QtWidgets import QLabel
+        dialog.show()
+        qapp.processEvents()
+        wrapped = [label for label in dialog.findChildren(QLabel) if label.wordWrap()]
+        assert wrapped
+        for label in wrapped:
+            assert label.height() >= label.heightForWidth(label.width()), label.text()[:60]
+
+    def test_every_button_is_whole(self, dialog, qapp):
+        from PySide6.QtWidgets import QPushButton
+        dialog.show()
+        qapp.processEvents()
+        for button in dialog.findChildren(QPushButton):
+            assert button.width() >= button.sizeHint().width(), button.text()
 
 
 class TestItStaysOnTheScreen:
