@@ -12,7 +12,9 @@ that is not mounted, and the file is only ever read from the mounted image),
 and every byte the file no longer uses is zeroed. Finder ignores a layout
 file written afresh by ds_store, so it is edited rather than rewritten.
 ``check`` fails when anything in a finished image outside the app still
-names the Mac it was built on.
+names the Mac it was built on, or when any file in it carries a mark macOS
+made as the build wrote it: an extended attribute other than Finder's own,
+or fseventsd's record of the writes.
 
     python tools/dmg_layout.py clean "/Volumes/Mail Manager"
     python tools/dmg_layout.py check "/Volumes/Mail Manager"
@@ -20,6 +22,8 @@ names the Mac it was built on.
 
 from __future__ import annotations
 
+import ctypes
+import ctypes.util
 import getpass
 import os
 import plistlib
@@ -39,6 +43,14 @@ UUID = re.compile(rb"[0-9A-Fa-f]{8}-(?:[0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12}")
 
 #: Runs of printable text, for names stored as one path part each.
 TEXT = re.compile(rb"[\x20-\x7e]{3,}")
+
+#: The extended attributes an installer image may carry: Finder's flags,
+#: which name nothing. macOS marks every file a build writes with where it
+#: came from (com.apple.provenance), and a download with its quarantine.
+KEPT_ATTRIBUTES = {"com.apple.FinderInfo"}
+
+#: listxattr's option for a link's own attributes, not its target's.
+_NO_FOLLOW = 0x0001
 
 
 class _Raw:
@@ -203,6 +215,40 @@ def check(volume: Path, home: str, user: str, own_uuid: str,
     return found
 
 
+def attributes(path: Path) -> list:
+    """The names of the extended attributes on ``path`` itself."""
+    libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+    libc.listxattr.restype = ctypes.c_ssize_t
+    libc.listxattr.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t,
+                               ctypes.c_int]
+    name = os.fsencode(str(path))
+    size = libc.listxattr(name, None, 0, _NO_FOLLOW)
+    if size <= 0:
+        return []
+    names = ctypes.create_string_buffer(size)
+    size = libc.listxattr(name, names, size, _NO_FOLLOW)
+    return [part.decode() for part in names.raw[:max(size, 0)].split(b"\0") if part]
+
+
+def marks(volume: Path) -> list:
+    """What macOS added as the image was written: an extended attribute on
+    anything in it but Finder's, and fseventsd's record of the writes. A
+    volume holding ``.fseventsd/no_log`` is never recorded."""
+    found = [f".: {name}" for name in attributes(volume)
+             if name not in KEPT_ATTRIBUTES]
+    for folder, folders, files in os.walk(volume):
+        for name in folders + files:
+            path = Path(folder) / name
+            found += [f"{path.relative_to(volume)}: {attribute}"
+                      for attribute in attributes(path)
+                      if attribute not in KEPT_ATTRIBUTES]
+    events = volume / ".fseventsd"
+    if events.is_dir():
+        found += [f".fseventsd/{entry.name}: a record of the build's writes"
+                  for entry in sorted(events.iterdir()) if entry.name != "no_log"]
+    return found
+
+
 def main(argv: list) -> int:
     if len(argv) != 3 or argv[1] not in ("clean", "check"):
         print("usage: dmg_layout.py clean|check VOLUME", file=sys.stderr)
@@ -217,7 +263,10 @@ def main(argv: list) -> int:
     found = check(volume, str(Path.home()), getpass.getuser(), uuid, machine)
     for line in found:
         print(f"names this Mac: {line}", file=sys.stderr)
-    return 1 if found else 0
+    marked = marks(volume)
+    for line in marked:
+        print(f"marked as it was built: {line}", file=sys.stderr)
+    return 1 if found or marked else 0
 
 
 if __name__ == "__main__":

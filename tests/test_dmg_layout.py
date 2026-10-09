@@ -274,6 +274,64 @@ class TestTheAliasLosesOnlyTheImage:
         assert dmg_layout.without_image(plain) == plain
 
 
+class TestTheBuildsMarks:
+    """macOS marks every file a build writes with where it came from, and
+    fseventsd records the writes; the image ships with neither. Files made
+    here may carry macOS's mark already, so each test looks for its own."""
+
+    @staticmethod
+    def _mark(path: Path, name: str = "org.example.test") -> None:
+        subprocess.run(["xattr", "-w", name, "1", str(path)], check=True)
+
+    def test_finders_flags_stay_and_any_other_attribute_is_named(self, tmp_path):
+        named = tmp_path / "named.txt"
+        named.write_text("x")
+        self._mark(named)
+        flagged = tmp_path / "flagged.txt"
+        flagged.write_text("y")
+        # Finder's own flags on the image's .DS_Store: invisible. All zeros
+        # would not be kept at all.
+        subprocess.run(["xattr", "-wx", "com.apple.FinderInfo",
+                        "2020202020202020" "4010" + "00" * 22, str(flagged)], check=True)
+        assert "com.apple.FinderInfo" in dmg_layout.attributes(flagged)
+        found = dmg_layout.marks(tmp_path)
+        assert "named.txt: org.example.test" in found
+        assert not any("FinderInfo" in line for line in found)
+
+    def test_a_folders_marks_are_named_too(self, tmp_path):
+        folder = tmp_path / "Mail Manager.app" / "Contents"
+        folder.mkdir(parents=True)
+        self._mark(folder)
+        assert "Mail Manager.app/Contents: org.example.test" in dmg_layout.marks(tmp_path)
+
+    def test_a_link_is_read_for_its_own_marks_not_its_targets(self, tmp_path):
+        target = tmp_path / "target.txt"
+        target.write_text("x")
+        self._mark(target)
+        (tmp_path / "link").symlink_to(target)
+        found = dmg_layout.marks(tmp_path)
+        assert "target.txt: org.example.test" in found
+        assert "link: org.example.test" not in found
+
+    def test_fseventsds_record_is_named_and_its_no_log_is_not(self, tmp_path):
+        events = tmp_path / ".fseventsd"
+        events.mkdir()
+        (events / "no_log").touch()
+        assert not any(line.endswith("a record of the build's writes")
+                       for line in dmg_layout.marks(tmp_path))
+        (events / "0000000000000001").write_bytes(b"\x1f\x8b")
+        assert (".fseventsd/0000000000000001: a record of the build's writes"
+                in dmg_layout.marks(tmp_path))
+
+    def test_the_check_fails_an_image_with_a_mark(self, image, capsys):
+        mount, made, home = image
+        dmg_layout.clean(mount)
+        self._mark(mount / "Read me first.txt")
+        assert dmg_layout.main(["dmg_layout.py", "check", str(mount)]) == 1
+        said = capsys.readouterr().err
+        assert "marked as it was built: Read me first.txt: org.example.test" in said
+
+
 class TestTheBuildUsesIt:
     def test_the_layout_is_cleaned_before_compressing_and_checked_after(self):
         script = (ROOT / "build_dmg.sh").read_text(encoding="utf-8")
@@ -288,3 +346,14 @@ class TestTheBuildUsesIt:
         assert laid_out < cleaned < compressed < checked
         failing = script[checked:script.index("fi", checked)]
         assert 'rm -f "$DMG"' in failing and "die" in failing
+
+    def test_nothing_records_the_writes_and_the_marks_come_off_last(self):
+        script = (ROOT / "build_dmg.sh").read_text(encoding="utf-8")
+        staged = script.index('touch "$STAGING/.fseventsd/no_log"')
+        created = script.index("hdiutil create")
+        cleaned = script.index("tools/dmg_layout.py clean")
+        unmarked = script.index('unmark "$MOUNT"')
+        compressed = script.index("hdiutil convert")
+        assert staged < created < cleaned < unmarked < compressed
+        body = script[script.index("unmark() {"):script.index("\n}\n", script.index("unmark() {"))]
+        assert "launchctl submit" in body and "xattr -rd com.apple.provenance" in body

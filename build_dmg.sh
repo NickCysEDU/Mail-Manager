@@ -24,6 +24,25 @@ fi
 say()  { printf '%s==>%s %s\n' "$G" "$N" "$*" >&2; }
 die()  { printf '%serror:%s %s\n' "$R" "$N" "$*" >&2; exit 1; }
 
+# macOS marks every file this build writes with where it came from
+# (com.apple.provenance), and no process started from here may take the mark
+# off; a job that launchd runs may. Takes them off everything under $1.
+unmark() {
+  local done_file label
+  done_file="$(mktemp -u "${TMPDIR:-/tmp}/mail-manager-unmark.XXXXXX")"
+  label="mail-manager.unmark.$$"
+  launchctl submit -l "$label" -- /bin/sh -c \
+    '/usr/bin/xattr -rd com.apple.provenance "$0" 2>/dev/null; /usr/bin/touch "$1"' \
+    "$1" "$done_file" || return 1
+  for _ in $(seq 1 120); do
+    [[ -e "$done_file" ]] && break
+    sleep 0.5
+  done
+  launchctl remove "$label" 2>/dev/null || true
+  [[ -e "$done_file" ]] || return 1
+  rm -f "$done_file"
+}
+
 # Finder would lay out whichever disk has the name, and the layout is
 # cleaned at the path the image mounts on.
 [[ -e "/Volumes/$VOLUME" ]] && die "eject the mounted “${VOLUME}” first"
@@ -62,6 +81,10 @@ BACKGROUND="assets/dmg-background.tiff"
 say "Staging the disk image"
 rm -rf "$STAGING" "$DMG" "$DMG.tmp.dmg"
 mkdir -p "$STAGING/.background"
+# fseventsd keeps no record of what is written to a volume holding this, from
+# its first mount on; without it the image carried the build's writes.
+mkdir -p "$STAGING/.fseventsd"
+touch "$STAGING/.fseventsd/no_log"
 cp -R "$APP" "$STAGING/"
 ln -s /Applications "$STAGING/Applications"
 [[ -f "$BACKGROUND" ]] && cp "$BACKGROUND" "$STAGING/.background/background.${BACKGROUND##*.}"
@@ -160,6 +183,11 @@ if ! "$LAYOUT_PY" tools/dmg_layout.py clean "$MOUNT"; then
   hdiutil detach "$MOUNT" >/dev/null
   die "could not clean the installer window's layout"
 fi
+# Last of all, once nothing more is written to it.
+if ! unmark "$MOUNT"; then
+  hdiutil detach "$MOUNT" >/dev/null
+  die "could not take macOS's marks off the image's files"
+fi
 sync
 hdiutil detach "$MOUNT" >/dev/null
 
@@ -169,8 +197,8 @@ rm -f "$DMG.tmp.dmg"
 rm -rf "$STAGING"
 
 # The finished image, as it will be downloaded: nothing outside the app may
-# name this Mac, and an image that does is not left lying where it could be
-# uploaded.
+# name this Mac, nothing in it may carry the build's marks, and an image that
+# fails is not left lying where it could be uploaded.
 say "Checking the image names nothing of this Mac"
 MOUNT="$(hdiutil attach -readonly -noverify -noautoopen -nobrowse "$DMG" |
          grep -Eo '/Volumes/.*$' | head -1)"
@@ -178,7 +206,7 @@ MOUNT="$(hdiutil attach -readonly -noverify -noautoopen -nobrowse "$DMG" |
 if ! "$LAYOUT_PY" tools/dmg_layout.py check "$MOUNT"; then
   hdiutil detach "$MOUNT" >/dev/null
   rm -f "$DMG"
-  die "$DMG named this Mac, so it has been removed"
+  die "$DMG named this Mac or carried the build's marks, so it has been removed"
 fi
 hdiutil detach "$MOUNT" >/dev/null
 SIZE="$(du -h "$DMG" | cut -f1)"
