@@ -574,7 +574,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 5,298 tests
+./dev test                     # 5,304 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus
