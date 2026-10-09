@@ -1790,6 +1790,41 @@ class TestTheWindowComesBack:
             viewer.close()
             viewer.deleteLater()
 
+    def test_the_list_keeps_its_own_windows(self, qapp, window, monkeypatch):
+        """Asked for every top-level widget, the list now and then met one
+        whose memory was no longer a widget, and the process went down
+        with it. It keeps its own: the windows the app made, as it saw
+        them shown."""
+        import sys
+
+        from PySide6.QtWidgets import QApplication, QWidget
+
+        if sys.platform != "darwin":
+            pytest.skip("the Dock is macOS's")
+
+        def every_top_level_widget():
+            raise AssertionError("the list asked for every top-level widget")
+
+        monkeypatch.setattr(QApplication, "topLevelWidgets",
+                            staticmethod(every_top_level_widget))
+        window.show()
+        notes = QWidget()
+        notes.setWindowTitle("Notes")
+        try:
+            notes.show()
+            qapp.processEvents()
+            names = [a.text() for a in window.dock_menu.actions()]
+            assert names[:names.index("Show Mail Manager")] == [
+                window.windowTitle(), "Notes", ""]
+            notes.close()
+            qapp.processEvents()
+            names = [a.text() for a in window.dock_menu.actions()]
+            assert names[:names.index("Show Mail Manager")] == [
+                window.windowTitle(), ""]
+        finally:
+            notes.close()
+            notes.deleteLater()
+
     def test_the_dock_is_given_the_windows(self):
         """What AppKit hands the Dock when its icon is right-clicked, on
         the Mac's own platform: the menu, windows first."""

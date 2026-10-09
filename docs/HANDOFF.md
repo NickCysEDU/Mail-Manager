@@ -197,6 +197,13 @@ describes the app itself.
   `--scan-once` calls `certs.ensure()`): launchd starts it with nothing
   set, and the bundle Python was built to look for exists only where it
   was built, so without it the agent could verify no server.
+- **The Dock's list of windows keeps its own** (`OpenWindows._seen`, the
+  windows the app made, as each was shown). Asking for every top-level
+  widget now and then met one whose memory was no longer a widget, and the
+  process went down with it (`test_the_list_keeps_its_own_windows`). Two
+  such walks remain, checked on the real screen and left alone:
+  `touchbar._focus_changed` (cocoa only) and `widgets._menu_at` (a pointer
+  resting in a menu).
 - **The agent's job follows the app's home** (`scheduler.agent_plist_path`):
   with `ICLOUD_TRIAGE_HOME` set it is written there and launchd is never
   asked. launchd starts a job without the moved home, so one written from a
@@ -595,7 +602,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 5,311 tests
+./dev test                     # 5,313 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus
@@ -699,7 +706,8 @@ About's security link is a 404 for everyone but the owner.
   here with CI's exact versions. Before lifting the cap, run the whole suite
   on the new version; `OpenWindows` could keep its own list of windows
   rather than ask for every top-level widget.
-- **6.11.2 has the same crash, rarely.** On 9 October two of four full runs
+- **6.11.2 has the same crash, rarely.** CI's failure on 7e5b298 was this,
+  not the screen. On 9 October two of four full runs
   here lost a worker to it: a bus error in `OpenWindows.windows()` and a
   segfault in `theme.apply` while PySide reported an error from a combo
   box's `changeEvent`. Then xdist either waited for the dead worker or
@@ -716,7 +724,10 @@ About's security link is a 404 for everyone but the owner.
   `test_rider_world`, `test_mail_client`, `test_viewing_modes`, brought it
   out in `test_mail_client` once in three runs with `MallocScribble=1
   PYTHONMALLOC=debug`, and not in three with `MallocNanoZone=0
-  MallocErrorAbort=1 MallocScribble=1`.
+  MallocErrorAbort=1 MallocScribble=1`. The Dock's list no longer walks
+  (see Everywhere). That removes where most of these landed, not whatever
+  spoils the widget: if a run still loses a worker, read its report in
+  `~/Library/Logs/DiagnosticReports` before anything else.
 - **A hosted runner's graphics vary from run to run.** On 8 October one
   drew the rider's world at least sixty times slower than a Mac: four world
   scripts each ran out their three minutes and the run its half hour, where

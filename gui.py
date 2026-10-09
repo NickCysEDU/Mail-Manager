@@ -184,7 +184,11 @@ class OpenWindows(QObject):
 
     One for the application, made by the first menu it serves: one per
     window would put every event through a filter for each window ever
-    made."""
+    made.
+
+    It lists the windows the app made, as it sees them shown, rather than
+    ask Qt for every top-level widget: that walk met a widget whose memory
+    was no longer one, now and then, and took the process down with it."""
 
     CHANGES = (QEvent.Type.Show, QEvent.Type.Hide, QEvent.Type.Close,
                QEvent.Type.WindowTitleChange, QEvent.Type.WindowStateChange,
@@ -209,6 +213,9 @@ class OpenWindows(QObject):
         #: (menu, the entry the windows go above, the entries put there),
         #: the first two weakly.
         self._menus: List[tuple] = []
+        #: The windows the app made, as each was shown; weakly too, so a
+        #: window closed and let go is not kept for this.
+        self._seen: "weakref.WeakSet[QWidget]" = weakref.WeakSet()
         self._shown = 0
         self._again = QTimer(self)
         self._again.setSingleShot(True)
@@ -221,10 +228,12 @@ class OpenWindows(QObject):
         if event.type() not in self.CHANGES or not isinstance(watched, QWidget):
             return False
         if watched.isWindow() and not isinstance(watched, QMenu):
-            if (event.type() == QEvent.Type.Show
-                    and watched.property("openedAs") is None):
-                self._shown += 1
-                watched.setProperty("openedAs", self._shown)
+            if event.type() == QEvent.Type.Show:
+                if watched.property("openedAs") is None:
+                    self._shown += 1
+                    watched.setProperty("openedAs", self._shown)
+                if shiboken6.createdByPython(watched):
+                    self._seen.add(watched)
             self._again.start()
         return False
 
@@ -242,11 +251,10 @@ class OpenWindows(QObject):
             title = title[:cls.TITLE_MOST - 1].rstrip() + "…"
         return title.replace("&", "&&")
 
-    @staticmethod
-    def windows() -> List[QWidget]:
+    def windows(self) -> List[QWidget]:
         """The windows to list, in the order they were opened."""
-        found = [widget for widget in QApplication.topLevelWidgets()
-                 if widget.isVisible() and not isinstance(widget, QMenu)
+        found = [widget for widget in list(self._seen)
+                 if shiboken6.isValid(widget) and widget.isVisible()
                  and widget.windowType() in (Qt.WindowType.Window,
                                              Qt.WindowType.Dialog)
                  and widget.windowTitle().strip()]
