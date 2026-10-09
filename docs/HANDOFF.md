@@ -483,15 +483,22 @@ describes the app itself.
   mounting images on one worker while the updater's opened one on another,
   the disk image service failed a call, "Device not configured", for longer
   than the retries waited.
-- **Real-screen tests do not take turns.** An app another worker brings
-  forward closes an open menu: the model menu's test failed every time some
-  other files' real windows ran beside it. A lock that made such tests take
-  turns, even only around the few that need their app in front, pushed the
-  hosted runner past its thirty minutes, where the Touch Bar's measurements
-  under Rosetta take minutes each. So the model menu's test tries again when
-  the menu was closed from outside (`still_open`), and skips, saying so, if
-  that happens every time; a menu still open that does not open the row
-  fails. The menu bar's tests do the same with the focus.
+- **A real-screen script stays behind** unless its test is about coming
+  forward: `setActivationPolicy:` 2 (prohibited) right after its
+  `QApplication`. Brought forward, each took the focus from whoever was at
+  the Mac (the Touch Bar's file twenty times a run) and from other tests:
+  another app coming forward closes an open menu, so the model menu's test
+  failed whenever such a file ran beside it. The graphics card's scripts
+  (`test_gpu_canvas.HEAD`, the rider's too) still come forward: a window
+  that cannot be in front is never given a frame to draw. The menu bar's
+  tests come forward on purpose.
+- **The model menu's test watches the front** (every 25 ms, NSWorkspace):
+  a try during which another app came forward says nothing either way and
+  is made again, up to three times, then skipped with what came forward.
+  With nothing else coming forward, a menu that closes or a row that does
+  not open fails it. A lock making real-screen tests take turns was tried
+  instead: it pushed the hosted runner past its thirty minutes, where the
+  Touch Bar's measurements under Rosetta take minutes each.
 - **Nothing inside a popover opens another.** A popover or a menu-style
   choice in a popover's bar closed the whole bar back to the top when it
   opened (the visualiser's Game held its game and level as menus);

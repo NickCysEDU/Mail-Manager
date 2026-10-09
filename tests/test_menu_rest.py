@@ -148,6 +148,14 @@ def test_the_model_menu_opens_the_row_come_back_to(qapp):
         from PySide6.QtTest import QTest
         from PySide6.QtWidgets import QApplication, QMenu
         app = QApplication([])
+        import ctypes as _c
+        from touchbar_mac import _Runtime as _Kit
+        _kit = _Kit()
+        # Drawn, but never in front of whatever the person at the Mac is using:
+        # brought forward, a test's window took the focus from them and from
+        # other tests.
+        _kit.send(_kit.send(_kit.cls("NSApplication"), "sharedApplication"),
+                  "setActivationPolicy:", 2, argtypes=[_c.c_long], restype=_c.c_bool)
         import widgets
         widgets.install_resting_opens_menus(app)
         from config import InMemoryCredentialStore, Settings
@@ -155,16 +163,33 @@ def test_the_model_menu_opens_the_row_come_back_to(qapp):
         window = MainWindow(Settings(icloud_email="you@icloud.example").normalized(),
                             InMemoryCredentialStore(), demo=True)
         window.show()
-        out = {{"states": []}}
+        out = {{}}
         state = {{}}
-        app.applicationStateChanged.connect(
-            lambda changed: out["states"].append(changed.name))
+        # Which app is in front, all along: another one coming forward
+        # closes an open menu, this app's included.
+        workspace = _kit.send(_kit.cls("NSWorkspace"), "sharedWorkspace")
+        fronts = set()
+
+        def look_at_the_front():
+            front = _kit.send(workspace, "frontmostApplication")
+            fronts.add(_kit.send(front, "processIdentifier", restype=_c.c_int)
+                       if front else 0)
+
+        watching = QTimer()
+        watching.timeout.connect(look_at_the_front)
+        watching.start(25)
+        look_at_the_front()
+
+        class Gone(Exception):
+            pass
 
         def move_to(goal, steps=10):
             start = state.get("at", goal)
             for step in range(1, steps + 1):
                 at = start + (goal - start) * step / steps
                 under = QApplication.widgetAt(at) or QApplication.activePopupWidget()
+                if under is None:
+                    raise Gone   # the menu has closed
                 top = under.window()
                 QTest.mouseMove(top.windowHandle(), top.mapFromGlobal(at))
                 app.processEvents()
@@ -183,17 +208,20 @@ def test_the_model_menu_opens_the_row_come_back_to(qapp):
             centre = lambda a: menu.mapToGlobal(menu.actionGeometry(a).center())
             first, other = rows[2], rows[4]
             state["at"] = menu.mapToGlobal(menu.rect().center())
-            move_to(centre(first))
-            out["first"] = wait_for(first.menu().isVisible, 1500)
-            sub = first.menu()
-            item = [a for a in sub.actions() if not a.isSeparator()][0]
-            move_to(sub.mapToGlobal(sub.actionGeometry(item).center()))
-            wait_for(lambda: False, 300)
-            # Nothing here closes it: closed now, something outside did.
-            out["still_open"] = menu.isVisible()
-            move_to(centre(other))
-            out["other"] = wait_for(other.menu().isVisible, 1500)
-            out["active"] = menu.activeAction() is other
+            try:
+                move_to(centre(first))
+                out["first"] = wait_for(first.menu().isVisible, 1500)
+                sub = first.menu()
+                item = [a for a in sub.actions() if not a.isSeparator()][0]
+                move_to(sub.mapToGlobal(sub.actionGeometry(item).center()))
+                wait_for(lambda: False, 300)
+                move_to(centre(other))
+                out["other"] = wait_for(other.menu().isVisible, 1500)
+                out["active"] = menu.activeAction() is other
+            except Gone:
+                out["gone"] = True
+            look_at_the_front()
+            out["fronts"] = len(fronts)
             while QApplication.activePopupWidget():
                 QApplication.activePopupWidget().close()
             print(json.dumps(out), flush=True)
@@ -207,9 +235,10 @@ def test_the_model_menu_opens_the_row_come_back_to(qapp):
     """)
     env = {key: value for key, value in os.environ.items()
            if key != "QT_QPA_PLATFORM"}
-    # An app another test worker brings forward closes the menu. Such a run
-    # says nothing either way, so it is tried again; a menu still open that
-    # does not open the row is the fault this test is for.
+    # Another app coming forward while the menu is open closes it, whichever
+    # test worker or person brought it forward. Such a try says nothing either
+    # way, so it is made again; with nothing else coming forward, a closed
+    # menu or a row that does not open is the fault this test is for.
     interrupted = []
     for _attempt in range(3):
         done = subprocess.run([sys.executable, "-c", script], capture_output=True,
@@ -217,10 +246,11 @@ def test_the_model_menu_opens_the_row_come_back_to(qapp):
         lines = [line for line in done.stdout.splitlines() if line.startswith("{")]
         assert done.returncode == 0 and lines, done.stderr[-2000:]
         result = json.loads(lines[-1])
-        assert result["first"], "the first row's models never opened"
-        if not result["still_open"]:
+        if result["fronts"] > 1:
             interrupted.append(result)
             continue
+        assert not result.get("gone"), f"the menu closed by itself: {result}"
+        assert result["first"], "the first row's models never opened"
         assert result["other"] and result["active"], result
         return
-    pytest.skip(f"something outside closed the menu on every try: {interrupted}")
+    pytest.skip(f"another app came forward during every try: {interrupted}")

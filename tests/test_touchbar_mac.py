@@ -42,6 +42,10 @@ HEAD = textwrap.dedent("""
     renderer = touchbar._renderer
     rt = renderer.rt
     _id = ctypes.c_void_p
+    # Shown, but never in front of whatever the person at the Mac is using:
+    # brought forward, it took the focus from them and from other tests.
+    rt.send(rt.send(rt.cls("NSApplication"), "sharedApplication"),
+            "setActivationPolicy:", 2, argtypes=[ctypes.c_long], restype=ctypes.c_bool)
 
     def spin(ms=150):
         loop = QEventLoop()

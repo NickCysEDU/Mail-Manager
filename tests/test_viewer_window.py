@@ -502,6 +502,14 @@ REAL = textwrap.dedent("""
     from PySide6.QtCore import QEventLoop, QPoint, QTimer, Qt
     from PySide6.QtWidgets import QApplication, QWidget
     app = QApplication.instance() or QApplication([])
+    import ctypes as _c
+    from touchbar_mac import _Runtime as _Kit
+    _kit = _Kit()
+    # Drawn, but never in front of whatever the person at the Mac is using:
+    # brought forward, a test's window took the focus from them and from
+    # other tests.
+    _kit.send(_kit.send(_kit.cls("NSApplication"), "sharedApplication"),
+              "setActivationPolicy:", 2, argtypes=[_c.c_long], restype=_c.c_bool)
     app.setApplicationName("Mail Manager")
     import attachments, visualizers
     from attachment_view import AttachmentViewer

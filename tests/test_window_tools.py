@@ -1813,6 +1813,14 @@ class TestTheWindowComesBack:
             from PySide6.QtCore import QTimer
             from PySide6.QtWidgets import QApplication, QWidget
             app = QApplication([])
+            import ctypes as _c
+            from touchbar_mac import _Runtime as _Kit
+            _kit = _Kit()
+            # Drawn, but never in front of whatever the person at the Mac is using:
+            # brought forward, a test's window took the focus from them and from
+            # other tests.
+            _kit.send(_kit.send(_kit.cls("NSApplication"), "sharedApplication"),
+                      "setActivationPolicy:", 2, argtypes=[_c.c_long], restype=_c.c_bool)
             from config import InMemoryCredentialStore, Settings
             from gui import MainWindow
             window = MainWindow(Settings(icloud_email="you@icloud.example").normalized(),

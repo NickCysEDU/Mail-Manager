@@ -31,6 +31,14 @@ HEAD = textwrap.dedent("""
     from PySide6.QtCore import QEventLoop, QTimer
     from PySide6.QtWidgets import QApplication, QMainWindow
     app = QApplication([])
+    import ctypes as _c
+    from touchbar_mac import _Runtime as _Kit
+    _kit = _Kit()
+    # Drawn, but never in front of whatever the person at the Mac is using:
+    # brought forward, a test's window took the focus from them and from
+    # other tests.
+    _kit.send(_kit.send(_kit.cls("NSApplication"), "sharedApplication"),
+              "setActivationPolicy:", 2, argtypes=[_c.c_long], restype=_c.c_bool)
     import webview_mac
     if not webview_mac.available():
         print(json.dumps({{"skip": "WebKit is not available here"}}))
