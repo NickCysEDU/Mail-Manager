@@ -622,33 +622,49 @@ def hdiutil_alone():
             fcntl.flock(lock, fcntl.LOCK_UN)
 
 
-#: The lock held while a test's windows are on the real screen.
+#: The locks held while a test's windows are on the real screen.
 _SCREEN: dict = {}
 
 
-def take_the_screen() -> None:
-    """Show windows on the real screen with no other test worker doing so,
-    until this test ends. A window another worker brings forward takes the
-    focus: an open menu closes, and a pointer moved over it opens nothing."""
-    if "lock" in _SCREEN:
-        return
-    import fcntl
+def _lock_file(name: str):
     import tempfile
 
-    lock = open(Path(tempfile.gettempdir()) / "mail-manager-tests-screen.lock", "a")
-    fcntl.flock(lock, fcntl.LOCK_EX)
-    _SCREEN["lock"] = lock
+    return open(Path(tempfile.gettempdir()) / f"mail-manager-tests-{name}.lock", "a")
+
+
+def take_the_screen(alone: bool = False) -> None:
+    """Show windows on the real screen until this test ends. Tests share it,
+    side by side, except one that needs its app to stay in front: an app
+    another worker brings forward takes the focus, an open menu closes and a
+    pointer moved over it opens nothing. That one takes the screen alone,
+    once the others' windows are gone, and first: the rest queue behind it
+    at the gate."""
+    if "screen" in _SCREEN:
+        return
+    import fcntl
+
+    gate, screen = _lock_file("screen-gate"), _lock_file("screen")
+    fcntl.flock(gate, fcntl.LOCK_EX)
+    if alone:
+        fcntl.flock(screen, fcntl.LOCK_EX)
+        _SCREEN["gate"] = gate
+    else:
+        fcntl.flock(gate, fcntl.LOCK_UN)
+        gate.close()
+        fcntl.flock(screen, fcntl.LOCK_SH)
+    _SCREEN["screen"] = screen
 
 
 @pytest.fixture(autouse=True)
 def _screen_given_back():
     yield
-    lock = _SCREEN.pop("lock", None)
-    if lock is not None:
-        import fcntl
+    import fcntl
 
-        fcntl.flock(lock, fcntl.LOCK_UN)
-        lock.close()
+    for key in ("screen", "gate"):
+        held = _SCREEN.pop(key, None)
+        if held is not None:
+            fcntl.flock(held, fcntl.LOCK_UN)
+            held.close()
 
 
 #: The repository root, for git calls that must run from inside it.

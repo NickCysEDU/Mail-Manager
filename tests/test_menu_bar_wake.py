@@ -303,12 +303,13 @@ class TestTheFilePanel:
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="AppKit is macOS only")
+@pytest.mark.timeout(600)   # time to wait for the screen to itself
 def test_on_the_real_platform_it_ends_active_with_its_window_key():
     """The real thing: the app goes to the Dock and comes back, and ends in
     front with its window key."""
     from test_gpu_canvas import real_platform_or_skip
 
-    real_platform_or_skip()
+    real_platform_or_skip(alone=True)
     import macname
 
     if macname._AppKit.load() is None:
@@ -373,13 +374,14 @@ def test_on_the_real_platform_it_ends_active_with_its_window_key():
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="AppKit is macOS only")
+@pytest.mark.timeout(600)   # time to wait for the screen to itself
 def test_on_the_real_platform_a_file_panel_goes_away_and_comes_back_once_up():
     """The real thing: a native file panel opened through widgets.open_file.
     Once it is up the app goes to the Dock and comes back, and the panel
     ends key."""
     from test_gpu_canvas import real_platform_or_skip
 
-    real_platform_or_skip()
+    real_platform_or_skip(alone=True)
     import macname
 
     if macname._AppKit.load() is None:

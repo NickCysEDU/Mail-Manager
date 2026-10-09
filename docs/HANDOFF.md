@@ -480,12 +480,15 @@ describes the app itself.
   mounting images on one worker while the updater's opened one on another,
   the disk image service failed a call, "Device not configured", for longer
   than the retries waited.
-- **Tests that put windows on the real screen take turns too**
-  (`conftest.take_the_screen()`, taken by `real_platform_or_skip()` and
-  held until the test ends). A window another worker brings forward takes
+- **A test that needs its app in front has the real screen to itself**
+  (`conftest.take_the_screen`, through `real_platform_or_skip(alone=True)`;
+  held until the test ends). An app another worker brings forward takes
   the focus: the model menu's test failed every time another file's real
-  windows ran beside it, and never alone. The longest holds the screen for
-  about ten seconds, well inside the sixty a test may take.
+  windows ran beside it, and never alone. Every other real-screen test
+  shares the screen, so they still run side by side: with all of them
+  taking turns the hosted runner went past its thirty minutes. One waiting
+  for the screen alone goes before shared ones asking after it, and has
+  ten minutes to wait (`tests/test_screen_lock.py`).
 - **Nothing inside a popover opens another.** A popover or a menu-style
   choice in a popover's bar closed the whole bar back to the top when it
   opened (the visualiser's Game held its game and level as menus);
@@ -574,7 +577,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 5,304 tests
+./dev test                     # 5,308 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus

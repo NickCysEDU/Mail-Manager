@@ -130,10 +130,11 @@ PROBE_FOR = 45.0
 FRAMES_FOR = 10.0
 
 
-def real_platform_or_skip() -> None:
+def real_platform_or_skip(alone: bool = False) -> None:
     """Skip, with the reason, where no script could run on the card here;
-    otherwise keep the screen to this test until it ends."""
-    take_the_screen()
+    otherwise hold the screen until this test ends, alone where its app has
+    to stay in front (conftest.take_the_screen)."""
+    take_the_screen(alone)
     if not _real_platform:
         _real_platform.append(_probe_real_platform())
     if _real_platform[0] is not None:

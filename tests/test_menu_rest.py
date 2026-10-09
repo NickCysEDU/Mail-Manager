@@ -131,6 +131,7 @@ def test_the_app_installs_it():
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="the Mac's menus")
+@pytest.mark.timeout(600)   # time to wait for the screen to itself
 def test_the_model_menu_opens_the_row_come_back_to(qapp):
     """The way it happened: onto one backend, into its models, back out
     onto another backend, and still. Driven through the window system's own
@@ -138,7 +139,7 @@ def test_the_model_menu_opens_the_row_come_back_to(qapp):
     is never moved."""
     from test_gpu_canvas import real_platform_or_skip
 
-    real_platform_or_skip()
+    real_platform_or_skip(alone=True)
     script = textwrap.dedent(f"""
         import json, os, sys, tempfile, time
         os.environ["ICLOUD_TRIAGE_HOME"] = tempfile.mkdtemp()
