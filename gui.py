@@ -4885,7 +4885,7 @@ class MainWindow(QMainWindow):
         def arrived(found, left_out) -> None:
             if not shiboken6.isValid(window):
                 return
-            window.add_attachments(found)
+            window.carry(found)
             if left_out:
                 window.note(f"Too big to carry: {', '.join(left_out)}")
             else:

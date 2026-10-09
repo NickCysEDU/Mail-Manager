@@ -883,9 +883,17 @@ class ComposeWindow(QMainWindow):
         self.add_attachments(found)
 
     def add_attachments(self, found) -> None:
-        """Attachments from elsewhere: what a forwarded message carried."""
         self._attachments.extend(found)
         self._show_attachments()
+
+    def carry(self, found) -> None:
+        """What a forwarded message carried, arriving after the window opened.
+        It is part of the forward, not something written: a forward nobody
+        has touched still closes without asking."""
+        untouched = not self.is_dirty()
+        self.add_attachments(found)
+        if untouched:
+            self._opened = self._state()
 
     def _show_attachments(self) -> None:
         while self.attachment_row.count():

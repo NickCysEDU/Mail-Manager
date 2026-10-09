@@ -45,9 +45,7 @@ def window(qapp, tmp_path, monkeypatch):
     win.model.set_items([item("1", hour=9), item("2", hour=11, flags=()),
                          item("3", hour=10, attachments=("cv.pdf",))])
     yield win
-    win._close_mail_windows()
-    win.close()
-    win.deleteLater()
+    _close_everything(win, monkeypatch)
 
 
 @pytest.fixture
@@ -58,6 +56,15 @@ def demo_window(qapp, tmp_path, monkeypatch):
     win.folder_plan = FolderPlan()
     win.model.set_items([item("1"), item("2")])
     yield win
+    _close_everything(win, monkeypatch)
+
+
+def _close_everything(win, monkeypatch):
+    """A message left half written is thrown away, not kept open by its
+    question, to turn up in the Dock's list of windows in a later test."""
+    from mail_window import ComposeWindow
+
+    monkeypatch.setattr(ComposeWindow, "_ask_to_keep", lambda self: "discard")
     win._close_mail_windows()
     win.close()
     win.deleteLater()
@@ -354,6 +361,38 @@ class TestWritingBack:
         assert writing.statusBar().currentMessage() == "Too big to carry: huge.zip"
         worker.failed.emit("Could not fetch the attachments", "timed out")
         assert "timed out" in writing.statusBar().currentMessage()
+
+    def test_a_forward_nobody_touched_closes_without_asking(
+            self, window, monkeypatch):
+        """Its attachments arrive after it opens; they are the forward's own,
+        so closing it untouched asks nothing, as Mail does."""
+        from mail_window import ComposeWindow
+
+        asked = []
+        monkeypatch.setattr(ComposeWindow, "_ask_to_keep",
+                            lambda self: asked.append(self) or "cancel")
+        window.store.set_mailbox_password("you@icloud.example", "app-specific")
+        Recorder = recorder_for(monkeypatch, "AttachmentFetchWorker")
+        window.compose("forward", 2)
+        writing = compose_windows(window)[0]
+        Recorder.made[-1].ready.emit(
+            [outgoing.Attachment("cv.pdf", "application/pdf", b"%PDF")], [])
+        assert not writing.is_dirty()
+        writing.close()
+        assert asked == [] and not writing.isVisible()
+
+    def test_words_written_before_they_arrive_are_still_asked_about(
+            self, window, monkeypatch):
+        window.store.set_mailbox_password("you@icloud.example", "app-specific")
+        Recorder = recorder_for(monkeypatch, "AttachmentFetchWorker")
+        window.compose("forward", 2)
+        writing = compose_windows(window)[0]
+        writing.to_edit.setText("pat@acme.example")
+        Recorder.made[-1].ready.emit(
+            [outgoing.Attachment("cv.pdf", "application/pdf", b"%PDF")], [])
+        assert writing.is_dirty()
+        writing.to_edit.clear()
+        assert writing.is_dirty(), "the attachment is still not how it opened"
 
     def test_the_demo_forwards_without_attachments(self, demo_window):
         demo_window.model.items[0].email.attachments = ("cv.pdf",)
