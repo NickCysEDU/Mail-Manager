@@ -1974,33 +1974,48 @@ class TestItHoldsSixtyFramesASecond:
 
         from PySide6.QtGui import QPainter, QPixmap
 
+        import attachment_audio
+
         scope = visualizers.by_name("Oscilloscope")
         was = scope.decay
-        spent = {}
+        settings = (scope.MIN_DECAY, scope.MAX_DECAY)
+        spent = {decay: [] for decay in settings}
+        spectrum = self._spectrum(qtbot, 1920, 1080)
+        spectrum.set_scene(scope)
+        canvas = QPixmap(1920, 1080)
+        canvas.setDevicePixelRatio(spectrum.devicePixelRatioF())
+        painter = QPainter(canvas)
+        # A new trace every frame, within the two seconds there are: at
+        # sixteen milliseconds a step three frames in four had none to
+        # draw, and neither the fade nor the trace was timed in them.
+        hop = 1000 // attachment_audio.RATE + 1
+        moved = 0
+
+        def frame():
+            nonlocal moved
+            spectrum.set_position(300 + moved % 1500)
+            moved += hop
+            spectrum._tick()
+            spectrum._paint(painter)
+
         try:
-            for decay in (scope.MIN_DECAY, scope.MAX_DECAY):
-                spectrum = self._spectrum(qtbot, 1920, 1080)
-                scope.set_decay(decay)
-                spectrum.set_scene(scope)
-                canvas = QPixmap(1920, 1080)
-                canvas.setDevicePixelRatio(spectrum.devicePixelRatioF())
-                painter = QPainter(canvas)
-                try:
-                    for _ in range(4):
-                        spectrum._tick()
-                        spectrum._paint(painter)
+            for _ in range(4):
+                frame()
+            # In turns, each setting's quickest round counted: timed one
+            # after the other, a busy moment on a shared runner landed on
+            # one setting and read as its cost.
+            for _ in range(3):
+                for decay in settings:
+                    scope.set_decay(decay)
                     started = time.monotonic()
-                    rounds = 24
-                    for step in range(rounds):
-                        spectrum.set_position(900 + step * 16)
-                        spectrum._tick()
-                        spectrum._paint(painter)
-                    spent[decay] = (time.monotonic() - started) / rounds * 1000
-                finally:
-                    painter.end()
+                    for _ in range(8):
+                        frame()
+                    spent[decay].append((time.monotonic() - started) / 8 * 1000)
         finally:
+            painter.end()
             scope.set_decay(was)
-        slowest, fastest = max(spent.values()), min(spent.values())
+        quickest = [min(rounds) for rounds in spent.values()]
+        slowest, fastest = max(quickest), min(quickest)
         assert slowest < fastest * 1.8 + 2.0, (
             f"the longest persistence costs {slowest:.1f} ms against "
             f"{fastest:.1f} ms for the shortest, so it is still being paid "
