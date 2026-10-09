@@ -144,9 +144,11 @@ Drafts, Sent, Junk, Trash and Archive, each gathering every account's, then
 each account's own folders. Choose one to see its mail: each time you do, it
 is looked at again, reading only what is new, and **View → Get New Mail**
 (⇧⌘N) looks again at the one on screen. Drag a folder onto another to move
-it inside, or onto the account's name for the top level; or right-click it
-and choose **Move To**. The folder moves on the server with everything in
-it; the inbox and the mailboxes the server keeps for itself stay put. The
+it inside, between two folders to put it beside them, or onto the account's
+name for the top level; or right-click it and choose **Move To**. While you
+hold it, a bar shows where it will be listed, and the folder it goes into is
+outlined. The folder moves on the server with everything in it; the inbox
+and the mailboxes the server keeps for itself stay put. The
 button at the left of the toolbar, or ⌃⌘S, hides the sidebar and brings it
 back. The window
 opens on the last month of your inbox, read without marking anything, so it

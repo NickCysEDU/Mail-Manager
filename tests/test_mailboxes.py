@@ -1098,12 +1098,11 @@ class TestAMessageCutShortIsReadWhole:
 
 
 class TestMovingAFolderInTheSidebar:
-    """Xxxxxx xxx Xxxxx xxxx xxxxxxx at the top level of the account, beside
-    the app's own two; the way to put them inside Sorted Mail is Mail's:
-    drag one onto it, or choose Move To from its menu."""
+    """A folder goes inside another the way Mail does it: drag it onto that
+    folder, or choose Move To from its menu."""
 
     FOLDERS = ICLOUD_FOLDERS + ["Sorted Mail", "Sorted Mail/Receipts",
-                                "Church", "Notes"]
+                                "Recipes", "Manuals"]
 
     @pytest.fixture
     def sidebar(self, qapp, settings):
@@ -1122,10 +1121,10 @@ class TestMovingAFolderInTheSidebar:
             self, sidebar):
         made, account = sidebar
         where = [folder for _title, folder in
-                 made.destinations(account.id, "Church")]
+                 made.destinations(account.id, "Recipes")]
         assert "Sorted Mail" in where and "Job Search/Interview" in where
         assert "" not in where, "already at the top level"
-        assert not {"Church", "INBOX", "Drafts", "Sent Messages", "Junk",
+        assert not {"Recipes", "INBOX", "Drafts", "Sent Messages", "Junk",
                     "Deleted Messages", "Archive"} & set(where)
         inside = [folder for _title, folder in
                   made.destinations(account.id, "Job Search")]
@@ -1133,7 +1132,7 @@ class TestMovingAFolderInTheSidebar:
         assert [title for title, folder in made.destinations(
             account.id, "Sorted Mail/Receipts") if folder == ""] == ["Top Level"]
         assert ("Job Search › Interview", "Job Search/Interview") in \
-            made.destinations(account.id, "Church")
+            made.destinations(account.id, "Recipes")
 
     def test_a_folder_dropped_on_another_goes_inside_it(self, sidebar):
         from types import SimpleNamespace
@@ -1145,12 +1144,12 @@ class TestMovingAFolderInTheSidebar:
         made, account = sidebar
         items = {item.data(0, Qt.ItemDataRole.UserRole): item
                  for item in made._walk()}
-        church = items[Place("folder", account.id, "Church")]
+        recipes = items[Place("folder", account.id, "Recipes")]
         sorted_mail = items[Place("folder", account.id, "Sorted Mail")]
         heading = next(item for item in made._walk()
                        if item.data(0, Qt.ItemDataRole.UserRole + 1) == account.id)
         inbox = next(item for item in made._walk() if item.text(0) == "Inbox")
-        made.setCurrentItem(church)
+        made.setCurrentItem(recipes)
 
         def at(item):
             centre = made.visualItemRect(item).center()
@@ -1158,7 +1157,7 @@ class TestMovingAFolderInTheSidebar:
 
         assert made._drop_target(at(sorted_mail))[1] == "Sorted Mail"
         assert made._drop_target(at(inbox))[1] is None
-        assert made._drop_target(at(church))[1] is None
+        assert made._drop_target(at(recipes))[1] is None
         made.setCurrentItem(items[Place("folder", account.id, "Sorted Mail/Receipts")])
         assert made._drop_target(at(heading))[1] == "", "the top level"
         made.setCurrentItem(inbox)
@@ -1175,20 +1174,257 @@ class TestMovingAFolderInTheSidebar:
         made.moveRequested.connect(lambda *args: asked.append(args))
         items = {item.data(0, Qt.ItemDataRole.UserRole): item
                  for item in made._walk()}
-        notes = items[Place("folder", account.id, "Notes")]
-        made.setCurrentItem(notes)
+        manuals = items[Place("folder", account.id, "Manuals")]
+        made.setCurrentItem(manuals)
         before = [item.text(0) for item in made._walk()]
         target = made.visualItemRect(items[Place("folder", account.id,
                                                   "Sorted Mail")]).center()
         # What the tree's own drag carries, which Qt's handling of a drop
         # would act on.
-        carried = made.mimeData([notes])
+        carried = made.mimeData([manuals])
         assert isinstance(carried, QMimeData) and carried.formats()
         event = QDropEvent(QPointF(target), Qt.DropAction.MoveAction, carried,
                            Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
         made.dropEvent(event)
-        assert asked == [(account.id, "Notes", "Sorted Mail")]
+        assert asked == [(account.id, "Manuals", "Sorted Mail")]
         assert [item.text(0) for item in made._walk()] == before
+
+
+class TestTheBarWhereAFolderWillGo:
+    """While a folder is held over the sidebar, a bar shows where it will be
+    listed once let go, as Mail shows it, and the folder it would go into is
+    outlined. The rows are alphabetical, so that is not always where the
+    pointer is."""
+
+    FOLDERS = TestMovingAFolderInTheSidebar.FOLDERS
+
+    @pytest.fixture
+    def sidebar(self, qapp, settings):
+        from sidebar import MailboxList
+
+        made = MailboxList()
+        made.set_accounts(settings.accounts)
+        account = settings.accounts[0]
+        made.set_mailboxes(_found(account.id, self.FOLDERS, ICLOUD_SPECIAL))
+        made.resize(260, 700)
+        made.show()
+        qapp.processEvents()
+        yield made, account
+        made.close()
+
+    @staticmethod
+    def _rows(made, account):
+        from sidebar import Place
+
+        rows = {}
+        for item in made._walk():
+            path = item.data(0, Qt.ItemDataRole.UserRole + 2)
+            if path is not None:
+                rows[path] = item
+            elif item.data(0, Qt.ItemDataRole.UserRole + 1) == account.id:
+                rows[""] = item
+            elif item.data(0, Qt.ItemDataRole.UserRole) == Place("inbox"):
+                rows["Inbox"] = item
+        return rows
+
+    @staticmethod
+    def _hold(made, held, over, where="middle"):
+        from PySide6.QtCore import QPoint
+        from PySide6.QtGui import QDragMoveEvent
+
+        made.setCurrentItem(held)
+        rect = made.visualItemRect(over)
+        y = {"top": rect.top() + 1, "middle": rect.center().y(),
+             "bottom": rect.bottom() - 1}[where]
+        event = QDragMoveEvent(QPoint(rect.center().x(), y), Qt.DropAction.MoveAction,
+                               made.mimeData([held]), Qt.MouseButton.LeftButton,
+                               Qt.KeyboardModifier.NoModifier)
+        made.dragMoveEvent(event)
+        return event
+
+    @staticmethod
+    def _drawn_at(made, y, left):
+        """Whether the bar is drawn along ``y`` from ``left`` to near the
+        right edge, in the highlight colour."""
+        from PySide6.QtGui import QPalette
+
+        made.viewport().repaint()
+        image = made.viewport().grab().toImage()
+        ratio = image.devicePixelRatio()
+        accent = made.palette().color(QPalette.ColorRole.Highlight)
+
+        def accent_at(x, row):
+            colour = image.pixelColor(int(x * ratio), int(row * ratio))
+            return max(abs(colour.red() - accent.red()), abs(colour.green() - accent.green()),
+                       abs(colour.blue() - accent.blue())) <= 40
+
+        width = made.viewport().width()
+        along = range(left + 10, width - 10, 6)
+        return all(accent_at(x, y) or accent_at(x, y - 1) for x in along)
+
+    @staticmethod
+    def _ink_from(made, row):
+        """The first column drawn in across the middle of a row's cell, the
+        arrow to its left and any outline aside: its icon."""
+        from PySide6.QtGui import QPalette
+
+        made.viewport().repaint()
+        image = made.viewport().grab().toImage()
+        ratio = image.devicePixelRatio()
+        paper = made.palette().color(QPalette.ColorRole.Base)
+        accent = made.palette().color(QPalette.ColorRole.Highlight)
+
+        def far(colour, other):
+            return max(abs(colour.red() - other.red()), abs(colour.green() - other.green()),
+                       abs(colour.blue() - other.blue()))
+
+        rect = made.visualItemRect(row)
+        y = int(rect.center().y() * ratio)
+        for x in range(int(rect.left() * ratio), image.width()):
+            colour = image.pixelColor(x, y)
+            if far(colour, paper) > 60 and far(colour, accent) > 40:
+                return x / ratio
+        return None
+
+    def test_held_over_a_folder_it_goes_inside_in_its_place(self, sidebar):
+        made, account = sidebar
+        rows = self._rows(made, account)
+        event = self._hold(made, rows["Manuals"], rows["Sorted Mail"])
+        assert event.isAccepted()
+        before, into = made.landing()
+        assert into is rows["Sorted Mail"]
+        assert before is rows["Sorted Mail/Receipts"], "Manuals comes before Receipts"
+        left, y, outlined = made._bar()
+        assert outlined is rows["Sorted Mail"]
+        assert y == made.visualItemRect(rows["Sorted Mail/Receipts"]).top()
+        assert self._drawn_at(made, y, left)
+        assert self._drawn_at(made, made.visualItemRect(rows["Sorted Mail"]).top() + 3, 3), \
+            "the folder it goes into is outlined"
+        assert abs(left - self._ink_from(made, rows["Sorted Mail/Receipts"])) <= 3, \
+            "the bar starts in line with the icons of the rows it goes among"
+
+    def test_between_two_rows_it_goes_beside_them_where_the_alphabet_says(
+            self, sidebar):
+        made, account = sidebar
+        rows = self._rows(made, account)
+        # Held at the top of Lists, at the top level: Interview will be listed
+        # first there, above Job Search, not where the pointer is.
+        self._hold(made, rows["Job Search/Interview"], rows["Lists"], "top")
+        before, into = made.landing()
+        assert into is rows[""] and before is rows["Job Search"]
+        left, y, outlined = made._bar()
+        assert outlined is None, "the top level is not a folder to outline"
+        assert y == made.visualItemRect(rows["Job Search"]).top()
+        assert self._drawn_at(made, y, left)
+        assert abs(left - self._ink_from(made, rows["Job Search"])) <= 3
+
+    def test_after_the_last_of_a_folders_rows(self, sidebar):
+        made, account = sidebar
+        rows = self._rows(made, account)
+        self._hold(made, rows["Manuals"], rows["Job Search"])
+        before, into = made.landing()
+        assert into is rows["Job Search"] and before is None
+        _left, y, _outlined = made._bar()
+        assert y == made.visualItemRect(rows["Job Search/Interview"]).bottom() + 1
+
+    def test_into_a_closed_folder_just_under_it_a_step_in(self, sidebar):
+        made, account = sidebar
+        rows = self._rows(made, account)
+        rows["Sorted Mail"].setExpanded(False)
+        self._hold(made, rows["Manuals"], rows["Sorted Mail"])
+        left, y, _outlined = made._bar()
+        assert y == made.visualItemRect(rows["Sorted Mail"]).bottom() + 1
+        assert self._drawn_at(made, y, left)
+        assert abs(left - made.indentation() - self._ink_from(made, rows["Sorted Mail"])) <= 3
+
+    def test_where_it_cannot_go_nothing_is_drawn(self, sidebar):
+        made, account = sidebar
+        rows = self._rows(made, account)
+        made.setCurrentItem(rows["Manuals"])
+        made.viewport().repaint()
+        plain = made.viewport().grab().toImage()
+        for over, where in ((rows["Inbox"], "middle"), (rows["Manuals"], "middle"),
+                            (rows["Recipes"], "top")):
+            event = self._hold(made, rows["Manuals"], over, where)
+            assert not event.isAccepted(), over.text(0)
+            assert made.landing() is None and made._bar() is None
+            made.viewport().repaint()
+            assert made.viewport().grab().toImage() == plain, over.text(0)
+
+    def test_it_goes_when_the_folder_is_let_go_or_taken_away(self, sidebar):
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QDragLeaveEvent, QDropEvent
+
+        made, account = sidebar
+        rows = self._rows(made, account)
+        self._hold(made, rows["Manuals"], rows["Sorted Mail"])
+        made.dragLeaveEvent(QDragLeaveEvent())
+        assert made.landing() is None
+        self._hold(made, rows["Manuals"], rows["Sorted Mail"])
+        made._rebuild()
+        assert made.landing() is None, "the list drawn again from the server"
+        rows = self._rows(made, account)
+        self._hold(made, rows["Manuals"], rows["Sorted Mail"])
+        centre = made.visualItemRect(rows["Sorted Mail"]).center()
+        made.dropEvent(QDropEvent(QPointF(centre), Qt.DropAction.MoveAction,
+                                  made.mimeData([rows["Manuals"]]),
+                                  Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
+        assert made.landing() is None
+
+    @pytest.mark.parametrize("held, over, where", [
+        ("Manuals", "Sorted Mail", "middle"),
+        ("Manuals", "Sorted Mail/Receipts", "top"),
+        ("Job Search/Interview", "Lists", "top"),
+        ("Job Search/Interview", "Recipes", "bottom"),
+        ("Sorted Mail/Receipts", "Job Search", "bottom"),
+    ])
+    def test_the_drop_goes_where_the_bar_said(self, sidebar, held, over, where):
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QDropEvent
+
+        made, account = sidebar
+        rows = self._rows(made, account)
+        asked = []
+        made.moveRequested.connect(lambda *args: asked.append(args))
+        self._hold(made, rows[held], rows[over], where)
+        shown = made._landing
+        assert shown is not None
+        rect = made.visualItemRect(rows[over])
+        y = {"top": rect.top() + 1, "middle": rect.center().y(),
+             "bottom": rect.bottom() - 1}[where]
+        made.dropEvent(QDropEvent(QPointF(rect.center().x(), y), Qt.DropAction.MoveAction,
+                                  made.mimeData([rows[held]]), Qt.MouseButton.LeftButton,
+                                  Qt.KeyboardModifier.NoModifier))
+        assert asked == [(account.id, held, shown[1])]
+
+    def test_where_it_goes_is_where_the_list_puts_it_once_moved(self, sidebar):
+        """The bar's place is worked out before the move; the list drawn from
+        the server afterwards has to agree with it."""
+        made, account = sidebar
+        cases = [("Manuals", "Sorted Mail", "middle"),
+                 ("Job Search/Interview", "Lists", "top"),
+                 ("Manuals", "Job Search", "middle"),
+                 ("Recipes", "Lists/Work", "middle"),
+                 ("Sorted Mail/Receipts", "Job Search", "bottom")]
+        for held, over, where in cases:
+            made.set_mailboxes(_found(account.id, self.FOLDERS, ICLOUD_SPECIAL))
+            rows = self._rows(made, account)
+            self._hold(made, rows[held], rows[over], where)
+            before, _into = made.landing()
+            following = before.data(0, Qt.ItemDataRole.UserRole + 2) if before else None
+            into = made._landing[1]
+            leaf = held.rsplit("/", 1)[-1]
+            new = f"{into}/{leaf}" if into else leaf
+            moved = [new + name[len(held):] if name == held or name.startswith(held + "/")
+                     else name for name in self.FOLDERS]
+            made.set_mailboxes(_found(account.id, moved, ICLOUD_SPECIAL))
+            after = self._rows(made, account)
+            siblings = [after[new].parent().child(i)
+                        for i in range(after[new].parent().childCount())]
+            at = siblings.index(after[new])
+            next_row = siblings[at + 1] if at + 1 < len(siblings) else None
+            assert (next_row.data(0, Qt.ItemDataRole.UserRole + 2)
+                    if next_row is not None else None) == following, (held, over)
 
 
 class TestTheWindowMovesAFolder:
@@ -1197,33 +1433,33 @@ class TestTheWindowMovesAFolder:
         from sidebar import Place
 
         window, server = opened
-        server.folders += ["Sorted Mail", "Church"]
+        server.folders += ["Sorted Mail", "Recipes"]
         window._open_mailboxes()
         _settle(qtbot, window)
         account = window.settings.accounts[0]
-        church = Place("folder", account.id, "Church")
-        window._chosen(church)
+        recipes = Place("folder", account.id, "Recipes")
+        window._chosen(recipes)
         _settle(qtbot, window)
-        window._move_folder(account.id, "Church", "Sorted Mail")
-        moved = Place("folder", account.id, "Sorted Mail/Church")
+        window._move_folder(account.id, "Recipes", "Sorted Mail")
+        moved = Place("folder", account.id, "Sorted Mail/Recipes")
         qtbot.waitUntil(lambda: window.sidebar.place() == moved, timeout=10000)
-        assert "Sorted Mail/Church" in server.folders and "Church" not in server.folders
-        assert moved in window.sidebar.places() and church not in window.sidebar.places()
-        assert church not in window._elsewhere
-        assert "moved “Church” to “Sorted Mail/Church”" in window.log_view.toPlainText()
+        assert "Sorted Mail/Recipes" in server.folders and "Recipes" not in server.folders
+        assert moved in window.sidebar.places() and recipes not in window.sidebar.places()
+        assert recipes not in window._elsewhere
+        assert "moved “Recipes” to “Sorted Mail/Recipes”" in window.log_view.toPlainText()
         assert dialog_calls == []
 
     def test_a_refusal_is_said_and_nothing_changes(self, opened, qtbot,
                                                     dialog_calls):
         window, server = opened
-        server.folders += ["Sorted Mail", "Sorted Mail/Church", "Church"]
+        server.folders += ["Sorted Mail", "Sorted Mail/Recipes", "Recipes"]
         window._open_mailboxes()
         _settle(qtbot, window)
         account = window.settings.accounts[0]
-        window._move_folder(account.id, "Church", "Sorted Mail")
+        window._move_folder(account.id, "Recipes", "Sorted Mail")
         qtbot.waitUntil(lambda: bool(dialog_calls), timeout=10000)
-        assert "already has a folder called “Church”" in str(dialog_calls[-1])
-        assert "Church" in server.folders
+        assert "already has a folder called “Recipes”" in str(dialog_calls[-1])
+        assert "Recipes" in server.folders
 
     def test_in_the_demo_nothing_is_moved(self, qapp, tmp_path, monkeypatch):
         from config import InMemoryCredentialStore, Settings
@@ -1233,7 +1469,7 @@ class TestTheWindowMovesAFolder:
         window = MainWindow(Settings(icloud_email="you@icloud.example").normalized(),
                             InMemoryCredentialStore(), demo=True)
         try:
-            window._move_folder(window.settings.accounts[0].id, "Church",
+            window._move_folder(window.settings.accounts[0].id, "Recipes",
                                 "Sorted Mail")
             assert "nothing was moved" in window._status_text
             assert window._workers == []
