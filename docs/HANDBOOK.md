@@ -399,7 +399,7 @@ See [SECURITY.md](../SECURITY.md) for reporting a problem.
 ./dev dry      # scan for real, with moves disabled
 ./dev fake     # the pipeline in the terminal, offline
 ./dev scan     # the pipeline on real mail, read-only
-./dev test     # 5,277 tests (with the evaluation sets present)
+./dev test     # 5,298 tests (with the evaluation sets present)
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 

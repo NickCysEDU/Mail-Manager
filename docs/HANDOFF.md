@@ -210,6 +210,12 @@ describes the app itself.
 - **A closed window is counted gone at once** (`_live_mail_windows` wants
   visible): `WA_DeleteOnClose` deletes on the next turn of the loop, and the
   wrapper in between would be found and raised as the open window.
+- **A forward's attachments are part of it** (`ComposeWindow.carry`): they
+  arrive after the window opens, and a forward nobody touched still closes
+  without asking whether to keep it. Counted as written, they made closing
+  ask, and in the tests the unanswered question kept the window open into
+  later tests, where it turned up in the Dock's list of windows. The test
+  fixtures now throw away anything left half written.
 - **An empty `account_id` on a message means the primary mailbox**
   (`_account_id_of`), as the rest of the app already assumed; the answered
   flag and the sent copy need the real id.
@@ -251,7 +257,11 @@ describes the app itself.
   --file`); the readers of real shapes in `rules_engine.py` (a calendar
   call, a job board's relay, precedence in leagues) came from its misses.
   Nothing from it may enter the tree: no name, address, subject or number,
-  even in a test. Invent the test's people.
+  even in a test. Invent the whole message, not only its people: the
+  wording, the role, the times, dates and IDs. A test that keeps a real
+  message's shape with its own words still tells who wrote it. Before
+  committing, compare the added lines with the private sets and the inbox
+  (six-word runs, and numbers) with the scans kept beside them.
 - **After the sorter, the conversation** (`workers.read_with_the_thread`):
   within a thread it is sure about, weak readings take the thread's
   category at a confidence below the filing threshold. It never touches a
@@ -470,6 +480,25 @@ describes the app itself.
   mounting images on one worker while the updater's opened one on another,
   the disk image service failed a call, "Device not configured", for longer
   than the retries waited.
+- **Tests that put windows on the real screen take turns too**
+  (`conftest.take_the_screen()`, taken by `real_platform_or_skip()` and
+  held until the test ends). A window another worker brings forward takes
+  the focus: the model menu's test failed every time another file's real
+  windows ran beside it, and never alone. The longest holds the screen for
+  about ten seconds, well inside the sixty a test may take.
+- **Nothing inside a popover opens another.** A popover or a menu-style
+  choice in a popover's bar closed the whole bar back to the top when it
+  opened (the visualiser's Game held its game and level as menus);
+  `touchbar.Popover` refuses such children. Choices inside a popover are
+  segments; a list of them goes at the top level.
+- **Under Rosetta a scrubber in a popover of several items aborts the
+  process** (AppKit: "Attempt to use unknown class"); natively it works.
+  The visualiser's shape and strobe-source lists are top-level popover
+  choices for that reason as well.
+- **A bar's items are set again only where they changed** (`_Handle.arranged`):
+  `setDefaultItemIdentifiers:` resets a bar, and an open popover with it.
+- **The volume is the Control Strip's.** The visualiser's bar has none of
+  its own; the game sounds' level stays, in the Game sounds popover.
 - **ctypes callbacks cannot return structs,** so a scrubber's entries share
   one width (`_fit`). A scrubber keeps its count until `reloadData`.
 - **The suite cannot see the bar.** `tests/test_touchbar_mac.py` runs on the
@@ -525,6 +554,12 @@ describes the app itself.
   tree: the server's word redraws it. Qt only moves items itself when a
   drag's source is the tree, which no test can make without a real drag,
   so that the override stops it is unchecked by the suite.
+- **While a folder is held, a bar shows where it will be listed**
+  (`MailboxList.landing`, `_rows_inside`): the rows are alphabetical, so the
+  place is worked out from the names the server will have, not from where
+  the pointer is, and the folder it goes into is outlined. Qt's own drop
+  indicator is off. Near a row's top or bottom (`EDGE`) a drop goes beside
+  the row rather than into it.
 
 ### Timing
 
@@ -539,7 +574,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 5,277 tests
+./dev test                     # 5,298 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus
@@ -643,7 +678,8 @@ About's security link is a 404 for everyone but the owner.
   here). A script that fails there is not a reason to skip.
 - **`test_the_towers_stay_upright_whatever_the_road_does` failed once** in
   about a dozen runs of its file here (the towers ahead differed by more
-  than 1%); never alone in eight. Not looked into.
+  than 1%); never alone in eight, and in ten more runs of its file the
+  towers moved 0.000% each time. Not reproduced.
 - **The visualiser window keeps its minimum in step with its controls**
   (`AttachmentViewer._keep_room_for_controls`, on every layout request).
   Taken once, at the first showing, it left out the visualiser's row of
