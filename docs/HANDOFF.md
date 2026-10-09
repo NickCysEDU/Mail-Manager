@@ -696,10 +696,27 @@ About's security link is a 404 for everyone but the owner.
   stack ends in `PySide::getWrapperForQObject`), and an abort while
   `reap_deleted_widgets` deletes widgets. pytest-xdist then waits for the
   dead workers for ever: CI ran into its 30-minute limit at 99%. Reproduced
-  here with CI's exact versions; never seen on 6.11.2, which is what the app
-  is built with. Before lifting the cap, run the whole suite on the new
-  version; `OpenWindows` could keep its own list of windows rather than ask
-  for every top-level widget.
+  here with CI's exact versions. Before lifting the cap, run the whole suite
+  on the new version; `OpenWindows` could keep its own list of windows
+  rather than ask for every top-level widget.
+- **6.11.2 has the same crash, rarely.** On 9 October two of four full runs
+  here lost a worker to it: a bus error in `OpenWindows.windows()` and a
+  segfault in `theme.apply` while PySide reported an error from a combo
+  box's `changeEvent`. Then xdist either waited for the dead worker or
+  stopped with an internal error (`KeyError: <WorkerController gw4>`). The
+  native stacks say what is wrong: `topLevelWidgets()` hands back a pointer
+  whose memory is no longer a widget, with no destructor on the stack, so
+  something freed or overwrote a live widget earlier. Not the cause: a
+  widget dropped on a worker thread (PySide deletes it on the main thread),
+  images over borrowed buffers (there are none), the CoreAudio reads in
+  `av_sync.py`, the Touch Bar and web view code (cocoa only). One worker's
+  files run in one process in this order, `test_models`,
+  `test_imap_engine`, `test_window_tools`, `test_providers`,
+  `test_attachments`, `test_config`, `test_gui_dialogs`, `test_gui`,
+  `test_rider_world`, `test_mail_client`, `test_viewing_modes`, brought it
+  out in `test_mail_client` once in three runs with `MallocScribble=1
+  PYTHONMALLOC=debug`, and not in three with `MallocNanoZone=0
+  MallocErrorAbort=1 MallocScribble=1`.
 - **A hosted runner's graphics vary from run to run.** On 8 October one
   drew the rider's world at least sixty times slower than a Mac: four world
   scripts each ran out their three minutes and the run its half hour, where
