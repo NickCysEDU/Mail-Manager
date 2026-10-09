@@ -468,7 +468,10 @@ describes the app itself.
   slider AppKit made itself has no knob either. Whether a real macOS 14 bar
   draws the knob is not known: no such Mac has been tried.
 - **A hosted runner draws the visualiser very slowly** (each step of the
-  bar's measurement took over five seconds, against a fifth of one here).
+  bar's measurement took over five seconds, against a fifth of one here;
+  on 9 October one under Rosetta measured every scene windowed inside two
+  minutes and was still going full screen when they ran out, so that test
+  has more time).
   A test that measures the bar stops the picture's frame clock, measures
   one item at a time (a host keeping every item laid them all out again for
   each new one, each slider logging AppKit's knob warnings on macOS 14),

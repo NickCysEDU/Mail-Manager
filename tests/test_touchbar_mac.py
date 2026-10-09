@@ -86,7 +86,7 @@ def _architectures():
     return found
 
 
-def _run(arch: str, *parts: str) -> dict:
+def _run(arch: str, *parts: str, within: float = 120) -> dict:
     real_platform_or_skip()
     script = HEAD.format(root=str(ROOT)) + "".join(
         textwrap.dedent(part) for part in parts) + "\nprint(json.dumps(out))\n"
@@ -98,7 +98,7 @@ def _run(arch: str, *parts: str) -> dict:
     late = None
     try:
         done = subprocess.run(command, capture_output=True, text=True,
-                              timeout=120, env=env, cwd=str(ROOT))
+                              timeout=within, env=env, cwd=str(ROOT))
     except subprocess.TimeoutExpired as caught:
         late = caught
     if late is not None:
@@ -546,6 +546,9 @@ POPOVER_ROOM = 613.0
 GAP = 8.0
 
 
+# A hosted runner under Rosetta measured every scene windowed inside two
+# minutes and had not finished full screen when they ran out.
+@pytest.mark.timeout(400)
 def test_the_visualisers_bar_fits_beside_the_control_strip(arch):
     """What does not fit, AppKit leaves off, lowest priority first. Every
     normal and high item of the visualiser's bars, in every scene, windowed
@@ -630,12 +633,13 @@ def test_the_visualisers_bar_fits_beside_the_control_strip(arch):
         FullScreenSpectrum.showFullScreen = FullScreenSpectrum.show
         sys.stderr.write("going full screen\\n")
         audio._go_full_screen()
+        sys.stderr.write("full screen shown\\n")
         spin(300)
         for scene in visualizers.SCENES:
             audio.scene_box.setCurrentText(scene.name)
             measure(touchbar.of(audio._full), "full screen, " + scene.name)
         audio._full.close()
-    """)
+    """, within=200)
     over = [row for row in result["rows"]
             if row[2] > (APP_ROOM if row[1] == "top" else POPOVER_ROOM)]
     assert over == [], over

@@ -18,9 +18,10 @@ permissions:
 jobs:
   test:
     runs-on: macos-14
-    # A hosted macOS runner is several times slower than a developer's Mac:
-    # a suite that takes three minutes here takes most of half an hour there.
-    # This is sized for that, not for the local number.
+    # A hosted macOS runner is slower than a developer's Mac, and slower on
+    # some days than others: the suite has taken from twenty-one to
+    # twenty-seven minutes there. This is sized for that, not for the local
+    # number.
     timeout-minutes: 50
     steps:
       - uses: actions/checkout@v7
@@ -42,10 +43,10 @@ jobs:
         # test for three minutes prints every thread's stack, and the
         # per-test limit allows for this runner being several times slower
         # than a developer's Mac.
-        timeout-minutes: 30
+        timeout-minutes: 40
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest -o faulthandler_timeout=180 --timeout=240
+        run: python -m pytest -o faulthandler_timeout=180 --timeout=240 --durations=20
 
       # The evaluation sets are built from a real mailbox and are not in the
       # repository, so a hosted runner has nothing to score. Anyone with sets
