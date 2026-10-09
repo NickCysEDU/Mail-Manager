@@ -232,6 +232,29 @@ class TestItemsMirrorTheirControls:
         button.hide()
         assert not item.present()
 
+    @pytest.mark.parametrize("inside", ["menu", "popover", "a popover"])
+    def test_a_popover_cannot_open_another(self, qtbot, inside):
+        """Opened from inside a popover, a second one took the Touch Bar
+        back to its top level, so it is refused when the bar is made."""
+        from PySide6.QtWidgets import QComboBox
+
+        import touchbar
+
+        window = _window(qtbot)
+        combo = _add(window, QComboBox())
+        combo.addItems(["Easy", "Hard"])
+        if inside == "a popover":
+            child = touchbar.Popover("deeper", "Deeper", [
+                touchbar.Choice("level", "Level", combo)])
+        else:
+            child = touchbar.Choice("level", "Level", combo, style=inside)
+        with pytest.raises(ValueError, match="cannot open another"):
+            touchbar.Popover("game", "Game", [child])
+        # In the popover itself, as segments or a strip, it is fine.
+        for style in ("segments", "list"):
+            touchbar.Popover("game", "Game", [
+                touchbar.Choice("level", "Level", combo, style=style)])
+
     def test_a_slider_kept_on_the_bar_while_its_control_is_hidden(
             self, qtbot):
         """The waveform stands in for the seek bar on screen; the bar keeps
@@ -569,12 +592,11 @@ class TestTheViewersBar:
         qtbot.waitUntil(lambda: viewer.stack.currentWidget() is viewer.audio,
                         timeout=3000)
         keys = self._keys(viewer)
-        assert {"play", "seek", "visualiser", "sound"} <= set(keys)
+        assert {"play", "seek", "visualiser"} <= set(keys)
         assert "scene" not in keys and "picture" not in keys
         viewer.audio.enable_box.setChecked(True)
         keys = self._keys(viewer)
-        assert {"play", "scene", "strobe", "picture", "where", "full",
-                "sound"} <= set(keys)
+        assert {"play", "scene", "strobe", "picture", "where", "full"} <= set(keys)
         assert "seek" not in keys
 
     def test_the_seek_bar_stays_when_the_waveform_stands_in_for_it(
@@ -598,31 +620,41 @@ class TestTheViewersBar:
         audio._show_scrubber(True)
         assert "seek" in self._keys(viewer)
 
-    def test_the_volume_is_a_button_that_opens_a_slider(self, viewer, qtbot):
-        """A slider on the bar jumps to where it is touched, which for a
-        volume can mean all the way up; the system's own volume is a button
-        that opens one, drawn with as many waves as the sound is loud."""
+    def test_the_volume_is_the_systems(self, viewer, qtbot):
+        """The Control Strip has the system's volume: one of the track's own
+        only repeated it. The game's sounds keep theirs."""
         import touchbar
 
         qtbot.waitUntil(lambda: viewer.stack.currentWidget() is viewer.audio,
                         timeout=3000)
         bar = touchbar.of(viewer)
-        for picture in (False, True):
-            viewer.audio.enable_box.setChecked(picture)
-            shown = {entry["key"]: entry for entry in bar.describe()}
-            assert shown["sound"]["kind"] == "popover"
-            assert [child["key"] for child in shown["sound"]["items"]] == [
-                "volume-in"]
-            plain = [key for key, entry in shown.items()
-                     if entry["kind"] == "slider"
-                     and bar.flat[key].source is viewer.audio.volume]
-            assert plain == [], picture
-        for value, image in ((0, "speaker.slash.fill"),
-                             (20, "speaker.wave.1.fill"),
-                             (50, "speaker.wave.2.fill"),
-                             (90, "speaker.wave.3.fill")):
-            viewer.audio.volume.setValue(value)
-            assert bar.flat["sound"].state() == {"title": "", "image": image}
+        assert not [key for key, item in bar.flat.items()
+                    if getattr(item, "source", None) is viewer.audio.volume]
+        audio = viewer.audio
+        audio.enable_box.setChecked(True)
+        audio.scene_box.setCurrentText("Music rider")
+        shown = {entry["key"]: entry for entry in bar.describe()}
+        assert [child["key"] for child in shown["game"]["items"]] == [
+            "game-mode", "level"]
+        assert [child["key"] for child in shown["game-sounds"]["items"]] == [
+            "sounds", "effects"]
+        assert bar.flat["effects"].source is audio.effects
+
+    def test_no_popover_opens_another(self, viewer, qtbot):
+        """On the Touch Bar a popover opened from inside a popover took the
+        bar back to its top level, the game's mode and level among them:
+        each choice in a popover is shown in it."""
+        import touchbar
+
+        bar = touchbar.of(viewer)
+        for item in bar.flat.values():
+            if item.kind == "popover":
+                for child in item.items:
+                    assert child.kind != "popover", (item.key, child.key)
+                    assert getattr(child, "style", "") not in (
+                        "menu", "popover"), (item.key, child.key)
+        assert bar.flat["game-mode"].style == "segments"
+        assert bar.flat["level"].style == "segments"
 
     def test_what_gives_way_when_the_bar_is_full(self, viewer, qtbot):
         """Beside the Control Strip there is room for the scene's own
@@ -650,10 +682,12 @@ class TestTheViewersBar:
         assert bar.press("scene", names.index("Music rider"))
         assert viewer.audio.scene_box.currentText() == "Music rider"
         keys = self._keys(viewer)
-        assert "game" in keys and "beam" not in keys
-        game = next(entry for entry in bar.describe() if entry["key"] == "game")
-        assert [child["key"] for child in game["items"]] == [
-            "game-mode", "level", "sounds", "effects"]
+        assert {"game", "game-sounds"} <= set(keys) and "beam" not in keys
+        shown = {entry["key"]: entry for entry in bar.describe()}
+        assert [child["key"] for child in shown["game"]["items"]] == [
+            "game-mode", "level"]
+        assert [child["key"] for child in shown["game-sounds"]["items"]] == [
+            "sounds", "effects"]
         bar.press("level", 3)
         assert viewer.audio.level_box.currentText() == "Expert"
 

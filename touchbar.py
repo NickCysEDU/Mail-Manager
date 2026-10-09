@@ -457,6 +457,15 @@ class Popover(Item):
         super().__init__(key, label, **kwargs)
         self.items = list(items)
         self.title = title
+        # A popover opened from inside a popover: on the Touch Bar, choosing
+        # in it, or only opening it, took the bar back to its top level.
+        nested = [item.key for item in self.items
+                  if item.kind == "popover" or (
+                      item.kind == "choice"
+                      and getattr(item, "style", "") in ("menu", "popover"))]
+        if nested:
+            raise ValueError(f"{key}: a popover cannot open another "
+                             f"({', '.join(nested)}); use segments or a list")
 
     def children(self) -> List[Item]:
         return list(self.items)

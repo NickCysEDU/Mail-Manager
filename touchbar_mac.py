@@ -348,6 +348,8 @@ class _Handle:
         #: Everything retained here, released together.
         self.owned: List[int] = []
         self.released = False
+        #: key ("" for the top) -> the items AppKit was last told it shows.
+        self.arranged: Dict[str, List[str]] = {}
 
 
 class Renderer:
@@ -615,6 +617,11 @@ class Renderer:
             return
         with self.rt.pool():
             for key, keys in arranged.items():
+                # Only a bar whose items changed: AppKit closes an open
+                # popover when its bar, or the bar under it, is given its
+                # items again, even the same ones.
+                if handle.arranged.get(key) == keys:
+                    continue
                 target = handle.touchbar if key == "" else handle.nested.get(key)
                 if not target:
                     continue
@@ -622,6 +629,7 @@ class Renderer:
                           for k in keys]
                 self.rt.send(target, "setDefaultItemIdentifiers:",
                              self.rt.array(idents), argtypes=[_id])
+                handle.arranged[key] = list(keys)
 
     def update(self, handle: _Handle, key: str, state: dict) -> None:
         if handle.released or key not in handle.kinds:

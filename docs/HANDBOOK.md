@@ -192,13 +192,17 @@ commands; the sliders icon has the time window, the model, hover help and
 Settings. Every window has its own; Settings has its pages and their main
 choices, and dialogs have their buttons. The visualiser's has play, the
 scene (tap it for the list), the strobe, the scene's own button (the game,
-the scope's beam, the meters' colours), **Picture**, **Seek**, the volume
-and full screen. Each does one thing when tapped; a button that opens onto
-more opens it, and nothing is held or dragged. Beside the Control Strip
-there is room for **Seek** or for a scene's own button, and Seek gives way;
-with the Control Strip hidden, everything fits. A slider's ends say what
-they mean (quiet and loud, less and more, start and end), and its knob is
-rounded, like the system's.
+the scope's beam, the meters' colours), **Picture**, **Seek** and full
+screen; in Music rider the game opens onto every game and every level, and
+the speaker beside it onto the game's sounds and their volume. Where there
+is room, the shape and what the strobe listens to open onto lists too. The
+music's volume is the Control Strip's own. Each does one thing when tapped;
+a button that opens onto more opens it, nothing inside opens anything
+further, and nothing is held or dragged. Beside the Control Strip there is
+room for **Seek** or for a scene's own button, and Seek gives way; with the
+Control Strip hidden, everything fits. A slider's ends say what they mean
+(quiet and loud, less and more, start and end), and its knob is rounded,
+like the system's.
 
 ## Rules
 
