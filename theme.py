@@ -704,6 +704,25 @@ def monochrome() -> bool:
     return _ACTIVE_CONTRAST == "maximum"
 
 
+def _arrows_in_place(app) -> bool:
+    """Whether the application already draws its arrows with an ArrowStyle.
+    With a stylesheet on, Qt answers ``app.style()`` with its own style laid
+    over ours, so ours is found as that one's child: asked only by type,
+    every change of look built a new one and restyled every widget for it.
+    """
+    import shiboken6
+
+    style = app.style()
+    if isinstance(style, ArrowStyle):
+        return True
+    ours = getattr(app, "_arrow_style", None)
+    if ours is None or not shiboken6.isValid(ours):
+        return False
+    over = ours.parent()
+    return (over is not None and shiboken6.getCppPointer(over)[0]
+            == shiboken6.getCppPointer(style)[0])
+
+
 def apply(app, mode: str = "system", contrast: str = "normal",
           readable: bool = False, spacing: str = "comfortable") -> Palette:
     """Paint the whole application. Returns the palette that was used."""
@@ -711,8 +730,9 @@ def apply(app, mode: str = "system", contrast: str = "normal",
 
     colours = resolve(app, mode, contrast)
     _ACTIVE_CONTRAST = contrast if contrast in dict(CONTRASTS) else "normal"
-    if not isinstance(app.style(), ArrowStyle):
-        app.setStyle(ArrowStyle(app.style()))
+    if not _arrows_in_place(app):
+        app._arrow_style = ArrowStyle(app.style())
+        app.setStyle(app._arrow_style)
     app.setPalette(build_palette(colours))
     app.setFont(base_font(readable))
     app.setStyleSheet(stylesheet(colours, readable, spacing=spacing))
