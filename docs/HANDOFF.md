@@ -183,7 +183,15 @@ describes the app itself.
   the stylesheet on every live widget). Settings previews a look as it is
   chosen, but not while it fills itself in (`_loading`), and Cancel puts the
   look back only if something was previewed (`previewed`): it opened in a
-  second before, and every model chosen without a key opens it.
+  second before, and every model chosen without a key opens it. The arrows'
+  style is built once (`theme._arrows_in_place` finds it under the
+  stylesheet's own style): asked only by type, every change of look built a
+  new one and restyled every widget once more, a fifth of the time
+  (`tests/test_theme.py`). A test that puts back an empty stylesheet leaves
+  the arrows' style as the application's own, which the app never does; a
+  look laid over that draws arrows without it, and setting another style
+  from there crashed the process. The arrows are checked in a process of
+  their own.
 - **Hover help waits in some windows** (`helpmode.PATIENT` on the message,
   compose and viewer windows): with the ? off, a control explains itself
   after the pointer has rested on it for `PATIENT_DELAY`; with it on, at once.
@@ -329,7 +337,10 @@ describes the app itself.
   sweep and sends a pulse that crosses the room in a beat; big rings close
   by a share of their distance in `RING_BEATS`, so they are seen growing
   evenly. A held hand strobe streams pulses there, rings in the tunnel
-  (`Tunnel._throw`) and flickers the city's windows.
+  (`Tunnel._throw`) and flickers the city's windows. A strobe hit's pulse
+  crosses faster the more is going on in the part it is sent in
+  (`PULSE_HURRY`, by `Section.level`): its own pace in the calmest part,
+  twice that in the busiest. A snare's keeps to the beat.
 - **Two hand strobe keys, two meanings:** G holds the light on until it is
   let go (`hold_flash` sets `SpectrumState.held`, which scenes read as a
   steady light: the city's windows all lit, the tunnel's corridor lit), H
@@ -402,9 +413,13 @@ describes the app itself.
   finish; the strip at the end draws it.
 - **Puzzle:** a grey hit drops in as clutter (`GREY_CELL`), broken by a clear
   beside it; a block into a full column bursts it and costs `OVERFILL_COST`.
-  A colour that goes by is recorded "missed" and dissolves before the craft
-  (`DISSOLVE`, `rider_gl._missed`) rather than passing through it dark. The
-  game chosen is kept across tracks (`AudioPane.GAME_PREF`).
+  The game chosen is kept across tracks (`AudioPane.GAME_PREF`).
+- **A colour taken breaks up where the craft met it**, white-hot and gone in
+  `DISSOLVE` (`rider_gl._breaking`, and `Rider._fizzle` on the CPU path), so
+  it comes on whole rather than being drawn into the ship; a coin or a
+  power-up still is. A colour that goes by is recorded "missed" and goes on
+  past and off the road, as a grey dodged does: it used to be the one that
+  broke up.
 - **Sounds:** bump `rider_sound.VERSION` when a sound changes, or the cached
   file is played. Notes are put off with the pane's own timers.
 - **The road is read on a curve** (Catmull-Rom through four samples, in
@@ -602,7 +617,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 5,313 tests
+./dev test                     # 5,326 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus
@@ -786,11 +801,10 @@ About's security link is a 404 for everyone but the owner.
   on the grid first.
 - **Gatekeeper:** without a paid Developer ID, the first launch needs
   right-click, Open.
-- **The Touch Bar has not been checked by eye or with a finger.** Its
-  drawing is checked in pixels and its room measured in AppKit's own
-  appearance, but the bar was asleep or the lid shut whenever it could have
-  been looked at. macOS's customise palette for the main window's bar is
-  untested.
+- **The Touch Bar was used by hand on a real bar on 9 October**, after
+  1.11.0, and works as built. Its drawing is also checked in pixels and its
+  room measured in AppKit's own appearance. macOS's customise palette for
+  the main window's bar is still untested.
 - **Other mailboxes are listed over the inbox's period** and read only:
   there is no paging beyond `workers.LIST_MOST`, no unread count in the
   sidebar, and no filing from them.

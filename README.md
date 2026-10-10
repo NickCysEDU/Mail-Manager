@@ -108,7 +108,7 @@ turns that off. See [SECURITY.md](SECURITY.md).
 
 ```bash
 ./dev demo     # the app with sample mail, no setup
-./dev test     # 5,313 tests, about eighteen minutes on four workers
+./dev test     # 5,326 tests, about eighteen minutes on four workers
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 
