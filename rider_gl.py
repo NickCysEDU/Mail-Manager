@@ -1509,12 +1509,13 @@ class RiderWorld:
         self._trim_colour = (1.0, 1.0, 1.0)
         self._bloom_bump = 0.0
         self._screen_ship = (0.5, 0.3)
-        #: Blocks seen finished, which of those the craft took, and when each
-        #: colour that went by was seen going (see DISSOLVE).
+        #: Blocks seen finished, which of those left the picture (a coin or a
+        #: power-up taken into the ship, an obstacle hit), and the colours
+        #: taken, breaking up where the craft met them (see DISSOLVE).
         self._done_seen = set()
         self._taken = set()
         self._taken_now = []
-        self._missed: set = set()
+        self._breaking: set = set()
 
     def _build(self, half: float) -> None:
         if self._half == half:
@@ -2049,14 +2050,14 @@ class RiderWorld:
             when, lane, kind, done, grey = block
             z = scene._where(when)
             if done and id(block) in self._taken:
-                # Taken: it went into the ship. See _notice.
+                # Gone into the ship, or hit. See _notice.
                 continue
-            gone = done and id(block) in self._missed
+            gone = done and id(block) in self._breaking
             breaking = 0.0
             if gone:
-                # A colour gone by breaks up where it is: white-hot, turning
-                # and shrinking, and gone in the scene's DISSOLVE, on the
-                # track's clock.
+                # A colour taken breaks up where the craft met it: white-hot,
+                # turning and shrinking, and gone in the scene's DISSOLVE, on
+                # the track's clock.
                 breaking = max(0.0, (float(scene._heard) - when)
                                / scene.DISSOLVE)
                 if breaking >= 1.0:
@@ -2068,8 +2069,9 @@ class RiderWorld:
             grow = max(0.0, min(1.0, (far + 0.5 - z) / 6.0))
             grow = grow * grow * (3.0 - 2.0 * grow)
             across = scene._lane_at(lane)
-            # The last stretch before the craft, in its lane: drawn in and
-            # shrinking, so a block taken is seen going into the ship. Not an
+            # The last stretch before the craft, in its lane: a coin or a
+            # power-up is drawn in and shrinking, seen going into the ship; a
+            # colour comes on whole, to break up where it is met. Not an
             # obstacle, which is hit (see _rammed), and not under a craft in
             # the air, which takes nothing.
             gap = z - scene.RIDER_AT
@@ -2077,9 +2079,10 @@ class RiderWorld:
             flying = frame["air"] > 0.05
             if (not done and not grey and not flying and gap < 0.9
                     and beside < scene.LANE_WIDE * 0.5):
-                pull = max(0.0, min(1.0, 1.0 - gap / 0.9))
-                grow *= 1.0 - pull * 0.85
-                across += (frame["across"] - across) * pull
+                if kind in ("coin", "power"):
+                    pull = max(0.0, min(1.0, 1.0 - gap / 0.9))
+                    grow *= 1.0 - pull * 0.85
+                    across += (frame["across"] - across) * pull
                 if gap < 0.0:
                     continue
             if kind == "coin":
@@ -2435,10 +2438,11 @@ class RiderWorld:
     def _notice(self, scene) -> None:
         """Which blocks finished this frame, and which the craft met. The game
         marks a block done when its moment passes and says what happened
-        (see Rider.struck): one taken or hit leaves the picture; one missed,
-        jumped, a lane away or met while the craft could not be hurt goes on
-        past. Working it out here from the craft's position drew jumped
-        prizes going into the ship.
+        (see Rider.struck): a colour taken breaks up where it was met; a coin
+        or a power-up taken, or an obstacle hit, leaves the picture; one
+        missed, jumped, a lane away or met while the craft could not be hurt
+        goes on past. Working it out here from the craft's position drew
+        jumped prizes going into the ship.
         """
         self._taken_now = []
         alive = set()
@@ -2448,25 +2452,25 @@ class RiderWorld:
                 continue
             self._done_seen.add(id(block))
             how = scene.struck(block)
-            if how is None:
+            if how is None or how == "missed":
                 continue
-            if how == "missed":
-                # Broken up where it is, beside the craft or under it,
-                # rather than going on through it darkening.
-                self._missed.add(id(block))
+            if how == "taken" and block[2] not in ("coin", "power"):
+                # Broken up where the craft met it, rather than drawn into
+                # the ship.
+                self._breaking.add(id(block))
                 colour = self._colour_of(scene, block)
                 self._spawn(26, (scene._lane_at(block[1]), 0.30,
                                  scene.RIDER_AT + float(scene._at)),
                             3.5, tuple(c * 2.5 for c in colour), 0.40, 0.50,
                             up=0.8)
-                continue
-            self._taken.add(id(block))
+            else:
+                self._taken.add(id(block))
             if how == "taken":
                 self._taken_now.append(
                     (block[2], block[4], self._colour_of(scene, block)))
         self._done_seen &= alive
         self._taken &= alive
-        self._missed &= alive
+        self._breaking &= alive
 
     def _events(self, scene) -> None:
         import colorsys

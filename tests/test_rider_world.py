@@ -149,7 +149,7 @@ def _bare_world():
     world._done_seen = set()
     world._taken = set()
     world._taken_now = []
-    world._missed = set()
+    world._breaking = set()
     world._seen_pops = set()
     world._particles = array("f", [0.0] * (world.PARTICLES * 12))
     world._particle_next = 0
@@ -290,8 +290,9 @@ class TestEachLevelHasItsCraft:
 
 
 class TestWhatWasTaken:
-    """The world draws a block as the game says it ended (taken or hit: gone;
-    a colour missed: breaking up where it is; a grey dodged: going on past),
+    """The world draws a block as the game says it ended (a colour taken:
+    breaking up where the craft met it; a coin or a power-up taken, or an
+    obstacle hit: gone; a colour missed or a grey dodged: going on past),
     never worked out again from the craft's position, which once drew a
     jumped prize going into the ship."""
 
@@ -306,18 +307,52 @@ class TestWhatWasTaken:
         scene._collide()
         return scene._blocks
 
-    def test_one_the_craft_took_is_drawn_taken(self, qapp):
+    @pytest.mark.parametrize("shape", ["wall", "block", "run"])
+    def test_a_colour_taken_breaks_up_and_one_gone_by_goes_on(self, qapp,
+                                                             shape):
         scene = _rider()
-        taken, missed = self._met(scene, [(4.0, 1, "block", False, False),
-                                          (4.0, 2, "block", False, False)])
+        taken, missed = self._met(scene, [(4.0, 1, shape, False, False),
+                                          (4.0, 2, shape, False, False)])
         world = _bare_world()
         world._notice(scene)
-        assert id(taken) in world._taken
+        assert id(taken) in world._breaking, "the colour taken did not break up"
+        assert id(taken) not in world._taken
+        assert id(missed) not in world._breaking, "the colour gone by broke up"
         assert id(missed) not in world._taken
-        assert id(missed) in world._missed, "the colour gone by did not break up"
         assert len(world._taken_now) == 1
+        assert any(world._particles), "it broke up without a piece"
 
-    def test_a_prize_jumped_over_breaks_up_under_it(self, qapp):
+    def test_a_colour_taken_is_held_at_the_craft_while_it_breaks_up(self,
+                                                                   qapp):
+        scene = _rider()
+        (taken,) = self._met(scene, [(4.0, 1, "block", False, False)])
+        world = _bare_world()
+        world._notice(scene)
+        sizes = []
+        for share in (0.0, 0.5, 0.9, 1.1):
+            scene._heard = 4.0 + scene.DISSOLVE * share
+            # The road has carried it on past the nose by now.
+            got = TestAnObstacleIsSeenHit._drawn(scene, -1.0, world=world)
+            if got is None:
+                sizes.append(0.0)
+                continue
+            place, scale, _turn = got
+            assert place[2] >= scene.RIDER_AT - 0.2 - 1e-6, (
+                "it went on through the craft as it broke up")
+            sizes.append(scale[0])
+        assert sizes[0] > 0.0, "it was not drawn where it was taken"
+        assert sizes[2] < sizes[0] * 0.6, "it did not shrink as it broke up"
+        assert sizes[3] == 0.0, "it was still there after it broke up"
+
+    def test_a_coin_taken_goes_into_the_ship(self, qapp):
+        scene = _rider()
+        (coin,) = self._met(scene, [(4.0, 1, "coin", False, False)])
+        world = _bare_world()
+        world._notice(scene)
+        assert id(coin) in world._taken
+        assert id(coin) not in world._breaking
+
+    def test_a_prize_jumped_over_goes_on_past_under_it(self, qapp):
         scene = _rider()
         (under,) = self._met(scene, [(4.0, 1, "block", False, False)],
                              _air=0.5)
@@ -326,7 +361,8 @@ class TestWhatWasTaken:
         world._notice(scene)
         assert id(under) not in world._taken, (
             "a prize the craft jumped over was drawn going into it")
-        assert id(under) in world._missed
+        assert id(under) not in world._breaking, (
+            "a prize the craft jumped over broke up")
         assert world._taken_now == []
 
     def test_a_grey_hit_is_gone_and_so_is_one_straight_after(self, qapp):
@@ -360,8 +396,8 @@ class TestWhatWasTaken:
         (block,) = self._met(scene, [(4.0, 1, kind, False, grey)],
                              _shield=shield)
         assert scene.struck(block) == how
-        # A lane away: a colour breaks up as it goes by, and the rest goes
-        # on past.
+        # A lane away: a colour is counted missed, and the rest is not
+        # counted at all.
         (away,) = self._met(scene, [(4.0, 0, kind, False, grey)],
                             _shield=shield, _sore=0.0)
         assert scene.struck(away) == away_how
@@ -393,10 +429,10 @@ class TestWhatWasTaken:
         self._met(scene, [(4.0, 1, "block", False, False)])
         world = _bare_world()
         world._notice(scene)
-        assert world._taken and world._done_seen
+        assert world._breaking and world._done_seen
         scene._blocks = []
         world._notice(scene)
-        assert not world._taken and not world._done_seen
+        assert not world._breaking and not world._done_seen
 
 
 class TestAnObstacleIsSeenHit:
@@ -438,10 +474,11 @@ class TestAnObstacleIsSeenHit:
             "at the hit it is not flattened square against the nose")
 
     @staticmethod
-    def _drawn(scene, gap, air=0.0):
+    def _drawn(scene, gap, air=0.0, world=None):
         """What _draw_blocks sends to the card for the one block, ``gap`` ahead
-        of the craft: its place, scale and turn."""
-        world = _bare_world()
+        of the craft: its place, scale and turn. ``world`` is one that has
+        already noticed what the game did with it."""
+        world = world or _bare_world()
         sent = []
 
         class Program:
@@ -486,16 +523,26 @@ class TestAnObstacleIsSeenHit:
             assert scale[0] >= full[0] - 1e-4, (
                 f"{gap:.2f} out, the obstacle is drawn shrinking")
 
-    def test_a_prize_still_goes_into_the_ship_unless_jumped(self, qapp):
+    def test_a_prize_comes_on_whole_to_break_up_where_it_is_met(self, qapp):
+        """Drawn going into the ship, a colour arrived too small for its
+        break-up to be seen (see TestWhatWasTaken)."""
         scene = _rider()
         scene._lane_here = scene._lane_at(1)
         scene._blocks = [[5.0, 1, "block", False, False]]
         _place, whole, _yaw = self._drawn(scene, 2.0)
+        _place, close, _yaw = self._drawn(scene, 0.2)
+        assert close[0] > whole[0] * 0.9, "a prize is drawn going in"
+
+    def test_a_coin_still_goes_into_the_ship_unless_jumped(self, qapp):
+        scene = _rider()
+        scene._lane_here = scene._lane_at(1)
+        scene._blocks = [[5.0, 1, "coin", False, False]]
+        _place, whole, _yaw = self._drawn(scene, 2.0)
         _place, taking, _yaw = self._drawn(scene, 0.2)
-        assert taking[0] < whole[0] * 0.5, "a prize is not drawn going in"
+        assert taking[0] < whole[0] * 0.5, "a coin is not drawn going in"
         _place, over, _yaw = self._drawn(scene, 0.2, air=0.6)
         assert over[0] > whole[0] * 0.9, (
-            "a prize under a jumping craft is drawn going into it")
+            "a coin under a jumping craft is drawn going into it")
 
     def test_one_met_unhurt_passes_through_whole(self, qapp):
         scene = _rider()

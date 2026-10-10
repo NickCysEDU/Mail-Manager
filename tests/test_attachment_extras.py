@@ -14922,10 +14922,11 @@ class TestTheStrobeKeysInEachScene:
         assert strobe[-1] - strobe[0] >= 6, "the windows did not answer the hits"
 
 
-class TestAColourGoneByBreaksUp:
-    """A colour the craft did not take broke up nowhere: it slid on through
-    the craft, darkening. It is marked missed, throws a few pieces and is
-    gone within Rider.DISSOLVE, held beside the craft while it goes."""
+class TestAColourTakenBreaksUp:
+    """The little break-up, held at the craft and gone within Rider.DISSOLVE,
+    is what a colour the craft takes does. A colour gone by goes on past and
+    off the road, as everything the craft did not meet does: it used to be
+    the one that broke up."""
 
     @staticmethod
     def _rider():
@@ -14936,14 +14937,29 @@ class TestAColourGoneByBreaksUp:
         scene._lane_here = scene._lane_at(0)
         return scene
 
-    def test_it_is_marked_missed_and_throws_pieces(self, qapp):
+    @pytest.mark.parametrize("mode", ["Mono", "Puzzle"])
+    def test_a_take_throws_its_pieces(self, qapp, mode):
+        scene = self._rider()
+        scene.set_mode(mode)
+        # Where lane 0 is in this mode: Puzzle lays the lanes out again.
+        scene._lane_here = scene._lane_at(0)
+        block = [10.0, 0, "block", False, False]
+        scene._blocks = [block]
+        scene._heard = 10.01
+        scene._collide()
+        assert scene.struck(block) == "taken"
+        # The take's own burst, and the pieces the block breaks into.
+        assert len(scene._sparks) == (scene.SPARKS // 2
+                                      + max(3, scene.SPARKS // 3))
+
+    def test_a_colour_gone_by_throws_nothing(self, qapp):
         scene = self._rider()
         block = [10.0, 2, "block", False, False]
         scene._blocks = [block]
         scene._heard = 10.01
         scene._collide()
         assert scene.struck(block) == "missed"
-        assert scene._sparks, "it went without a piece"
+        assert not scene._sparks, "a colour gone by broke up"
 
     def test_a_grey_gone_by_is_not_broken_up(self, qapp):
         """Dodged obstacles go on past, as obstacles do."""
@@ -14954,7 +14970,7 @@ class TestAColourGoneByBreaksUp:
         scene._collide()
         assert scene.struck(block) is None
 
-    def test_jumped_over_it_breaks_up_too(self, qapp):
+    def test_jumped_over_it_goes_on_past_too(self, qapp):
         scene = self._rider()
         block = [10.0, 0, "block", False, False]
         scene._blocks = [block]
@@ -14962,17 +14978,19 @@ class TestAColourGoneByBreaksUp:
         scene._heard = 10.01
         scene._collide()
         assert scene.struck(block) == "missed"
+        assert not scene._sparks
 
-    def test_it_is_drawn_smaller_and_then_not_at_all(self, qapp):
+    @staticmethod
+    def _widths(scene, block, how, shares, travel=0.0):
+        """How wide ``block``, recorded as ``how``, is drawn at each share of
+        DISSOLVE after its moment, with the craft ``travel`` seconds on from
+        level with it."""
         from PySide6.QtCore import QPointF, QRectF
         from PySide6.QtGui import QImage, QPainter
 
-        scene = self._rider()
-        block = [10.0, 2, "block", True, False]
         scene._blocks = [block]
-        scene._record(block, "missed")
-        # The craft level with it, where it was missed.
-        scene._at = scene._flat(10.0)
+        scene._record(block, how)
+        scene._at = scene._flat(10.0 + travel)
         image = QImage(320, 180, QImage.Format.Format_ARGB32_Premultiplied)
         painter = QPainter(image)
         widths = []
@@ -14984,10 +15002,10 @@ class TestAColourGoneByBreaksUp:
             return point
 
         try:
-            for share in (0.0, 0.6, 1.1):
+            for share in shares:
                 spied = []
                 scene._eye = spy
-                scene._heard = 10.0 + scene.DISSOLVE * share
+                scene._heard = 10.0 + travel + scene.DISSOLVE * share
                 scene._blocks_of(painter, QRectF(0, 0, 320, 180),
                                  QPointF(160, 60), 200.0, 0.3, 0.0,
                                  "block", False, 0.5, 0.4)
@@ -14995,6 +15013,98 @@ class TestAColourGoneByBreaksUp:
         finally:
             painter.end()
             scene._eye = real
-        assert widths[0] > 0.0, "it was not drawn as it went by"
+        return widths
+
+    def test_a_take_is_drawn_smaller_and_then_not_at_all(self, qapp):
+        scene = self._rider()
+        widths = self._widths(scene, [10.0, 0, "block", True, False],
+                              "taken", (0.0, 0.6, 1.1))
+        assert widths[0] > 0.0, "it was not drawn where it was taken"
         assert widths[1] < widths[0], "it did not shrink as it broke up"
         assert widths[2] == 0.0, "it was still there after it broke up"
+
+    def test_a_colour_gone_by_is_drawn_whole_until_it_has_passed(self, qapp):
+        scene = self._rider()
+        block = [10.0, 2, "block", True, False]
+        widths = self._widths(scene, block, "missed", (0.0, 0.6, 1.1))
+        assert widths[0] > 0.0 and widths[0] == widths[1] == widths[2], (
+            f"it broke up as it went by: {widths}")
+        assert self._widths(scene, block, "missed", (0.0,), travel=1.0) == [
+            0.0], "it was still on the road a second after the craft passed"
+
+
+class TestTheStrobesRingsKeepUpWithTheTrack:
+    """The circles a strobe hit sends in the Rave grow at their own pace in
+    a calm part of the track, and faster the more is going on in the part
+    they are sent in (Rave.PULSE_HURRY), by the track's own reading."""
+
+    @staticmethod
+    def _rave(levels):
+        """A Rave in a track of four-second parts at these levels, at two
+        beats a second."""
+        import types
+
+        import trackstyle
+        import visualizers
+
+        scene = visualizers.Rave()
+        scene._per_beat = 0.5
+        scene._style = types.SimpleNamespace(sections=[
+            trackstyle.Section(start=4.0 * index, end=4.0 * (index + 1),
+                               kind="groove", level=level, drums=True)
+            for index, level in enumerate(levels)])
+        return scene
+
+    @staticmethod
+    def _go(scene, step, hit):
+        from PySide6.QtCore import QPointF, QRectF
+        from PySide6.QtGui import QImage, QPainter
+
+        image = QImage(64, 36, QImage.Format.Format_ARGB32_Premultiplied)
+        painter = QPainter(image)
+        try:
+            scene._pulses_now(painter, QRectF(0, 0, 64, 36), QPointF(32, 12),
+                              40.0, step, 0.3, hit)
+        finally:
+            painter.end()
+
+    def _sent(self, scene, at):
+        """The pace of the pulse one strobe hit sends at ``at`` seconds."""
+        scene._said = at
+        scene._pulses = []
+        scene._strobe_was = False
+        self._go(scene, 0.0, 1.0)
+        (pulse,) = scene._pulses
+        return pulse[2]
+
+    def test_a_calm_part_keeps_the_pace_and_a_busy_one_hurries(self, qapp):
+        scene = self._rave([0.0, 0.5, 1.0])
+        own = scene._crossing(scene.PULSE_BEATS, 0.5) * 1.5
+        assert self._sent(scene, 2.0) == pytest.approx(own)
+        assert self._sent(scene, 6.0) == pytest.approx(
+            own * (1.0 + 0.5 * scene.PULSE_HURRY))
+        assert self._sent(scene, 10.0) == pytest.approx(
+            own * (1.0 + scene.PULSE_HURRY))
+
+    def test_without_the_reading_it_keeps_its_own_pace(self, qapp):
+        import visualizers
+
+        scene = visualizers.Rave()
+        scene._per_beat = 0.5
+        assert self._sent(scene, 3.0) == pytest.approx(
+            scene._crossing(scene.PULSE_BEATS, 0.5) * 1.5)
+
+    def test_in_the_busiest_part_it_reaches_the_eye_sooner(self, qapp):
+        """What is seen: the same hit's circle grows to full size in fewer
+        frames."""
+        def frames(at):
+            scene = self._rave([0.0, 1.0])
+            self._sent(scene, at)
+            count = 0
+            while scene._pulses and count < 600:
+                self._go(scene, 1.0 / 60.0, 0.0)
+                count += 1
+            return count
+
+        calm, busy = frames(2.0), frames(6.0)
+        assert 0 < busy < calm * 0.6, (calm, busy)

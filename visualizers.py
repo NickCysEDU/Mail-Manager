@@ -2057,6 +2057,10 @@ class Rave(Scene):
     SNARE_REARM = 0.45
     #: How hard the strobe has to be to count as a hit for a pulse.
     STROBE_HIT = 0.5
+    #: A strobe pulse crosses faster the more is going on in the part of the
+    #: track it is sent in: at its own pace in the calmest part, and this much
+    #: again on top in the busiest (see trackstyle.Section.level).
+    PULSE_HURRY = 1.0
 
     #: The rig's sweep is on the beat: this many beats for one sweep across
     #: and back at rest, and this many in a drop.
@@ -2348,6 +2352,16 @@ class Rave(Scene):
         if last - first < beat * 4:
             return start, end
         return first, last
+
+    def _going_on(self) -> float:
+        """How much is going on in the part of the track the music is in, 0
+        to 1 against the rest of it (trackstyle.Section.level); 0 until the
+        track's sections are read."""
+        style = self._style
+        for section in (style.sections if style is not None else ()):
+            if section.start <= self._said < section.end:
+                return max(0.0, min(1.0, section.level))
+        return 0.0
 
     def _drop_now(self):
         """The drop the room is in, as (start, end), or None: none until the
@@ -2822,8 +2836,9 @@ class Rave(Scene):
                     hit) -> None:
         """A thin ring from the far end on every snare, crossing the room in
         a beat so it lands on the next; and one, faster, on every strobe
-        hit, so the strobe key's run of hits sends them streaming. Brighter
-        the harder the room is going.
+        hit, so the strobe key's run of hits sends them streaming, and
+        faster still in a busy part of the track (see PULSE_HURRY).
+        Brighter the harder the room is going.
         """
         lit = self._lasers_lit()
         if self._snared and self._heard_for >= self.RING_SETTLE:
@@ -2831,8 +2846,10 @@ class Rave(Scene):
                                  self._crossing(self.PULSE_BEATS, 0.5)])
         struck = hit >= self.STROBE_HIT
         if struck and not self._strobe_was:
+            hurry = 1.0 + self.PULSE_HURRY * self._going_on()
             self._pulses.append([self.FAR * 0.9, 1.0,
-                                 self._crossing(self.PULSE_BEATS, 0.5) * 1.5])
+                                 self._crossing(self.PULSE_BEATS, 0.5) * 1.5
+                                 * hurry])
         self._strobe_was = struck
         if not self._pulses:
             return
@@ -4838,12 +4855,13 @@ class Rider(Scene):
                     self._pop("prize", strength=0.7 + self._heat() * 0.6
                               + self.COMBO_LIFT * min(4, combo - 1))
                     self._milestone(before, self._chain)
+                # And it breaks up where the craft met it: see DISSOLVE.
+                self._fizzle(self._lane_at(lane))
             else:
-                # A colour gone by: it breaks up beside the craft rather than
-                # sliding through it (see struck).
+                # A colour gone by goes on past, as everything the craft did
+                # not meet does.
                 self._note(when, "missed")
                 self._record(block, "missed")
-                self._fizzle(self._lane_at(lane))
 
     #: The puzzle grid: collected blocks drop into three columns, six deep, and
     #: three or more of a colour touching clear and pay.
@@ -4872,8 +4890,8 @@ class Rider(Scene):
     FLY = 0.32
     FADE = 0.55
 
-    #: How long a colour that went by takes to break up beside the craft, on
-    #: the track's clock: it used to slide on through the craft, darkening.
+    #: How long a colour the craft takes breaks up for where it met it, on the
+    #: track's clock. A colour gone by goes on past instead.
     DISSOLVE = 0.24
 
     def _drop(self, colour: int, column: int) -> None:
@@ -5050,7 +5068,8 @@ class Rider(Scene):
                 1.0])
 
     def _fizzle(self, across: float) -> None:
-        """A few pieces off a colour that went by: lighter than a take."""
+        """A few pieces off a colour breaking up as it is taken: lighter
+        than the take's own burst."""
         how_many = max(3, self.SPARKS // 3)
         for index in range(how_many):
             angle = (index / how_many) * math.tau + self._at * 1.7
@@ -5920,10 +5939,10 @@ class Rider(Scene):
             if shape != kind or grey is not grey_now:
                 continue
             at = self._where(when)
-            # A colour gone by breaks up beside the craft: see DISSOLVE.
+            # A colour taken breaks up where the craft met it: see DISSOLVE.
             breaking = 0.0
             edge, tall = edge_at, tall_at
-            if done and not grey and self.struck(block) == "missed":
+            if done and not grey and self.struck(block) == "taken":
                 breaking = max(0.0, (self._heard - when) / self.DISSOLVE)
                 if breaking >= 1.0:
                     continue
