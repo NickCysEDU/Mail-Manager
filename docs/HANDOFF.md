@@ -414,12 +414,18 @@ describes the app itself.
 - **Puzzle:** a grey hit drops in as clutter (`GREY_CELL`), broken by a clear
   beside it; a block into a full column bursts it and costs `OVERFILL_COST`.
   The game chosen is kept across tracks (`AudioPane.GAME_PREF`).
-- **A colour taken breaks up where the craft met it**, white-hot and gone in
-  `DISSOLVE` (`rider_gl._breaking`, and `Rider._fizzle` on the CPU path), so
-  it comes on whole rather than being drawn into the ship; a coin or a
-  power-up still is. A colour that goes by is recorded "missed" and goes on
-  past and off the road, as a grey dodged does: it used to be the one that
-  broke up.
+- **A colour taken breaks up where the craft met it**, gone in `DISSOLVE`
+  (`rider_gl._breaking`, and `Rider._fizzle` on the CPU path), so it comes
+  on whole rather than being drawn into the ship; a coin or a power-up
+  still is. A colour that goes by is recorded "missed" and goes on past and
+  off the road, as a grey dodged does: it used to be the one that broke up.
+  A take is the commonest pop, so on the card it throws `PRIZE_DIM` of the
+  light the rarer ones do, and its break-up stays near its own colour
+  (`BREAK_HEAT`, `BREAK_WHITE`, `BREAK_SPARK`): at full light and
+  white-hot, a run of takes washed the road out. Measured on the card as
+  the light a take adds over the same ride with all four at nought, the
+  values in place leave about a third of it. The craft's size test clears
+  the road, since a take just before its frame hid part of the craft.
 - **Sounds:** bump `rider_sound.VERSION` when a sound changes, or the cached
   file is played. Notes are put off with the pane's own timers.
 - **The road is read on a curve** (Catmull-Rom through four samples, in
@@ -617,7 +623,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 5,326 tests
+./dev test                     # 5,329 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus

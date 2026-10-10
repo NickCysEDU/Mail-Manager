@@ -262,6 +262,11 @@ class TestEachLevelHasItsCraft:
                 made, scene = rider_pane(size=(640, 400))
                 scene.set_difficulty(level)
                 def each(i):
+                    # The game's own road cleared: a block taken just
+                    # before the frame lit the lane under the craft and
+                    # broke up over it, and either hid some of it.
+                    scene._placed = scene._laid = 1e9
+                    scene._blocks = []
                     world = made._canvas.world
                     if world is not None and not craft:
                         world._draw_ship = lambda frame: None
@@ -474,10 +479,11 @@ class TestAnObstacleIsSeenHit:
             "at the hit it is not flattened square against the nose")
 
     @staticmethod
-    def _drawn(scene, gap, air=0.0, world=None):
+    def _drawn(scene, gap, air=0.0, world=None, everything=False):
         """What _draw_blocks sends to the card for the one block, ``gap`` ahead
-        of the craft: its place, scale and turn. ``world`` is one that has
-        already noticed what the game did with it."""
+        of the craft: its place, scale and turn, or with ``everything`` all
+        it was given. ``world`` is one that has already noticed what the
+        game did with it."""
         world = world or _bare_world()
         sent = []
 
@@ -503,6 +509,8 @@ class TestAnObstacleIsSeenHit:
         if not sent:
             return None
         got = sent[-1]
+        if everything:
+            return got
         return (tuple(got["uPlace"].toTuple()), tuple(got["uScale"].toTuple()),
                 got["uAngles"].x())
 
@@ -632,7 +640,7 @@ class TestWhatTheGameDidBecomesWhatTheWorldDoes:
             self, qapp):
         green = (0.1, 0.9, 0.2)
         world = self._happened("prize", taken=green)
-        assert world._flash == 1.0
+        assert 0.0 < world._flash == world.PRIZE_DIM
         assert world._flash_colour == green
         assert world._trim_colour == green
 
@@ -1571,3 +1579,54 @@ class TestTheCityIsTheSameAfterACorkscrew:
         assert got["tunnel"] == 0.0, got
         assert got["moved"] < 0.02, (
             f"{got['moved']:.0%} of the sky and city differ after a corkscrew")
+
+
+class TestABlockTakenThrowsLessLight:
+    """A block taken is the commonest pop, and its break-up burns on top of
+    it: see PRIZE_DIM."""
+
+    @staticmethod
+    def _lit_by(kind):
+        scene = _rider()
+        scene._pops = []
+        scene._pop(kind, hue=0.3, sat=0.8, strength=1.0)
+        world = _bare_world()
+        world._events(scene)
+        return world
+
+    @staticmethod
+    def _brightest_piece(world):
+        data = world._particles
+        return max(max(data[at + 8:at + 11]) for at in range(0, len(data), 12))
+
+    def test_it_throws_a_third_of_the_light_of_a_rarer_pop_at_most(self, qapp):
+        taken, clear = self._lit_by("prize"), self._lit_by("clear")
+        for name in ("_bloom_bump", "_glow", "_flash"):
+            assert 0.0 < getattr(taken, name) <= getattr(clear, name) / 3, name
+        assert 0.0 < self._brightest_piece(taken) <= (
+            self._brightest_piece(clear) / 3), "its pieces"
+
+    def test_its_break_up_burns_a_little_hotter_and_in_its_own_colour(
+            self, qapp):
+        """Its brightest channel is what blooms; how far the others rise
+        towards it is how white it burns."""
+        def channels(colour):
+            return sorted((colour.x(), colour.y(), colour.z()))
+
+        scene = _rider()
+        scene._lane_here = scene._lane_at(1)
+        scene._blocks = [[4.0, 1, "block", False, False]]
+        whole = TestAnObstacleIsSeenHit._drawn(scene, 0.5, everything=True)
+        scene = _rider()
+        TestWhatWasTaken._met(scene, [(4.0, 1, "block", False, False)])
+        world = _bare_world()
+        world._notice(scene)
+        scene._heard = 4.0      # the moment it breaks, when it burns hottest
+        hot = TestAnObstacleIsSeenHit._drawn(scene, -1.0, world=world,
+                                             everything=True)
+        burning, own = channels(hot["uColour"]), channels(whole["uColour"])
+        assert burning[-1] <= own[-1] * 1.5, (burning, own)
+        assert burning[-1] >= burning[-2] * 3.0, (
+            f"it burns white rather than in its own colour: {burning}")
+        assert 0.0 < self._brightest_piece(world) <= burning[-1], (
+            "the pieces it breaks into outshine it")

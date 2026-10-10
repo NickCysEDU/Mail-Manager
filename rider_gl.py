@@ -1441,6 +1441,15 @@ class RiderWorld:
     FOV_FAST = 74.0
     #: How many degrees a prize opens the view by, at full strength.
     PUNCH = 7.0
+    #: How much of its light a block taken throws: its lane's flash, its share
+    #: of the bloom and of the glow in from the edges, and its pieces. Then
+    #: how much hotter than its own light the block burns as it breaks up, how
+    #: far it goes towards white, and how bright the pieces it breaks into
+    #: are. Taken in a run at full light, blocks washed the road out white.
+    PRIZE_DIM = 0.3
+    BREAK_HEAT = 0.3
+    BREAK_WHITE = 0.1
+    BREAK_SPARK = 1.0
     #: How far the craft hovers.
     HOVER = 0.28
     #: The least the eye may be above the road at any point between it and
@@ -2128,8 +2137,9 @@ class RiderWorld:
                     z = max(z, scene.RIDER_AT - 0.2)
                     left = 1.0 - breaking
                     grow = left ** 0.5 * (1.0 + 0.35 * breaking)
-                    glow *= 1.0 + 2.5 * left
-                    colour = tuple(c + (1.0 - c) * 0.6 * left for c in colour)
+                    glow *= 1.0 + self.BREAK_HEAT * left
+                    colour = tuple(c + (1.0 - c) * self.BREAK_WHITE * left
+                                   for c in colour)
                     wide *= grow
                     tall *= grow
                     self._put(p, (across, tall * 0.5 + 0.02 + breaking * 0.5,
@@ -2461,8 +2471,8 @@ class RiderWorld:
                 colour = self._colour_of(scene, block)
                 self._spawn(26, (scene._lane_at(block[1]), 0.30,
                                  scene.RIDER_AT + float(scene._at)),
-                            3.5, tuple(c * 2.5 for c in colour), 0.40, 0.50,
-                            up=0.8)
+                            3.5, tuple(c * self.BREAK_SPARK for c in colour),
+                            0.40, 0.50, up=0.8)
             else:
                 self._taken.add(id(block))
             if how == "taken":
@@ -2532,16 +2542,19 @@ class RiderWorld:
             else:
                 if self._taken_now:
                     colour = self._taken_now[-1][2]
+                # A block taken is the commonest pop and breaks up besides,
+                # so it throws less light: see PRIZE_DIM.
+                dim = self.PRIZE_DIM if kind == "prize" else 1.0
                 self._flash_lane = float(scene._lane_here)
                 self._flash_colour = colour
-                self._flash = 1.0
+                self._flash = dim
                 self._trim = 1.0
                 self._trim_colour = colour
-                self._bloom_bump = max(self._bloom_bump, 0.5 * strength)
+                self._bloom_bump = max(self._bloom_bump, 0.5 * strength * dim)
                 self._spawn(int(40 + 40 * strength), at, 6.0,
-                            tuple(c * 3.0 for c in colour), 0.55, 0.6)
+                            tuple(c * 3.0 * dim for c in colour), 0.55, 0.6)
                 if kind in ("prize", "clear", "power", "milestone"):
-                    self._glow = min(1.6, self._glow + 0.6 * strength)
+                    self._glow = min(1.6, self._glow + 0.6 * strength * dim)
                     self._glow_colour = colour
                     self._punch = min(1.6, self._punch + 0.55 * strength)
                 if kind == "milestone":
