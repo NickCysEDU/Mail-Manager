@@ -403,10 +403,22 @@ describes the app itself.
   the loudness really rises and falls (`_snapped`), since the sections came
   up to a bar early on real records; the rig comes up over `RIG_IN` seconds
   and goes over `RIG_OUT` beats. Nothing is lit before the drums are read.
-- **The bloom's halo is not blurred before it is added.** A softened halo
-  (two binomial passes) took the neon off the rave's wireframe; what made
-  the rave look bad in a window was its haze, stretched from a small tile,
-  and `HAZE_DOUBLINGS` is the fix for that.
+- **On the card the bloom is worked out there** (`glow_gl`,
+  `PostProcess.glow_on_card`): the frame halved, blurred by a Gaussian and
+  added back with its two fringe copies, nothing read back. It was an
+  eighth-size copy stretched back up, which glowed in blocks: along a thin
+  line its middle wandered 2.2 real pixels off the line, and at full screen
+  the rave's wireframe tiled and crawled as it turned. Keep its width at
+  what the blocks spread it (`glow_spread`, half a block): a softened halo
+  (two binomial passes, wider) took the neon off the wireframe. A card that
+  will not build it gets the small copy (`_halo_on_gpu`, `last_halo`),
+  logged once; the CPU path still stretches a small copy. What made the
+  rave look bad in a window was its haze, stretched from a small tile, and
+  `HAZE_DOUBLINGS` is the fix for that.
+- **A wide line on the card is a real pen** (`visualizers.stroke`). The
+  stack of hairlines is a CPU speed-up; on the card each pass went through
+  the samples on its own, and the wireframe came out ridged down each line
+  and lit twice where lines crossed.
 - **Scene changes** fade over the last frame on the GPU (`_GpuCanvas.hold`,
   `cover`); a change during a change folds the two frames first. The CPU path
   fades from the background.
@@ -446,6 +458,10 @@ describes the app itself.
   nothing new puts up the picture it drew (`_picture_due`).
 - **One frame in four waits for the card** to be measured
   (`MEASURE_EVERY`); every frame waiting held the main thread 9 to 12 ms.
+  That frame starts with the card idle, too: nothing else waits for it now
+  the bloom is not read back, and measured with earlier frames still
+  queued, the rave drawn frame after frame read 13 ms against its own 8
+  and gave up half its samples.
   The full-screen controls no longer halve the rate on the card
   (`GIVE_WAY` is for the CPU path).
 - **The suite cannot see the GPU.** It runs offscreen, where every test goes
@@ -725,7 +741,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 5,406 tests
+./dev test                     # 5,426 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus

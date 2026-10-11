@@ -128,10 +128,15 @@ def stroke(painter, path, colour, width: float,
     where that is cheaper (see HAIRLINE), each pass faint enough that the
     stack reads as one line (see _hair_alpha).
     """
-    # Only under ordinary compositing. Under additive compositing the passes
-    # add light, and the reduced alpha leaves a hollow line.
+    # Only under ordinary compositing, and only on the CPU. Under additive
+    # compositing the passes add light, and the reduced alpha leaves a hollow
+    # line. On the card a wide pen costs nothing much, and each pass of the
+    # stack went through the card's samples on its own: the rave's wireframe
+    # came out ridged down the middle of each line and lit twice where lines
+    # crossed, 24 levels in 255 from a real pen on average.
     if (painter.compositionMode()
-            != QPainter.CompositionMode.CompositionMode_SourceOver):
+            != QPainter.CompositionMode.CompositionMode_SourceOver
+            or _on_card(painter)):
         painter.setPen(QPen(colour, width, Qt.PenStyle.SolidLine, cap, join))
         painter.drawPath(path)
         return

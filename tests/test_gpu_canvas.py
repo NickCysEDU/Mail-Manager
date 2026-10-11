@@ -295,11 +295,12 @@ class TestThePaneIsOnTheCard:
             f"{got['diff']:.4f} apart in brightness on average")
 
     def test_the_bloom_is_made_from_an_even_average(self):
-        """The bloom is a small copy of the frame, made big again. An eightfold
-        shrink in one linear blit reads one pixel in sixteen, so a thin line
-        reached the small copy only where it crossed the pixels read, and
-        the bloom strung soft blobs along every chevron. In halves, each
-        step is an exact average.
+        """Where the card will not work the bloom out itself (see
+        TestTheGlowOnTheCard), it is a small copy of the frame, made big
+        again. An eightfold shrink in one linear blit reads one pixel in
+        sixteen, so a thin line reached the small copy only where it crossed
+        the pixels read, and the bloom strung soft blobs along every
+        chevron. In halves, each step is an exact average.
 
         Read off the pane's own small copy: a first version ran its own copy
         of the halving loop, and passed with the pane's loop deleted.
@@ -322,6 +323,7 @@ class TestThePaneIsOnTheCard:
                             math.cos(a) * rect.width() * 0.4,
                             math.sin(a) * rect.height() * 0.4))
             made = pane(scene=Fan(), size=(960, 600))
+            made._canvas.glow_failed = True
             for i in range(3):
                 made._tick()
             made._canvas.grabFramebuffer()
@@ -356,9 +358,10 @@ class TestThePaneIsOnTheCard:
         """A framebuffer counts rows from the bottom and a painter from the
         top. With the scene centred the two agree, so here the scene sits
         high (the strip under it is for the controls, as in the app) and is
-        lit only in its top quarter. The bloom's small copy must be lit at
-        its top too; read upside down, it comes from a band the scene is not
-        in.
+        lit only in its top quarter. The bloom's small copy, where the card
+        makes one, must be lit at its top too; read upside down, it comes
+        from a band the scene is not in. See TestTheGlowOnTheCard for the
+        bloom the card works out itself.
         """
         got = on_the_card("""
             class TopQuarter:
@@ -374,6 +377,7 @@ class TestThePaneIsOnTheCard:
                                             rect.height() * 0.25),
                                      QColor(255, 255, 255))
             made = pane(scene=TopQuarter(), size=(800, 600))
+            made._canvas.glow_failed = True
             made._card.choice = lambda pixels, ratio, scene: RUNG
             made.set_reserve(200)
             for i in range(3):
@@ -553,6 +557,360 @@ SCOPE_BOTH_WAYS = textwrap.dedent("""
         return sum(1 for x in range(0, W, 3) for y in range(0, H, 3)
                    if lightness(image, x, y) > 0.3)
 """)
+
+
+#: A scene the tests below make, with a recipe of bloom alone: every scene's
+#: own recipe has a vignette or grain as well, which would be measured too.
+GLOW_TEST = textwrap.dedent("""
+    visualizers.POST["Glow test"] = {"bloom": 0.9}
+
+    class GlowTest:
+        name = "Glow test"
+        blurb = "test"
+        sharp_pixels = 0
+        def reset(self):
+            pass
+""")
+
+
+class TestTheGlowOnTheCard:
+    """The bloom worked out on the card (see glow_gl): the frame halved,
+    blurred there by a true Gaussian and laid back over itself. It was a
+    copy an eighth of the frame's size stretched back up, and at full screen
+    the rave's wireframe glowed in tiles that moved as it turned.
+    """
+
+    def test_a_thin_lines_glow_is_centred_on_it_all_along(self):
+        """A glow made of blocks is centred on the blocks, not on the line:
+        along a line on a slant it wandered up to 2.2 real pixels either
+        side of it at full screen, over and over as the line crossed them,
+        which is the tiling that was seen; this one stays within a fifth of
+        a pixel of it. Measured on the light the polish adds, column by
+        column, by its centre of weight, against where the line is. And it
+        spreads as far as the blocks did, half a block's side, measured by
+        how far that light lies from its centre, less how far the line's
+        own does."""
+        got = on_the_card(GLOW_TEST + textwrap.dedent("""
+            SLOPE = 0.13
+            class Slant(GlowTest):
+                def paint(self, painter, rect, state):
+                    painter.fillRect(rect, QColor(0, 0, 0))
+                    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                    painter.setPen(QPen(QColor(90, 90, 90), 1.5))
+                    top = rect.top() + rect.height() * 0.4
+                    painter.drawLine(
+                        QPointF(rect.left(), top),
+                        QPointF(rect.right(), top + rect.width() * SLOPE))
+            made = pane(scene=Slant(), size=(1440, 900))
+            for i in range(3):
+                made._tick()
+            lit = made._canvas.grabFramebuffer()
+            made.set_post(False)
+            made._tick()
+            bare = made._canvas.grabFramebuffer()
+            r = made._canvas.devicePixelRatioF()
+            w = lit.width()
+            def spread_of(weights, centre):
+                total = sum(w for _y, w in weights)
+                return sum(w * (y - centre) ** 2
+                           for y, w in weights) / total
+            apart = []
+            widths = []
+            clipped = 0
+            for x in range(int(w * 0.2), int(w * 0.8), 2):
+                centre = 900 * 0.4 * r + (x + 0.5) * SLOPE
+                rows = range(int(centre) - 30, int(centre) + 31)
+                added = []
+                line = []
+                for y in rows:
+                    shown = lit.pixelColor(x, y).green()
+                    under = bare.pixelColor(x, y).green()
+                    clipped += shown >= 250
+                    added.append((y + 0.5, shown - under))
+                    line.append((y + 0.5, under))
+                total = sum(a for _y, a in added)
+                apart.append(sum(y * a for y, a in added) / total - centre)
+                widths.append(spread_of(added, centre)
+                              - spread_of(line, centre))
+            # The side of a block of the small copy the glow was made from.
+            block = w / attachment_widgets.PostProcess.halo_size(
+                w, lit.height()).width()
+            print(json.dumps({
+                "gpu": made.on_gpu, "glow": made._canvas.glow is not None,
+                "spread": block / 2.0,
+                "clipped": clipped,
+                "most": max(abs(a) for a in apart),
+                "width": (sum(widths) / len(widths)) ** 0.5}))
+        """))
+        assert got["gpu"] is True and got["glow"] is True
+        # Fair only if nothing reached white, which would cut the glow off
+        # where the line is, and where there is a glow to measure.
+        assert got["clipped"] == 0
+        assert got["spread"] >= 2.0
+        assert got["most"] < 0.4, (
+            f"the glow of a thin line wanders {got['most']:.2f} real pixels "
+            f"off it: it is laid in blocks, which move as the line does")
+        assert abs(got["width"] - got["spread"]) < got["spread"] * 0.15, (
+            f"the glow spreads {got['width']:.2f} real pixels from the "
+            f"line, where the blocks spread it {got['spread']:.2f}")
+
+    def test_its_fringes_lie_either_side_by_the_recipes_distance(self):
+        """The fringing is two more copies of the glow, the recipe's
+        distance either side, which spread it sideways by just that much:
+        measured across an upright line, as how much further its light lies
+        from the line with the copies alone than the glow does."""
+        got = on_the_card(GLOW_TEST + textwrap.dedent("""
+            class Upright(GlowTest):
+                def paint(self, painter, rect, state):
+                    painter.fillRect(rect, QColor(0, 0, 0))
+                    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                    # Wide and bright enough that the copies' faint edges
+                    # are not lost to rounding: they are most of how far
+                    # out the light lies.
+                    painter.setPen(QPen(QColor(120, 120, 120), 3.0))
+                    x = rect.center().x() + 0.3
+                    painter.drawLine(QPointF(x, rect.top()),
+                                     QPointF(x, rect.bottom()))
+            made = pane(scene=Upright(), size=(1440, 900))
+            made.set_post(False)
+            for i in range(3):
+                made._tick()
+            bare = made._canvas.grabFramebuffer()
+            r = made._canvas.devicePixelRatioF()
+            middle = (720 + 0.3) * r
+            def spread(image):
+                found = []
+                for y in range(int(image.height() * 0.3),
+                               int(image.height() * 0.7), 3):
+                    weights = [(x + 0.5, image.pixelColor(x, y).green()
+                                - bare.pixelColor(x, y).green())
+                               for x in range(int(middle) - 45,
+                                              int(middle) + 46)]
+                    total = sum(w for _x, w in weights)
+                    found.append(sum(w * (x - middle) ** 2
+                                     for x, w in weights) / total)
+                return sum(found) / len(found)
+            made.set_post(True)
+            seen = {}
+            for label, recipe in (("glow", {"bloom": 0.9}),
+                                  ("fringes", {"aberration": 1.6})):
+                visualizers.POST["Glow test"] = recipe
+                made._tick()
+                seen[label] = spread(made._canvas.grabFramebuffer())
+            print(json.dumps({"ratio": r,
+                              "apart": max(0.0, seen["fringes"]
+                                           - seen["glow"]) ** 0.5}))
+        """))
+        wanted = 1.6 * got["ratio"]
+        assert abs(got["apart"] - wanted) < wanted * 0.2, (
+            f"the fringes lie {got['apart']:.2f} real pixels either side of "
+            f"the glow, where the recipe puts them {wanted:.2f}")
+
+    def test_it_adds_what_the_recipe_asks_for(self):
+        """As much as the small copy added: the recipe's bloom, to at most
+        GLOW_MOST of the frame, and a copy either side at FRINGE where it
+        asks for fringing; and faded with the scene as it comes up, or the
+        glow arrives at full strength over a scene still half there."""
+        got = on_the_card(GLOW_TEST + textwrap.dedent("""
+            class Grey(GlowTest):
+                def paint(self, painter, rect, state):
+                    painter.fillRect(rect, QColor(60, 60, 60))
+            made = pane(scene=Grey(), size=(640, 400))
+            got = {}
+            for label, recipe, reveal in (
+                    ("bloom", {"bloom": 0.5}, 1.0),
+                    ("most", {"bloom": 0.95}, 1.0),
+                    ("fringed", {"bloom": 0.9, "aberration": 1.2}, 1.0),
+                    ("faded", {"bloom": 0.9, "aberration": 1.2}, 0.5)):
+                made._reveal_changed(reveal)
+                visualizers.POST["Glow test"] = recipe
+                made.set_post(True)
+                made._tick()
+                lit = made._canvas.grabFramebuffer()
+                made.set_post(False)
+                made._tick()
+                bare = made._canvas.grabFramebuffer()
+                x, y = lit.width() // 2, lit.height() // 2
+                got[label] = (lit.pixelColor(x, y).green()
+                              / bare.pixelColor(x, y).green())
+            got["glow"] = made._canvas.glow is not None
+            print(json.dumps(got))
+        """))
+        from attachment_widgets import PostProcess
+
+        assert got["glow"] is True
+        most, fringe = PostProcess.GLOW_MOST, PostProcess.FRINGE
+        wanted = {"bloom": 1.5, "most": 1.0 + most,
+                  "fringed": 1.0 + most + 2 * fringe,
+                  "faded": 1.0 + 0.5 * (most + 2 * fringe)}
+        for label, ratio in wanted.items():
+            assert abs(got[label] - ratio) < 0.03, (
+                f"{label}: the polish made the frame {got[label]:.3f} times "
+                f"as bright, where the recipe asks for {ratio:.3f}")
+
+    @pytest.mark.parametrize("rung", [(4, 1.0), (2, 0.5)])
+    def test_it_lands_where_the_scene_is(self, rung):
+        """Read and laid back in the framebuffer's rows, which count from
+        the bottom. The scene sits high, with the controls' strip under
+        it, and is lit only in its top quarter: the glow spills below that
+        band and nowhere near the bottom of the scene, which, read upside
+        down, it would light."""
+        got = on_the_card(GLOW_TEST + textwrap.dedent("""
+            class TopQuarter(GlowTest):
+                def paint(self, painter, rect, state):
+                    painter.fillRect(rect, QColor(0, 0, 0))
+                    painter.fillRect(QRectF(rect.x(), rect.y(), rect.width(),
+                                            rect.height() * 0.25),
+                                     QColor(200, 200, 200))
+            made = pane(scene=TopQuarter(), size=(800, 600))
+            made._card.choice = lambda pixels, ratio, scene: RUNG
+            made.set_reserve(200)
+            for i in range(3):
+                made._tick()
+            lit = made._canvas.grabFramebuffer()
+            made.set_post(False)
+            made._tick()
+            bare = made._canvas.grabFramebuffer()
+            r = made._canvas.devicePixelRatioF()
+            box = made._scene_box(QRectF(0, 0, 800, 400))
+            top, height = box.y() * r, box.height() * r
+            def added(y0, y1):
+                values = [lit.pixelColor(x, y).green()
+                          - bare.pixelColor(x, y).green()
+                          for y in range(int(y0), int(y1), 2)
+                          for x in range(int(box.x() * r) + 20,
+                                         int(box.right() * r) - 20, 7)]
+                return sum(values) / max(1, len(values))
+            band = top + height * 0.25
+            print(json.dumps({"glow": made._canvas.glow is not None,
+                              "below": added(band + 1, band + 5),
+                              "bottom": added(top + height * 0.5,
+                                              top + height - 2)}))
+        """).replace("RUNG", repr(rung)))
+        assert got["glow"] is True
+        assert got["below"] > 5, (
+            f"the band lit at the top of the scene spills only "
+            f"{got['below']:.1f} below itself: the glow was not laid there")
+        assert got["bottom"] < 1, (
+            f"and {got['bottom']:.1f} reaches the bottom of the scene, "
+            f"which is black: the glow came from the wrong band")
+
+    def test_a_card_that_will_not_make_it_makes_a_small_copy(self):
+        """Once, logged, and the bloom carries on the way it was made
+        before, from a small copy read back off the card."""
+        got = on_the_card(GLOW_TEST + textwrap.dedent("""
+            import glow_gl
+            tries = []
+            class Refused:
+                def __init__(self, gl):
+                    tries.append(1)
+                    raise RuntimeError("a card that will not build it")
+            glow_gl.Glow = Refused
+            visualizers.POST["Glow test"] = {"bloom": 0.5}
+            class Grey(GlowTest):
+                def paint(self, painter, rect, state):
+                    painter.fillRect(rect, QColor(60, 60, 60))
+            made = pane(scene=Grey(), size=(640, 400))
+            for i in range(4):
+                made._tick()
+                lit = made._canvas.grabFramebuffer()
+            made.set_post(False)
+            made._tick()
+            bare = made._canvas.grabFramebuffer()
+            x, y = lit.width() // 2, lit.height() // 2
+            print(json.dumps({
+                "gpu": made.on_gpu, "tries": len(tries),
+                "failed": made._canvas.glow_failed,
+                "copy": made._canvas.last_halo is not None,
+                "ratio": (lit.pixelColor(x, y).green()
+                          / bare.pixelColor(x, y).green())}))
+        """))
+        assert got["gpu"] is True, "the pane left the card"
+        assert got["failed"] is True and got["tries"] == 1, (
+            f"the glow was tried {got['tries']} times on a card that "
+            f"refused it")
+        assert got["copy"] is True
+        assert abs(got["ratio"] - 1.5) < 0.03, (
+            f"and without it the frame is {got['ratio']:.3f} times as "
+            f"bright, not the 1.5 its bloom asks for")
+
+
+class TestAWideLineOnTheCard:
+    """A line a few real pixels wide is stroked with a real pen on the card.
+    The CPU draws one as a stack of hairlines, which is quicker there (see
+    visualizers.stroke); on the card each hairline was its own faint pass
+    with the card's four samples, and the stack came out ridged down its
+    middle and lit twice where lines crossed: 24 levels in 255 from a real
+    pen, on average over the rave's wireframe at its usual width.
+    """
+
+    def test_it_is_drawn_as_a_real_pen_draws_it(self):
+        got = on_the_card("""
+            from PySide6.QtGui import QPainterPath
+            from PySide6.QtOpenGL import (QOpenGLFramebufferObject,
+                QOpenGLFramebufferObjectFormat, QOpenGLPaintDevice)
+            surface = QOffscreenSurface()
+            surface.create()
+            context = QOpenGLContext()
+            context.create()
+            context.makeCurrent(surface)
+            W, H = 840, 520
+            def drawn(how, width):
+                shape = QOpenGLFramebufferObjectFormat()
+                shape.setSamples(4)
+                shape.setAttachment(
+                    QOpenGLFramebufferObject.Attachment.CombinedDepthStencil)
+                multi = QOpenGLFramebufferObject(QSize(W, H), shape)
+                flat = QOpenGLFramebufferObject(QSize(W, H))
+                multi.bind()
+                device = QOpenGLPaintDevice(QSize(W, H))
+                device.setDevicePixelRatio(2.0)
+                p = QPainter(device)
+                p.fillRect(QRectF(0, 0, W, H), QColor(0, 0, 0))
+                p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                # The rave's wireframe: every corner of a hexagon to every
+                # other.
+                corners = [QPointF(W / 4 + math.cos(0.3 + k * math.tau / 6)
+                                   * 150,
+                                   H / 4 + math.sin(0.3 + k * math.tau / 6)
+                                   * 90)
+                           for k in range(6)]
+                path = QPainterPath()
+                for a in range(6):
+                    for b in range(a + 1, 6):
+                        path.moveTo(corners[a])
+                        path.lineTo(corners[b])
+                ink = QColor.fromHsvF(0.5, 0.25, 1.0, 0.7)
+                if how == "pen":
+                    p.setPen(QPen(ink, width, Qt.PenStyle.SolidLine,
+                                  Qt.PenCapStyle.RoundCap,
+                                  Qt.PenJoinStyle.RoundJoin))
+                    p.drawPath(path)
+                else:
+                    visualizers.stroke(p, path, ink, width)
+                p.end()
+                multi.release()
+                QOpenGLFramebufferObject.blitFramebuffer(flat, multi)
+                return flat.toImage()
+            apart = {}
+            for width in (1.2, 1.4, 1.7):
+                pen, stroked = drawn("pen", width), drawn("stroke", width)
+                total = count = 0
+                for y in range(H):
+                    for x in range(W):
+                        one = pen.pixelColor(x, y).green()
+                        two = stroked.pixelColor(x, y).green()
+                        if one > 8 or two > 8:
+                            total += abs(one - two)
+                            count += 1
+                apart[str(width)] = total / max(1, count)
+            print(json.dumps(apart))
+        """)
+        for width, apart in got.items():
+            assert apart < 0.5, (
+                f"at {width} points ({float(width) * 2:.1f} real pixels) the "
+                f"line is {apart:.1f} levels in 255 from a real pen's, on "
+                f"average where either drew")
 
 
 class TestTheScopeOnTheCard:
@@ -1004,6 +1362,73 @@ class TestABigScreenOnASmallCard:
         assert got["every"] == 4
         assert got["measured"] == 10, (
             f"forty frames were measured {got['measured']} times")
+
+    def test_a_measured_frame_is_measured_alone(self):
+        """Nothing waits for the card between frames, so frames asked for
+        faster than it finishes them queue up. A frame measured with work
+        still queued ahead of it counted that work as its own: the rave at
+        full screen read 13 ms a frame against its own 10, and lost half
+        its samples. Here the card is handed a pile of work no one waits
+        for just before a measured frame."""
+        got = on_the_card("""
+            import time
+            from PySide6.QtOpenGL import QOpenGLFramebufferObject
+            made = pane(size=(320, 200))
+            for i in range(6):
+                made._tick()
+                made._canvas.grabFramebuffer()
+            canvas = made._canvas
+            canvas.makeCurrent()
+            gl = canvas.context().functions()
+            side = 2048
+            one = QOpenGLFramebufferObject(QSize(side, side))
+            two = QOpenGLFramebufferObject(QSize(side, side))
+            whole = QRect(0, 0, side, side)
+            def pile(n):
+                for i in range(n):
+                    QOpenGLFramebufferObject.blitFramebuffer(
+                        two if i % 2 else one, whole,
+                        one if i % 2 else two, whole, 0x4000, 0x2601)
+            def left(n):
+                # How much of the pile is still to do once it has been
+                # handed over.
+                gl.glFinish()
+                pile(n)
+                started = time.perf_counter()
+                gl.glFinish()
+                return (time.perf_counter() - started) * 1000.0
+            measured = []
+            made._card.record = lambda ms, ratio: measured.append(ms)
+            def frame(queued):
+                made._tick()
+                made._picture_due = True
+                made._card_frames = made.MEASURE_EVERY - 1
+                gl.glFinish()
+                if queued:
+                    pile(count)
+                made._paint_on_gpu(canvas)
+            for i in range(3):
+                frame(False)
+            own = sorted(measured)[1]
+            count = 8
+            leftover = left(count)
+            while leftover < max(30.0, own * 4) and count < 8192:
+                count *= 2
+                leftover = left(count)
+            measured.clear()
+            for i in range(3):
+                frame(True)
+            canvas.doneCurrent()
+            print(json.dumps({"own": own, "leftover": leftover,
+                              "queued": sorted(measured)[1]}))
+        """)
+        if got["leftover"] < got["own"] * 3:
+            pytest.skip(f"the card here finishes the pile as it is handed "
+                        f"over ({got['leftover']:.0f} ms left, against "
+                        f"{got['own']:.0f} ms a frame)")
+        assert got["queued"] < got["own"] + got["leftover"] / 2, (
+            f"a frame of {got['own']:.1f} ms measured {got['queued']:.1f} "
+            f"with {got['leftover']:.0f} ms of other work queued ahead of it")
 
     def test_a_card_too_slow_for_its_screen_draws_less(self):
         """A frame the card cannot finish in its budget is measured on the

@@ -165,6 +165,7 @@ class TestTheSelfTestLooksForWhatIsImportedLate:
 
     @pytest.mark.parametrize("module,words", [("rider_layout", "road"),
                                               ("scope_gl", "scope"),
+                                              ("glow_gl", "glow"),
                                               ("av_sync", "beat")])
     def test_a_bundle_without_it_fails(self, tmp_path, monkeypatch, capsys,
                                        module, words):
@@ -183,6 +184,7 @@ class TestTheSelfTestLooksForWhatIsImportedLate:
         line = next(row for row in capsys.readouterr().out.splitlines()
                     if "attachment viewer" in row)
         assert "the rider's road" in line and "the scope on the card" in line
+        assert "the glow on the card" in line
         assert "the picture on the beat" in line
 
 

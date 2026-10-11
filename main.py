@@ -427,6 +427,15 @@ def self_test(offline: bool = False) -> int:
                 scope_gl, "Tube"):
             raise RuntimeError("the scope cannot draw on the card")
         working.append("the scope on the card")
+        # The bloom worked out on the card, imported the first time a scene
+        # with a glow is drawn there. Without it the glow is made from a small
+        # copy as it once was, in blocks, so it is looked for here.
+        import glow_gl
+        centre, pairs = glow_gl.taps(2.0)
+        if (abs(centre + 2.0 * sum(weight for _at, weight in pairs) - 1.0)
+                > 1e-6 or not hasattr(glow_gl, "Glow")):
+            raise RuntimeError("the glow cannot be worked out on the card")
+        working.append("the glow on the card")
         # The picture's allowance for the ear and the eye, made the first time
         # a track plays: asked here, so a bundle without it, or without the
         # Core Audio it asks, fails now.

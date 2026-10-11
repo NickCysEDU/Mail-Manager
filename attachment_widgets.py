@@ -384,8 +384,13 @@ class _GpuCanvas(QOpenGLWidget):
         #: The last frame of the scene before, while the next fades up over it.
         #: See hold.
         self._held = None
-        #: The small copy of the last frame the bloom was made from.
+        #: The small copy of the last frame the bloom was made from, where it
+        #: is made that way. See Spectrum._polish_on_gpu.
         self.last_halo = None
+        #: The bloom worked out on the card, for this context (see glow_gl),
+        #: and whether this card would not build it.
+        self.glow = None
+        self.glow_failed = False
         #: The rider's lit world, for this context. See Spectrum._world.
         self.world = None
         self.world_failed = False
@@ -408,6 +413,7 @@ class _GpuCanvas(QOpenGLWidget):
         self._halves = {}
         self._held = None
         self.world = None
+        self.glow = None
         self._blitter = QOpenGLTextureBlitter()
         self._blitter.create()
         # The rider's world frees its GL names with its context, so dropping it
@@ -897,14 +903,21 @@ class Spectrum(QWidget):
         """One frame, drawn on the card at the screen's own resolution.
 
         The same _paint, into a multisampled framebuffer the size of the
-        pane in real pixels. The scene's polish goes over it from a small
-        copy made on the card (the bloom is a blur, so only that small
-        picture comes back). A card that cannot draw that many pixels sixty
-        times a second gets fewer samples, then fewer pixels: see
-        CardSharpness.
+        pane in real pixels, with the scene's polish worked out over it on
+        the card (see _polish_on_gpu). A card that cannot draw that many
+        pixels sixty times a second gets fewer samples, then fewer pixels:
+        see CardSharpness.
         """
         import time as _time
 
+        if (self._card_frames + 1) % self.MEASURE_EVERY == 0:
+            # A frame to be measured starts with the card idle, so what is
+            # measured is this frame alone. Nothing else waits for the card,
+            # and frames asked for faster than it finishes them queue up:
+            # measured from the middle of the queue, the rave at full screen
+            # drawn frame after frame read 13 ms a frame where it takes 8,
+            # and gave up half its samples.
+            canvas.context().functions().glFinish()
         started = _time.perf_counter()
         try:
             ratio = canvas.devicePixelRatioF()
@@ -1023,8 +1036,8 @@ class Spectrum(QWidget):
         a smaller buffer then makes all of the frame cheaper.
         """
         rect, transform, opacity, recipe = self._gpu_scene
-        # Where the scene landed in real pixels, which the small copy is taken
-        # from: the polish belongs to the scene, not the background around it.
+        # Where the scene landed in real pixels, which the bloom is made from:
+        # the polish belongs to the scene, not the background around it.
         box = transform.mapRect(rect)
         source = QRect(int(box.x() * ratio), int(box.y() * ratio),
                        max(1, int(box.width() * ratio)),
@@ -1035,6 +1048,49 @@ class Spectrum(QWidget):
         flipped = QRect(source.x(),
                         flat.height() - source.y() - source.height(),
                         source.width(), source.height())
+        halo = None
+        if not self._glow_on_gpu(canvas, flat, flipped, rect, opacity, recipe):
+            halo = self._halo_on_gpu(canvas, flat, small, flipped)
+        flat.bind()
+        painter = QPainter(device)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setWorldTransform(transform)
+            painter.setOpacity(opacity)
+            self._effects.apply_on_gpu(painter, rect, halo, recipe)
+        finally:
+            painter.end()
+            flat.release()
+
+    def _glow_on_gpu(self, canvas, flat, area, rect, opacity, recipe) -> bool:
+        """The scene's bloom over ``area`` of ``flat``, worked out on the
+        card (see glow_gl). False where this card would not do it, which is
+        logged once; the bloom is then made from a small copy, as it was.
+        """
+        if canvas.glow_failed:
+            return False
+        try:
+            if canvas.glow is None:
+                import glow_gl
+
+                canvas.glow = glow_gl.Glow(canvas.context().functions())
+            spread = PostProcess.glow_spread(flat.width(), flat.height())
+            self._effects.glow_on_card(canvas.glow, flat, area, rect, spread,
+                                       opacity, recipe)
+        except Exception:      # noqa: BLE001 - the small copy is there
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "the bloom could not be worked out on this card; making it "
+                "from a small copy from here on")
+            canvas.glow = None
+            canvas.glow_failed = True
+            return False
+        return True
+
+    def _halo_on_gpu(self, canvas, flat, small, flipped):
+        """The bloom's small copy of ``flipped`` in ``flat``, read back off
+        the card, for a card that will not work the bloom out itself."""
         # Down to the bloom's size in halves. A linear blit averages two by
         # two, so each halving is exact, while one eightfold shrink reads one
         # pixel in sixteen and turned thin lines into rows of soft blobs. This
@@ -1055,16 +1111,7 @@ class Spectrum(QWidget):
         # Kept, so the source of the bloom can be inspected: it is the one
         # thing that comes back off the card.
         canvas.last_halo = halo
-        flat.bind()
-        painter = QPainter(device)
-        try:
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-            painter.setWorldTransform(transform)
-            painter.setOpacity(opacity)
-            self._effects.apply_on_gpu(painter, rect, halo, recipe)
-        finally:
-            painter.end()
-            flat.release()
+        return halo
 
     def set_scene(self, scene) -> None:
         was, self._scene = self._scene, scene
@@ -3719,7 +3766,8 @@ class PostProcess:
     """Cheap screen-space polish after a scene has drawn itself. No shaders
     here, so bloom is done at a fraction of the resolution and scaled up
     (which is a blur), and fixed overlays are tiles. The pass is skipped
-    when a scene asks for nothing.
+    when a scene asks for nothing. On the card the bloom is worked out with
+    shaders instead (see glow_on_card), and the rest is the same.
     """
 
     #: Bloom is worked out at this fraction of the frame, so its cost barely
@@ -3863,6 +3911,34 @@ class PostProcess:
 
     #: How much of the halo each offset copy adds, for the fringing.
     FRINGE = 0.16
+    #: The most of the halo itself the bloom adds back.
+    GLOW_MOST = 0.85
+
+    @classmethod
+    def glow_spread(cls, width: int, height: int) -> float:
+        """How far the bloom of a frame this many real pixels across spreads
+        on the card, as a standard deviation in real pixels: half the side
+        of the small copy's blocks (see halo_size), which is how far those
+        blocks, stretched back up, spread it. The glow is as wide as it was;
+        only the blocks are gone."""
+        return 0.5 * width / cls.halo_size(width, height).width()
+
+    def glow_on_card(self, glow, flat, area, rect, spread: float,
+                     opacity: float, recipe: dict) -> None:
+        """The recipe's bloom and fringing over ``area`` of ``flat`` (in its
+        rows from the bottom), worked out by ``glow`` on the card, faded by
+        ``opacity`` with the scene in ``rect``. The same amounts as
+        _glow."""
+        bloom = float(recipe.get("bloom", 0.0))
+        shift = float(recipe.get("aberration", 0.0))
+        if bloom <= 0.01 and shift <= 0.05:
+            return
+        fringe = self.FRINGE if shift > 0.05 else 0.0
+        # The recipe's offset is in the scene's points.
+        apart = shift * area.width() / max(1.0, rect.width())
+        glow.apply(flat, area, spread,
+                   min(self.GLOW_MOST, max(bloom, 0.0)) * opacity,
+                   fringe * opacity, apart)
 
     def _glow(self, halo, amount: float, shift: float):
         """The halo plus its two offset copies, composed at the halo's own size
@@ -3876,7 +3952,7 @@ class PostProcess:
         wide.fill(QColor(0, 0, 0, 0))
         inner = QPainter(wide)
         try:
-            inner.setOpacity(min(0.85, amount))
+            inner.setOpacity(min(self.GLOW_MOST, amount))
             inner.drawPixmap(0, 0, halo)
             if shift > 0.0:
                 inner.setCompositionMode(
@@ -3938,11 +4014,12 @@ class PostProcess:
         """The recipe over a frame already on the card: every effect the scene
         asks for, since on the card the whole polish costs a fraction of a
         millisecond. ``halo`` is the small copy the bloom is made from (see
-        Spectrum._paint_on_gpu).
+        Spectrum._polish_on_gpu), or None where the card has laid the bloom
+        already (see glow_on_card).
         """
         bloom = float(recipe.get("bloom", 0.0))
         shift = float(recipe.get("aberration", 0.0))
-        if bloom > 0.01 or shift > 0.05:
+        if halo is not None and (bloom > 0.01 or shift > 0.05):
             apart = 0.0
             if shift > 0.05:
                 apart = shift * halo.width() / max(1.0, rect.width())
