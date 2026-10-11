@@ -563,6 +563,10 @@ REAL = textwrap.dedent("""
             "holder": holder.height(), "wanted": wanted,
             "overlaps": overlaps, "past": past}}
     report["size"] = [viewer.width(), viewer.height()]
+    # The viewer's copy of the tone goes with it: os._exit skips what the
+    # viewer clears away at exit, and the copy was left in the temporary
+    # folder after every run.
+    viewer._sweep()
     print(json.dumps(report))
     sys.stdout.flush()
     os._exit(0)
