@@ -944,11 +944,12 @@ class TestABigScreenOnASmallCard:
         assert got["same"], "and what was put up again is not what was drawn"
         assert got["next_tick"] >= 1, "and the next tick drew nothing"
 
-    def test_a_widget_over_it_changing_draws_no_frame(self):
-        """Qt puts the window together again around the canvas's last frame.
-        The pane asked the canvas for another from its own paint, so a
-        widget over the picture that changed drew a frame for nothing,
-        which put the next one a refresh late."""
+    def test_a_widget_over_it_changing_asks_for_no_frame(self):
+        """The pane asked the canvas for a frame from its own paint, which Qt
+        runs for a widget over the picture that changes, so each such change
+        drew a frame for nothing and put the next one a refresh late. Qt
+        itself puts the window together around the canvas's last frame
+        here, and on a hosted runner drew the canvas once as well."""
         got = on_the_card("""
             import time
             from PySide6.QtWidgets import QLabel
@@ -969,12 +970,20 @@ class TestABigScreenOnASmallCard:
             asked = []
             real = made._paint_on_gpu
             made._paint_on_gpu = lambda canvas: (asked.append(1), real(canvas))
+            requested = []
+            real_update = made._canvas.update
+            made._canvas.update = lambda *how: (requested.append(1),
+                                                real_update(*how))
             label.setText("changed over the picture")
             settle()
-            print(json.dumps({"asked": len(asked)}))
+            print(json.dumps({"asked": len(asked),
+                              "requested": len(requested)}))
         """)
-        assert got["asked"] == 0, (
-            f"one change over the picture asked for {got['asked']} frames")
+        assert got["requested"] == 0, (
+            f"the pane asked the canvas for {got['requested']} frames when "
+            f"a widget over the picture changed")
+        assert got["asked"] <= 1, (
+            f"one change over the picture drew {got['asked']} frames")
 
     def test_one_frame_in_four_waits_for_the_card(self):
         """Every frame waited for the card to finish, to be measured, which
