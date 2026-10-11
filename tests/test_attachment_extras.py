@@ -6618,6 +6618,20 @@ class TestTheSceneGivesWayToTheControls:
         assert back == ordinary, (
             f"the rate stayed at {back} ms after the controls went away")
 
+    def test_the_bars_fade_is_on_only_while_it_fades(self, qapp, qtbot):
+        """An effect draws the whole bar again, every control on it, when
+        any of them changes, and the seek bar changes as the track plays."""
+        spectrum, full = self._full(qapp, qtbot)
+        try:
+            assert not full._effect.isEnabled()
+            full._set_bar_opacity(0.5)
+            assert full._effect.isEnabled()
+            assert full._effect.opacity() == pytest.approx(0.5)
+            full._set_bar_opacity(1.0)
+            assert not full._effect.isEnabled()
+        finally:
+            full.close()
+
     def test_showing_the_controls_is_what_asks_for_it(self, qapp, qtbot):
         spectrum, full = self._full(qapp, qtbot)
         try:
@@ -7004,6 +7018,55 @@ class TestTheLaserRigRunsThroughTheDrop:
             f"half, so the fan is standing still")
 
 
+class TestTheSeekBarIsDrawnWhenItsHandleMoves:
+    """The player reports every 50 ms, and a long track moves the handle a
+    pixel every few seconds: drawn at every report, the bar over the
+    full-screen picture had the window put together twenty more times a
+    second than the picture needed."""
+
+    @staticmethod
+    def _bar(qapp, qtbot):
+        from PySide6.QtCore import QEvent, QObject
+
+        from attachment_widgets import SeekBar
+
+        bar = SeekBar()
+        qtbot.addWidget(bar)
+        bar.setRange(0, 420_000)
+        bar.resize(200, 30)
+        bar.show()
+        qapp.processEvents()
+        painted = []
+
+        class Watch(QObject):
+            def eventFilter(self, watched, event):      # noqa: N802
+                if event.type() == QEvent.Type.Paint:
+                    painted.append(1)
+                return False
+
+        bar._watch = Watch()
+        bar.installEventFilter(bar._watch)
+        return bar, painted
+
+    def test_reports_that_leave_it_where_it_is_draw_nothing(self, qapp, qtbot):
+        bar, painted = self._bar(qapp, qtbot)
+        for i in range(40):
+            bar.report(10_000 + i * 50)
+            qapp.processEvents()
+        assert bar.value() == 10_000 + 39 * 50, "and its value is exact"
+        assert 1 <= len(painted) <= 3, (
+            f"two seconds of a seven-minute track drew it {len(painted)} "
+            f"times")
+
+    def test_a_drag_draws_it_at_every_change(self, qapp, qtbot):
+        bar, painted = self._bar(qapp, qtbot)
+        bar._dragging = True
+        for i in range(10):
+            bar.setValue(20_000 + i * 10)
+            qapp.processEvents()
+        assert len(painted) >= 10
+
+
 class TestTheFullScreenControlsWork:
     """Four reports about the full-screen window, all of them true."""
 
@@ -7102,6 +7165,167 @@ class TestTheFullScreenControlsWork:
         finally:
             pane._full.close()
             qapp.processEvents()
+
+
+class TestWhatMovesBesideThePictureWaitsForAFrame:
+    """The full-screen bar's seek and clock, and the window's waveform and
+    clock, change just after a frame of the picture. See
+    Spectrum.after_the_frame."""
+
+    @staticmethod
+    def _keeping_time(pane):
+        """The pane's picture as on the card, its frames running: what
+        waits for a frame waits until one is shown."""
+        from PySide6.QtWidgets import QWidget
+
+        spectrum = pane.spectrum
+        spectrum._canvas = QWidget(spectrum)
+        spectrum._timer.start(10 ** 7)
+        return spectrum
+
+    @staticmethod
+    def _let_go(spectrum):
+        spectrum._timer.stop()
+        canvas, spectrum._canvas = spectrum._canvas, None
+        canvas.deleteLater()
+
+    def test_the_bar_moves_just_after_a_frame(self, qapp, qtbot):
+        """Moved as each report came, the bar over the picture had the
+        window put together just before a frame whenever a report landed
+        there, and that frame waited a refresh to be shown."""
+        pane = TestTheFullScreenControlsWork._pane(qtbot)
+        pane._go_full_screen()
+        qapp.processEvents()
+        spectrum = self._keeping_time(pane)
+        try:
+            bar = pane._full.bar.findChildren(type(pane.position))[0]
+            start = bar.value()
+            pane._moved(42_000)
+            assert bar.value() == start, "it moved before the frame"
+            assert pane.position.value() == 42_000, (
+                "the window's own place waited too")
+            spectrum._frame_shown()
+            assert bar.value() == 42_000
+            # A seek moves it at once, and the report before it is dropped.
+            pane._moved(43_000)
+            pane.position.setValue(10_000)
+            assert bar.value() == 10_000
+            spectrum._frame_shown()
+            assert bar.value() == 10_000, "a report from before the seek won"
+        finally:
+            self._let_go(spectrum)
+            pane._full.close()
+            qapp.processEvents()
+
+    def test_closing_full_screen_forgets_the_move_waiting(self, qapp, qtbot):
+        """Or the next frame moves a bar that has been deleted."""
+        import attachment_view
+
+        pane = TestTheFullScreenControlsWork._pane(qtbot)
+        pane._go_full_screen()
+        qapp.processEvents()
+        spectrum = self._keeping_time(pane)
+        try:
+            pane._moved(42_000)
+            assert attachment_view.FULL_BAR in spectrum._after_frame
+            pane._full.close()
+            qapp.processEvents()
+            assert attachment_view.FULL_BAR not in spectrum._after_frame
+            spectrum._frame_shown()
+        finally:
+            self._let_go(spectrum)
+
+    def test_the_windows_own_place_waits_for_a_frame_too(self, qapp, qtbot):
+        """The waveform and the clock are in the window with the picture."""
+        from types import SimpleNamespace
+
+        pane = TestTheFullScreenControlsWork._pane(qtbot)
+        # Somewhere for a seek to go.
+        pane._player = SimpleNamespace(setPosition=lambda value: None)
+        pane.show()
+        qapp.processEvents()
+        spectrum = self._keeping_time(pane)
+        try:
+            pane._moved(65_000)
+            assert "1:05" not in pane.clock.text()
+            spectrum._frame_shown()
+            assert "1:05" in pane.clock.text()
+            assert pane.wave._at == 65_000
+            # A seek shows at once, over any report still waiting.
+            pane._moved(66_000)
+            pane._seek(20_000)
+            assert "0:20" in pane.clock.text()
+            spectrum._frame_shown()
+            assert "0:20" in pane.clock.text()
+            assert pane.wave._at == 20_000
+        finally:
+            self._let_go(spectrum)
+
+
+class TestThePicturesShareIsReadWhenSomethingChanges:
+    """See AudioPane._budget_settled."""
+
+    def test_full_screen_leaves_the_windows_layout_alone(self, qapp, qtbot):
+        """Each fresh reading of the picture's share asked for a layout, and
+        each layout, finding a gap where the picture had been, for another
+        reading: over a thousand a second while the picture was full
+        screen."""
+        import time
+
+        pane = TestTheFullScreenControlsWork._pane(qtbot)
+        pane.resize(900, 700)
+        pane.visual_holder.setVisible(True)
+        pane.show()
+        qapp.processEvents()
+        readings = []
+        real = pane._spectrum_budget
+        pane._spectrum_budget = (
+            lambda *args, **kwargs: readings.append(1)
+            or real(*args, **kwargs))
+        pane._go_full_screen()
+        try:
+            end = time.monotonic() + 0.5
+            while time.monotonic() < end:
+                qapp.processEvents()
+            # One as the picture leaves; none while it is away, when its
+            # share of the pane is nothing to anybody.
+            assert len(readings) <= 2, (
+                f"{len(readings)} readings in half a second")
+        finally:
+            pane._full.close()
+            qapp.processEvents()
+
+    def test_a_reading_that_finds_nothing_new_asks_for_no_other(
+            self, qapp, qtbot):
+        """In the window as well: a picture whose shape leaves room under the
+        controls looks squeezed after every reading."""
+        import time
+
+        from PySide6.QtCore import QCoreApplication, QEvent
+
+        pane = TestTheFullScreenControlsWork._pane(qtbot)
+        pane.resize(900, 700)
+        pane.visual_holder.setVisible(True)
+        pane.show()
+        qapp.processEvents()
+        pane._controls_squeezed = lambda: True
+        settled = []
+        real = pane._spectrum_budget
+
+        def reading(fresh=True):
+            if fresh:
+                settled.append(1)
+            return real(fresh)
+
+        pane._spectrum_budget = reading
+        # Something around the picture changing size.
+        pane.resize(900, 720)
+        QCoreApplication.postEvent(pane, QEvent(QEvent.Type.LayoutRequest))
+        end = time.monotonic() + 0.5
+        while time.monotonic() < end:
+            qapp.processEvents()
+        assert 1 <= len(settled) <= 4, (
+            f"{len(settled)} fresh readings in half a second")
 
 
 class TestTheTwoStrobeKeys:

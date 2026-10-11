@@ -6,7 +6,8 @@ Rave and Ambience hitched. The clock here sets the timer afresh each frame
 for the moment the next tick is due, and a frame that comes late is given
 the ticks it missed, so what moves keeps its speed. Measured on the card,
 the share of frames shown a refresh apart went from 88 to 99.6 per cent at
-full screen.
+full screen. Where the Mac hands out the screen's refreshes, they keep the
+frames instead, and the timer only stands in for them.
 """
 
 from __future__ import annotations
@@ -133,6 +134,338 @@ class TestTheClock:
         made._timer.setInterval(13)
         made._pace()
         assert made._timer.interval() == 13
+
+
+class _Link:
+    """Stands in for the screen's refreshes: what the pane asked of them."""
+
+    def __init__(self) -> None:
+        self.following = 0
+        self.stopped = 0
+        self.running = False
+
+    def follow(self, widget) -> bool:
+        self.following += 1
+        self.running = True
+        return True
+
+    def stop(self) -> None:
+        self.stopped += 1
+        self.running = False
+
+
+@pytest.fixture
+def refreshing(pane):
+    """The pane above, shown, with the screen's refreshes standing by."""
+    made, clock, ticks = pane
+    link = _Link()
+    made._refreshes = link
+    made.show()
+    yield made, clock, ticks, link
+    made.hide()
+
+
+def _refreshes(made, clock, gaps_s, stamp=50.0, late=()):
+    """A refresh after each gap, by the screen's clock; the call to the pane
+    comes as late after it as ``late`` says, a main thread being busy."""
+    for i, gap in enumerate(gaps_s):
+        stamp += gap
+        clock.now += gap
+        lag = late[i % len(late)] if late else 0.0
+        clock.now += lag
+        made._refreshed(stamp)
+        clock.now -= lag
+    return stamp
+
+
+class TestTheScreensRefreshes:
+    """On the card each frame starts at a refresh of the screen. Timed by
+    the timer, frames fell wherever its phase put them in the refresh, and
+    near the moment the screen took its picture one refresh in three showed
+    a frame twice or skipped one."""
+
+    def test_the_timer_asks_for_them(self, refreshing):
+        made, _clock, _ticks, link = refreshing
+        made._on_timer()
+        assert link.following, "the frames never asked for the refreshes"
+
+    def test_each_refresh_of_a_screen_at_sixty_is_a_tick(self, refreshing):
+        """Counted by the refreshes' own moments, so a call that comes late
+        or early, as a busy main thread makes it, is still one tick."""
+        made, clock, ticks, _link = refreshing
+        before = len(ticks)
+        each = []
+        stamp = 50.0
+        for lag in [0.0, 0.006, 0.0, 0.009, 0.002] * 24:
+            count = len(ticks)
+            stamp = _refreshes(made, clock, [1.0 / 60.0], stamp, late=[lag])
+            each.append(len(ticks) - count)
+            # The timer, firing meanwhile, adds nothing.
+            clock.now += 0.004
+            made._on_timer()
+            clock.now -= 0.004
+        assert len(ticks) - before == 120
+        assert set(each) == {1}
+
+    def test_a_refresh_missed_is_made_up_and_a_long_gap_starts_again(
+            self, refreshing):
+        made, clock, ticks, _link = refreshing
+        stamp = _refreshes(made, clock, [1.0 / 60.0] * 3)
+        before = len(ticks)
+        stamp = _refreshes(made, clock, [2.0 / 60.0], stamp)
+        assert len(ticks) - before == 2, "what moves would have slowed"
+        _refreshes(made, clock, [1.0], stamp)
+        assert len(ticks) - before == 3, "it raced through a second"
+
+    @pytest.mark.parametrize("rate", [120.0, 59.94, 50.0])
+    def test_another_screen_gets_sixty_ticks_a_second(self, refreshing, rate):
+        """At a hundred and twenty, a tick every other refresh; within a
+        tenth of sixty, one at every refresh; otherwise, by the time."""
+        made, clock, ticks, _link = refreshing
+        stamp = _refreshes(made, clock, [1.0 / rate] * 10)
+        before = len(ticks)
+        each = []
+        for _ in range(int(rate * 10)):
+            count = len(ticks)
+            stamp = _refreshes(made, clock, [1.0 / rate], stamp)
+            each.append(len(ticks) - count)
+        made_ticks = len(ticks) - before
+        if rate == 120.0:
+            assert made_ticks == 600 and set(each) == {0, 1}
+            assert all(a != b for a, b in zip(each, each[1:])), (
+                "two refreshes in a row went by with the same number")
+        elif rate == 59.94:
+            assert set(each) == {1}
+        else:
+            assert abs(made_ticks - 600) <= 1
+            assert set(each) == {1, 2}
+
+    def test_meanwhile_the_timer_only_watches(self, refreshing):
+        made, clock, _ticks, _link = refreshing
+        _refreshes(made, clock, [1.0 / 60.0])
+        assert made._timer.interval() == made._watching_ms() == 50
+
+    def test_when_they_stop_the_timer_takes_the_frames_back(self, refreshing):
+        made, clock, ticks, _link = refreshing
+        _refreshes(made, clock, [1.0 / 60.0] * 5)
+        before = len(ticks)
+        clock.now += made.TICK_S * (made.REFRESH_LOST - 0.5)
+        made._on_timer()
+        assert len(ticks) == before, "the timer drew while they came"
+        clock.now += made.TICK_S
+        made._on_timer()
+        assert 1 <= len(ticks) - before <= made.CATCH_UP
+        assert made._timer.interval() < made._watching_ms()
+
+    @pytest.mark.parametrize("why", ["off the card", "analysing",
+                                     "frames too dear", "timer stopped",
+                                     "hidden"])
+    def test_the_timer_keeps_the_frames_when(self, refreshing, why):
+        made, clock, ticks, link = refreshing
+        _refreshes(made, clock, [1.0 / 60.0])
+        if why == "off the card":
+            made._canvas = None
+        elif why == "analysing":
+            made._working = 0.5
+        elif why == "frames too dear":
+            made._paced_ms = lambda: 30
+        elif why == "timer stopped":
+            made._timer.stop()
+        else:
+            made.hide()
+        before = len(ticks)
+        stopped = link.stopped
+        _refreshes(made, clock, [1.0 / 60.0], 99.0)
+        assert len(ticks) == before
+        assert link.stopped > stopped, "the refreshes were left running"
+        assert not made._refreshing()
+
+    def test_a_hidden_pane_lets_them_go(self, refreshing):
+        made, clock, _ticks, link = refreshing
+        _refreshes(made, clock, [1.0 / 60.0])
+        made.hide()
+        assert link.stopped and not link.running
+        assert made._timer.interval() == made.FRAME_MS
+
+
+class TestWhatWaitsForAFrame:
+    """See Spectrum.after_the_frame."""
+
+    def test_it_waits_while_frames_come_and_not_otherwise(self, refreshing):
+        made, _clock, _ticks, _link = refreshing
+        ran = []
+        made.after_the_frame("a", lambda: ran.append("first"))
+        made.after_the_frame("a", lambda: ran.append("second"))
+        assert ran == []
+        made._frame_shown()
+        assert ran == ["second"], "the later call takes the earlier's place"
+        made._timer.stop()
+        made.after_the_frame("a", lambda: ran.append("at once"))
+        assert ran[-1] == "at once"
+
+    def test_a_track_put_down_forgets_it(self, refreshing):
+        made, _clock, _ticks, _link = refreshing
+        ran = []
+        made.after_the_frame("a", lambda: ran.append(1))
+        made.clear()
+        made._frame_shown()
+        assert ran == []
+
+    def test_a_card_given_up_on_runs_it(self, refreshing):
+        """No frame will be shown on it again."""
+        made, _clock, _ticks, _link = refreshing
+        ran = []
+        made.after_the_frame("a", lambda: ran.append(1))
+        made._drop_canvas()
+        assert ran == [1]
+
+
+class TestTheMusicsClockOnTheCard:
+    """Run on by the time since the last tick, the music's clock took the
+    timer's unevenness with it, and a road driven by it moved anywhere from
+    nothing to 30 ms of the song a frame."""
+
+    @staticmethod
+    def _playing(qapp, monkeypatch):
+        from array import array
+
+        import attachment_audio
+        import attachment_widgets
+        from attachment_widgets import Spectrum
+        from PySide6.QtWidgets import QWidget
+
+        clock = _Clock()
+        monkeypatch.setattr(attachment_widgets._time, "monotonic", clock)
+        made = Spectrum()
+        made.set_frames(
+            [array("f", [0.4] * attachment_audio.BANDS) for _ in range(3000)],
+            attachment_audio.RATE)
+        made._canvas = QWidget(made)
+        made.set_playing(True)
+        player = {"at": 0.0}
+        # A player that says where it is every 50 ms, as Qt's does.
+        made.follow(lambda: int(player["at"] * 1000) // 50 * 50)
+        # Where the music's clock was after each tick.
+        made.heard = []
+        real = made._tick
+
+        def tick():
+            real()
+            made.heard.append(made._heard_now)
+
+        made._tick = tick
+        return made, clock, player
+
+    @staticmethod
+    def _play(made, clock, player, gaps_ms):
+        made.heard.clear()
+        for gap in gaps_ms:
+            clock.now += gap / 1000.0
+            player["at"] += gap / 1000.0
+            made._on_timer()
+        return list(made.heard)
+
+    def test_each_tick_moves_it_a_sixtieth(self, qapp, monkeypatch):
+        """Frames late and early by a few milliseconds, as a busy machine
+        makes them: each still moves the music on by a sixtieth, leaning
+        on the player by at most an eighth of that."""
+        made, clock, player = self._playing(qapp, monkeypatch)
+        try:
+            self._play(made, clock, player, [1000.0 / 60.0] * 120)
+            uneven = [16.7 + 5.0, 16.7 - 5.0, 16.7 + 2.0, 16.7 - 2.0] * 60
+            heard = self._play(made, clock, player, uneven)
+            steps = [b - a for a, b in zip(heard, heard[1:])]
+            assert len(steps) > 200
+            assert min(steps) >= made.TICK_S - made.LEAN - 1e-9
+            assert max(steps) <= made.TICK_S + made.LEAN + 1e-9
+            assert abs(heard[-1] - player["at"]) < 0.06, (
+                "and it still keeps up with the music")
+        finally:
+            made._canvas = None
+            made.deleteLater()
+
+    def test_a_report_out_of_step_is_leaned_on_not_followed(
+            self, qapp, monkeypatch):
+        """A player says where it is when it can; one report 60 ms out of
+        step moves the clock towards it by an eighth of a tick at most."""
+        made, clock, player = self._playing(qapp, monkeypatch)
+        try:
+            self._play(made, clock, player, [1000.0 / 60.0] * 120)
+            made.follow(lambda: int(player["at"] * 1000) // 50 * 50 + 60)
+            heard = self._play(made, clock, player, [1000.0 / 60.0] * 3)
+            made.follow(lambda: int(player["at"] * 1000) // 50 * 50)
+            heard += self._play(made, clock, player, [1000.0 / 60.0] * 30)
+            steps = [b - a for a, b in zip(heard, heard[1:])]
+            assert max(steps) > made.TICK_S + made.LEAN * 0.9, (
+                "the report never pulled at the clock")
+            assert max(steps) <= made.TICK_S + made.LEAN + 1e-9
+            assert min(steps) >= made.TICK_S - made.LEAN - 1e-9
+        finally:
+            made._canvas = None
+            made.deleteLater()
+
+    def test_time_the_frames_skipped_is_not_lost(self, qapp, monkeypatch):
+        """A frame held up a tenth of a second starts the frames' clock
+        again; the music's clock, run on a sixtieth a tick, fell that far
+        behind and took a second to catch up, the blocks off the beat."""
+        made, clock, player = self._playing(qapp, monkeypatch)
+        try:
+            self._play(made, clock, player, [1000.0 / 60.0] * 120)
+            heard = self._play(made, clock, player, [150.0])
+            # Where the music was before the player's last report moved on.
+            assert abs(heard[-1] - player["at"]) < 0.05 + made.TICK_S
+            heard = self._play(made, clock, player, [1000.0 / 60.0] * 6)
+            assert abs(heard[-1] - player["at"]) < 0.05
+        finally:
+            made._canvas = None
+            made.deleteLater()
+
+    def test_nor_when_the_refreshes_keep_the_frames(self, qapp, monkeypatch):
+        """The same held-up frame with the screen's refreshes keeping the
+        frames: the refreshes missed are made up in the music too."""
+        made, clock, player = self._playing(qapp, monkeypatch)
+        made._refreshes = _Link()
+        made._timer.start()
+        made.show()
+        try:
+            stamp = 80.0
+            for gap in [1.0 / 60.0] * 120 + [0.15] + [1.0 / 60.0] * 6:
+                stamp += gap
+                clock.now += gap
+                player["at"] += gap
+                made._refreshed(stamp)
+                if gap > 0.1:
+                    assert abs(made._heard_now - player["at"]) < (
+                        0.05 + made.TICK_S)
+            assert abs(made._heard_now - player["at"]) < 0.05
+        finally:
+            made.hide()
+            made._timer.stop()
+            made._canvas = None
+            made.deleteLater()
+
+    def test_and_the_controls_no_longer_slow_the_frames(self, qapp):
+        """Halved while the full-screen controls were up, the frames ran at
+        thirty a second whenever the mouse moved. On the card a frame
+        leaves the controls most of the sixtieth."""
+        from attachment_widgets import Spectrum
+        from PySide6.QtWidgets import QWidget
+
+        made = Spectrum()
+        try:
+            made._canvas = QWidget(made)
+            ordinary = made._paced_ms()
+            made.set_giving_way(True)
+            assert made._paced_ms() == ordinary
+            made._canvas = None
+            made.set_giving_way(False)
+            ordinary = made._paced_ms()
+            made.set_giving_way(True)
+            assert made._paced_ms() == int(ordinary * made.GIVE_WAY), (
+                "off the card it still gives way")
+        finally:
+            made._canvas = None
+            made.deleteLater()
 
 
 class TestTheFieldBehindAmbience:

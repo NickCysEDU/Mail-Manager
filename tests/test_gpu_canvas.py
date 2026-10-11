@@ -898,6 +898,104 @@ class TestABigScreenOnASmallCard:
         assert got["drawn"] >= 27, (
             f"thirty ticks drew only {got['drawn']} frames")
 
+    def test_asked_again_with_nothing_new_it_puts_up_what_it_drew(self):
+        """Qt asks for the canvas again whenever a widget over it changes
+        (the full-screen controls' seek bar, every 50 ms): drawn afresh each
+        time, each cost a whole frame of the card. The picture drawn is put
+        up again instead, and the next tick draws a new one."""
+        got = on_the_card("""
+            import time
+            made = pane(size=(320, 200))
+            # Running, as it is whenever frames come, but not ticking here.
+            made._timer.start(10 ** 7)
+            made.show()
+
+            def settle(seconds=0.1):
+                end = time.monotonic() + seconds
+                while time.monotonic() < end:
+                    app.processEvents()
+                    time.sleep(0.002)
+
+            # Until the strip has finished sliding open, which is new each
+            # frame.
+            settle(1.0)
+            scenes = []
+            real = made._paint
+            made._paint = lambda painter: (scenes.append(1), real(painter))
+            made._tick()
+            settle()
+            first = made._canvas.grabFramebuffer()
+            drawn = len(scenes)
+            made._canvas.update()
+            settle()
+            again = made._canvas.grabFramebuffer()
+            asked_again = len(scenes) - drawn
+            made._tick()
+            settle()
+            print(json.dumps({"drawn": drawn, "asked_again": asked_again,
+                              "same": first == again,
+                              "next_tick": len(scenes) - drawn
+                              - asked_again}))
+        """)
+        assert got["drawn"] >= 1
+        assert got["asked_again"] == 0, (
+            f"the scene was drawn {got['asked_again']} more times with "
+            f"nothing new to show")
+        assert got["same"], "and what was put up again is not what was drawn"
+        assert got["next_tick"] >= 1, "and the next tick drew nothing"
+
+    def test_a_widget_over_it_changing_draws_no_frame(self):
+        """Qt puts the window together again around the canvas's last frame.
+        The pane asked the canvas for another from its own paint, so a
+        widget over the picture that changed drew a frame for nothing,
+        which put the next one a refresh late."""
+        got = on_the_card("""
+            import time
+            from PySide6.QtWidgets import QLabel
+            made = pane(size=(320, 200))
+            made._timer.start(10 ** 7)
+            label = QLabel("over the picture", made)
+            label.move(10, 10)
+            made.show()
+
+            def settle(seconds=0.1):
+                end = time.monotonic() + seconds
+                while time.monotonic() < end:
+                    app.processEvents()
+                    time.sleep(0.002)
+
+            # Until the strip has finished sliding open.
+            settle(1.0)
+            asked = []
+            real = made._paint_on_gpu
+            made._paint_on_gpu = lambda canvas: (asked.append(1), real(canvas))
+            label.setText("changed over the picture")
+            settle()
+            print(json.dumps({"asked": len(asked)}))
+        """)
+        assert got["asked"] == 0, (
+            f"one change over the picture asked for {got['asked']} frames")
+
+    def test_one_frame_in_four_waits_for_the_card(self):
+        """Every frame waited for the card to finish, to be measured, which
+        held the app's own thread for 9 to 12 ms of every sixtieth at full
+        screen."""
+        got = on_the_card("""
+            made = pane(size=(320, 200))
+            measured = []
+            real = made._card.record
+            made._card.record = lambda ms, ratio: (measured.append(ms),
+                                                   real(ms, ratio))
+            for i in range(40):
+                made._tick()
+                made._canvas.grabFramebuffer()
+            print(json.dumps({"measured": len(measured),
+                              "every": made.MEASURE_EVERY}))
+        """)
+        assert got["every"] == 4
+        assert got["measured"] == 10, (
+            f"forty frames were measured {got['measured']} times")
+
     def test_a_card_too_slow_for_its_screen_draws_less(self):
         """A frame the card cannot finish in its budget is measured on the
         card, and the pane gives up samples and slows its timer to what the
@@ -915,7 +1013,8 @@ class TestABigScreenOnASmallCard:
                     time.sleep(0.02)
             made = pane(scene=Heavy(), size=(640, 400))
             card = made._card
-            for i in range(card.WARMUP + card.WINDOW + 2):
+            every = made.MEASURE_EVERY
+            for i in range((card.WARMUP + card.WINDOW + 2) * every):
                 made._tick()
                 made._canvas.grabFramebuffer()
             made._tick()
@@ -928,6 +1027,113 @@ class TestABigScreenOnASmallCard:
             f"a card taking over 20 ms a frame is still at {got['rung']}")
         assert got["timer"] > 20, (
             f"and the timer is still asking every {got['timer']} ms")
+
+
+#: What the scripts below have before their own bodies: the screen's
+#: refreshes counted as the pane is handed them.
+REFRESHES = textwrap.dedent("""
+    import gc, platform, time
+    import refreshes_mac
+    if not refreshes_mac.available():
+        if int(platform.mac_ver()[0].split(".")[0]) < 14:
+            print(json.dumps({"skip": "this Mac hands out no refreshes: a "
+                                      "view makes them from macOS 14"}))
+        else:
+            print(json.dumps({"unanswered": refreshes_mac._rt().missing(
+                refreshes_mac.NEEDED)}))
+        sys.stdout.flush()
+        os._exit(0)
+    calls = []
+    real_refreshed = Spectrum._refreshed
+
+    def counted(self, stamp):
+        calls.append(stamp)
+        return real_refreshed(self, stamp)
+
+    Spectrum._refreshed = counted
+
+    def settle(seconds):
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            app.processEvents()
+            time.sleep(0.002)
+""")
+
+
+class TestTheScreensRefreshesKeepTheFrames:
+    """On the card each frame starts at a refresh of the screen, from a
+    display link the window's view makes. See refreshes_mac."""
+
+    def test_they_come_and_each_is_a_tick(self):
+        got = on_the_card(REFRESHES + textwrap.dedent("""
+            made = pane(size=(320, 200))
+            made.show()
+            ticks = []
+            real_tick = made._tick
+            made._tick = lambda: (ticks.append(1), real_tick())
+            settle(0.5)
+            calls.clear()
+            ticks.clear()
+            settle(1.5)
+            print(json.dumps({"refreshes": len(calls), "ticks": len(ticks),
+                              "rate": made.screen().refreshRate(),
+                              "following": made._refreshes.running}))
+        """))
+        assert "unanswered" not in got, (
+            f"this Mac does not answer {got.get('unanswered')}")
+        assert got["following"]
+        assert got["refreshes"] >= got["rate"] * 1.5 * 0.8, (
+            f"{got['refreshes']} refreshes came in a second and a half of "
+            f"a screen at {got['rate']:.0f}")
+        assert abs(got["ticks"] - 90) <= 12, (
+            f"{got['ticks']} ticks in a second and a half")
+
+    def test_a_pane_let_go_of_lets_them_go(self):
+        """With its window, which takes the view the refreshes came from:
+        no refresh comes to find the pane gone, so the link goes with the
+        pane, not left running for the rest of the session."""
+        got = on_the_card(REFRESHES + textwrap.dedent("""
+            made = pane(size=(320, 200))
+            made.show()
+            settle(0.5)
+            following = made._refreshes.running
+            del made
+            gc.collect()
+            settle(0.5)
+            print(json.dumps({"following": following,
+                              "links": len(refreshes_mac._links)}))
+        """))
+        assert got["following"]
+        assert got["links"] == 0, f"{got['links']} links were left running"
+
+    def test_they_follow_the_pane_into_another_window(self):
+        """As going full screen moves it, perhaps to another screen."""
+        got = on_the_card(REFRESHES + textwrap.dedent("""
+            home, away = QWidget(), QWidget()
+            for window in (home, away):
+                window.resize(400, 300)
+            made = pane(size=(320, 200))
+            made.setParent(home)
+            home.show()
+            made.show()
+            settle(0.5)
+            first = made._refreshes._view == int(home.winId())
+            away.show()
+            made.setParent(away)
+            made.show()
+            settle(0.5)
+            calls.clear()
+            settle(1.0)
+            print(json.dumps({
+                "first": first,
+                "now": made._refreshes._view == int(away.winId()),
+                "refreshes": len(calls), "rate": made.screen().refreshRate(),
+                "links": len(refreshes_mac._links)}))
+        """))
+        assert got["first"], "the refreshes were not the first window's"
+        assert got["now"], "they did not follow the pane to the second"
+        assert got["refreshes"] >= got["rate"] * 0.8
+        assert got["links"] == 1, f"{got['links']} links are running"
 
 
 class TestNothingIsTakenApartMidFrame:

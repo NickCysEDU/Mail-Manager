@@ -180,6 +180,11 @@ def _combo(options, tip: str) -> QComboBox:
 #: How far J and L jump.
 SKIP_MS = 10_000
 
+#: What the full-screen bar's moves, and the window's, wait for the
+#: scene's frames under. See Spectrum.after_the_frame.
+FULL_BAR = "full-screen bar"
+TRANSPORT = "transport"
+
 PLAY_GLYPH = "\u25b6"
 PAUSE_GLYPH = "\u275a\u275a"
 
@@ -405,6 +410,9 @@ class AudioPane(QWidget):
     #: Where it is kept. A new name when the default changes, so a level set
     #: under the old default is not carried over.
     EFFECTS_PREF = "effects_level"
+    #: What the last fresh reading of the picture's share was taken from.
+    #: See _budget_settled.
+    _settled_on = None
     #: What each of the rider's games is, in a line, under the controls.
     GAME_ABOUT = {
         "Mono": "Take the coloured blocks and miss the grey ones. Colours "
@@ -1073,6 +1081,7 @@ class AudioPane(QWidget):
         if self._player is not None:
             self._player.setPosition(value)
             self.spectrum.seek_to(value)
+            self.spectrum.forget_after_the_frame(TRANSPORT)
             self.wave.set_position(value)
             self._show_clock(value)
 
@@ -1091,8 +1100,16 @@ class AudioPane(QWidget):
     def _moved(self, value: int) -> None:
         self.position.report(value)
         self.spectrum.set_position(value)
-        self.wave.set_position(value)
-        self._show_clock(self.position.value())
+        shown = self.position.value()
+
+        def show() -> None:
+            self.wave.set_position(value)
+            self._show_clock(shown)
+
+        # Just after a frame of the picture rather than just before one: in
+        # the same window, drawn as a frame was due, they held it back. See
+        # Spectrum.after_the_frame.
+        self.spectrum.after_the_frame(TRANSPORT, show)
 
     @Slot(int)
     def _duration(self, value: int) -> None:
@@ -1455,6 +1472,7 @@ class AudioPane(QWidget):
             except (RuntimeError, TypeError):      # already gone
                 pass
         self._full_links = []
+        self.spectrum.forget_after_the_frame(FULL_BAR)
         self._full = None
         self._full_play = None
         self._full_effects = ()
@@ -1672,28 +1690,35 @@ class AudioPane(QWidget):
         seek.setValue(self.position.value())
         seek.seeked.connect(self._seek)
         seek.seeked.connect(self.position.setValue)
+
+        clock = QLabel(self.clock.text())
+        clock.setFont(system_font())
+        clock.setMinimumWidth(104)
+        clock.setStyleSheet("color: #e8e8ee;")
+
+        def show(value: int) -> None:
+            seek.report(value)
+            clock.setText(f"{_mmss(value)} / {_mmss(self.position.maximum())}")
+
+        def moved(value: int) -> None:
+            # Just after a frame rather than just before one: the bar is
+            # over the picture. See Spectrum.after_the_frame.
+            self.spectrum.after_the_frame(FULL_BAR, lambda: show(value))
+
+        def changed(value: int) -> None:
+            # A seek or a new track, at once, over any report still waiting.
+            self.spectrum.forget_after_the_frame(FULL_BAR)
+            show(value)
+
         # Connections from the pane's widgets to widgets that exist only while
         # full screen does, undone when it closes, or the next seek calls into
         # a deleted label. Both signals: valueChanged carries a seek or a track
         # change, and ``moved`` carries the player's own reports while a track
         # plays.
         self._full_links = [
-            (self.position.valueChanged, self.position.valueChanged.connect(
-                seek.report)),
-            (self.position.moved, self.position.moved.connect(seek.report))]
-
-        clock = QLabel(self.clock.text())
-        clock.setFont(system_font())
-        clock.setMinimumWidth(104)
-        clock.setStyleSheet("color: #e8e8ee;")
-        def tick(value: int) -> None:
-            clock.setText(f"{_mmss(value)} / {_mmss(self.position.maximum())}")
-
-        self._full_links.append(
             (self.position.valueChanged,
-             self.position.valueChanged.connect(tick)))
-        self._full_links.append(
-            (self.position.moved, self.position.moved.connect(tick)))
+             self.position.valueChanged.connect(changed)),
+            (self.position.moved, self.position.moved.connect(moved))]
 
         volume = QSlider(Qt.Orientation.Horizontal)
         volume.setRange(0, 100)
@@ -2038,15 +2063,26 @@ class AudioPane(QWidget):
             # Something around the picture changed size (the cover and title
             # arriving, a row of controls wrapping), so its share is worked out
             # again, not only on a resize. Not while the pane is being taken
-            # apart, when the picture may be gone.
+            # apart, when the picture may be gone, nor while it is full
+            # screen, when its share of the pane is nothing to anybody.
             import shiboken6
 
             spectrum = getattr(self, "spectrum", None)
-            if spectrum is not None and shiboken6.isValid(spectrum):
+            if (spectrum is not None and shiboken6.isValid(spectrum)
+                    and self.isAncestorOf(spectrum)):
                 self._apply_budget(fresh=False)
-                if self._controls_squeezed():
+                if (self._controls_squeezed()
+                        and self._layout_reading() != self._settled_on):
                     QTimer.singleShot(0, self, self._budget_settled)
         return handled
+
+    def _layout_reading(self) -> tuple:
+        """What the picture's share is worked out from: a layout asked for
+        again with all of it as it was has nothing new to say."""
+        holder = self.visual_holder
+        return (self.size(), holder.isVisible(), holder.geometry(),
+                holder.heightForWidth(holder.width()),
+                self.spectrum.minimumHeight(), self.spectrum.maximumHeight())
 
     def _controls_squeezed(self) -> bool:
         """Whether the row of controls has less than it asks for, or the
@@ -2065,7 +2101,12 @@ class AudioPane(QWidget):
         """A fresh reading once the layout is quiet. The layout's cached
         numbers can lag a label that has just wrapped, and a budget read from
         them left the controls cut short with room to spare under them. Acts
-        only when the answer differs, so nothing loops."""
+        only when the answer differs. The reading asks for a layout itself,
+        and while the controls still looked squeezed that layout asked for
+        another reading, and so on: over a thousand a second while the
+        picture was full screen, where the room it leaves under the controls
+        stays. So another is asked for only once something it is worked out
+        from has changed."""
         import shiboken6
 
         if not shiboken6.isValid(self.spectrum):
@@ -2073,6 +2114,7 @@ class AudioPane(QWidget):
         budget = max(80, self._spectrum_budget(fresh=True))
         if budget != self.spectrum._budget:
             self.spectrum.set_budget(budget)
+        self._settled_on = self._layout_reading()
 
     def closeEvent(self, incoming) -> None:      # noqa: N802 - Qt's name
         self._cancel_analysis()

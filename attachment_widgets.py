@@ -14,11 +14,12 @@ from typing import List, Optional
 import math as _math
 import time as _time
 
+import refreshes_mac
 import visualizers
 from flowlayout import FlowHolder as _FlowHolder
 
-from PySide6.QtCore import (QAbstractAnimation, QEasingCurve, QPoint, QPointF,
-                            QRect, QRectF, QSize, Qt,
+from PySide6.QtCore import (QAbstractAnimation, QEasingCurve, QEvent, QPoint,
+                            QPointF, QRect, QRectF, QSize, Qt,
                             QTimer, QVariantAnimation, Signal)
 from PySide6.QtGui import (QColor, QFont, QFontMetricsF, QImage, QLinearGradient,
                            QPainter, QPixmap, QPen,
@@ -27,8 +28,8 @@ from PySide6.QtOpenGL import (QOpenGLFramebufferObject,
                               QOpenGLFramebufferObjectFormat,
                               QOpenGLPaintDevice, QOpenGLTextureBlitter)
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
-from PySide6.QtWidgets import (QGraphicsOpacityEffect, QLayout, QSizePolicy,
-                               QSlider, QStyle,
+from PySide6.QtWidgets import (QAbstractSlider, QGraphicsOpacityEffect,
+                               QLayout, QSizePolicy, QSlider, QStyle,
                                QStyleOptionSlider, QVBoxLayout, QWidget)
 
 
@@ -46,11 +47,59 @@ class SeekBar(QSlider):
         self.setRange(0, 0)
         self._pending: Optional[int] = None
         self._dragging = False
+        #: Where the handle was last drawn, across the bar, and how far it
+        #: travels at this width. See sliderChange.
+        self._drawn_at: Optional[int] = None
+        self._travel: Optional[int] = None
         # If the player never confirms, stop ignoring it rather than freezing.
         self._giveup = QTimer(self)
         self._giveup.setSingleShot(True)
         self._giveup.setInterval(1200)
         self._giveup.timeout.connect(self._stop_waiting)
+
+    def _handle_at(self) -> int:
+        if self._travel is None:
+            # Asked of the style once a size: it takes a millisecond.
+            option = QStyleOptionSlider()
+            self.initStyleOption(option)
+            style = self.style()
+            groove = style.subControlRect(
+                QStyle.ComplexControl.CC_Slider, option,
+                QStyle.SubControl.SC_SliderGroove, self)
+            handle = style.subControlRect(
+                QStyle.ComplexControl.CC_Slider, option,
+                QStyle.SubControl.SC_SliderHandle, self)
+            self._travel = max(0, groove.width() - handle.width())
+        return QStyle.sliderPositionFromValue(
+            self.minimum(), self.maximum(), self.sliderPosition(),
+            self._travel)
+
+    def sliderChange(self, change) -> None:      # noqa: N802 - Qt's name
+        """Drawn again only when the handle moves. The player reports every
+        50 ms and a long track moves the handle a pixel every few seconds;
+        drawn at every report, the bar over the full-screen picture had the
+        window put together twenty more times a second than the picture
+        needed."""
+        if (change == QAbstractSlider.SliderChange.SliderValueChange
+                and not self._dragging and self.isVisible()):
+            at = self._handle_at()
+            if at == self._drawn_at:
+                return
+            self._drawn_at = at
+        else:
+            self._drawn_at = None
+            if change != QAbstractSlider.SliderChange.SliderValueChange:
+                self._travel = None
+        super().sliderChange(change)
+
+    def resizeEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        self._drawn_at = self._travel = None
+        super().resizeEvent(event)
+
+    def changeEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        if event.type() == QEvent.Type.StyleChange:
+            self._drawn_at = self._travel = None
+        super().changeEvent(event)
 
     def _value_at(self, x: int) -> int:
         option = QStyleOptionSlider()
@@ -345,6 +394,12 @@ class _GpuCanvas(QOpenGLWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents,
                           True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.frameSwapped.connect(self._shown)
+
+    def _shown(self) -> None:
+        pane = self._pane()
+        if pane is not None:
+            pane._frame_shown()
 
     def initializeGL(self) -> None:      # noqa: N802 - Qt's name
         # A new context, which reparenting into full screen can bring: whatever
@@ -381,6 +436,13 @@ class _GpuCanvas(QOpenGLWidget):
                              made(halo.width(), halo.height()), device)
             self._halves = {}
         return self._buffers[1:]
+
+    def kept(self):
+        """What the framebuffers were built for, and the plain one the last
+        frame was resolved into; None before any."""
+        if self._buffers is None:
+            return None
+        return self._buffers[0], self._buffers[2]
 
     def half(self, width: int, height: int):
         """A plain framebuffer of this size, kept for the next frame."""
@@ -612,6 +674,10 @@ class Spectrum(QWidget):
         self._swap_pending = False
         self._crossing = False
         self._shown_fresh = 0.0
+        #: Whether the pane has asked for a picture since the card last drew
+        #: one, and what that one was drawn for. See _paint_on_gpu.
+        self._picture_due = True
+        self._drawn_for = None
         #: How many frames the current scene has drawn; the fade waits for
         #: these (see WARM_FRAMES).
         self._drawn = 0
@@ -693,13 +759,29 @@ class Spectrum(QWidget):
         self._rapid_at = -99.0
         self._timer = QTimer(self)
         # Sixty a second; every scene paints in well under a frame at 1080p.
-        # On the card the timer is set afresh each frame for the next tick's
-        # moment (see _frame).
+        # On the card the screen's refreshes keep the frames where this Mac
+        # hands them out (see _refreshed), and otherwise the timer is set
+        # afresh each frame for the next tick's moment (see _frame).
         self._timer.setInterval(self.FRAME_MS)
         self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.timeout.connect(self._on_timer)
         #: Where the scenes' clock has got to. See _frame.
         self._tick_clock: Optional[float] = None
+        #: The screen's refreshes, once asked for; when the last came, its
+        #: moment by the screen's clock, and the part of a tick owed since.
+        #: See _refreshed.
+        self._refreshes: Optional[refreshes_mac.Refreshes] = None
+        self._refreshed_at: Optional[float] = None
+        self._refresh_stamp: Optional[float] = None
+        self._owed = 0.0
+        #: Time the frames skipped and the music did not, for the next tick
+        #: to run the music's clock on by. See _heard.
+        self._skipped = 0.0
+        #: What waits for the frame being drawn to be shown, by key. See
+        #: after_the_frame.
+        self._after_frame: dict = {}
+        #: Frames drawn on the card, for measuring one in MEASURE_EVERY.
+        self._card_frames = 0
 
         self._reveal = 0.0
         self._idling = False
@@ -749,6 +831,8 @@ class Spectrum(QWidget):
         if canvas is not None:
             canvas.hide()
             canvas.deleteLater()
+        # No more frames will be shown on it.
+        self._frame_shown()
         super().update()
 
     def _world(self):
@@ -786,6 +870,7 @@ class Spectrum(QWidget):
         return self._canvas is not None
 
     def update(self, *args) -> None:      # noqa: D401 - Qt's name
+        self._picture_due = True
         if self._canvas is None:
             super().update(*args)
             return
@@ -796,6 +881,13 @@ class Spectrum(QWidget):
         if self._canvas.geometry() != self.rect():
             self._canvas.setGeometry(self.rect())
         self._canvas.update()
+
+    #: Every frame waited for the card to finish, to be measured, which held
+    #: the app's own thread for 9 to 12 ms of every sixtieth at full screen:
+    #: frames came late, two ticks at once, and the controls had to halve
+    #: the rate to be answered. A frame in four is measured; the rest the
+    #: card draws while the next is made. See CardSharpness.
+    MEASURE_EVERY = 4
 
     def _paint_on_gpu(self, canvas) -> None:
         """One frame, drawn on the card at the screen's own resolution.
@@ -817,6 +909,16 @@ class Spectrum(QWidget):
             if screen_w < 2 or screen_h < 2:
                 # A pane with no room has nothing to draw, and the card will
                 # not paint into a framebuffer with no height.
+                return
+            due, self._picture_due = self._picture_due, False
+            kept = canvas.kept()
+            if (not due and kept is not None and self._timer.isActive()
+                    and self._drawn_for == (screen_w, screen_h, kept[0])):
+                # Asked for again with nothing new, as Qt does whenever a
+                # widget over the canvas changes (the full-screen controls'
+                # seek bar, every 50 ms): the picture already drawn, put up
+                # again. Drawn afresh, each cost a whole frame of the card.
+                self._put_up(canvas, kept[1], screen_w, screen_h)
                 return
             samples, share = self._card.choice(
                 screen_w * screen_h, ratio, self._scene)
@@ -857,40 +959,15 @@ class Spectrum(QWidget):
             QOpenGLFramebufferObject.blitFramebuffer(flat, full, multi, full)
             if self._gpu_scene is not None:
                 self._polish_on_gpu(canvas, flat, small, device, ratio * share)
-            # Back onto the canvas's own framebuffer, which the blits above
-            # unbound.
-            functions = canvas.context().functions()
-            functions.glBindFramebuffer(0x8D40, canvas.defaultFramebufferObject())
-            screen = QRect(0, 0, screen_w, screen_h)
-            functions.glViewport(0, 0, screen_w, screen_h)
-            functions.glClearColor(0.0, 0.0, 0.0, 1.0)
-            functions.glClear(0x00004000)
-            # Stretched without smoothing when the stretch is a whole number,
-            # which keeps the edges a smoothed stretch blurs (see blit_scene).
-            grew = screen_w / width
-            whole = abs(grew - round(grew)) < 0.02
-            smooth = (getattr(self._scene, "stretch_smooth", False)
-                      or not whole)
-            functions.glBindTexture(0x0DE1, flat.texture())
-            functions.glTexParameteri(0x0DE1, 0x2800,
-                                      0x2601 if smooth else 0x2600)
-            held = canvas.held() if self._crossing else None
-            shown = max(0.0, min(1.0, self._fresh))
-            if held is not None and shown < 0.999:
-                # The scene before, and this one coming up over it.
-                canvas.cover(held.texture(), screen)
-                canvas.cover(flat.texture(), screen, shown)
-                self._shown_fresh = shown
-            else:
-                if self._crossing:
-                    self._crossing = False
-                    canvas.let_go()
-                canvas.cover(flat.texture(), screen)
+            self._drawn_for = (screen_w, screen_h, canvas.kept()[0])
+            self._put_up(canvas, flat, screen_w, screen_h)
             # Waited for, so the measurement is what the card took, not how
-            # long it took to be asked.
-            functions.glFinish()
-            self._card.record((_time.perf_counter() - started) * 1000.0,
-                              ratio)
+            # long it took to be asked; but in one frame of MEASURE_EVERY.
+            self._card_frames += 1
+            if self._card_frames % self.MEASURE_EVERY == 0:
+                canvas.context().functions().glFinish()
+                self._card.record((_time.perf_counter() - started) * 1000.0,
+                                  ratio)
         except Exception:      # noqa: BLE001
             import logging
 
@@ -898,6 +975,39 @@ class Spectrum(QWidget):
                 "drawing on the graphics card failed; drawing on the CPU "
                 "from here on")
             QTimer.singleShot(0, self._drop_canvas)
+
+    def _put_up(self, canvas, flat, screen_w: int, screen_h: int) -> None:
+        """The scene drawn in ``flat`` onto the canvas's own framebuffer,
+        over the scene before while one fades up over another."""
+        # Back onto the canvas's own framebuffer, which the blits of the
+        # frame unbound.
+        functions = canvas.context().functions()
+        functions.glBindFramebuffer(0x8D40, canvas.defaultFramebufferObject())
+        screen = QRect(0, 0, screen_w, screen_h)
+        functions.glViewport(0, 0, screen_w, screen_h)
+        functions.glClearColor(0.0, 0.0, 0.0, 1.0)
+        functions.glClear(0x00004000)
+        # Stretched without smoothing when the stretch is a whole number,
+        # which keeps the edges a smoothed stretch blurs (see blit_scene).
+        grew = screen_w / flat.width()
+        whole = abs(grew - round(grew)) < 0.02
+        smooth = (getattr(self._scene, "stretch_smooth", False)
+                  or not whole)
+        functions.glBindTexture(0x0DE1, flat.texture())
+        functions.glTexParameteri(0x0DE1, 0x2800,
+                                  0x2601 if smooth else 0x2600)
+        held = canvas.held() if self._crossing else None
+        shown = max(0.0, min(1.0, self._fresh))
+        if held is not None and shown < 0.999:
+            # The scene before, and this one coming up over it.
+            canvas.cover(held.texture(), screen)
+            canvas.cover(flat.texture(), screen, shown)
+            self._shown_fresh = shown
+        else:
+            if self._crossing:
+                self._crossing = False
+                canvas.let_go()
+            canvas.cover(flat.texture(), screen)
 
     def _polish_on_gpu(self, canvas, flat, small, device, ratio) -> None:
         """The scene's post-processing, over the frame on the card.
@@ -1501,6 +1611,8 @@ class Spectrum(QWidget):
         self._wanted = False
         self._crossing = self._swap_pending = False
         self._timer.stop()
+        # Whatever waited to show the old track's place.
+        self._after_frame = {}
         self._frames = []
         self._level = []
         self._peak = []
@@ -1620,6 +1732,12 @@ class Spectrum(QWidget):
         self.updateGeometry()
         self.update()
 
+    def hideEvent(self, event) -> None:      # noqa: N802 - Qt's name
+        # A hidden pane is sent no refreshes, and one moved into another
+        # window takes that window's when it is shown there.
+        self._stop_refreshes()
+        super().hideEvent(event)
+
     def resizeEvent(self, event) -> None:      # noqa: N802 - Qt's name
         super().resizeEvent(event)
         if self._canvas is not None:
@@ -1691,9 +1809,12 @@ class Spectrum(QWidget):
         return sum(row[low:high]) / max(1, high - low)
 
     #: A frame's allowed length while the controls are being used, as a
-    #: multiple of the ordinary one. The pane spends most of each sixtieth of a
-    #: second painting, leaving about a millisecond for the cursor and the
-    #: controls, so the scene halves its rate while they are up.
+    #: multiple of the ordinary one, off the card: painting there takes most
+    #: of each sixtieth of a second, leaving about a millisecond for the
+    #: cursor and the controls, so the scene halves its rate while they are
+    #: up. On the card a frame leaves the controls most of the sixtieth (see
+    #: MEASURE_EVERY), and halved, full screen ran at thirty a second
+    #: whenever the mouse moved.
     GIVE_WAY = 2.0
 
     def set_giving_way(self, giving: bool) -> None:
@@ -1717,7 +1838,8 @@ class Spectrum(QWidget):
             wanted = self._sharpness.interval_ms(
                 self.devicePixelRatioF(), self.FRAME_MS,
                 extra=self._effects.cost_ms())
-        if self._giving_way and not (self._holding or self._spamming):
+        if (self._giving_way and self._canvas is None
+                and not (self._holding or self._spamming)):
             # Not while the strobe is being played by hand: the bar comes up on
             # any mouse movement, and the halved rate delayed the light by a
             # frame and a half.
@@ -1743,17 +1865,88 @@ class Spectrum(QWidget):
 
     def _clocked(self) -> bool:
         """Whether the frames keep the scenes' clock (see _frame): on the
-        card, outside an analysis, and with nobody working the controls
-        (see GIVE_WAY), which slow the frames down instead."""
-        return (self._canvas is not None and self._working is None
-                and not (self._giving_way
-                         and not (self._holding or self._spamming)))
+        card, outside an analysis."""
+        return self._canvas is not None and self._working is None
 
     def _on_timer(self) -> None:
         if self._clocked():
+            if self._refreshing():
+                return      # the screen's refreshes are keeping the frames
+            self._refresh_stamp = None
             self._frame()
+            self._follow_refreshes()
         else:
             self._tick_clock = None
+            self._tick()
+
+    #: How many ticks' time without a refresh before the timer takes the
+    #: frames back: a window hidden, minimised or between screens is sent
+    #: none.
+    REFRESH_LOST = 3
+
+    def _refreshing(self) -> bool:
+        """Whether the screen's refreshes are keeping the frames."""
+        return (self._refreshed_at is not None and _time.monotonic()
+                - self._refreshed_at < self.TICK_S * self.REFRESH_LOST)
+
+    def _follow_refreshes(self) -> None:
+        """Have the refreshes of the screen the pane is on keep the frames
+        from now on, where this Mac hands them out: those of the pane's
+        window, which going full screen changes. See _refreshed."""
+        if not self.isVisible() or self._paced_ms() > self.FRAME_MS:
+            return
+        if self._refreshes is None:
+            if not refreshes_mac.available():
+                return
+            self._refreshes = refreshes_mac.Refreshes(self._refreshed)
+        self._refreshes.follow(self)
+
+    def _stop_refreshes(self) -> None:
+        if self._refreshes is not None:
+            self._refreshes.stop()
+        self._refreshed_at = self._refresh_stamp = None
+        self._owed = 0.0
+        if self._timer.interval() == self._watching_ms():
+            self._timer.setInterval(self.FRAME_MS)
+
+    def _watching_ms(self) -> int:
+        return int(self.TICK_S * 1000.0 * self.REFRESH_LOST)
+
+    def _refreshed(self, stamp: float) -> None:
+        """A refresh of the screen, at ``stamp`` seconds by its clock: the
+        ticks it is owed, which on a screen of sixty is one. Timed by the
+        timer, frames fell wherever its phase put them in the refresh, and
+        where that was near the moment the screen took its picture, up to
+        two refreshes in five showed a frame twice or skipped one: the road
+        and the rave's lines juddered, in one session and not the next. Started
+        at the refresh, a frame is drawn and handed over with most of it to
+        spare. A screen within a tenth of sixty gets exactly a tick a
+        refresh; any other, ticks by the time between them."""
+        if not (self._clocked() and self._timer.isActive()
+                and self.isVisible() and self._paced_ms() <= self.FRAME_MS):
+            # The timer keeps the frames: at the pace frames this dear can
+            # be drawn at, through an analysis, and off the card.
+            self._stop_refreshes()
+            return
+        last = self._refresh_stamp
+        if last is not None and 0.0 < stamp - last <= self.TICK_S * (
+                self.CATCH_UP + 1):
+            owed = self._owed + (stamp - last) / self.TICK_S
+        else:
+            if last is not None and stamp > last:
+                self._skipped += stamp - last - self.TICK_S
+            owed = 1.0
+        due = min(self.CATCH_UP, int(owed + 0.5))
+        owed -= due
+        if due and abs(owed) < 0.1:
+            owed = 0.0
+        self._owed = owed
+        self._refresh_stamp = stamp
+        self._refreshed_at = self._tick_clock = _time.monotonic()
+        # Meanwhile the timer only watches for the refreshes stopping.
+        if self._timer.interval() != self._watching_ms():
+            self._timer.setInterval(self._watching_ms())
+        for _ in range(due):
             self._tick()
 
     def _frame(self) -> None:
@@ -1766,6 +1959,8 @@ class Spectrum(QWidget):
         now = _time.monotonic()
         if (self._tick_clock is None
                 or now - self._tick_clock > self.TICK_S * (self.CATCH_UP + 1)):
+            if self._tick_clock is not None:
+                self._skipped += now - self.TICK_S - self._tick_clock
             self._tick_clock = now - self.TICK_S
         due = min(self.CATCH_UP,
                   int((now - self._tick_clock) / self.TICK_S + 0.25))
@@ -1780,6 +1975,32 @@ class Spectrum(QWidget):
             self._timer.setInterval(max(1, int(round(wait * 1000.0)),
                                         paced if paced > self.FRAME_MS else 1))
 
+    def after_the_frame(self, key: str, call) -> None:
+        """Run ``call`` once the frame being drawn has been shown, in place of
+        anything still waiting under ``key``; at once where frames are not
+        coming. A widget over the picture that changed just before a frame
+        had the window put together twice in one refresh, and the frame
+        waited for the next one to be shown, as the full-screen controls'
+        seek bar did at the player's reports. Changed with the frame, it had
+        the whole window painted again, every control on the bar, which took
+        a frame's time. Changed just after one, it has the refresh to
+        itself."""
+        if self._clocked() and self._timer.isActive() and self.isVisible():
+            self._after_frame[key] = call
+        else:
+            self._after_frame.pop(key, None)
+            call()
+
+    def forget_after_the_frame(self, key: str) -> None:
+        """Forget what waits under ``key``."""
+        self._after_frame.pop(key, None)
+
+    def _frame_shown(self) -> None:
+        if self._after_frame:
+            waiting, self._after_frame = self._after_frame, {}
+            for call in waiting.values():
+                call()
+
     def _tick(self) -> None:
         self._pace()
         if self._source is not None and not self._idling:
@@ -1791,7 +2012,10 @@ class Spectrum(QWidget):
         # player's last report. The player updates every 50 ms; read straight
         # off it, hits landed up to 33 ms late or 25 ms early depending on
         # where the frame fell.
-        self._now = max(0.0, self._heard() + self._ahead())
+        advance = None
+        if self._clocked():
+            advance, self._skipped = self.TICK_S + self._skipped, 0.0
+        self._now = max(0.0, self._heard(advance) + self._ahead())
         if (self._fresh < 1.0 and self._level and self._working is None
                 and self._drawn >= self.WARM_FRAMES):
             # Only once there is a scene to fade in: during analysis the pane
@@ -2072,6 +2296,9 @@ class Spectrum(QWidget):
     #: seek rather than drift, and how hard drift is corrected each frame.
     SEEK_GAP = 0.30
     PULL = 0.06
+    #: The most that correction moves the clock in a tick on the card: an
+    #: eighth of a tick, so the music it leans on never shows as a lurch.
+    LEAN = TICK_S / 8.0
     #: After starting again, the most faster or slower than time the clock runs
     #: while it closes on the player's first report.
     CATCH_RATE = 0.25
@@ -2111,11 +2338,18 @@ class Spectrum(QWidget):
         self._heard_now = self._position / 1000.0
         self._jumps += 1
 
-    def _heard(self) -> float:
+    def _heard(self, advance: Optional[float] = None) -> float:
         """The moment the music is at: the player's last report run on from
         when it landed and eased towards each new one, since it only moves
         every 50 ms. Exact while paused, held after a seek until the player
-        moves on; an unannounced jump is taken at once."""
+        moves on; an unannounced jump is taken at once.
+
+        ``advance`` is how far a tick on the card runs it on: a sixtieth
+        exactly, and any time the frames skipped, leaning on the reports by
+        at most LEAN a tick. Run on by the time since the last tick instead,
+        it took the timer's unevenness with it, and a road driven by it moved
+        anywhere from nothing to 30 ms of the song a frame. Without it (off
+        the card), the time since the last call."""
         import time as _time
 
         now = _time.monotonic()
@@ -2168,6 +2402,8 @@ class Spectrum(QWidget):
                 self._jumps += 1
             self._heard_now = run
             return run
+        if advance is not None:
+            step = advance
         if stale <= self.STALE_MOST:
             self._heard_now += step
         gap = run - self._heard_now
@@ -2175,6 +2411,8 @@ class Spectrum(QWidget):
             most = self.CATCH_RATE * step
             self._heard_now += max(-most, min(most, gap))
             self._catching = abs(gap) > most
+        elif advance is not None:
+            self._heard_now += max(-self.LEAN, min(self.LEAN, gap * self.PULL))
         else:
             self._heard_now += gap * self.PULL
         return self._heard_now
@@ -2361,9 +2599,12 @@ class Spectrum(QWidget):
         painter still active on the backing store and then crashes.
         """
         if self._canvas is not None:
-            # The canvas covers the pane and draws it, so any repaint of the
-            # pane is a repaint of the canvas.
-            self._canvas.update()
+            # The canvas covers the pane and draws it, and Qt paints it with
+            # the pane: asked again here, it drew a second frame whenever a
+            # widget over the picture changed, and the frame after waited a
+            # refresh to be shown.
+            if self._canvas.geometry() != self.rect():
+                self._canvas.setGeometry(self.rect())
             return
         painter = QPainter(self)
         try:
@@ -2755,6 +2996,7 @@ class FullScreenSpectrum(QWidget):
         self._fade.valueChanged.connect(self._set_bar_opacity)
         self._effect = QGraphicsOpacityEffect(self.bar)
         self._effect.setOpacity(1.0)
+        self._effect.setEnabled(False)
         self.bar.setGraphicsEffect(self._effect)
 
         self._idle = QTimer(self)
@@ -2784,6 +3026,10 @@ class FullScreenSpectrum(QWidget):
 
     def _set_bar_opacity(self, value) -> None:
         self._effect.setOpacity(max(0.0, min(1.0, float(value))))
+        # Only while it fades: an effect draws the whole bar again, every
+        # control on it, whenever any of them changes, which the seek bar
+        # does as the track plays, and that took a frame's time.
+        self._effect.setEnabled(self._effect.opacity() < 0.999)
         self.bar.setVisible(self._effect.opacity() > 0.01)
 
     def _show_controls(self) -> None:
@@ -3320,14 +3566,15 @@ class CardSharpness:
     #: and the app.
     BUDGET_MS = 12.5
 
-    #: Frames not believed after a scene, size or rung changes: new
-    #: framebuffers' first frames are setup. See Sharpness.
+    #: Measured frames (see Spectrum.MEASURE_EVERY) not believed after a
+    #: scene, size or rung changes: new framebuffers' first frames are setup.
+    #: See Sharpness.
     WARMUP = 24
     SETTLE = 12
 
-    #: How many frames a rung is judged on, by their median. A running average
-    #: let one stray slow frame in thirty halve a MacBook Pro's resolution for
-    #: frames that were 10.5 ms nine times in ten.
+    #: How many measured frames a rung is judged on, by their median. A
+    #: running average let one stray slow frame in thirty halve a MacBook
+    #: Pro's resolution for frames that were 10.5 ms nine times in ten.
     WINDOW = 30
 
     #: What the rung above is expected to cost against this one until drawn at:
@@ -3336,9 +3583,10 @@ class CardSharpness:
     DEARER_SAMPLES = 1.5
     DEARER_PIXELS = 2.0
 
-    #: Frames before a rung that did not fit is tried again (five seconds at
-    #: sixty), doubling each time it still does not.
-    RETRY = 300
+    #: Measured frames before a rung that did not fit is tried again (five
+    #: seconds at sixty, a frame in four measured), doubling each time it
+    #: still does not.
+    RETRY = 75
 
     def __init__(self) -> None:
         self._rung = None

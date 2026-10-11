@@ -208,7 +208,7 @@ class TestOneMomentAFrame:
         asked = []
         real = pane._heard
         monkeypatch.setattr(pane, "_heard",
-                            lambda: asked.append(1) or real())
+                            lambda *how: asked.append(1) or real(*how))
         pane.follow(lambda: 2500)
         for _frame in range(5):
             pane._tick()

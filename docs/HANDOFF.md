@@ -322,7 +322,12 @@ describes the app itself.
 - **The picture's share of the pane** is worked out in
   `AudioPane._spectrum_budget` from `minimumHeightForWidth` at the pane's
   real width, on resize and on every layout request. The window's minimum
-  width comes from its layout, set on first show.
+  width comes from its layout, set on first show. A fresh reading
+  (`_budget_settled`) invalidates the layouts, which asks for a layout
+  again: another is asked for only when what it reads has changed
+  (`_layout_reading`), and none while the picture is full screen. Without
+  both, the window behind a full-screen picture read it 1,100 times a
+  second, all the while.
 - **The transport line has one height** with the slider or the waveform
   (`addStrut`).
 - **A new track keeps the picture open** (`Spectrum.clear(keep_open=True)`);
@@ -382,6 +387,37 @@ describes the app itself.
 - **Scene changes** fade over the last frame on the GPU (`_GpuCanvas.hold`,
   `cover`); a change during a change folds the two frames first. The CPU path
   fades from the background.
+- **On the card, frames start at the screen's refreshes**
+  (`refreshes_mac`, `Spectrum._refreshed`): a display link the window's
+  view makes (macOS 14 and later) calls on the main run loop at every
+  refresh, and the ticks owed are counted from the refreshes' own
+  timestamps, exactly one a refresh within a tenth of sixty. The timer
+  then only watches, and takes the frames back after `REFRESH_LOST` ticks
+  without one, and whenever frames are paced slower than sixty, during an
+  analysis, off the card or hidden. `requestUpdate` on the window was
+  tried first: a widget window answers it by repainting all of itself, so
+  refreshes came every 28 ms and the canvas was drawn twice. A pane's link
+  goes with it (`weakref.finalize`): a window taken away sends no refresh
+  to find the pane gone.
+- **The music's clock moves a sixtieth a tick on the card** (`_heard`'s
+  `advance`), leaning on the player by at most `LEAN`; time the frames
+  skipped (`_skipped`) goes into the next tick, or a stall left the blocks
+  behind the beat for a second while it crept back.
+- **What changes beside or over the picture changes just after a frame**
+  (`Spectrum.after_the_frame`): the full-screen bar's seek and clock
+  (`FULL_BAR`) and the window's waveform and clock (`TRANSPORT`). Changed
+  just before a frame, the window was put together twice in one refresh
+  and the frame shown a refresh late; changed in the same pass as the
+  canvas, Qt repaints the whole window (seen with a bare `QOpenGLWidget`
+  and `QSlider` too), every control on the bar. The seek bar draws itself
+  only when its handle moves a pixel (`SeekBar.sliderChange`), the bar's
+  opacity effect is on only while it fades, the pane's paint no longer
+  asks the canvas for another frame, and a canvas asked again with
+  nothing new puts up the picture it drew (`_picture_due`).
+- **One frame in four waits for the card** to be measured
+  (`MEASURE_EVERY`); every frame waiting held the main thread 9 to 12 ms.
+  The full-screen controls no longer halve the rate on the card
+  (`GIVE_WAY` is for the CPU path).
 - **The suite cannot see the GPU.** It runs offscreen, where every test goes
   through the CPU path. `tests/test_gpu_canvas.py` runs scripts on the real
   platform; anything that touches drawing must pass both.
@@ -655,7 +691,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 5,347 tests
+./dev test                     # 5,384 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus
@@ -675,6 +711,26 @@ longer was left running, a core at full tilt, when pytest gave up first.
 `./dev playtest` reports where blocks land against their beats, the road's
 speed, and frame cost. Run it one record at a time. No song or frame of one is
 ever written into the repository.
+
+Frames are measured against the screen. A script outside the repository
+plays a record muted in the real viewer, notes every `frameSwapped` and the
+tick each frame drew, and takes the refreshes' times from a CVDisplayLink;
+for each refresh it finds the newest frame handed over a little before it,
+and counts the refreshes that showed exactly one new tick. Run one record a
+process. On this Mac (60 Hz), with the deadline up to 2 ms before the
+refresh:
+
+| | timer (1.12.0) | refreshes |
+|---|---|---|
+| Rider, window | 91.0% | 99.3% |
+| Rave, window | 95.0% | 99.5% |
+| Rider, full screen | 99.4% | 98.7% |
+| Rave, full screen | 100% | 99.3% |
+| Rider, controls up | 30 a second | 99.3% |
+| Rave, controls up | 30 a second | 98.9% |
+
+The timer's figures depend on where its phase falls in the session; at the
+worst place for the deadline, they were 64 to 71 per cent.
 
 Timing changes are checked against a DJ program's beat grids for a private set
 of 300 records, outside the repository; only counts are recorded here.
@@ -825,18 +881,14 @@ About's security link is a 404 for everyone but the owner.
 - **The verdict cache ignores UIDVALIDITY changes;** `forget_mailbox` is
   unused.
 - **No test opens the built `.app`.**
-- **Frame pacing:** the visualiser's clock (`Spectrum._frame`) sets the
-  timer each frame for the next sixtieth, gives a late frame the ticks it
-  missed, and never asks sooner than dear frames can be drawn. Measured on
-  the card by the gaps between `frameSwapped`, at full screen on this Mac,
-  idle: 98 to 100 per cent of frames a refresh apart in Vaporwave, Rave,
-  Ambience and the rider, against 85 to 95 with the old whole-millisecond
-  sixteen. In a small window behind other apps the readings swing from run
-  to run with either clock (Ambience between 52 and 100 per cent), so they
-  say little. Frames driven from `frameSwapped` came in pairs; a paint
-  straight after each tick (`repaint`) gained a per cent at full screen and
-  is not in. Syncing to the display's own refresh (`requestUpdate` on the
-  window) is the next thing to try.
+- **Where in the refresh the screen takes its frame is not measured.**
+  Nothing here can see the glass (no screen recording), so frames are
+  drawn just after each refresh on Apple's account of it: anything handed
+  over before the next refresh is shown at it. The numbers in Measuring
+  hold if that is so; if the deadline sat a third of the way in, where
+  the frames are handed over, about half of them would miss it, so that is
+  what to check first if the picture ever stutters on a Mac where the old
+  timer did not.
 - **The difficulty levels want tuning by play.** They are one table,
   `rider_layout.DIFFICULTY`.
 - **The audio allowance is measured on built-in speakers only;** Bluetooth
