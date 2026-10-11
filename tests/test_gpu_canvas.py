@@ -1060,26 +1060,16 @@ REFRESHES = textwrap.dedent("""
 
     _kept = []
 
-    def screen_refreshes(seconds=0.5):
-        # Refreshes a second that a window like the pane's, a GL widget in
-        # it drawing all the time, is sent by its own display link, made
-        # through the runtime and not refreshes_mac. A sleeping screen sends
-        # none, and a hosted runner's virtual one sent two in a second and
-        # a half.
+    def screen_refreshes(window, seconds):
+        # How many refreshes the system sends ``window``'s view over the
+        # next ``seconds``, through a display link made with the runtime and
+        # not refreshes_mac, beside the pane's own. A sleeping screen sends
+        # none; a hosted runner's virtual one sent a window like the pane's
+        # two in a second and a half, and one shown before it at least half
+        # its rate.
         import ctypes
         import touchbar_mac
-        from PySide6.QtCore import QTimer
-        from PySide6.QtOpenGLWidgets import QOpenGLWidget
         rt = touchbar_mac._Runtime()
-        window = QWidget()
-        window.resize(320, 200)
-        drawn = QOpenGLWidget(window)
-        drawn.resize(320, 200)
-        drawing = QTimer()
-        drawing.timeout.connect(drawn.update)
-        drawing.start(16)
-        window.show()
-        settle(0.2)
         counted = []
         imp = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p,
                                ctypes.c_void_p)(
@@ -1104,20 +1094,21 @@ REFRESHES = textwrap.dedent("""
                 restype=None, argtypes=[ctypes.c_void_p, ctypes.c_void_p])
         settle(seconds)
         rt.send(link, "invalidate", restype=None)
-        drawing.stop()
-        window.hide()
-        return len(counted) / seconds
+        return len(counted)
 
-    def steady_or_skip():
-        rate = app.primaryScreen().refreshRate()
-        sent = screen_refreshes()
-        if sent < rate * 0.5:
-            print(json.dumps({"skip": "this screen sends a window %.0f "
-                                      "refreshes a second, not %.0f: it is "
-                                      "asleep, or a hosted runner's"
-                                      % (sent, rate)}))
+    def sent_or_skip(window, seconds):
+        # The refreshes the system sends the window meanwhile, beside the
+        # pane's: skipped where it sends too few to judge the pane by.
+        rate = window.screen().refreshRate()
+        sent = screen_refreshes(window, seconds)
+        if sent < rate * seconds * 0.5:
+            print(json.dumps({"skip": "this screen sent the window %d "
+                                      "refreshes in %.1fs at %.0f a second: "
+                                      "it is asleep, or a hosted runner's"
+                                      % (sent, seconds, rate)}))
             sys.stdout.flush()
             os._exit(0)
+        return sent
 """)
 
 
@@ -1127,7 +1118,6 @@ class TestTheScreensRefreshesKeepTheFrames:
 
     def test_they_come_and_each_is_a_tick(self):
         got = on_the_card(REFRESHES + textwrap.dedent("""
-            steady_or_skip()
             made = pane(size=(320, 200))
             made.show()
             ticks = []
@@ -1136,9 +1126,9 @@ class TestTheScreensRefreshesKeepTheFrames:
             settle(0.5)
             calls.clear()
             ticks.clear()
-            settle(1.5)
-            print(json.dumps({"refreshes": len(calls), "ticks": len(ticks),
-                              "rate": made.screen().refreshRate(),
+            sent = sent_or_skip(made, 1.5)
+            print(json.dumps({"refreshes": len(calls), "sent": sent,
+                              "ticks": len(ticks),
                               "following": made._refreshes.running,
                               "keeping": made._refreshing()}))
         """))
@@ -1146,10 +1136,10 @@ class TestTheScreensRefreshesKeepTheFrames:
             f"this Mac does not answer {got.get('unanswered')}")
         assert got["following"]
         assert got["keeping"], (
-            "the refreshes came but the timer kept the frames")
-        assert got["refreshes"] >= got["rate"] * 1.5 * 0.8, (
-            f"{got['refreshes']} refreshes came in a second and a half of "
-            f"a screen at {got['rate']:.0f}")
+            "the refreshes came but the timer kept the frames", got)
+        assert got["refreshes"] >= got["sent"] * 0.8, (
+            f"the pane was handed {got['refreshes']} of the {got['sent']} "
+            f"refreshes its window was sent")
         assert abs(got["ticks"] - 90) <= 12, (
             f"{got['ticks']} ticks in a second and a half")
 
@@ -1174,7 +1164,6 @@ class TestTheScreensRefreshesKeepTheFrames:
     def test_they_follow_the_pane_into_another_window(self):
         """As going full screen moves it, perhaps to another screen."""
         got = on_the_card(REFRESHES + textwrap.dedent("""
-            steady_or_skip()
             home, away = QWidget(), QWidget()
             for window in (home, away):
                 window.resize(400, 300)
@@ -1189,16 +1178,16 @@ class TestTheScreensRefreshesKeepTheFrames:
             made.show()
             settle(0.5)
             calls.clear()
-            settle(1.0)
+            sent = sent_or_skip(away, 1.0)
             print(json.dumps({
                 "first": first,
                 "now": made._refreshes._view == int(away.winId()),
-                "refreshes": len(calls), "rate": made.screen().refreshRate(),
+                "refreshes": len(calls), "sent": sent,
                 "links": len(refreshes_mac._links)}))
         """))
         assert got["first"], "the refreshes were not the first window's"
         assert got["now"], "they did not follow the pane to the second"
-        assert got["refreshes"] >= got["rate"] * 0.8
+        assert got["refreshes"] >= got["sent"] * 0.8, got
         assert got["links"] == 1, f"{got['links']} links are running"
 
 

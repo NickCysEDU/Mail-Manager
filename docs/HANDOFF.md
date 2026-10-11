@@ -412,7 +412,8 @@ describes the app itself.
   virtual screen sent two in a second and a half, and took the frames at
   each). A sleeping screen sends none, so
   `TestTheScreensRefreshesKeepTheFrames` skips there and on a hosted
-  runner, by what a window like the pane's is sent through the runtime.
+  runner, by what the pane's own window is sent through a display link of
+  the runtime's beside the pane's.
   `requestUpdate` on the window was
   tried first: a widget window answers it by repainting all of itself, so
   refreshes came every 28 ms and the canvas was drawn twice. A pane's link
