@@ -21,8 +21,8 @@ import tempfile
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from PySide6.QtCore import (QEvent, QSize, QStandardPaths, Qt, QThread,
-                            QTimer, QUrl, Signal, Slot)
+from PySide6.QtCore import (QCoreApplication, QEvent, QSize, QStandardPaths,
+                            Qt, QThread, QTimer, QUrl, Signal, Slot)
 from PySide6.QtGui import (QAction, QGuiApplication, QImage, QKeySequence,
                            QPixmap)
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
@@ -195,6 +195,60 @@ def _name_transport(button, playing: bool) -> None:
     word = "Pause" if playing else "Play"
     button.setToolTip(word)
     button.setAccessibleName(word)
+
+
+#: Every fetch still running. A fetch was the viewer's child, so closing the
+#: viewer while a part was still coming destroyed a running QThread, which
+#: aborts the whole app; kept here instead until it finishes. See
+#: AttachmentViewer._pump.
+_FETCHING: set = set()
+
+
+def _fetches_finished() -> None:
+    """Let go of the fetches that have finished."""
+    _FETCHING.difference_update(
+        [thread for thread in _FETCHING if thread.isFinished()])
+
+
+def _wait_for_fetches() -> None:
+    """On the way out: the viewer has closed the connection a fetch reads
+    from, so each ends within moments, and one destroyed while it runs
+    would take the app down as it quits."""
+    for thread in list(_FETCHING):
+        thread.wait(2000)
+    _fetches_finished()
+
+
+#: Each viewer's folder of copies of parts, until its sweep has emptied it:
+#: the app can quit before a closing viewer's sweep comes round, and the
+#: copies were left behind. See AttachmentViewer._sweep.
+_COPIES: set = set()
+
+
+def _remove_copies() -> None:
+    """At exit, whatever no sweep has reached."""
+    import shutil
+
+    for folder in list(_COPIES):
+        shutil.rmtree(folder, ignore_errors=True)
+        _COPIES.discard(folder)
+
+
+_QUIT_ARMED = False
+
+
+def _arm_quit() -> None:
+    global _QUIT_ARMED
+    if not _QUIT_ARMED:
+        _QUIT_ARMED = True
+        import atexit
+
+        # However the app ends short of a crash: nothing here calls
+        # os._exit.
+        atexit.register(_remove_copies)
+        app = QCoreApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(_wait_for_fetches)
 
 
 class _FetchThread(QThread):
@@ -2233,6 +2287,8 @@ class AttachmentViewer(QDialog):
         self._found = list(found)
         self._fetch = fetch
         self._temp = Path(tempfile.mkdtemp(prefix="mm-attach-"))
+        _COPIES.add(self._temp)
+        _arm_quit()
         os.chmod(self._temp, 0o700)
         self._written: List[Path] = []
         self._last_dir = str(Path.home() / "Downloads")
@@ -2632,16 +2688,39 @@ class AttachmentViewer(QDialog):
                 continue
             if self._found[row].data is not None or row in self._workers:
                 continue
-            thread = _FetchThread(self._fetch, row, self._found[row], self)
+            # Not the viewer's child: see _FETCHING. Each signal reaches a
+            # method of the viewer, so none reaches it once it has gone.
+            _fetches_finished()
+            thread = _FetchThread(self._fetch, row, self._found[row])
+            _FETCHING.add(thread)
             self._workers[row] = thread
             thread.done.connect(self._fetched)
             thread.failed.connect(self._fetch_failed)
-            thread.finished.connect(lambda r=row: self._worker_done(r))
+            thread.finished.connect(self._worker_finished)
             thread.start()
+
+    @Slot()
+    def _worker_finished(self) -> None:
+        row = getattr(self.sender(), "_row", None)
+        if row is not None:
+            self._worker_done(row)
 
     def _worker_done(self, row: int) -> None:
         self._workers.pop(row, None)
         self._pump()
+
+    def _let_fetches_go(self) -> None:
+        """Leave whatever is still being fetched to finish without the
+        viewer, which is closing."""
+        self._queue = []
+        for thread in list(self._workers.values()):
+            if isinstance(thread, _FetchThread):
+                for signal in (thread.done, thread.failed, thread.finished):
+                    try:
+                        signal.disconnect()
+                    except (RuntimeError, TypeError):      # none left
+                        pass
+        self._workers = {}
 
     @Slot(int, object)
     def _fetched(self, row: int, data: bytes) -> None:
@@ -2922,14 +3001,21 @@ class AttachmentViewer(QDialog):
 
     def done(self, result: int) -> None:      # noqa: D102 - Qt's name
         self.audio.stop()
+        self._let_fetches_go()
         QTimer.singleShot(0, self._sweep)
         super().done(result)
 
     def _sweep(self) -> None:
         # Stop reading the files before deleting them: unlinking alone left an
         # analysis reading a deleted path, and a thread outliving its widget
-        # takes the process with it.
-        self.audio.stop()
+        # takes the process with it. The files go even when the window was
+        # deleted first, as one closed and reaped at once is: the pane's
+        # widgets went with it, and stopping them raised before the files
+        # were reached.
+        import shiboken6
+
+        if shiboken6.isValid(self.audio):
+            self.audio.stop()
         self.audio._cancel_analysis()
         for path in self._written:
             try:
@@ -2940,6 +3026,8 @@ class AttachmentViewer(QDialog):
             self._temp.rmdir()
         except OSError:
             pass
+        else:
+            _COPIES.discard(self._temp)
 
 
 def _row_tooltip(item) -> str:

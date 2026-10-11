@@ -572,6 +572,160 @@ class TestTheControlsExplainThemselves:
         viewer._sweep()
 
 
+#: A viewer fetching a part from a server that answers only when told to,
+#: closed and reaped while the part is still coming. Run in a process of its
+#: own: what this guards against takes the whole process down.
+_CLOSED_MID_FETCH = """
+import os, sys, tempfile, threading, time
+sys.path.insert(0, {root!r})
+os.environ["ICLOUD_TRIAGE_HOME"] = tempfile.mkdtemp()
+from PySide6.QtCore import QEvent, Qt, QTimer
+from PySide6.QtWidgets import QApplication
+app = QApplication([])
+import attachments, attachment_view
+from attachment_view import AttachmentViewer
+answer, asked = threading.Event(), []
+
+def fetch(item):
+    asked.append(item.part)
+    answer.wait(5.0)
+    # A read cut short by its connection closing ends a moment later.
+    time.sleep(0.3)
+    return b"x" * 10
+
+def spin_until(check):
+    end = time.monotonic() + 5
+    while not check() and time.monotonic() < end:
+        app.processEvents()
+        time.sleep(0.01)
+
+found = [attachments.Attachment(part=str(i), name="notes%d.txt" % i,
+                                content_type="text/plain", size=10)
+         for i in range(5)]
+viewer = AttachmentViewer(found, "", None, fetch=fetch)
+viewer.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, {delete})
+viewer.show()
+viewer.list.setCurrentRow(0)
+spin_until(lambda: asked)
+viewer._start_fetch(4, found[4], then_show=False)
+viewer._start_fetch(3, found[3], then_show=False)
+temp = viewer._temp
+{ending}
+"""
+
+
+class TestClosingTheViewerWhileAPartIsComing:
+    """A part fetched over IMAP takes a second or two. Each fetch was the
+    viewer's child, so closing the viewer then destroyed a running thread,
+    and Qt aborts the whole app for that."""
+
+    @staticmethod
+    def _run(ending, delete=True):
+        import os
+        import subprocess
+        import sys
+        import textwrap
+        from pathlib import Path
+
+        script = _CLOSED_MID_FETCH.format(
+            root=str(Path(__file__).resolve().parents[1]), delete=delete,
+            ending=textwrap.dedent(ending))
+        env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+        return subprocess.run([sys.executable, "-c", script],
+                              capture_output=True, text=True, timeout=50,
+                              env=env)
+
+    def test_the_app_survives_it(self):
+        done = self._run("""
+            viewer.close()
+            app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            app.processEvents()
+            print("closed while", len(asked), "fetching", flush=True)
+            answer.set()
+            attachment_view._wait_for_fetches()
+            app.processEvents()
+            print("left", len(attachment_view._FETCHING), "fetching;",
+                  "files left:", temp.exists(), flush=True)
+        """)
+        assert done.returncode == 0, (
+            f"the app died (exit {done.returncode}):\n{done.stderr[-1500:]}")
+        assert "closed while" in done.stdout
+        assert "left 0 fetching; files left: False" in done.stdout, (
+            done.stdout)
+        assert "Traceback" not in done.stderr, done.stderr[-2000:]
+
+    def test_what_was_waiting_is_not_fetched_once_it_has_closed(self):
+        """Kept, not deleted, a closed viewer went on fetching its queue."""
+        done = self._run("""
+            waiting = list(viewer._queue)
+            viewer.close()
+            answer.set()
+            attachment_view._wait_for_fetches()
+            for _ in range(20):
+                app.processEvents()
+                time.sleep(0.01)
+            attachment_view._wait_for_fetches()
+            print("waiting", len(waiting), "asked", len(asked), flush=True)
+        """, delete=False)
+        assert done.returncode == 0, done.stderr[-1500:]
+        waiting, asked = (int(n) for n in
+                          done.stdout.split("waiting ")[1].split(" asked "))
+        assert waiting >= 1, "nothing was waiting, so this shows nothing"
+        assert asked <= 3, (
+            f"{asked} parts were fetched for a viewer that had closed with "
+            f"{waiting} waiting")
+
+    def test_the_copies_go_however_the_app_ends(self):
+        """A viewer's sweep comes round after it closes, and the app can quit
+        first: its copies of parts were left in the temporary folder."""
+        import os
+        import subprocess
+        import sys
+        import textwrap
+        from pathlib import Path
+
+        for ending in ("QTimer.singleShot(0, app.quit)\napp.exec()", ""):
+            script = textwrap.dedent("""
+                import os, sys, tempfile
+                sys.path.insert(0, {root!r})
+                os.environ["ICLOUD_TRIAGE_HOME"] = tempfile.mkdtemp()
+                from PySide6.QtCore import QTimer
+                from PySide6.QtWidgets import QApplication
+                app = QApplication([])
+                from attachment_view import AttachmentViewer
+                viewer = AttachmentViewer([], "", None)
+                copy = viewer._temp / "part.mp3"
+                copy.write_bytes(b"a copy of a part")
+                viewer._written.append(copy)
+                print(viewer._temp, flush=True)
+            """).format(root=str(Path(__file__).resolve().parents[1]))
+            done = subprocess.run(
+                [sys.executable, "-c", script + ending], capture_output=True,
+                text=True, timeout=50,
+                env=dict(os.environ, QT_QPA_PLATFORM="offscreen"))
+            assert done.returncode == 0, done.stderr[-1500:]
+            folder = Path(done.stdout.strip().splitlines()[-1])
+            assert folder.name.startswith("mm-attach-")
+            assert not folder.exists(), (
+                f"the copies were left behind ({ending or 'no event loop'})")
+
+    def test_quitting_while_a_part_is_coming_ends_cleanly(self):
+        """The main window closes the viewer on the way out, and with it the
+        connection the part comes over; the app waits the moment the read
+        takes to end, rather than destroying it as it quits."""
+        done = self._run("""
+            viewer.finished.connect(lambda *_: answer.set())
+            QTimer.singleShot(0, viewer.close)
+            QTimer.singleShot(20, app.quit)
+            app.exec()
+            print("quit", flush=True)
+        """)
+        assert done.returncode == 0, (
+            f"the app died on the way out (exit {done.returncode}):\n"
+            f"{done.stderr[-1500:]}")
+        assert "quit" in done.stdout
+
+
 class TestOneConnectionMeansOneRequest:
     """Two threads on one IMAP socket interleave inside TLS: the server answers
     "bad record mac", drops the connection, and every later fetch fails.

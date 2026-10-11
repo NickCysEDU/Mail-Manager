@@ -50,6 +50,19 @@ describes the app itself.
 - **A menu rebuilt from its own entry's signal frees the old entries
   later** (`deleteLater`), and makes them its own children: made by the
   window, forty actions and six menus were left behind on each rebuild.
+- **No running QThread may be a closing window's child.** Qt aborts the
+  process when one is destroyed. The viewer's fetches were its children,
+  so closing it while a part was still coming took the app down (found when
+  CI's reaping of widgets hit it). They are kept in
+  `attachment_view._FETCHING` until they finish, cut off from the viewer
+  when it closes (`_let_fetches_go`), and waited for at quit, after the
+  main window has closed the viewer and with it the connection they read.
+  A thread still running when Python exits aborts it all the same;
+  `shiboken6.invalidate` does not stop that. The viewer's copies of parts
+  (`_temp`, mode 700) go in its sweep, which skips the widgets a reaped
+  window has lost and still deletes the files, and whatever no sweep
+  reached goes at exit (`_COPIES`, `atexit`): the app could quit before a
+  closing viewer's sweep came round.
 
 - **Every shortcut is unique.** Qt fires neither of two actions bound to the
   same keys. `test_no_two_actions_share_a_shortcut` checks the main window.
@@ -697,7 +710,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 5,385 tests
+./dev test                     # 5,389 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus
