@@ -774,6 +774,10 @@ class Spectrum(QWidget):
         self._refreshed_at: Optional[float] = None
         self._refresh_stamp: Optional[float] = None
         self._owed = 0.0
+        #: The last refresh's moment, whoever kept the frames, and how many
+        #: have come in a row at the screen's pace. See REFRESH_STEADY.
+        self._seen_stamp: Optional[float] = None
+        self._steady = 0
         #: Time the frames skipped and the music did not, for the next tick
         #: to run the music's clock on by. See _heard.
         self._skipped = 0.0
@@ -1883,6 +1887,12 @@ class Spectrum(QWidget):
     #: frames back: a window hidden, minimised or between screens is sent
     #: none.
     REFRESH_LOST = 3
+    #: How many refreshes in a row, each within two ticks of the last, before
+    #: they take the frames from the timer. A screen that sends them now and
+    #: then (a hosted runner's sent two in a second and a half) took the
+    #: frames at each, and left the timer's watch, REFRESH_LOST ticks, with
+    #: nothing drawn.
+    REFRESH_STEADY = 3
 
     def _refreshing(self) -> bool:
         """Whether the screen's refreshes are keeping the frames."""
@@ -1904,8 +1914,9 @@ class Spectrum(QWidget):
     def _stop_refreshes(self) -> None:
         if self._refreshes is not None:
             self._refreshes.stop()
-        self._refreshed_at = self._refresh_stamp = None
+        self._refreshed_at = self._refresh_stamp = self._seen_stamp = None
         self._owed = 0.0
+        self._steady = 0
         if self._timer.interval() == self._watching_ms():
             self._timer.setInterval(self.FRAME_MS)
 
@@ -1928,6 +1939,13 @@ class Spectrum(QWidget):
             # be drawn at, through an analysis, and off the card.
             self._stop_refreshes()
             return
+        seen, self._seen_stamp = self._seen_stamp, stamp
+        if seen is not None and 0.0 < stamp - seen <= self.TICK_S * 2:
+            self._steady += 1
+        else:
+            self._steady = 0
+        if not self._refreshing() and self._steady < self.REFRESH_STEADY:
+            return      # the timer keeps them until the refreshes are steady
         last = self._refresh_stamp
         if last is not None and 0.0 < stamp - last <= self.TICK_S * (
                 self.CATCH_UP + 1):

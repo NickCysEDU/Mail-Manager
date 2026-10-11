@@ -178,6 +178,16 @@ def _refreshes(made, clock, gaps_s, stamp=50.0, late=()):
     return stamp
 
 
+def _steady(made, clock, stamp=50.0):
+    """Refreshes at sixty until they keep the frames, the last at
+    ``stamp``."""
+    count = made.REFRESH_STEADY + 1
+    stamp = _refreshes(made, clock, [1.0 / 60.0] * count,
+                       stamp - count / 60.0)
+    assert made._refreshing()
+    return stamp
+
+
 class TestTheScreensRefreshes:
     """On the card each frame starts at a refresh of the screen. Timed by
     the timer, frames fell wherever its phase put them in the refresh, and
@@ -193,9 +203,9 @@ class TestTheScreensRefreshes:
         """Counted by the refreshes' own moments, so a call that comes late
         or early, as a busy main thread makes it, is still one tick."""
         made, clock, ticks, _link = refreshing
+        stamp = _steady(made, clock)
         before = len(ticks)
         each = []
-        stamp = 50.0
         for lag in [0.0, 0.006, 0.0, 0.009, 0.002] * 24:
             count = len(ticks)
             stamp = _refreshes(made, clock, [1.0 / 60.0], stamp, late=[lag])
@@ -210,12 +220,17 @@ class TestTheScreensRefreshes:
     def test_a_refresh_missed_is_made_up_and_a_long_gap_starts_again(
             self, refreshing):
         made, clock, ticks, _link = refreshing
-        stamp = _refreshes(made, clock, [1.0 / 60.0] * 3)
+        stamp = _steady(made, clock)
         before = len(ticks)
         stamp = _refreshes(made, clock, [2.0 / 60.0], stamp)
         assert len(ticks) - before == 2, "what moves would have slowed"
-        _refreshes(made, clock, [1.0], stamp)
-        assert len(ticks) - before == 3, "it raced through a second"
+        # A second without a refresh: the timer has had the frames, and the
+        # refreshes have it again only once they come steadily.
+        clock.now += 1.0
+        made._on_timer()
+        before = len(ticks)
+        stamp = _refreshes(made, clock, [1.0], stamp)
+        assert len(ticks) == before, "it raced through a second"
 
     @pytest.mark.parametrize("rate", [120.0, 59.94, 50.0])
     def test_another_screen_gets_sixty_ticks_a_second(self, refreshing, rate):
@@ -223,6 +238,7 @@ class TestTheScreensRefreshes:
         tenth of sixty, one at every refresh; otherwise, by the time."""
         made, clock, ticks, _link = refreshing
         stamp = _refreshes(made, clock, [1.0 / rate] * 10)
+        assert made._refreshing()
         before = len(ticks)
         each = []
         for _ in range(int(rate * 10)):
@@ -242,12 +258,40 @@ class TestTheScreensRefreshes:
 
     def test_meanwhile_the_timer_only_watches(self, refreshing):
         made, clock, _ticks, _link = refreshing
-        _refreshes(made, clock, [1.0 / 60.0])
+        _steady(made, clock)
         assert made._timer.interval() == made._watching_ms() == 50
+
+    def test_they_keep_the_frames_only_once_they_come_steadily(
+            self, refreshing):
+        """A screen that sends refreshes now and then (a hosted runner's
+        sent two in a second and a half) took the frames at each, and left
+        the timer's watch with nothing drawn; the timer keeps them now."""
+        made, clock, ticks, _link = refreshing
+        made._on_timer()
+        stamp = 50.0
+        each = []
+        for _ in range(4):
+            # The timer's frames for most of a second, a refresh among them.
+            count = len(ticks)
+            for _ in range(15):
+                clock.now += 1.0 / 60.0
+                made._on_timer()
+            stamp += 0.25
+            made._refreshed(stamp)
+            assert not made._refreshing()
+            each.append(len(ticks) - count)
+        assert set(each) == {15}, (
+            f"a quarter of a second drew {each} ticks: a stray refresh "
+            f"stopped the timer's frames")
+        assert made._timer.interval() < made._watching_ms()
+        # Three in a row at the screen's pace, and they have them.
+        for _ in range(made.REFRESH_STEADY):
+            stamp = _refreshes(made, clock, [1.0 / 60.0], stamp)
+        assert made._refreshing()
 
     def test_when_they_stop_the_timer_takes_the_frames_back(self, refreshing):
         made, clock, ticks, _link = refreshing
-        _refreshes(made, clock, [1.0 / 60.0] * 5)
+        _steady(made, clock)
         before = len(ticks)
         clock.now += made.TICK_S * (made.REFRESH_LOST - 0.5)
         made._on_timer()
@@ -262,7 +306,7 @@ class TestTheScreensRefreshes:
                                      "hidden"])
     def test_the_timer_keeps_the_frames_when(self, refreshing, why):
         made, clock, ticks, link = refreshing
-        _refreshes(made, clock, [1.0 / 60.0])
+        _steady(made, clock)
         if why == "off the card":
             made._canvas = None
         elif why == "analysing":
@@ -282,7 +326,7 @@ class TestTheScreensRefreshes:
 
     def test_a_hidden_pane_lets_them_go(self, refreshing):
         made, clock, _ticks, link = refreshing
-        _refreshes(made, clock, [1.0 / 60.0])
+        _steady(made, clock)
         made.hide()
         assert link.stopped and not link.running
         assert made._timer.interval() == made.FRAME_MS
@@ -422,21 +466,41 @@ class TestTheMusicsClockOnTheCard:
 
     def test_nor_when_the_refreshes_keep_the_frames(self, qapp, monkeypatch):
         """The same held-up frame with the screen's refreshes keeping the
-        frames: the refreshes missed are made up in the music too."""
+        frames: the timer takes them back, and the music is where the
+        player is; then the refreshes have them again."""
         made, clock, player = self._playing(qapp, monkeypatch)
         made._refreshes = _Link()
         made._timer.start()
         made.show()
         try:
             stamp = 80.0
-            for gap in [1.0 / 60.0] * 120 + [0.15] + [1.0 / 60.0] * 6:
+
+            def refresh(gap, lag=0.0):
+                nonlocal stamp
                 stamp += gap
-                clock.now += gap
-                player["at"] += gap
+                clock.now += gap + lag
+                player["at"] += gap + lag
                 made._refreshed(stamp)
-                if gap > 0.1:
-                    assert abs(made._heard_now - player["at"]) < (
-                        0.05 + made.TICK_S)
+                clock.now -= lag
+                player["at"] -= lag
+
+            for _ in range(120):
+                refresh(1.0 / 60.0)
+            assert made._refreshing()
+            clock.now += 0.15
+            player["at"] += 0.15
+            made._on_timer()
+            assert abs(made._heard_now - player["at"]) < 0.05 + made.TICK_S
+            for _ in range(6):
+                refresh(1.0 / 60.0)
+            assert made._refreshing()
+            assert abs(made._heard_now - player["at"]) < 0.05
+            # A refresh whose call came late, then one on time three ticks
+            # on: the refreshes still have the frames, and the ticks they
+            # missed are made up in the music too.
+            refresh(1.0 / 60.0, lag=0.03)
+            refresh(4.5 / 60.0)
+            assert made._refreshing()
             assert abs(made._heard_now - player["at"]) < 0.05
         finally:
             made.hide()

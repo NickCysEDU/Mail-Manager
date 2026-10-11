@@ -1057,6 +1057,67 @@ REFRESHES = textwrap.dedent("""
         while time.monotonic() < end:
             app.processEvents()
             time.sleep(0.002)
+
+    _kept = []
+
+    def screen_refreshes(seconds=0.5):
+        # Refreshes a second that a window like the pane's, a GL widget in
+        # it drawing all the time, is sent by its own display link, made
+        # through the runtime and not refreshes_mac. A sleeping screen sends
+        # none, and a hosted runner's virtual one sent two in a second and
+        # a half.
+        import ctypes
+        import touchbar_mac
+        from PySide6.QtCore import QTimer
+        from PySide6.QtOpenGLWidgets import QOpenGLWidget
+        rt = touchbar_mac._Runtime()
+        window = QWidget()
+        window.resize(320, 200)
+        drawn = QOpenGLWidget(window)
+        drawn.resize(320, 200)
+        drawing = QTimer()
+        drawing.timeout.connect(drawn.update)
+        drawing.start(16)
+        window.show()
+        settle(0.2)
+        counted = []
+        imp = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p,
+                               ctypes.c_void_p)(
+            lambda _self, _cmd, _link: counted.append(1))
+        _kept.append(imp)
+        name = b"TestRefreshCounter%d" % len(_kept)
+        made = rt.objc.objc_allocateClassPair(rt.cls("NSObject"), name, 0)
+        rt.objc.class_addMethod(made, rt.sel("counted:"),
+                                ctypes.cast(imp, ctypes.c_void_p), b"v@:@")
+        rt.objc.objc_registerClassPair(made)
+        target = rt.send(rt.send(made, "alloc"), "init")
+        link = rt.send(int(window.winId()), "displayLinkWithTarget:selector:",
+                       target, rt.sel("counted:"),
+                       argtypes=[ctypes.c_void_p, ctypes.c_void_p])
+        rt.send(link, "retain")
+        foundation = ctypes.cdll.LoadLibrary(
+            "/System/Library/Frameworks/Foundation.framework/Foundation")
+        modes = ctypes.c_void_p.in_dll(foundation,
+                                       "NSRunLoopCommonModes").value
+        rt.send(link, "addToRunLoop:forMode:",
+                rt.send(rt.cls("NSRunLoop"), "mainRunLoop"), modes,
+                restype=None, argtypes=[ctypes.c_void_p, ctypes.c_void_p])
+        settle(seconds)
+        rt.send(link, "invalidate", restype=None)
+        drawing.stop()
+        window.hide()
+        return len(counted) / seconds
+
+    def steady_or_skip():
+        rate = app.primaryScreen().refreshRate()
+        sent = screen_refreshes()
+        if sent < rate * 0.5:
+            print(json.dumps({"skip": "this screen sends a window %.0f "
+                                      "refreshes a second, not %.0f: it is "
+                                      "asleep, or a hosted runner's"
+                                      % (sent, rate)}))
+            sys.stdout.flush()
+            os._exit(0)
 """)
 
 
@@ -1066,6 +1127,7 @@ class TestTheScreensRefreshesKeepTheFrames:
 
     def test_they_come_and_each_is_a_tick(self):
         got = on_the_card(REFRESHES + textwrap.dedent("""
+            steady_or_skip()
             made = pane(size=(320, 200))
             made.show()
             ticks = []
@@ -1077,11 +1139,14 @@ class TestTheScreensRefreshesKeepTheFrames:
             settle(1.5)
             print(json.dumps({"refreshes": len(calls), "ticks": len(ticks),
                               "rate": made.screen().refreshRate(),
-                              "following": made._refreshes.running}))
+                              "following": made._refreshes.running,
+                              "keeping": made._refreshing()}))
         """))
         assert "unanswered" not in got, (
             f"this Mac does not answer {got.get('unanswered')}")
         assert got["following"]
+        assert got["keeping"], (
+            "the refreshes came but the timer kept the frames")
         assert got["refreshes"] >= got["rate"] * 1.5 * 0.8, (
             f"{got['refreshes']} refreshes came in a second and a half of "
             f"a screen at {got['rate']:.0f}")
@@ -1109,6 +1174,7 @@ class TestTheScreensRefreshesKeepTheFrames:
     def test_they_follow_the_pane_into_another_window(self):
         """As going full screen moves it, perhaps to another screen."""
         got = on_the_card(REFRESHES + textwrap.dedent("""
+            steady_or_skip()
             home, away = QWidget(), QWidget()
             for window in (home, away):
                 window.resize(400, 300)

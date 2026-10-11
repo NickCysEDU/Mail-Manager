@@ -394,7 +394,13 @@ describes the app itself.
   timestamps, exactly one a refresh within a tenth of sixty. The timer
   then only watches, and takes the frames back after `REFRESH_LOST` ticks
   without one, and whenever frames are paced slower than sixty, during an
-  analysis, off the card or hidden. `requestUpdate` on the window was
+  analysis, off the card or hidden; the refreshes have them again only
+  after `REFRESH_STEADY` in a row at the screen's pace (a hosted runner's
+  virtual screen sent two in a second and a half, and took the frames at
+  each). A sleeping screen sends none, so
+  `TestTheScreensRefreshesKeepTheFrames` skips there and on a hosted
+  runner, by what a window like the pane's is sent through the runtime.
+  `requestUpdate` on the window was
   tried first: a widget window answers it by repainting all of itself, so
   refreshes came every 28 ms and the canvas was drawn twice. A pane's link
   goes with it (`weakref.finalize`): a window taken away sends no refresh
@@ -691,7 +697,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 5,384 tests
+./dev test                     # 5,385 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus
