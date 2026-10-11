@@ -14,7 +14,7 @@ import time
 from typing import Callable, Dict, List, Optional, Sequence
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QTimer, SignalInstance
-from PySide6.QtGui import QAction, QGuiApplication
+from PySide6.QtGui import QAction, QGuiApplication, QTextCursor
 from PySide6.QtWidgets import (
     QAbstractButton, QApplication, QComboBox, QDialog, QDialogButtonBox,
     QMenu, QSlider, QTabWidget, QWidget, QWizard,
@@ -444,6 +444,56 @@ class Slider(Item):
             self.change(wanted)
         else:
             self.source.setValue(wanted)
+
+
+class Suggestions(Item):
+    """The words macOS offers for what is being typed in ``editor``, a
+    QTextEdit, as its own text views offer them on the Touch Bar: the rest
+    of the word under the cursor, a misspelt word mended, or the next word
+    after a space. Asked for the paragraph the cursor is in rather than the
+    whole letter, which may quote pages; positions are counted as Qt and
+    AppKit both count them, in UTF-16 units."""
+
+    kind = "suggestions"
+
+    def __init__(self, key: str, label: str, editor, **kwargs) -> None:
+        super().__init__(key, label, **kwargs)
+        self.editor = editor
+        self.watch = self.watch + (editor.textChanged,
+                                   editor.cursorPositionChanged)
+
+    def sources(self) -> list:
+        return [self.editor]
+
+    def state(self) -> dict:
+        cursor = self.editor.textCursor()
+        block = cursor.block()
+        at = block.position()
+        start, end = cursor.selectionStart(), cursor.selectionEnd()
+        if start < at or end > at + block.length() - 1:
+            # A selection across paragraphs: nothing is offered for that.
+            return {"text": "", "at": at, "start": 0, "length": 0}
+        return {"text": block.text(), "at": at, "start": start - at,
+                "length": end - start}
+
+    def act(self, value=None) -> bool:
+        """Put in a word chosen. ``value`` says which paragraph it was
+        offered for and what it held then, and which part of it the word
+        replaces. Returns whether it went in: a paragraph changed since is
+        left as it is."""
+        if not value:
+            return False
+        block = self.editor.document().findBlock(value["at"])
+        if block.position() != value["at"] or block.text() != value["was"]:
+            return False
+        start = value["at"] + value["start"]
+        cursor = QTextCursor(block)
+        cursor.setPosition(start)
+        cursor.setPosition(start + value["length"],
+                           QTextCursor.MoveMode.KeepAnchor)
+        cursor.insertText(value["text"])
+        self.editor.setTextCursor(cursor)
+        return True
 
 
 class Popover(Item):

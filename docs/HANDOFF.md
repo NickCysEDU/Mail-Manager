@@ -503,6 +503,21 @@ describes the app itself.
   fit gives way by priority: Seek is `lower`, between normal and low, so a
   scene's own button keeps its place; back, forward and the viewer's own
   buttons are low.
+- **Suggestions while writing** (`touchbar.Suggestions`, behind the
+  writing window's speech-bubble button) are macOS's own QuickType words:
+  `NSSpellChecker`'s `requestCandidatesForSelectedRange:…`, asked for the
+  paragraph the cursor is in, positions in UTF-16 units as Qt and AppKit
+  both count them. macOS answers on a thread of its own, to one block made
+  for good (`_answer_block`); the answer is retained there and queued to
+  the main thread through `_Answers`, and only a list's latest request is
+  shown. A word chosen replaces what it was offered for, unless that
+  paragraph has changed since (`Suggestions.act`).
+- **The writing window's bar wants 833 points beside the Control Strip's
+  685** (it wanted 753 before Suggestions): Link (`low`) and Numbers
+  (`lower`) give way, Suggestions is `high`. Bold, Italic and Underline in
+  one segmented control would save 75 points (180 against 255), the two
+  list buttons 8. `test_the_writing_windows_bar_fits_beside_the_control_
+  strip` measures it as the visualiser's is measured (`MEASURING`).
 - **AppKit draws a slider's knob on the bar as a square:**
   `Renderer._polish` rounds every `NSSliderKnob` (`KNOB_ROUNDING`,
   continuous corners) on every push of a slider's state, giving a knob its
@@ -640,7 +655,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 5,335 tests
+./dev test                     # 5,347 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus

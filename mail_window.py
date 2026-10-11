@@ -850,9 +850,15 @@ class ComposeWindow(QMainWindow):
                             named=True),
             touchbar.Button("bullets", "Bullets", pieces["bullets"], title="",
                             image="list.bullet"),
+            # The bar holds all but these beside the Control Strip: they give
+            # way first, Link before Numbers, and both are in the Format menu.
             touchbar.Button("numbers", "Numbers", pieces["numbers"], title="",
-                            image="list.number"),
-            touchbar.Button("link", "Link", pieces["link"], title="", image="link"),
+                            image="list.number", priority="lower"),
+            touchbar.Button("link", "Link", pieces["link"], title="", image="link",
+                            priority="low"),
+            touchbar.Popover("suggest", "Suggestions", [
+                touchbar.Suggestions("words", "Suggestions", self.editor)],
+                title="", image="text.bubble", priority="high"),
         ]
         touchbar.give(self, items, "compose")
 

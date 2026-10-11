@@ -191,7 +191,9 @@ On a MacBook Pro with a Touch Bar, the bar has **Scan** (**Stop** while it
 works), **Apply**, **Undo**, **Show**, the category and the tick shortcuts.
 **More** has the visualiser, Briefing, Find, Links and the rest of the
 commands; the sliders icon has the time window, the model, hover help and
-Settings. Every window has its own; Settings has its pages and their main
+Settings. When you write a message, the speech-bubble button opens onto the
+words macOS suggests as you type; tap one to put it in. Every window has its
+own; Settings has its pages and their main
 choices, and dialogs have their buttons. The visualiser's has play, the
 scene (tap it for the list), the strobe, the scene's own button (the game,
 the scope's beam, the meters' colours), **Picture**, **Seek** and full
@@ -399,7 +401,7 @@ See [SECURITY.md](../SECURITY.md) for reporting a problem.
 ./dev dry      # scan for real, with moves disabled
 ./dev fake     # the pipeline in the terminal, offline
 ./dev scan     # the pipeline on real mail, read-only
-./dev test     # 5,335 tests (with the evaluation sets present)
+./dev test     # 5,347 tests (with the evaluation sets present)
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 

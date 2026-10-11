@@ -298,6 +298,97 @@ class TestItemsMirrorTheirControls:
                     touchbar.Button("same", "B", lambda: None)])], "twice")
 
 
+class TestSuggestions:
+    """Words for what is being typed, asked for the paragraph the cursor is
+    in, and put in where they were offered."""
+
+    @staticmethod
+    def _editor(qtbot, text, at=None):
+        from PySide6.QtGui import QTextCursor
+        from PySide6.QtWidgets import QTextEdit
+
+        window = _window(qtbot)
+        editor = _add(window, QTextEdit())
+        editor.setPlainText(text)
+        cursor = editor.textCursor()
+        if at is None:
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+        else:
+            cursor.setPosition(at)
+        editor.setTextCursor(cursor)
+        return window, editor
+
+    def test_it_asks_for_the_paragraph_the_cursor_is_in(self, qtbot):
+        import touchbar
+
+        window, editor = self._editor(qtbot, "First line\nThank yo")
+        item = touchbar.Suggestions("words", "Suggestions", editor)
+        assert item.state() == {"text": "Thank yo", "at": 11, "start": 8,
+                                "length": 0}
+
+    def test_a_selection_across_paragraphs_is_offered_nothing(self, qtbot):
+        from PySide6.QtGui import QTextCursor
+
+        import touchbar
+
+        window, editor = self._editor(qtbot, "First line\nThank yo", at=3)
+        cursor = editor.textCursor()
+        cursor.setPosition(15, QTextCursor.MoveMode.KeepAnchor)
+        editor.setTextCursor(cursor)
+        item = touchbar.Suggestions("words", "Suggestions", editor)
+        assert item.state()["text"] == ""
+
+    def test_a_word_chosen_replaces_what_it_was_offered_for(self, qtbot):
+        import touchbar
+
+        window, editor = self._editor(qtbot, "First line\nThank yo")
+        item = touchbar.Suggestions("words", "Suggestions", editor)
+        assert item.act({"was": "Thank yo", "at": 11, "start": 6,
+                         "length": 2, "text": "you "})
+        assert editor.toPlainText() == "First line\nThank you "
+        assert editor.textCursor().position() == len("First line\nThank you ")
+
+    def test_a_word_for_a_paragraph_changed_since_is_not_put_in(self, qtbot):
+        import touchbar
+
+        window, editor = self._editor(qtbot, "First line\nThank yo")
+        item = touchbar.Suggestions("words", "Suggestions", editor)
+        editor.insertPlainText("u")
+        assert not item.act({"was": "Thank yo", "at": 11, "start": 6,
+                             "length": 2, "text": "you "})
+        assert editor.toPlainText() == "First line\nThank you"
+
+    def test_positions_count_as_qt_and_appkit_both_count_them(self, qtbot):
+        """In UTF-16 units: a face before the word is two of them."""
+        import touchbar
+
+        window, editor = self._editor(qtbot, "\N{GRINNING FACE} Thank yo")
+        item = touchbar.Suggestions("words", "Suggestions", editor)
+        state = item.state()
+        assert state["start"] == 11
+        assert item.act({"was": state["text"], "at": 0, "start": 9,
+                         "length": 2, "text": "you "})
+        assert editor.toPlainText() == "\N{GRINNING FACE} Thank you "
+
+    def test_typing_and_moving_the_cursor_send_what_changed(
+            self, qtbot, recorder):
+        import touchbar
+
+        window, editor = self._editor(qtbot, "Thank yo")
+        touchbar.give(window, [touchbar.Popover("suggest", "Suggestions", [
+            touchbar.Suggestions("words", "Suggestions", editor)])], "probe")
+        window.show()
+        qtbot.waitUntil(lambda: bool(recorder.updates("words")), timeout=1000)
+        editor.insertPlainText("u")
+        qtbot.waitUntil(lambda: recorder.updates("words")[-1]["text"]
+                        == "Thank you", timeout=1000)
+        cursor = editor.textCursor()
+        cursor.setPosition(5)
+        editor.setTextCursor(cursor)
+        qtbot.waitUntil(lambda: recorder.updates("words")[-1]["start"] == 5,
+                        timeout=1000)
+
+
 class TestABarKeepsInStep:
     def _bar(self, qtbot, recorder, tracked=True):
         from PySide6.QtWidgets import QCheckBox, QComboBox, QVBoxLayout, QWidget

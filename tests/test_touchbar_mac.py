@@ -258,6 +258,78 @@ def test_a_popover_opens_on_a_tap_and_nothing_else(arch):
     assert result["held"] is False
 
 
+def test_words_are_offered_and_one_chosen_goes_in(arch):
+    """The words macOS offers for a half-typed word, on the item AppKit shows
+    them in, and one chosen put in as AppKit reports the choice. macOS
+    answers on a thread of its own; they are shown from the main one, and
+    only the latest request's."""
+    result = _run(arch, """
+        import threading
+        from PySide6.QtGui import QTextCursor
+        from PySide6.QtWidgets import QTextEdit
+        window = QWidget()
+        editor = QTextEdit(window)
+        editor.setPlainText("Thank yo")
+        editor.moveCursor(QTextCursor.MoveOperation.End)
+        threads = []
+        offer = renderer._offer
+        def watched(sequence, candidates):
+            threads.append(threading.current_thread() is threading.main_thread())
+            offer(sequence, candidates)
+        renderer._offer = watched
+        bar = touchbar.give(window, [touchbar.Popover("suggest", "Suggestions", [
+            touchbar.Suggestions("words", "Suggestions", editor)])], "probe")
+        window.show()
+        spin_until(lambda: bar._handle is not None)
+        words = bar._handle.items["words"]
+        def offered():
+            shown = rt.send(words, "candidates")
+            count = rt.send(shown, "count", restype=ctypes.c_ulong) if shown else 0
+            return [rt.text(rt.send(rt.send(shown, "objectAtIndex:", index,
+                                            argtypes=[ctypes.c_ulong]),
+                                    "replacementString"))
+                    for index in range(count)]
+        spin_until(lambda: "you " in offered())
+        out["kind"] = rt.objc.object_getClassName(words).decode()
+        out["offered"] = offered()
+        out["main_thread"] = threads
+        chosen = out["offered"].index("you ") if "you " in out["offered"] else -1
+        rt.send(renderer.handler,
+                "candidateListTouchBarItem:endSelectingCandidateAtIndex:",
+                words, chosen, argtypes=[_id, ctypes.c_long])
+        spin_until(lambda: editor.toPlainText() != "Thank yo")
+        out["text"] = editor.toPlainText()
+        out["delegate"] = rt.send(words, "delegate") == renderer.handler
+        out["folds"] = bool(rt.send(words, "allowsCollapsing",
+                                    restype=ctypes.c_bool))
+        # The earlier request's answer held back until the later one has
+        # been shown, then let through: late, it must not replace it.
+        held = []
+        def holding(sequence, candidates):
+            if sequence == first and not held:
+                held.append((sequence, candidates))
+                return
+            offer(sequence, candidates)
+        renderer._offer = holding
+        renderer._ask(words, {"text": "I recieved", "at": 0, "start": 10,
+                              "length": 0})
+        first = renderer._latest[words]
+        renderer._ask(words, {"text": "Thank yo", "at": 0, "start": 8,
+                              "length": 0})
+        spin_until(lambda: held and len(renderer._asked) == 1)
+        offer(*held[0])
+        out["after_two"] = offered()
+    """)
+    assert result["kind"] == "NSCandidateListTouchBarItem"
+    assert result["delegate"] is True
+    assert result["folds"] is False
+    assert "you " in result["offered"]
+    assert result["main_thread"] and all(result["main_thread"])
+    assert result["text"] == "Thank you "
+    assert "you " in result["after_two"]
+    assert "received " not in result["after_two"]
+
+
 def test_a_knob_left_between_two_values_stays_where_it_was_left(arch):
     """AppKit reports where the finger left the knob, between two whole
     values; set to the one it rounds to, the knob hopped under the finger."""
@@ -549,6 +621,55 @@ POPOVER_ROOM = 613.0
 #: Between two items.
 GAP = 8.0
 
+#: How wide each normal and high item of a bar is, measured in the bar's own
+#: look, whose type and keys are larger than a window's, in a window off
+#: every screen, so nothing is seen: measure(bar, state) adds a row of
+#: [state, which bar, the room they take, each one's width] to out["rows"].
+MEASURING = textwrap.dedent("""
+    from touchbar_mac import NSRect, NSSize
+    look_of_bar = rt.send(rt.cls("NSAppearance"), "_functionRowAppearance")
+    if not look_of_bar:
+        print(json.dumps({"skip": "no Touch Bar appearance here"}))
+        sys.exit(0)
+    window = rt.send(rt.send(rt.cls("NSWindow"), "alloc"),
+                     "initWithContentRect:styleMask:backing:defer:",
+                     NSRect(-9000, -9000, 1100, 30), 0, 2, False,
+                     argtypes=[NSRect, ctypes.c_ulong, ctypes.c_ulong,
+                               ctypes.c_bool])
+    rt.send(window, "setAppearance:", look_of_bar, argtypes=[_id])
+    host = rt.send(window, "contentView")
+
+    def width(made):
+        view = rt.send(made, "view")
+        borrowed = not rt.send(view, "window")
+        if borrowed:
+            rt.send(host, "addSubview:", view, argtypes=[_id])
+        rt.send(host, "layoutSubtreeIfNeeded")
+        size = rt.send(view, "fittingSize", restype=NSSize)
+        if size.width < 1:
+            size = rt.send(view, "frame", restype=NSRect)
+        if borrowed:
+            # One at a time: a host keeping every view measured so far laid
+            # them all out again for each new one, and on macOS 14 every
+            # slider among them logs AppKit's knob warnings.
+            rt.send(view, "removeFromSuperview")
+        return size.width
+
+    def measure(bar, state):
+        spin(200)
+        sys.stderr.write(f"measuring {state}\\n")
+        handle = bar._handle
+        for key, keys in bar.arrangement().items():
+            kept = [k for k in keys if bar.flat[k].kind != "space"
+                    and bar.flat[k].priority in ("normal", "high")]
+            widths = {k: width(handle.items[k]) for k in kept}
+            room = sum(widths.values()) + GAP * max(0, len(kept) - 1)
+            out.setdefault("rows", []).append(
+                [state, key or "top", room, widths])
+
+    GAP = 8.0
+""")
+
 
 # A hosted runner under Rosetta measured every scene windowed inside two
 # minutes and had not finished full screen when they ran out.
@@ -558,15 +679,10 @@ def test_the_visualisers_bar_fits_beside_the_control_strip(arch):
     normal and high item of the visualiser's bars, in every scene, windowed
     and full screen, and of each popover, fits in the room it has: nothing
     comes and goes for want of room but what is marked to give way."""
-    result = _run(arch, """
+    result = _run(arch, MEASURING, """
         import math, struct
         import attachments, visualizers
         from attachment_view import AttachmentViewer
-        from touchbar_mac import NSRect, NSSize
-        look_of_bar = rt.send(rt.cls("NSAppearance"), "_functionRowAppearance")
-        if not look_of_bar:
-            print(json.dumps({"skip": "no Touch Bar appearance here"}))
-            sys.exit(0)
         rate = 22050
         pcm = b"".join(struct.pack("<h", int(9000 * math.sin(
             2 * math.pi * 220.0 * i / rate))) for i in range(rate))
@@ -579,45 +695,6 @@ def test_the_visualisers_bar_fits_beside_the_control_strip(arch):
         viewer.show()
         viewer.list.setCurrentRow(0)
         spin_until(lambda: viewer.stack.currentWidget() is viewer.audio)
-        # Measured in the bar's own look, whose type and keys are larger
-        # than a window's: off every screen, so nothing is seen.
-        window = rt.send(rt.send(rt.cls("NSWindow"), "alloc"),
-                         "initWithContentRect:styleMask:backing:defer:",
-                         NSRect(-9000, -9000, 1100, 30), 0, 2, False,
-                         argtypes=[NSRect, ctypes.c_ulong, ctypes.c_ulong,
-                                   ctypes.c_bool])
-        rt.send(window, "setAppearance:", look_of_bar, argtypes=[_id])
-        host = rt.send(window, "contentView")
-
-        def width(made):
-            view = rt.send(made, "view")
-            borrowed = not rt.send(view, "window")
-            if borrowed:
-                rt.send(host, "addSubview:", view, argtypes=[_id])
-            rt.send(host, "layoutSubtreeIfNeeded")
-            size = rt.send(view, "fittingSize", restype=NSSize)
-            if size.width < 1:
-                size = rt.send(view, "frame", restype=NSRect)
-            if borrowed:
-                # One at a time: a host keeping every view measured so far
-                # laid them all out again for each new one, and on macOS 14
-                # every slider among them logs AppKit's knob warnings.
-                rt.send(view, "removeFromSuperview")
-            return size.width
-
-        def measure(bar, state):
-            spin(200)
-            sys.stderr.write(f"measuring {state}\\n")
-            handle = bar._handle
-            for key, keys in bar.arrangement().items():
-                kept = [k for k in keys if bar.flat[k].kind != "space"
-                        and bar.flat[k].priority in ("normal", "high")]
-                widths = {k: width(handle.items[k]) for k in kept}
-                room = sum(widths.values()) + GAP * max(0, len(kept) - 1)
-                out.setdefault("rows", []).append(
-                    [state, key or "top", room, widths])
-
-        GAP = 8.0
         audio = viewer.audio
         # The bar is measured, not the picture, whose frames a hosted
         # runner's graphics drew slowly enough to stall every measurement:
@@ -648,4 +725,29 @@ def test_the_visualisers_bar_fits_beside_the_control_strip(arch):
             if row[2] > (APP_ROOM if row[1] == "top" else POPOVER_ROOM)]
     assert over == [], over
     assert len(result["rows"]) > 20
+    assert not layout_complaints(result["stderr"])
+
+
+def test_the_writing_windows_bar_fits_beside_the_control_strip(arch):
+    """The window a message is written in: its formatting and the button
+    that opens onto suggestions all fit, so none is left off for want of
+    room, and so do the suggestions."""
+    result = _run(arch, MEASURING, """
+        from types import SimpleNamespace
+        import outgoing
+        from mail_window import ComposeWindow
+        account = SimpleNamespace(id="a1", address="you@icloud.example",
+                                  describe=lambda: "you · you@icloud.example")
+        owner = SimpleNamespace(settings=SimpleNamespace(show_images=False),
+                                accounts=[account])
+        writing = ComposeWindow(owner, outgoing.Draft(
+            from_address="you@icloud.example"), [account], account)
+        writing.show()
+        spin_until(lambda: touchbar.of(writing)._handle is not None)
+        measure(touchbar.of(writing), "writing")
+    """)
+    over = [row for row in result["rows"]
+            if row[2] > (APP_ROOM if row[1] == "top" else POPOVER_ROOM)]
+    assert over == [], over
+    assert {row[1] for row in result["rows"]} >= {"top", "suggest"}
     assert not layout_complaints(result["stderr"])

@@ -17,7 +17,7 @@ import logging
 import weakref
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QObject, QTimer, Signal, Slot
 
 import touchbar
 
@@ -39,6 +39,15 @@ class NSRect(ctypes.Structure):
     _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double),
                 ("width", ctypes.c_double), ("height", ctypes.c_double)]
 
+
+class NSRange(ctypes.Structure):
+    _fields_ = [("location", ctypes.c_ulong), ("length", ctypes.c_ulong)]
+
+
+#: NSTextCheckingAllSystemTypes: what to offer words for, as the system's
+#: own text views ask, which brings the rest of a word, a misspelling
+#: mended and the next word after a space.
+ALL_CHECKING = 0xFFFFFFFF
 
 #: How AppKit ranks what to leave out of a bar that is too narrow.
 PRIORITY = {"high": 1000.0, "normal": 0.0, "lower": -500.0, "low": -1000.0}
@@ -126,6 +135,14 @@ NEEDED = {
     "NSLayoutConstraint": ("setActive:",),
     "+NSImage": ("imageWithSystemSymbolName:accessibilityDescription:",),
     "+NSColor": tuple(sorted(set(BEZEL.values()))),
+    "NSCandidateListTouchBarItem": ("initWithIdentifier:", "setDelegate:",
+                                    "setAllowsCollapsing:",
+                                    "setCandidates:forSelectedRange:inString:",
+                                    "candidates", "setCustomizationLabel:"),
+    "+NSSpellChecker": ("sharedSpellChecker", "uniqueSpellDocumentTag"),
+    "NSSpellChecker": ("requestCandidatesForSelectedRange:inString:types:"
+                       "options:inSpellDocumentWithTag:completionHandler:",),
+    "NSTextCheckingResult": ("range", "replacementString"),
 }
 
 
@@ -293,6 +310,63 @@ def _picked(_self, _cmd, scrubber, index) -> None:
         log.exception("Touch Bar choice failed")
 
 
+def _chose(_self, _cmd, item, index) -> None:
+    try:
+        if _current is not None:
+            _current._chose(item, index)
+    except Exception:      # noqa: BLE001
+        log.exception("Touch Bar suggestion failed")
+
+
+_ANSWERED = ctypes.CFUNCTYPE(None, _id, _long, _id)
+#: The block macOS answers every request for words with, the request's
+#: number saying which it answers; with what it is made of, for good.
+_ANSWER_BLOCK: Optional[tuple] = None
+
+
+def _answered(_block, sequence, candidates) -> None:
+    """macOS's answer, on a thread of its own: kept, and handed to the main
+    thread, where the bar is."""
+    try:
+        if _current is not None:
+            if candidates:
+                _current.rt.send(candidates, "retain")
+            _current.answers.arrived.emit(sequence, candidates or 0)
+    except Exception:      # noqa: BLE001 - nothing may unwind into AppKit
+        log.exception("Touch Bar suggestions could not be taken")
+
+
+def _answer_block() -> int:
+    global _ANSWER_BLOCK
+    if _ANSWER_BLOCK is None:
+        from webview_mac import (_BLOCK_IS_GLOBAL, _Block, _Descriptor,
+                                 _block_class)
+
+        imp = _ANSWERED(_answered)
+        descriptor = _Descriptor(0, ctypes.sizeof(_Block))
+        block = _Block(_block_class(), _BLOCK_IS_GLOBAL, 0,
+                       ctypes.cast(imp, ctypes.c_void_p),
+                       ctypes.pointer(descriptor))
+        _ANSWER_BLOCK = (imp, descriptor, block)
+    return ctypes.addressof(_ANSWER_BLOCK[2])
+
+
+class _Answers(QObject):
+    """Brings macOS's answers to the main thread: made on it, so its own
+    slot is queued there when the signal is sent from anywhere else."""
+
+    arrived = Signal(object, object)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.arrived.connect(self._take)
+
+    @Slot(object, object)
+    def _take(self, sequence, candidates) -> None:
+        if _current is not None:
+            _current._offer(sequence, candidates)
+
+
 def _handler(rt: _Runtime) -> int:
     """The handler object, made the first time it is asked for."""
     global _HANDLER
@@ -309,12 +383,15 @@ def _handler(rt: _Runtime) -> int:
             ("act:", _ACT(_acted), b"v@:@"),
             ("numberOfItemsForScrubber:", _COUNT(_count), b"q@:@"),
             ("scrubber:viewForItemAtIndex:", _VIEW(_view), b"@@:@q"),
-            ("scrubber:didSelectItemAtIndex:", _PICK(_picked), b"v@:@q")):
+            ("scrubber:didSelectItemAtIndex:", _PICK(_picked), b"v@:@q"),
+            ("candidateListTouchBarItem:endSelectingCandidateAtIndex:",
+             _PICK(_chose), b"v@:@q")):
         _IMPS.append(imp)
         if not rt.objc.class_addMethod(made, rt.sel(selector),
                                        ctypes.cast(imp, _id), types):
             raise RuntimeError(f"could not add {selector}")
-    for protocol in (b"NSScrubberDataSource", b"NSScrubberDelegate"):
+    for protocol in (b"NSScrubberDataSource", b"NSScrubberDelegate",
+                     b"NSCandidateListTouchBarItemDelegate"):
         found = rt.objc.objc_getProtocol(protocol)
         if found:
             rt.objc.class_addProtocol(made, found)
@@ -368,6 +445,15 @@ class Renderer:
         #: sender -> (handle, key, kind, popover to close); one for lists.
         self._targets: Dict[int, tuple] = {}
         self._lists: Dict[int, list] = {}
+        #: A list of suggestions -> [handle, key, what its words were for];
+        #: a request's number -> (list, its text, what it asked for); and a
+        #: list -> its latest request, the only answer it shows.
+        self._suggesting: Dict[int, list] = {}
+        self._asked: Dict[int, tuple] = {}
+        self._latest: Dict[int, int] = {}
+        self._checker = 0
+        self._document = 0
+        self.answers = _Answers()
         self._images: Dict[str, int] = {}
         self._colours: Dict[str, int] = {}
         app = self.rt.send(self.rt.cls("NSApplication"), "sharedApplication")
@@ -600,6 +686,14 @@ class Renderer:
             handle.labels[item.key] = self._keep(handle, name)
             handle.drawn[item.key] = slider
             self._targets[slider] = (handle, item.key, kind, 0)
+        elif kind == "suggestions":
+            made = self._keep(handle, rt.send(
+                rt.send(rt.cls("NSCandidateListTouchBarItem"), "alloc"),
+                "initWithIdentifier:", ident, argtypes=[_id]), retain=False)
+            rt.send(made, "setDelegate:", self.handler, argtypes=[_id])
+            # All the words at once, never folded away behind a button.
+            rt.send(made, "setAllowsCollapsing:", False, argtypes=[_bool])
+            self._suggesting[made] = [handle, item.key, None]
         elif kind == "popover":
             inside = [self._make(handle, child) for child in item.items
                       if child.kind != "space"]
@@ -679,6 +773,8 @@ class Renderer:
                         bool(state.get("enabled", True)), argtypes=[_bool])
                 # Every push, from the first: AppKit may draw them afresh.
                 self._polish(handle.drawn.get(key))
+            elif kind == "suggestions":
+                self._ask(made, state)
             elif kind == "popover":
                 rt.send(made, "setCollapsedRepresentationLabel:",
                         rt.string(state.get("title") or ""), argtypes=[_id])
@@ -756,6 +852,11 @@ class Renderer:
                     rt.send(pointer, "setDataSource:", None, argtypes=[_id])
                     rt.send(pointer, "setDelegate:", None, argtypes=[_id])
                     del self._lists[pointer]
+            for pointer, entry in list(self._suggesting.items()):
+                if entry[0] is handle:
+                    rt.send(pointer, "setDelegate:", None, argtypes=[_id])
+                    del self._suggesting[pointer]
+                    self._latest.pop(pointer, None)
             for pointer in reversed(handle.owned):
                 rt.send(pointer, "release")
         handle.owned.clear()
@@ -815,6 +916,67 @@ class Renderer:
         handle, key, _options, popover, _layout = entry
         self._close(popover)
         self._press(handle, key, int(index))
+
+    def _ask(self, made: int, state: dict) -> None:
+        """Ask macOS which words to offer for ``state``. The answer comes
+        back to _offer, on the main thread."""
+        rt = self.rt
+        if not self._checker:
+            self._checker = rt.send(rt.cls("NSSpellChecker"),
+                                    "sharedSpellChecker")
+            self._document = rt.send(rt.cls("NSSpellChecker"),
+                                     "uniqueSpellDocumentTag", restype=_long)
+        text = rt.send(rt.string(state.get("text") or ""), "retain")
+        sequence = rt.send(
+            self._checker, "requestCandidatesForSelectedRange:inString:types:"
+            "options:inSpellDocumentWithTag:completionHandler:",
+            NSRange(state.get("start", 0), state.get("length", 0)), text,
+            ALL_CHECKING, None, self._document, _answer_block(),
+            restype=_long, argtypes=[NSRange, _id, ctypes.c_ulonglong, _id,
+                                     _long, _id])
+        self._asked[sequence] = (made, text, state)
+        self._latest[made] = sequence
+
+    def _offer(self, sequence, candidates) -> None:
+        """Show the words macOS answered with, if they answer the latest
+        request of a list still on a bar; a later one is on its way."""
+        asked = self._asked.pop(sequence, None)
+        try:
+            if asked is None:
+                return
+            made, text, state = asked
+            entry = self._suggesting.get(made)
+            if entry is None or self._latest.get(made) != sequence:
+                return
+            self.rt.send(made, "setCandidates:forSelectedRange:inString:",
+                         candidates,
+                         NSRange(state.get("start", 0), state.get("length", 0)),
+                         text, argtypes=[_id, NSRange, _id])
+            entry[2] = state
+        finally:
+            if asked is not None:
+                self.rt.send(asked[1], "release")
+            if candidates:
+                self.rt.send(candidates, "release")
+
+    def _chose(self, made, index) -> None:
+        """A word chosen: what it replaces in the text it was offered for."""
+        entry = self._suggesting.get(made)
+        if entry is None or entry[2] is None:
+            return
+        rt = self.rt
+        shown = rt.send(made, "candidates")
+        count = rt.send(shown, "count", restype=_ulong) if shown else 0
+        # Out of range is NSNotFound: the finger was lifted off them all.
+        if not 0 <= index < count:
+            return
+        word = rt.send(shown, "objectAtIndex:", index, argtypes=[_ulong])
+        where = rt.send(word, "range", restype=NSRange)
+        handle, key, state = entry
+        self._press(handle, key, {
+            "was": state["text"], "at": state["at"],
+            "start": where.location, "length": where.length,
+            "text": rt.text(rt.send(word, "replacementString"))})
 
     def window_bar(self, window) -> int:
         """The bar AppKit has on a window now."""

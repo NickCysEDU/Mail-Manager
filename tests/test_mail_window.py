@@ -239,6 +239,15 @@ class TestTheComposeWindow:
         windows.append(window)
         return owner, window
 
+    def test_its_touch_bar_offers_words_for_the_letter(self, windows):
+        import touchbar
+
+        _owner, window = self._window(windows)
+        bar = touchbar.of(window)
+        assert bar.flat["suggest"].kind == "popover"
+        words = bar.flat["words"]
+        assert words.kind == "suggestions" and words.editor is window.editor
+
     def test_a_reply_opens_addressed_with_the_quote_under_the_signature(self, windows):
         draft = outgoing.Draft(from_address="you@icloud.example",
                                to=["Dana <dana@northwind.example>"], subject="Re: Offer",
