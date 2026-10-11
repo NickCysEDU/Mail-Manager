@@ -696,7 +696,6 @@ class TestClosingTheViewerWhileAPartIsComing:
                 viewer = AttachmentViewer([], "", None)
                 copy = viewer._temp / "part.mp3"
                 copy.write_bytes(b"a copy of a part")
-                viewer._written.append(copy)
                 print(viewer._temp, flush=True)
             """).format(root=str(Path(__file__).resolve().parents[1]))
             done = subprocess.run(

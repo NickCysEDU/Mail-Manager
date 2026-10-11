@@ -158,7 +158,8 @@ def _bare_world():
     world._now = 1.0
     world._screen_ship = (0.5, 0.3)
     for name in ("_shock_hard", "_knock", "_split", "_flash", "_trim",
-                 "_bloom_bump", "_flash_lane", "_glow", "_punch"):
+                 "_bloom_bump", "_flash_lane", "_glow", "_punch", "_wide",
+                 "_wide_speed"):
         setattr(world, name, 0.0)
     world._glow_colour = (1.0, 1.0, 1.0)
     world._shock = 9.0
@@ -1415,6 +1416,77 @@ class TestEveryHitLandsAndRunsOfThemBuild:
             print(json.dumps({"off": edges(0.0), "on": edges(1.5)}))
         """))
         assert got["on"][0] > got["off"][0] * 1.3, got
+
+
+class TestAPunchOpensTheViewSmoothly:
+    """A block taken punches the view wider. Opened in one frame, the picture
+    jumped at every block taken, up to six and a half degrees, and the craft
+    jumped with it: what a player saw as the craft stuttering."""
+
+    def test_it_opens_over_a_few_frames(self):
+        world = _bare_world()
+        steps = []
+        for _ in range(12):
+            before = world._wide
+            world._widen(7.0, 1.0 / 60.0)
+            steps.append(world._wide - before)
+        assert steps[0] < 7.0 * 0.15, (
+            f"the first frame opened it {steps[0]:.2f} of 7 degrees")
+        assert max(steps) < 7.0 * 0.3, (
+            f"a frame opened it {max(steps):.2f} of 7 degrees at once")
+        assert min(steps) >= -1e-9 and world._wide <= 7.0 + 1e-6, (
+            "it went past and came back")
+        assert world._wide > 7.0 * 0.9, (
+            f"a fifth of a second in it is open {world._wide:.2f} of 7")
+
+    def test_a_long_frame_does_not_throw_it(self):
+        world = _bare_world()
+        for _ in range(20):
+            world._widen(7.0, 0.1)
+            assert -1e-9 <= world._wide <= 7.0 + 1e-6, world._wide
+        assert world._wide == pytest.approx(7.0, abs=1e-3)
+
+    def test_a_block_taken_moves_the_craft_smoothly_on_the_card(self):
+        """The same ride twice, a block taken in one: the difference is the
+        punch alone, the kicks' own punches being in both."""
+        got = on_the_card(RIDER + textwrap.dedent("""
+            runs = []
+            for taken in (False, True):
+                made, scene = rider_pane(size=(800, 500))
+                fovs, ships = [], []
+                with Clock() as clock:
+                    for i in range(80):
+                        clock.step(1 / 60)
+                        made.set_position(int((10 + i / 60) * 1000))
+                        # A road with nothing on it, so the craft stays in
+                        # its lane.
+                        scene._placed = scene._laid = 1e9
+                        scene._blocks = []
+                        if taken and i == 40:
+                            scene._pop("prize", strength=1.3)
+                        made._tick()
+                        made._canvas.grabFramebuffer()
+                        seen = made._canvas.world.seen
+                        fovs.append(seen["fov"])
+                        ships.append(seen["ship"])
+                runs.append((fovs, ships))
+            (fovs, ships), (fovs_t, ships_t) = runs
+            wider = [b - a for a, b in zip(fovs, fovs_t)]
+            moved = [(b[0] - a[0], b[1] - a[1])
+                     for a, b in zip(ships, ships_t)]
+            steps = [abs(b - a) for a, b in zip(wider, wider[1:])]
+            jumps = [abs(b[0] - a[0]) + abs(b[1] - a[1])
+                     for a, b in zip(moved, moved[1:])]
+            print(json.dumps({"before": max(abs(w) for w in wider[:40]),
+                              "opened": max(wider), "step": max(steps),
+                              "move": max(jumps)}))
+        """))
+        assert got["before"] < 1e-6, f"the two rides differ before it: {got}"
+        assert got["opened"] > 1.0, f"the punch no longer opens it: {got}"
+        assert got["step"] < 1.2, (
+            f"a frame opened the view {got['step']:.2f} degrees at once")
+        assert got["move"] < 0.004, (
+            f"the craft moved {got['move']:.4f} of the frame in one frame")
 
 
 class TestTheEyeStaysClearOfTheRoad:

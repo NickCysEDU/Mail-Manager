@@ -63,6 +63,16 @@ describes the app itself.
   window has lost and still deletes the files, and whatever no sweep
   reached goes at exit (`_COPIES`, `atexit`): the app could quit before a
   closing viewer's sweep came round.
+- **Nothing the app writes outside its folders outlives what it was for.**
+  The viewer keeps one copy a pane, the player's and the PDF view's, and
+  lets the last go as the next comes (`_let_go_of_copy`). Each viewer's
+  folder is claimed with its process (`leftovers.claim`), and at every
+  start a thread sweeps the temporary folder of `mm-attach-` and
+  `mm-update-` folders whose process has gone, or unclaimed and an hour
+  old, never one still mounted (`main._clear_leftovers`,
+  `leftovers.sweep`). An update that fails or is stopped removes what it
+  downloaded and unpacked beside the app, and a start removes one left
+  ten minutes, unless it holds the old app (`updates.clear_stale_staging`).
 
 - **Every shortcut is unique.** Qt fires neither of two actions bound to the
   same keys. `test_no_two_actions_share_a_shortcut` checks the main window.
@@ -475,7 +485,11 @@ describes the app itself.
   turned further than the craft, put the road through the camera. **A
   craft is one rigid piece** (`onRoadAs`, mirrored by `RiderWorld._rigid`):
   placed in the road's frame where it stands, not point by point along the
-  road's line, which bent it over a crest.
+  road's line, which bent it over a crest. **The view opens with a punch
+  on a spring** (`RiderWorld._widen`, `PUNCH_SPRING`), a kick's or a
+  prize's: opened in one frame, it jumped up to six and a half degrees at
+  a block taken, and the craft jumped with it, which players saw as the
+  craft stuttering. The lights and the flash still come in one frame.
 - **The results card runs on the wall clock** (`Rider._finished_at`): the
   track has stopped by then, so on the track's clock it never finished
   coming up. A seek back from the finish is a new run from there, with the
@@ -711,7 +725,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 5,389 tests
+./dev test                     # 5,406 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus

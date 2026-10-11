@@ -1441,6 +1441,12 @@ class RiderWorld:
     FOV_FAST = 74.0
     #: How many degrees a prize opens the view by, at full strength.
     PUNCH = 7.0
+    #: How quickly the view opens with a punch, a kick's or a prize's, as
+    #: the rate a second of the critically damped spring it follows (see
+    #: _widen). Opened in one frame, the picture jumped wider at every block
+    #: taken, up to six and a half degrees, and the craft jumped with it;
+    #: on the spring it opens over about a tenth of a second.
+    PUNCH_SPRING = 25.0
     #: How much of its light a block taken throws: its lane's flash, its share
     #: of the bloom and of the glow in from the edges, and its pieces. Then
     #: how much hotter than its own light the block burns as it breaks up, how
@@ -1511,6 +1517,10 @@ class RiderWorld:
         self._glow = 0.0
         self._glow_colour = (1.0, 1.0, 1.0)
         self._punch = 0.0
+        #: How many degrees the punches have the view open by, and how fast
+        #: that is changing. See _widen.
+        self._wide = 0.0
+        self._wide_speed = 0.0
         self._shock_at = (0.5, 0.3)
         self._split = 0.0
         self._knock = 0.0
@@ -1810,8 +1820,9 @@ class RiderWorld:
         roll = (bank * self.CAM_BANK - turn
                 + math.sin(float(getattr(scene, "_wobble", 0.0)) * 2.3)
                 * hurt * 0.10)
+        self._widen(self._kick_punch * 3.0 + self._punch * self.PUNCH, dt)
         fov = (self.FOV_CALM + (self.FOV_FAST - self.FOV_CALM) * rush
-               + self._kick_punch * 3.0 + self._punch * self.PUNCH)
+               + self._wide)
         view = QMatrix4x4()
         view.perspective(fov / max(1.0, aspect / 1.6) ** 0.35, aspect,
                          0.05, 400.0)
@@ -2566,6 +2577,17 @@ class RiderWorld:
                                + self._rng.uniform(22.0, 34.0))
                         self._spawn(140, sky, 7.0,
                                     tuple(c * 4.0 for c in colour), 2.4, 1.6)
+
+    def _widen(self, wanted: float, dt: float) -> None:
+        """The punches' opening of the view, on a critically damped spring
+        towards ``wanted`` degrees: solved exactly over the frame, so a long
+        one cannot throw it."""
+        rate = self.PUNCH_SPRING
+        off = self._wide - wanted
+        lag = self._wide_speed + rate * off
+        fade = math.exp(-rate * dt)
+        self._wide = wanted + (off + lag * dt) * fade
+        self._wide_speed = (self._wide_speed - rate * lag * dt) * fade
 
     def _bloom(self, frame) -> None:
         gl = self.gl

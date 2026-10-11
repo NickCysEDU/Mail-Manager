@@ -577,6 +577,25 @@ def _qt_plugin_check() -> str:
     return f"{len(list(platforms.glob('*.dylib')))} found"
 
 
+def _clear_leftovers() -> None:
+    """What earlier runs left: their folders in the temporary folder (see
+    leftovers), and an update staged beside the app and never finished
+    (see updates.clear_stale_staging)."""
+    import leftovers
+    import updates
+
+    log = logging.getLogger("main")
+    try:
+        gone = leftovers.sweep()
+        if gone:
+            log.info("Cleared %d folders an earlier run left.", gone)
+        here = updates.running_app()
+        if here is not None and updates.clear_stale_staging(here):
+            log.info("Cleared an update an earlier run left unfinished.")
+    except Exception:      # noqa: BLE001 - tidying up is never worth a crash
+        log.exception("Could not clear what an earlier run left")
+
+
 def main(argv: Optional[list] = None) -> int:
     args = build_parser().parse_args(_clean_argv(argv))
     log_path = configure_logging("DEBUG" if args.verbose else args.log_level,
@@ -650,6 +669,12 @@ def main(argv: Optional[list] = None) -> int:
     certs.ensure()
 
     install_exception_hook(app)
+
+    # What an earlier run could not clear up, if it crashed or was made to
+    # quit: off the main thread, so a long list never holds the window up.
+    import threading
+    threading.Thread(target=_clear_leftovers, name="leftovers",
+                     daemon=True).start()
 
     from config import CredentialStore, Settings
     import widgets

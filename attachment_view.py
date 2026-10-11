@@ -17,6 +17,7 @@ once.
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Callable, List, Optional
@@ -36,6 +37,7 @@ import shiboken6
 
 import attachment_meta
 import attachments
+import leftovers
 from attachment_widgets import (FlowHolder, FlowRow, SeekBar, Spectrum,
                                 Waveform)
 import widgets
@@ -2290,7 +2292,12 @@ class AttachmentViewer(QDialog):
         _COPIES.add(self._temp)
         _arm_quit()
         os.chmod(self._temp, 0o700)
-        self._written: List[Path] = []
+        # So a later run can tell it from one whose process has gone: see
+        # leftovers.
+        leftovers.claim(self._temp)
+        #: The copy each pane that reads from a file has open, by pane. See
+        #: _let_go_of_copy.
+        self._copies: dict = {}
         self._last_dir = str(Path.home() / "Downloads")
         #: Where the library's file panel opens: Music, then wherever the
         #: last track came from.
@@ -2820,12 +2827,14 @@ class AttachmentViewer(QDialog):
             path = self._materialise(item)
             self.stack.setCurrentWidget(self.audio)
             self.status.setText(self.audio.load(path, item))
+            self._let_go_of_copy("audio", path)
             # The pane says what the track is, beside its cover.
             self.heading.hide()
         elif kind == "pdf":
             path = self._materialise(item)
             self.stack.setCurrentWidget(self.pdf)
             self.status.setText(self.pdf.load(path))
+            self._let_go_of_copy("pdf", path)
         elif kind in ("text", "program") or item.ext in ("svg", "html", "htm", "xml"):
             self.stack.setCurrentWidget(self.text)
             self.status.setText(self.text.show_bytes(data))
@@ -2857,11 +2866,23 @@ class AttachmentViewer(QDialog):
 
     def _materialise(self, item) -> Path:
         path = self._temp / item.filename
-        if path not in self._written:
+        if not path.exists():
             path.write_bytes(item.data or b"")
             os.chmod(path, 0o600)
-            self._written.append(path)
         return path
+
+    def _let_go_of_copy(self, pane: str, path: Path) -> None:
+        """``pane`` has ``path`` open now, and the copy it had before goes
+        at once rather than when the viewer closes: the library, played for
+        an evening, kept a copy of every track it played until then."""
+        old = self._copies.get(pane)
+        self._copies[pane] = path
+        if old is None or old == path or old in self._copies.values():
+            return
+        try:
+            old.unlink()
+        except OSError:
+            pass
 
     @Slot()
     def _save_current(self) -> None:
@@ -3017,16 +3038,8 @@ class AttachmentViewer(QDialog):
         if shiboken6.isValid(self.audio):
             self.audio.stop()
         self.audio._cancel_analysis()
-        for path in self._written:
-            try:
-                path.unlink()
-            except OSError:
-                pass
-        try:
-            self._temp.rmdir()
-        except OSError:
-            pass
-        else:
+        shutil.rmtree(self._temp, ignore_errors=True)
+        if not self._temp.exists():
             _COPIES.discard(self._temp)
 
 

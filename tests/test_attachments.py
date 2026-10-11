@@ -319,13 +319,45 @@ class TestTheViewerPicksASafePane:
                                              b"ID3\x04\x00" + b"\x00" * 200)])
         qtbot.addWidget(viewer)
         viewer.list.setCurrentRow(0)
-        written = list(viewer._written)
+        import leftovers
+
         temp = viewer._temp
+        written = [p for p in temp.iterdir() if p.name != leftovers.CLAIM]
         assert written and all(p.exists() for p in written)
         assert all(p.stat().st_mode & 0o077 == 0 for p in written), \
             "a temp copy of somebody's attachment is not group or world readable"
         viewer._sweep()
         assert not any(p.exists() for p in written)
+        assert not temp.exists()
+
+    def test_a_copy_goes_once_another_takes_its_place(self, qtbot):
+        """Kept until the window closed, the library, played for an evening,
+        held a copy of every track it played in the temporary folder."""
+        from attachment_view import AttachmentViewer
+
+        sound = b"ID3\x04\x00" + b"\x00" * 200
+        viewer = AttachmentViewer([
+            self._one("a.mp3", "audio/mpeg", sound),
+            self._one("b.mp3", "audio/mpeg", sound),
+            self._one("c.pdf", "application/pdf", b"%PDF-1.4" + b"\x00" * 20)])
+        qtbot.addWidget(viewer)
+        temp = viewer._temp
+        try:
+            viewer.list.setCurrentRow(0)
+            assert (temp / "a.mp3").exists()
+            viewer.list.setCurrentRow(1)
+            assert not (temp / "a.mp3").exists(), (
+                "the first track's copy stayed")
+            assert (temp / "b.mp3").exists()
+            # A document, while the track may still be playing: both stay.
+            viewer.list.setCurrentRow(2)
+            assert (temp / "b.mp3").exists() and (temp / "c.pdf").exists()
+            # Back to the first track: written again, the second's gone.
+            viewer.list.setCurrentRow(0)
+            assert (temp / "a.mp3").exists()
+            assert not (temp / "b.mp3").exists()
+        finally:
+            viewer._sweep()
         assert not temp.exists()
 
     def test_nothing_in_the_viewer_opens_a_file_with_the_system(self):

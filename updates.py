@@ -125,6 +125,35 @@ def offered(release: Optional[Release], current: str, skipped: str) -> bool:
             and release.version != (skipped or ""))
 
 
+def staging_for(app: Path) -> Path:
+    """Where an update to ``app`` is downloaded and unpacked: beside it."""
+    return app.parent / f".{app.stem} update"
+
+
+#: How long a staging folder has gone untouched before a start of the app
+#: takes it for one an update left behind: a swap under way moves the old
+#: app through it moments before the new one opens.
+STALE_STAGING = 600.0
+
+
+def clear_stale_staging(app: Path, now: Optional[float] = None) -> bool:
+    """Remove the folder an update staged in beside ``app``, if one was left
+    (the app quit, or was made to, part way through an update): never one
+    touched in the last STALE_STAGING seconds, nor one holding the old app,
+    which a swap that failed half way leaves there. Whether one went."""
+    staging = staging_for(app)
+    try:
+        touched = staging.stat().st_mtime
+    except OSError:
+        return False
+    now = time.time() if now is None else now
+    if (now - touched < STALE_STAGING
+            or (staging / f"{app.stem} (old).app").exists()):
+        return False
+    shutil.rmtree(staging, ignore_errors=True)
+    return not staging.exists()
+
+
 def running_app() -> Optional[Path]:
     """This copy's bundle, when it is a built app in a folder it may replace;
     None from source, from a disk image, or where it cannot write."""
@@ -202,7 +231,7 @@ class Installer:
         self.hosts = hosts
         self.stage = stage
         self.progress = progress
-        self.staging = self.app.parent / f".{self.app.stem} update"
+        self.staging = staging_for(self.app)
         self.cancelled = False
 
     def run(self) -> Path:
@@ -215,11 +244,17 @@ class Installer:
         if self.staging.exists():
             shutil.rmtree(self.staging, ignore_errors=True)
         self.staging.mkdir(parents=True)
-        image = self.download()
-        staged = self.unpack(image)
-        self.check(staged, mine)
-        script = self.staging / "swap.sh"
-        script.write_text(SWAP, encoding="utf-8")
+        try:
+            image = self.download()
+            staged = self.unpack(image)
+            self.check(staged, mine)
+            script = self.staging / "swap.sh"
+            script.write_text(SWAP, encoding="utf-8")
+        except BaseException:
+            # Stopped or failed: the download and the app unpacked from it,
+            # hundreds of megabytes beside the app, are no use to anybody.
+            shutil.rmtree(self.staging, ignore_errors=True)
+            raise
         return script
 
     def download(self) -> Path:

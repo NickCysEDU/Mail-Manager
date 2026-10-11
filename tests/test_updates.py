@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import plistlib
 import subprocess
 import time
@@ -162,6 +163,48 @@ def made(image, tmp_path):
         yield old, image, release, tmp_path
 
 
+class TestAnUpdateLeftUnfinished:
+    """An update the app quit in the middle of, or was made to: what it had
+    downloaded and unpacked stayed beside the app, hundreds of megabytes,
+    until the next update."""
+
+    @staticmethod
+    def _staged(tmp_path, age: float, old_app: bool = False):
+        app = tmp_path / "Applications" / "Test App.app"
+        app.mkdir(parents=True)
+        staging = updates.staging_for(app)
+        staging.mkdir()
+        (staging / "update.dmg").write_bytes(b"part of a download")
+        if old_app:
+            (staging / "Test App (old).app").mkdir()
+        when = time.time() - age
+        os.utime(staging, (when, when))
+        return app, staging
+
+    def test_it_goes_at_the_next_start(self, tmp_path):
+        app, staging = self._staged(tmp_path, updates.STALE_STAGING + 60)
+        assert updates.clear_stale_staging(app) is True
+        assert not staging.exists() and app.exists()
+
+    def test_not_while_a_swap_may_be_under_way(self, tmp_path):
+        app, staging = self._staged(tmp_path, 30)
+        assert updates.clear_stale_staging(app) is False
+        assert staging.exists()
+
+    def test_never_while_it_holds_the_old_app(self, tmp_path):
+        """A swap that failed half way leaves the old app there: it is the
+        only copy."""
+        app, staging = self._staged(tmp_path, updates.STALE_STAGING + 60,
+                                    old_app=True)
+        assert updates.clear_stale_staging(app) is False
+        assert (staging / "Test App (old).app").exists()
+
+    def test_nothing_there_is_nothing_to_do(self, tmp_path):
+        app = tmp_path / "Test App.app"
+        app.mkdir()
+        assert updates.clear_stale_staging(app) is False
+
+
 @pytest.mark.timeout(240)
 class TestInstalling:
     def test_it_downloads_checks_stages_and_swaps(self, made):
@@ -202,6 +245,16 @@ class TestInstalling:
         with pytest.raises(updates.UpdateError, match="checksum"):
             updates.Installer(wrong, old, opener=_opener(data)).run()
         assert updates.bundle_facts(old)["version"] == "1.0.0"
+        # Nor is the download left beside the app.
+        assert not updates.staging_for(old).exists()
+
+    def test_one_stopped_part_way_leaves_nothing_beside_the_app(self, made):
+        old, data, release, _tmp = made
+        installer = updates.Installer(release, old, opener=_opener(data))
+        installer.cancelled = True
+        with pytest.raises(updates.UpdateError, match="Stopped"):
+            installer.run()
+        assert not installer.staging.exists()
 
     def test_a_download_cut_short(self, made, monkeypatch):
         """Where the app's certificate is what is checked and GitHub gave no
