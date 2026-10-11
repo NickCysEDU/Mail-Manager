@@ -399,9 +399,14 @@ See [SECURITY.md](../SECURITY.md) for reporting a problem.
 ./dev dry      # scan for real, with moves disabled
 ./dev fake     # the pipeline in the terminal, offline
 ./dev scan     # the pipeline on real mail, read-only
-./dev test     # 5,329 tests (with the evaluation sets present)
+./dev test     # 5,335 tests (with the evaluation sets present)
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
+
+In a terminal, `./dev demo`, `run` and `dry` start the app through macOS,
+as the built app is started, from a small bundle in `build/dev.noindex`
+("Mail Manager (source)" in the Dock); the terminal's environment goes with
+it, and its output comes back to the terminal.
 
 `./dev` lists everything. No test touches the network or the Keychain:
 `tests/conftest.py` has a fake IMAP server and a fake model client.

@@ -95,6 +95,65 @@ ensure_icon() {
   QT_QPA_PLATFORM=offscreen "$PY" tools/make_icon.py >/dev/null
 }
 
+# The app, started by macOS the way the built app is, from a small bundle in
+# build/ that runs this checkout (.noindex keeps it out of Spotlight). Run
+# straight from a terminal it has to make itself active, and macOS now and
+# then left it in front but never active: its windows drawn as if behind
+# another app's, a file panel's sidebar greyed out, until something in it was
+# clicked. Away from a terminal, as before.
+launch() {
+  if [[ "$(uname)" != Darwin || ! -t 0 || ! -t 1 ]]; then
+    exec "$PY" main.py "$@"
+  fi
+  local bundle="build/dev.noindex/Mail Manager (source).app"
+  mkdir -p "$bundle/Contents/MacOS"
+  # Native only: an app whose executable is a script is otherwise run under
+  # Rosetta on Apple silicon, and so is the interpreter it starts.
+  cat > "$bundle/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key><string>run</string>
+  <key>CFBundleIdentifier</key><string>local.mailmanager.source</string>
+  <key>CFBundleName</key><string>Mail Manager (source)</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>LSArchitecturePriority</key><array><string>arm64</string><string>x86_64</string></array>
+  <key>LSRequiresNativeExecution</key><true/>
+</dict>
+</plist>
+PLIST
+  # It finds the checkout from where it is, and reads the environment from
+  # the file it is handed, once.
+  cat > "$bundle/Contents/MacOS/run" <<'RUN'
+#!/bin/bash
+cd "$(dirname "$0")/../../../../.." || exit 1
+source "$1" && rm -f "$1"
+shift
+exec ./.venv/bin/python main.py "$@"
+RUN
+  chmod +x "$bundle/Contents/MacOS/run"
+  # This terminal's environment goes with it, but for what names the
+  # terminal's own app: in a file only this user can read rather than on a
+  # command line, which any account on the Mac can list, and each value in
+  # single quotes, since anything else expanded the ~ in a PATH.
+  local environment entry name value status=0 quote="'\\''"
+  environment="$(mktemp "$ROOT/build/dev.noindex/environment.XXXXXX")"
+  while IFS= read -r -d '' entry; do
+    case "$entry" in __CF*|XPC_*|_=*|PWD=*|OLDPWD=*|SHLVL=*) continue ;; esac
+    name="${entry%%=*}" value="${entry#*=}"
+    if [[ "$name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      printf "export %s='%s'\n" "$name" "${value//\'/$quote}"
+    fi
+  done < <(env -0) > "$environment"
+  local here; here="$(tty)"
+  open -W -n --stdout "$here" --stderr "$here" "$bundle" \
+    --args "$environment" "$@" || status=$?
+  rm -f "$environment"
+  return "$status"
+}
+
 usage() {
   cat <<EOF
 ${B}iCloud Mail Job Triage: dev commands${N}
@@ -145,9 +204,9 @@ case "$command" in
 
   setup)               ensure_venv; say "Ready. Try: ./dev demo" ;;
 
-  demo)                ensure_venv; exec "$PY" main.py --demo "$@" ;;
-  run)                 ensure_venv; exec "$PY" main.py "$@" ;;
-  dry)                 ensure_venv; exec "$PY" main.py --dry-run --verbose "$@" ;;
+  demo)                ensure_venv; launch --demo "$@" ;;
+  run)                 ensure_venv; launch "$@" ;;
+  dry)                 ensure_venv; launch --dry-run --verbose "$@" ;;
 
   creds|credentials)   ensure_venv; exec "$PY" main.py --set-credentials ;;
   config)              ensure_venv; exec "$PY" main.py --show-config ;;

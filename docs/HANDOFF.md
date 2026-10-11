@@ -150,6 +150,23 @@ describes the app itself.
   Dock. A test fails on any `QFileDialog.get…` call outside `widgets.py`.
   The round trip is tested on the real platform; whether it ungreys the
   sidebar is not, since this session cannot capture the screen.
+- **`./dev demo|run|dry` start the app through macOS** (`launch()` in
+  `dev`), from a bundle in `build/dev.noindex/` that runs the checkout, as
+  the built app is started. Run straight from a terminal the process has to
+  make itself active, and now and then macOS made it the front app without
+  activating it: in `log show --predicate 'eventMessage CONTAINS
+  "SETFRONT"'` the app came to the front and nothing followed, no Dock round
+  trip (`MenuBarWaker` waits for an activation, and none came), no Touch
+  Bar, no text cursor service. A panel opened from the View menu then came
+  up with its sidebar grey until a click activated the app; launched through
+  macOS it comes up active. The bundle asks for native execution
+  (`LSRequiresNativeExecution`): an app whose executable is a script is
+  otherwise run under Rosetta on Apple silicon, Python with it, and the
+  Keychain prompted for the other slice. The terminal's environment goes
+  over in a file the bundle sources and deletes, never as `open --env`,
+  since any account can list a command line, with each value single-quoted
+  (`%q` let bash expand a `~` in PATH). `tests/test_dev_launch.py` runs it.
+  Away from a terminal, `./dev` runs Python directly, as before.
 - **The inbox is two lists** (`MainWindow._listed`, `_sorted`): the messages
   a `ListWorker` read when the window opened (`TriageItem.analysed` False,
   shown as Not sorted yet), and the last scan's rows, shown together by
@@ -623,7 +640,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 5,329 tests
+./dev test                     # 5,335 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus
@@ -756,6 +773,12 @@ About's security link is a 404 for everyone but the owner.
   now draws sixteen frames of the world first and skips its scripts on the
   card when a frame takes over `WORLD_FRAME_MOST` (100 ms; about seven
   here). A script that fails there is not a reason to skip.
+- **The corkscrew city test failed once** in a full local run on 10
+  October (`test_the_towers_stay_upright_whatever_the_road_does`: the turned
+  road's frame differed from the level one by more than the city did,
+  30,220 against 21,915), and passed alone three times and with its file
+  on four workers. If it fails again, look at the two frames it compares
+  before touching the threshold.
 - **`test_the_towers_stay_upright_whatever_the_road_does` failed once** in
   about a dozen runs of its file here (the towers ahead differed by more
   than 1%); never alone in eight, and in ten more runs of its file the
