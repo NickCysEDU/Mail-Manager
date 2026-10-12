@@ -471,15 +471,22 @@ describes the app itself.
   will not build it gets the small copy (`_halo_on_gpu`, `last_halo`),
   logged once; the CPU path still stretches a small copy. What made the
   rave look bad in a window was its haze, stretched from a small tile, and
-  `HAZE_DOUBLINGS` is the fix for that. Its tests take the polished frame
-  again, up to three times, when the hosted runner's shared card hands one
-  back without it (once in four runs there, never on a Mac here in 120
-  tries under load): `polished` in `tests/test_gpu_canvas.py`. A glow that
-  never lands or lands upside down still fails them; both were tried.
-- **macOS's spelling service starts cold on a fresh runner:** the Touch Bar
-  test of the words it offers waits up to thirty seconds for the first
-  answer, where five ran out once. The wait ends when the words come, and
-  with the words never shown the test fails.
+  `HAZE_DOUBLINGS` is the fix for that. The glow is as wide in points at
+  any pixel ratio (`glow_spread`), so a single real pixel at 1x where it is
+  two at 2x: a test of how far it reaches measures within that spread, not
+  a fixed count of real pixels. One that looked one to five rows below the
+  lit band failed on the hosted runner, whose screen is 1x, and passed on
+  every Retina Mac. `QT_SCALE_FACTOR=0.5` makes a Retina Mac's screen 1x for
+  a run, which is how it was reproduced and how to check such tests.
+- **On a hosted runner, showing a window keeps drawing for a while:** the
+  window server's exposes arrive late, and each makes Qt draw the canvas. A
+  test that counts frames waits until the canvas has drawn nothing for half
+  a second before it changes anything (`test_a_widget_over_it_changing_
+  asks_for_no_frame`), not a fixed second.
+- **macOS's spelling service can be slow to answer on a hosted runner:**
+  the Touch Bar test of the words it offers once found none within five
+  seconds there; it now waits up to thirty, ending as soon as they come.
+  Why it was slow was not found. With the words never shown it still fails.
 - **A wide line on the card is a real pen** (`visualizers.stroke`). The
   stack of hairlines is a CPU speed-up; on the card each pass went through
   the samples on its own, and the wireframe came out ridged down each line
