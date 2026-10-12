@@ -131,6 +131,63 @@ describes the app itself.
   corpus; "ham filed as job mail" must stay at 0. Three loose patterns were
   found there ("not considered a deterrent", "when the program is closed",
   "our new publishing schedule"), each now a test.
+- **What a person writes, and what only borrows its words** (`rules_engine.py`,
+  tests in `tests/test_reading_people.py`). Stage phrases a form, a lender, a
+  shop or a friend writes as readily as an employer (`GENERIC_STAGE_PHRASES`:
+  "please complete", "your offer", "introduce you to", "no action is
+  required") say which stage only once something says hiring. A candidate
+  platform writes for employers (`PLATFORM_SENDER_DOMAINS`); a people team
+  writing about the job the reader already has is work mail (`_CURRENT_JOB`,
+  unless `_BEING_HIRED`), and a school's, a hospital's or a court's own people
+  team is an employer, not another world (`_EMPLOYER_SIDE`, computed once as
+  `elsewhere_sender`). A job title applied for (`_APPLIED_FOR_A_TITLE`), an
+  agency and "your onsite" (`_YOUR_ONSITE`) say hiring by themselves; an
+  offer's business from a person writing for an organisation in their own
+  name (`statements.SOFT_EVIDENT`, `_NAMED_MAILBOX`) is read without a word of
+  hiring and held below filing, since a house has offers too. People's news
+  has its own readers: networking (`networking_score`, which needs
+  `_CAREER_CUE`, never fires on being asked to find somebody, inside a
+  process or beside a programme being sold, `_PROGRAMME_SOLD`), headhunting
+  (`headhunt_score`, its later families only beside `_HIRING_ANCHOR`) and a
+  recruiter's own follow-up (`_follows_up_itself`). Ahead of all of it,
+  `elsewhere_now` vetoes the job reading: another world's application, the
+  reader interviewing, an interview for a programme or a publication
+  (`_MEDIA_INTERVIEW`, `_ON_A_PROGRAMME`), money asked for the way a swindle
+  asks, a school's or a board's list; a scam domain, words written to a
+  machine, a one-time code or a password reset, and a sale to people looking
+  for work (`_SALE`) zero the job evidence. In bulk mail an interview nobody
+  is offered is discounted. A digest of several applications is job mail of
+  no one stage.
+- **Church mail follows the prompt, and only when the sender is a church.**
+  `church_sender` returns the word and whether it settles it: a
+  congregation's own name does; a church word run into a domain, a
+  denomination alone or a saint's domain count only beside churchly words
+  (`churchly`) or a death notice (`mourned`, held below filing). Never a
+  hospital, a school, a government, a firm the lexicon knows, a civil parish
+  or a person called Church. Church mail then beats every topic but security
+  and spam, and never in a scam's shape; a sender that may be a church and was
+  not confirmed keeps its verdict under `SOFT_EVIDENCE_CEILING`.
+- **A swindle borrows a voice.** `favour_scam` (gift cards, their codes sent
+  on, pressed for) and `job_swindle` (a job paid out through the reader)
+  discount the personal, work and church words they wear; the favour scam
+  then outranks them outright. Both are flagged, not junked unasked. The
+  same idea for the everyday topics: no courier or shop writes from somebody's
+  own mailbox (`_MAIL_PROVIDERS`), and the reader's pay is their employer's
+  (`_PAYROLL`).
+- **Every guard in the sorter was broken on purpose and a test failed** - 130
+  of them in the October work, one test per way of saying a thing (a test
+  that says it three ways passes with any two). Run each mutant with
+  `PYTHONDONTWRITEBYTECODE=1` and the target's `__pycache__` cleared: two
+  same-size mutants of one file written in the same second run the first
+  one's bytecode, and a guard looks tested when it is not.
+- **Write a held-out set, then do not write rules from memory of it.** The
+  same hand writes the sets and the rules. Two pattern alternatives added
+  after the third set was written echo its wording with no dev-set source
+  (`_INTERVIEWER` "run the technical part of the interview",
+  `_INTERVIEW_OFFERED` "pre-selected to interview"); one more ("pay period")
+  was caught and taken out before the fifth was measured. Before measuring a
+  set, compare every code fragment added since it was written against its
+  text and the dev data: a fragment found only in the held-out set is an echo.
 - **A message is cut short only when its text is** (`imap_engine._text_was_cut`):
   the bytes run out in the last part the parser saw, so a logo or PDF after
   the text leaves it whole; a readable part the server describes in
@@ -741,7 +798,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 5,426 tests
+./dev test                     # 5,665 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus
@@ -798,10 +855,11 @@ Sorter, from `./dev eval`, `tools/adversarial.py` and `tools/corpus.py`:
 
 | Set | Job vs not | Exact category | Filed, of those right |
 |---|---|---|---|
-| labelled (102, dev) | 100% | 94.1% | 71 of 72 |
+| labelled (102, dev) | 100% | 94.1% | 72 of 73 |
 | adversarial (39, dev) | 100% | 97.4% | 5 of 5 |
-| retired held-out (34) | 91.2% | 82.4% | 11 of 12 |
-| held out (39, measured once) | 92.3% | 87.2% | 20 of 21 |
+| stress (248, dev, written 11 October) | 97.2% | 85.1% | 82 of 82 |
+| retired held-out (434, dev now) | 98.6% | 93.5% | 183 of 183 |
+| held out (116, measured at its start and once at the end) | 94.8% | 84.5% | 43 of 44 |
 
 A private set from a real inbox, split before anything was read into 508 to
 study and 292 held out, labelled by hand before the sorter ran on it, lives
@@ -812,10 +870,14 @@ version before: exact category 72.3% to 88.7%, job mail filed without asking
 everyday messages were taken for job mail at full confidence; two were a
 talent community's invitations, read as an interview and an offer by
 patterns that have since been tightened, so the held-out figure after that
-(89.4%) is not a clean one.
+(89.4%) is not a clean one. Measured once more on 11 October, after the
+sorter learnt to read what people write: 89.7% exact, 137 of 152 job
+messages filed, none into the wrong folder, one everyday message still filed
+as job mail.
 
 On the SpamAssassin corpus, none of 4,150 genuine messages is filed as job
-mail. That must stay at zero.
+mail. That must stay at zero. 93 of them are read as job mail at any
+confidence (118 before 11 October), 3 are sent to junk.
 
 ## Releasing
 
@@ -914,16 +976,27 @@ About's security link is a 404 for everyone but the owner.
   short. The dark look's slightly wider buttons made it show; a Touch Bar
   test that chose Always dark in Settings and never put the look back made
   later tests in the same worker dark, which is why it came and went.
-- **The sorter's scores** (exact category): labelled 94.1%, meetings 93.3%,
-  acknowledgements 100%, adversarial 97.4%, oblique 100%, retired held-out
-  82.4% - all dev sets now. The held-out set (`holdout.json`, 39 messages,
-  written fresh on 7 October 2026 and measured once): 87.2% exact, 92.3% job
-  against not, 20 of the 21 it filed right. That is the number to quote for
-  mail it has not seen. Its one wrong filing, and the retired set's, are the
-  two confident mistakes left that the version before did not make: onboarding
-  paperwork after an accepted offer read as Next Steps, and a person's "we
-  got your CV" read as an interview. Do not fix them against those sets;
+- **The sorter's scores** (exact category): labelled 94.1%, stress 85.1%,
+  meetings 93.3%, acknowledgements 100%, adversarial 97.4%, oblique 100%,
+  retired held-out 93.5% - all dev sets now. The held-out set
+  (`holdout.json`, 116 messages, written on 11 October 2026, measured at its
+  start and once at the end): 84.5% exact, 94.8% job against not, 43 of the
+  44 it filed right. That is the number to quote for mail it has not seen,
+  with the caveats in `test_the_held_out_set_is_never_used_to_tune` (its
+  author knew the last set's weak spots, and a few of its sentences repeat the
+  unit tests' wording, so it reads a little high). Its one
+  wrong filing is the confident mistake left; do not fix it against this set,
   write the next set first. `./dev tune --corrections` lists real gaps.
+- **A label to settle with the owner:** job-board digests ("New today: a role
+  in a town", "N new jobs matching your search") are Promotion in
+  `labelled.json` and `meetings.json` but Newsletter in the real inbox's study
+  labels, and the prompt's definitions read as Newsletter. They stay
+  Promotion until the owner says which; `test_sorter_safety` pins
+  `labelled.json`.
+- **Known gaps in the sorter:** an advert about interviews (a workshop on
+  interview skills) can still land in job review at low confidence; a
+  forwarded courier notice from a friend's own address waits for review
+  instead of being filed.
 - **A conversation is read together only after the fact** (the two
   `workers.read_with_*` passes); each message is still classified alone.
 - **Corrections only learn folders,** not that a sender is job-related.

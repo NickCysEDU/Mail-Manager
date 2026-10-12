@@ -29,7 +29,8 @@ ENV_VAR = "MAIL_MANAGER_PRIVATE_FIXTURES"
 #: safe" is a judgement, and judgements about this corpus have been wrong
 #: four times. Shipping no message data at all is not a judgement.
 PRIVATE = ("labelled.json", "acknowledgements.json", "adversarial.json",
-           "holdout.json", "meetings.json", "oblique.json", "retired_holdout.json")
+           "holdout.json", "meetings.json", "oblique.json", "retired_holdout.json",
+           "stress.json")
 
 WHY = (
     "evaluation data, kept out of the repository; see "

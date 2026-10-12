@@ -80,6 +80,12 @@ KNOWN_DOMAINS = {
     "myworkday.com", "workday.com", "lever.co", "ashbyhq.com",
     "smartrecruiters.com", "successfactors.com", "taleo.net",
     "anthropic.com", "claude.com", "github.com",
+    # Assessment, interviewing and screening platforms, which the sorter
+    # recognises as hiring by their own addresses, and two couriers.
+    "hackerrank.com", "codesignal.com", "codility.com", "testgorilla.com",
+    "criteriacorp.com", "pymetrics.ai", "karat.com", "hirevue.com",
+    "sparkhire.com", "willo.video", "goodtime.io", "chilipiper.com",
+    "checkr.com", "sterlingcheck.com", "jobvite.com", "ups.com", "fedex.com",
 }
 
 #: Local parts that are published addresses rather than people.
@@ -224,8 +230,12 @@ PUBLIC_PLATFORMS = {
     "icims.com", "taleo.net", "jobvite.com", "bamboohr.com", "ashbyhq.com",
     "smartrecruiters.com", "successfactors.com",
     "apple.com", "microsoft.com", "google.com", "calendly.com", "zoom.us",
-    # Assessment platforms the sorter recognises by name.
-    "hackerrank.com",
+    # Assessment, interviewing, screening and booking platforms the sorter
+    # recognises by name.
+    "hackerrank.com", "codesignal.com", "codility.com", "testgorilla.com",
+    "pymetrics.ai", "karat.com", "hirevue.com", "sparkhire.com", "goodtime.io",
+    "chilipiper.com", "checkr.com", "sterlingcheck.com", "cal.com", "savvycal.com",
+    "hubspot.com",
     "facebook.com", "instagram.com", "twitter.com", "x.com", "snapchat.com",
     "discord.gg", "youtube.com", "github.com", "aka.ms",
     "ups.com", "fedex.com", "usps.com", "dhl.com", "royalmail.com",
@@ -757,7 +767,8 @@ class TestNoEvaluationDataIsTracked:
 
         assert set(private_fixtures.PRIVATE) == {
             "labelled.json", "acknowledgements.json", "adversarial.json",
-            "holdout.json", "meetings.json", "oblique.json", "retired_holdout.json"}
+            "holdout.json", "meetings.json", "oblique.json", "retired_holdout.json",
+            "stress.json"}
 
 
 class TestNobodyElsesMediaIsPublished:

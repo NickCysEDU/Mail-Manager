@@ -652,6 +652,36 @@ APPLICATION_RECEIVED_SIGNALS: Tuple[Signal, ...] = (
     Signal("vielen dank fur ihre bewerbung", 2.4, label="German acknowledgement"),
 )
 
+#: Phrases a form, a lender, a shop, a club or a friend writes as readily as
+#: an employer. Once a message is about hiring they help say which stage it
+#: is; they never make it about hiring. Alone, "please complete your annual
+#: review", "upload your two most recent pay stubs" and "this exclusive offer
+#: expires Sunday" each read as job mail.
+GENERIC_STAGE_PHRASES: frozenset = GENERIC_SCHEDULING | frozenset({
+    "please complete", "complete the following", "complete within",
+    "questionnaire", "a few questions", "visa status", "upload your",
+    "fill out the form", "complete your profile", "submit your application",
+    "finish your application", "action required", "next steps", "expires in",
+    "due by", "within 5 days", "within 48 hours", "send us your", "get started",
+    "the link will expire", "link expires in", "finish setting up your account",
+    "activate your account", "complete setup for your",
+    "additional information is needed", "please respond by",
+    "complete your application", "started your application",
+    "your application is incomplete", "incomplete application",
+    "partially completed application", "return to your application",
+    "resume your application", "background check", "reference check",
+    "congratulations", "start date", "respond by", "offer expires",
+    "welcome to the team", "your offer", "accept the offer", "accepting this offer",
+    # A friend's ordinary kindnesses, which are networking only when the
+    # message is about work: "let me introduce you to free software".
+    "introduce you to", "make an introduction", "connect you with", "grab a coffee",
+    "grab coffee", "catch up", "thought of you", "passing along",
+    "let me know if you want me to", "might be a good fit for",
+    # What every service notice says of a payment, a return or an outage.
+    "no action is required", "no further action is needed", "has been received",
+    "this confirms",
+})
+
 NETWORKING_SIGNALS: Tuple[Signal, ...] = (
     Signal("happy to refer you", 3.0),
     Signal("refer you internally", 3.0),
@@ -697,7 +727,6 @@ UNSOLICITED_SIGNALS: Tuple[Signal, ...] = (
     Signal("c2c", 2.6),
     Signal("corp to corp", 2.8),
     Signal("w2 only", 2.6),
-    Signal("1099", 1.6),
     Signal("rate is", 1.4),
     Signal("hourly rate", 1.6),
     Signal("would you be open to", 2.0),
@@ -744,7 +773,21 @@ _HIRING_ANCHOR = re.compile(
 _HIRING_WORDS = re.compile(
     r"\b(?:interview\w*|positions?|roles?|openings?|vacanc\w+|jobs?|candidate\w*|"
     r"candidacy|recruit\w*|hiring|hire|resume|cv|requisition|req|talent acquisition|"
-    r"employment|employer|career\w*)\b")
+    r"employment|employer|career\w*|hr|human resources|salary|stock options|"
+    r"offer letter|onboarding)\b")
+
+#: A job applied for, by its title: "thanks for applying for the IT
+#: generalist spot" says hiring with none of the words above.
+_APPLIED_FOR_A_TITLE = re.compile(
+    r"\b(?:apply|applying|applied|application)\s+(?:for|to)\s+(?:the|a|an|our|your|this)\s+"
+    r"(?:[\w/+-]+\s+){0,3}?(?:technician|engineer|analyst|developer|administrator|admin|"
+    r"specialist|generalist|manager|coordinator|assistant|intern|internship|associate|"
+    r"consultant|designer|architect|lead|officer|representative|clerk|operator|"
+    r"programmer|tech)\b")
+#: The part of a school, a hospital or a court that hires: its own people
+#: team writes about its own vacancies.
+_EMPLOYER_SIDE = re.compile(
+    r"\b(?:hr|human resources|careers?|recruit\w*|talent|employment|staffing|personnel)\b")
 
 #: One-way video interview platforms: an employer's questions, recorded
 #: answers. What they ask for is an interview, however the reminder words it.
@@ -766,7 +809,8 @@ SUBJECT_PATTERNS: Tuple[Tuple[re.Pattern, float, str], ...] = tuple(
     for pattern, weight, label in (
         (r"^\s*(?:re:\s*)?your application (?:for|to|with)\b", 3.0,
          "a subject of the form 'Your application for ...'"),
-        (r"^\s*application (?:for|to|update|status|received|submitted|confirmation)\b",
+        (r"^\s*(?:re:\s*)?application (?:for|to|update|status|received|submitted|"
+         r"confirmation)\b",
          3.0, "an application-status subject"),
         (r"\bupdate (?:on|regarding) your application\b", 3.0,
          "a subject announcing an application update"),
@@ -800,6 +844,16 @@ ATS_LINK_DOMAINS: Tuple[str, ...] = (
     "smrtr.io", "ripplematch.com", "handshake.com", "ziprecruiter.com",
     "indeed.com", "linkedin.com/jobs", "monster.com", "dice.com",
 )
+
+#: The applicant-tracking systems among those, whose mail is an employer's
+#: about an application: not the job boards, and not the tools recruiters
+#: send cold outreach through.
+TRACKING_SYSTEMS: Tuple[str, ...] = tuple(
+    domain for domain in ATS_LINK_DOMAINS
+    if domain not in {"indeed.com", "linkedin.com/jobs", "monster.com", "dice.com",
+                      "ziprecruiter.com", "handshake.com", "ripplematch.com",
+                      "wellfound.com", "gem.com", "dover.com", "eightfold.ai",
+                      "paradox.ai", "smrtr.io"})
 
 #: Phrases that mean nothing on their own and a great deal from a careers
 #: mailbox: "your details are with us" is an acknowledgement only because of
@@ -918,6 +972,7 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("one time password", 3.0), Signal("security code", 2.8),
         Signal("two factor", 2.6), Signal("password reset", 3.0),
         Signal("reset your password", 3.0), Signal("new sign in", 2.8),
+        Signal("reset the password", 2.8), Signal("choose a new password", 2.8),
         Signal("suspicious activity", 2.8), Signal("security alert", 2.8),
         Signal("was signed in to", 2.6), Signal("do not share this code", 3.0),
         Signal("confirm your email address", 2.2), Signal("verify your account", 2.4),
@@ -962,7 +1017,11 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("card ending in", 2.8), Signal("credit score", 1.4),
         Signal("annual percentage rate", 1.2), Signal("loan payment", 2.0),
         Signal("student loan", 1.6), Signal("mortgage", 1.0),
+        Signal("loan application", 2.6), Signal("auto loan", 2.4),
+        Signal("loan officer", 2.4), Signal("pay stubs", 2.2),
+        Signal("pre approval", 2.4), Signal("pre approved for a mortgage", 3.0),
         Signal("escrow", 1.8), Signal("tax return", 2.6),
+        Signal("form 1099", 2.8), Signal("your 1099", 2.6),
         Signal("tax document", 2.8), Signal("premium is due", 2.6),
         Signal("insurance policy", 1.4), Signal("policy renewal", 2.6),
         Signal("e statement", 2.8), Signal("paperless statement", 2.8),
@@ -1016,6 +1075,7 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("your package", 2.8), Signal("tracking number", 3.0),
         Signal("track your", 2.4), Signal("delivered today", 2.6),
         Signal("delivery attempt", 2.6), Signal("return label", 2.4),
+        Signal("your return has", 2.6), Signal("received your return", 2.8),
         # Where the parcel is, rather than what it cost.
         Signal("your shipment", 2.8), Signal("shipment update", 3.0),
         Signal("estimated delivery", 3.0), Signal("expected delivery", 2.8),
@@ -1095,6 +1155,9 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("replied to your", 2.6), Signal("shared a post", 2.6),
         Signal("new message from", 2.4), Signal("upvoted", 2.6),
         Signal("trending in your network", 2.6), Signal("your weekly stats", 2.2),
+        Signal("accepted your invitation", 2.8), Signal("sent you a message", 2.8),
+        Signal("new comments on", 2.6), Signal("you were mentioned", 2.8),
+        Signal("profiles like yours", 2.6), Signal("reacted to your", 2.6),
         Signal("linkedin.com", 2.4, field="sender", label="a social network"),
         Signal("facebookmail.com", 3.0, field="sender", label="a social network"),
         Signal("instagram.com", 2.8, field="sender", label="a social network"),
@@ -1232,6 +1295,11 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("church elders", 3.0), Signal("the elders", 2.2),
         Signal("coffee hour", 2.6), Signal("potluck", 2.0),
         Signal("reverend", 2.6), Signal("the deaconess", 3.0),
+        # A death in the congregation, in the words a parish gives it.
+        Signal("funeral mass", 3.0), Signal("mass of christian burial", 3.0),
+        Signal("memorial mass", 3.0), Signal("parishioner", 2.8),
+        Signal("rosary", 2.4),
+        Signal("eternal rest", 2.6),
     ),
     OtherCategory.SPAM: (
         Signal("you have won", 3.0), Signal("claim your prize", 3.0),
@@ -1287,6 +1355,8 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("on call", 2.4), Signal("postmortem", 2.6),
         Signal("quarterly review", 2.4), Signal("one on one", 2.2),
         Signal("team meeting", 2.2),
+        # The reader interviewing for their own team.
+        Signal("scorecard", 2.6), Signal("interview panel", 2.4),
         Signal("atlassian.net", 2.6, field="sender", label="a work tool"),
         Signal("slack.com", 2.4, field="sender", label="a work tool"),
         Signal("asana.com", 2.4, field="sender", label="a work tool"),
@@ -1344,7 +1414,12 @@ _OTHER_WORLD = re.compile(
     r"dissertation|tutor|faculty|be interviewed|running a piece|a piece on|"
     r"our (?:programme|show|listeners|viewers)|the (?:flat|house)|offer on the|"
     r"completion date|exchange(?:d)? contracts|the landlord|"
-    r"your appointment|hygienist appointment)\b"
+    r"your appointment|hygienist appointment|"
+    r"adopt|adopting|adoption|rescue|foster care|fostering|animal shelter|home visit|"
+    r"scholarship|bursary|funding (?:this|cycle|round)|awarded funding|"
+    r"to volunteer|volunteer (?:application|coordinator|orientation)|"
+    r"architectural review|homeowners association|"
+    r"working on a story|for a story|our readers)\b"
 )
 
 
@@ -1378,6 +1453,29 @@ _SOLICITATION = (
         r"you have been (?:specially )?selected|"
         r"congratulations,? you)\b")),
 )
+#: The day of interviews at an employer's office, by its trade name; not a
+#: technician's visit.
+_YOUR_ONSITE = re.compile(
+    r"\byour on-?sites?\b(?! (?:support|parking|visit|service|team|staff|repair))")
+#: The reader's pay, in an employer's words.
+_PAYROLL = re.compile(
+    r"\b(?:pay statement|pay ?stubs?|payslip|employee portal|"
+    r"employee self[- ]service)\b")
+#: A mailbox in a person's own name, first and last: what a hiring manager
+#: writes from, and a marketing list does not ("offers@").
+_NAMED_MAILBOX = re.compile(r"<?[a-z]{2,20}[._-][a-z]{2,20}\d{0,4}@")
+#: Somebody's own mailbox at a mail provider: no courier or shop writes from one.
+_MAIL_PROVIDERS = re.compile(
+    r"@(?:gmail|googlemail|yahoo|ymail|outlook|hotmail|live|msn|icloud|me|mac|aol|"
+    r"comcast|verizon|att|sbcglobal|proton|protonmail|pm|fastmail|gmx|zoho|hey)\.")
+#: An account's password being reset.
+_PASSWORD_RESET = re.compile(
+    r"\b(?:reset (?:the |your )?password|password reset|choose a new password|"
+    r"set a new password)\b")
+#: A price cut held out: what a shop says, never an employer.
+_SALE = re.compile(
+    r"\b(?:save \d{1,3}%|\d{1,3}% off|save \$\d+|\$\d+ off|discount code|promo code|"
+    r"coupon code|use code)")
 #: Shouting, which is a shape rather than a vocabulary.
 _SHOUTED = re.compile(r"\b[A-Z]{4,}\b")
 
@@ -1470,6 +1568,14 @@ _PROFESSIONAL_CONTEXT = (
         r"\b(?:recruit\w*|hiring|hire|talent|candidate|candidacy|sourc(?:er|ing)|"
         r"staffing|placement|résumé|resume|cv|cover letter|portfolio|"
         r"employer|employment|career)\b")),
+    ("pay and terms", re.compile(
+        r"\b(?:salary|starting pay|base pay|pay rate|hourly rate|sign(?:ing|-on| on) bonus|"
+        r"notice period|visa sponsorship|relocation package)\b")),
+    ("news of a job", re.compile(
+        r"\b(?:offer letter|your offer (?:letter|package)|your start date|your first day|"
+        r"new hire (?:paperwork|orientation|forms?)|accepted (?:our|the|your) (?:job |"
+        r"employment )?offer|join (?:us|our team|the team) as|(?:list|use|put) me (?:down )?"
+        r"as a reference|referral bonus)\b")),
     ("a professional introduction", re.compile(
         r"\b(?:i (?:am|'m) .{0,40}(?:assistant|recruiter|partner|manager|"
         r"director|founder|lead|facilitator)|my name is .{0,30} and i"
@@ -1668,7 +1774,7 @@ _OFFER_TERMS = (
         r"\b(?:start(?:ing)? (?:date|on|the|from|with us)|first day|notice period|"
         r"probation(?:ary)?|join(?:ing)? (?:us )?on the)\b")),
     ("the paperwork", re.compile(
-        r"\b(?:contract|paperwork|offer letter|the offer|agreement|"
+        r"\b(?:contract|paperwork|offer letter|(?:the|our|your) offer|agreement|"
         r"sign(?:ing)? (?:when|it|the|and return|element|bonus)|countersign|"
         r"return (?:it )?signed|the terms|terms attached)\b")),
     ("the extras", re.compile(
@@ -1770,18 +1876,258 @@ _HEADHUNT = (
     ("your profile noticed", re.compile(
         r"\b(?:(?:came across|found|saw|noticed|spotted) your (?:profile|name|cv|resume|"
         r"details|background)|your profile (?:came up|caught)|keep a (?:short |long )?list|"
+        r"(?:came across|found|saw|noticed|spotted) your (?:\w+ )?(?:project|repo|repository|"
+        r"github|portfolio|blog|post|article|talk|work|code|scripts|playbooks|write-?ups?|"
+        r"videos?|answers?|contributions?)|"
+        r"you(?:'d| would) be a (?:great|strong|perfect|good) (?:fit|match)|"
+        r"your (?:experience|background|profile|resume) (?:really )?(?:stood out|caught my "
+        r"(?:eye|attention))|"
         r"on my radar|wondered whether to add you|add you to)\b")),
     ("a sounding out", re.compile(
         r"\b(?:open to a move|open to (?:a |new )?(?:conversation|chat|opportunit\w+|"
-        r"roles?|hearing)|worth a (?:chat|conversation|call)|might (?:suit|be of "
+        r"roles?|hearing)|worth a (?:quick |short )?(?:chat|conversation|call)|might (?:suit|be of "
         r"interest|interest you)|would you be (?:interested|open)|if you(?:'re| are) "
-        r"(?:not )?(?:looking|interested|open)|not (?:a role|something) i'?m (?:filling|"
+        r"(?:not )?(?:looking|interested|open|curious)|not (?:a role|something) i'?m (?:filling|"
         r"hiring for|working on) right now)\b")),
     ("the role sketched", re.compile(
         r"\b(?:staff level|senior|lead|principal|head of|director|hybrid|remote|"
-        r"well funded|funded|series [abc]|scale[- ]up|start[- ]up|equity|day rate|"
-        r"contract role|perm(?:anent)? role|platform work)\b")),
+        r"well funded|funded|series [abc]|scale[- ]up|start[- ]up|fast[- ]growing|equity|day rate|"
+        r"contract role|perm(?:anent)? role|platform work|contract to hire|w2|c2c|"
+        r"corp to corp|long term|day 1 onsite|on-?site|full time|duration|"
+        r"\d+\+? months|pay rate|[$]\d{2,3}(?:[-/]| per | an )(?:hr|hour|\$?\d))")),
 )
+
+#: More of a stranger's approach, from agencies and recruiters' templates.
+#: Weaker words, so they count only beside a word of hiring.
+_HEADHUNT_MORE = (
+    ("a recruiter's own words", re.compile(
+        r"\b(?:i'?m (?:a|an|the) (?:\w+ ){0,2}recruiter|(?:i'?m|i am|we'?re|we are) "
+        r"recruiting (?:for|a)|recruiter (?:at|with)|talent partner|"
+        r"i specialize in placing|we (?:recently )?placed|our recruiters? (?:are|is)|"
+        r"greetings from|this is \w+ from|\w+ here from|i (?:lead|head) (?:talent|recruiting|"
+        r"hiring))\b")),
+    ("a client's role", re.compile(
+        r"\b(?:(?:our|my|one of our|one of my|multiple|several|a few|a couple of|some) "
+        r"(?:\w+ )?clients?|direct client|with a client|for a client|"
+        r"clients? (?:who are |that are )?hiring)\b")),
+    ("a reply asked for", re.compile(
+        r"\b(?:reply (?:with (?:your|an updated|a) (?:\w+ )?(?:resume|cv|rate|phone|"
+        r"number|contact)|yes|to any)|(?:send|share|forward) (?:me|us) (?:your|an "
+        r"updated|the updated) (?:updated )?(?:resume|cv)|(?:share|send) your updated "
+        r"(?:resume|cv)|(?:revert|respond) with your (?:updated )?(?:resume|cv)|"
+        r"let me know (?:if|your) interest|interested(?=\s*\?)|if you or someone you know|"
+        r"send me (?:a )?(?:good )?times? to (?:talk|chat|connect|call)|"
+        r"want (?:me to send|the details)|would you (?:consider|be (?:interested|open))|"
+        r"happy to share the (?:job )?description|happy where you are|"
+        r"consider a move|kindly (?:reply|share|go through)|"
+        r"your (?:experience|background|profile|skills)\b[^.!?]{0,60}\b(?:looks like|"
+        r"would be|is|seems like) a (?:strong|great|good) (?:match|fit))\b")),
+)
+
+
+#: What a person does for somebody else's search: a referral, an
+#: introduction, a reference, a lead, a chat about how a team works. No
+#: application is behind any of it yet, which is what makes it networking.
+_NETWORKING_MOVES = (
+    ("a referral", 2.6, re.compile(
+        r"\b(?:refer(?:red)? you|refer me|(?:a|the|your) referral|referral (?:bonus|for)|"
+        r"put (?:in )?a good word|put your name (?:in|forward)|submitted you|"
+        r"pass(?:ed)? (?:along |on )?your (?:resume|cv|name)|walk it over|"
+        r"(?:send|forward|share) your (?:resume|cv) (?:to|with) (?:\w+ ){0,3}(?:people|"
+        r"friends?|contacts?|someone|him|her|them)|"
+        r"(?:send|forward|give|pass) (?:him|her|them) your (?:resume|cv)|"
+        r"flag you to)\b")),
+    ("an introduction", 2.6, re.compile(
+        r"\b(?:\w+, meet \w+|introduc(?:e|ing) (?:you|two)|intro(?:duction)?:|intro to|"
+        r"connect you (?:with|to)|put you in touch|i'?ll let you (?:two|both)|"
+        r"over to you (?:both|two)|let you two connect|"
+        r"(?:shall|should|can|may|could) i (?:connect|introduce) you)\b")),
+    ("a reference", 2.6, re.compile(
+        r"\b(?:(?:list|use|put) me (?:down )?as a reference|be (?:a|your) reference|"
+        r"happy to vouch|give you a reference)\b")),
+    ("a lead", 2.0, re.compile(
+        r"\b(?:(?:my|his|her|their|our|\w+'s) (?:team|company|firm|employer|office|group|"
+        r"department)(?: is| are|'s| just)? (?:hiring|building|backfilling|looking for)|"
+        r"is quietly (?:hiring|building)|just (?:posted|opened) (?:a|an)\b[^.!?]{0,30}"
+        r"\b(?:role|position|opening|job)|thought of you|right up your alley|"
+        r"sounds like you|keep an eye out for (?:openings|roles|jobs)|"
+        r"openings? on (?:their|his|her|my|our) teams?|lead for you|"
+        r"(?:asked|wants) if i knew anyone)\b")),
+    ("a chat about the work", 2.0, re.compile(
+        r"\b(?:(?:happy|glad|always happy) to (?:chat|help|tell you|share|talk|look over|"
+        r"have a (?:quick |short )?(?:call|chat)|grab (?:a )?coffee|meet)"
+        r"\b[^.!?]{0,60}\b(?:team|day to day|what (?:the|we)|how (?:we|people|the|they)|"
+        r"values|look for|hire|resume)|informational (?:interview|chat)|"
+        r"(?:grab |a )?coffee\b[^.!?]{0,60}\b(?:team|work|hire|role)|pick your brain|"
+        r"(?:offered|agreed|willing) to (?:talk|chat|meet|speak) (?:with|to) you\b[^.!?]{0,60}"
+        r"\b(?:field|team|work|role|career|industry|resume|cv)|"
+        r"(?:look|go) (?:at|over|through) your (?:resume|cv))\b")),
+    ("the search talked about", 1.0, re.compile(
+        r"\b(?:your (?:job )?(?:search|hunt)|looking for (?:work|a (?:new )?(?:job|role))|"
+        r"breaking into|your resume|your next role|job hunting|on the job front|"
+        r"you(?:'re| are) (?:job )?(?:hunting|looking))\b")),
+)
+
+#: What makes a referral or an introduction about a career: a word of
+#: hiring, a team growing, or the search itself. "I'll put you in touch with
+#: Ryan" sells a computer, and "let me introduce you to free software" is an
+#: essay.
+_CAREER_CUE = re.compile(
+    _HIRING_ANCHOR.pattern
+    + r"|\b(?:(?:growing|grow|expanding|building out|building) (?:the|their|our|his|her|"
+    r"a) (?:\w+ )?team|your (?:job )?(?:search|hunt)|looking for (?:work|a (?:new )?"
+    r"(?:job|role))|breaking into|next role|(?:anything|nothing) (?:posted|open)|"
+    r"opens up|(?:move|moving|get|getting|switch|switching|transition|transitioning|break) "
+    r"into (?:security|cyber\w*|networking|network \w+|cloud|devops|data|software|tech|"
+    r"the (?:industry|field))|career change|chang(?:e|ing) careers|switch(?:ing)? careers)\b")
+
+#: A programme being sold, which a favour never is: "shall I connect you
+#: with an advisor" from a bootcamp is a sale.
+_PROGRAMME_SOLD = re.compile(
+    r"\b(?:our (?:free |online |live |upcoming |next )?(?:webinar|bootcamp|masterclass)|"
+    r"free (?:webinar|workshop|class|trial|consultation|info session)|"
+    r"enrol(?:l|ls|led|ling|ment)?|tuition)\b")
+
+#: An application for something other than a job: a loan, a place on a
+#: course, a flat, a dog. "Sadly we cannot offer you admission" is a decline
+#: in every word but the last.
+_OTHER_APPLICATION = re.compile(
+    r"\b(?:loan|mortgage|credit card|account|lease|leasing|rental|tenancy|adopt\w*|"
+    r"admissions?|scholarship|bursary|grant|visa|passport|permit|membership|"
+    r"volunteer\w*|insurance|programme|program|degree|course)\b[^.!?]{0,40}"
+    r"\bapplication\b|"
+    r"\bapplication\b[^.!?]{0,40}\b(?:for|to) (?:an? |the |your |our )?(?:\w+ ){0,4}?"
+    r"(?:loan|mortgage|credit card|account|lease|apartment|unit|adopt\w*|admission|"
+    r"program|programme|degree|course|scholarship|grant|membership|volunteer\w*|"
+    r"visa|card)\b|"
+    r"\b(?:offer you|grant you|granted) admission\b|\badmission decision\b|"
+    r"\bapplying (?:for|to) (?:an? )?(?:auto |car |home |personal )?(?:loan|mortgage|"
+    r"adopt\w*|volunteer|lease)\b")
+
+#: The reader on the other side of the table, at the job they have: on a
+#: panel, writing up candidates.
+_INTERVIEWER = re.compile(
+    r"\b(?:(?:sit|be|join) on (?:the|an|our) (?:\w+ )?interview panel|"
+    r"(?:candidate )?scorecards?|interview(?:ing)? (?:the|a|our|some) candidates?|"
+    r"thanks for interviewing (?:the |our |some |a |\d+ )?candidates?|"
+    r"run the technical (?:part|portion) of the interview|"
+    r"feedback on (?:the )?candidates?|(?:the|this) candidate'?s? (?:resume|interview))\b")
+
+#: An interview the newspaper, the podcast or the column wants: another
+#: world's.
+_MEDIA_INTERVIEW = re.compile(
+    r"\binterview(?:ing)? you\b[^.!?]{0,40}\b(?:podcast|episode|show|story|article|"
+    r"piece|column|newsletter|documentary|blog|magazine|segment|spotlight)\b|"
+    r"\b(?:podcast|column|reporter|journalist|newsletter|magazine)\b[^.!?]{0,80}"
+    r"\binterview(?:ing)? you\b")
+#: A guest for a programme, or a programme at work on a piece: with an
+#: interview anywhere in the message, it is the programme's. Not a job
+#: title, which a station hires for too ("the Video Editor role on our show").
+_ON_A_PROGRAMME = re.compile(
+    r"\b(?:have you|be|come|appear|join us|guest) on (?:our|the|my) (?:show|podcast|"
+    r"programme|program|radio show|segment|livestream)\b|"
+    r"\b(?:our|the|my) (?:podcast|show|magazine|newspaper|paper|publication|programme|"
+    r"program|newsletter|channel|station) (?:is|are|will be|has been) (?:running|doing|"
+    r"working on|putting together|preparing|planning|writing|making|producing|featuring)\b")
+
+#: An interview held out, rather than the word: "ace your next interview" is
+#: a coaching advert.
+_INTERVIEW_OFFERED = re.compile(
+    r"\b(?:invit\w* (?:you )?to (?:an )?interview|interview (?:slot|request)s?|"
+    r"to interview (?:you|for)|interviews? (?:for|with) (?:multiple|several|\d+|our)|"
+    r"interviews are (?:filling|happening)|pre-?selected to interview|"
+    r"invited to interview)\b")
+
+#: Something only an applicant is told.
+_APPLIED = re.compile(
+    r"\b(?:your (?:application|candidacy)|you applied|applied (?:for|to)|"
+    r"thanks for applying|thank you for applying)\b")
+
+#: An interview offered to everyone on a list.
+_MASS_INVITATION = re.compile(
+    r"\b(?:multiple|several|\d+) (?:remote )?(?:\w+ )?(?:positions|roles|companies|"
+    r"employers|openings)\b[^.!?]{0,60}\b(?:interview|partner|hiring)|"
+    r"\bpartner companies\b|\bthousands of (?:resumes|candidates|profiles)\b|"
+    r"\b(?:spots|slots|seats) (?:are )?(?:limited|filling)|\blimited (?:spots|slots)\b|"
+    r"\b(?:pre-?selected|hand-?picked) to interview\b|"
+    r"\binterviews are (?:filling|happening)\b|\bunlock interview requests\b")
+
+#: A school's, a board's or an alumni office's list about careers: fairs,
+#: workshops, advice, for everyone on it.
+_CAREER_INSTITUTION = re.compile(
+    r"career (?:services|center|centre|office|development)|alumni|university|college|"
+    r"workforce|chamber of commerce|community college|school district")
+
+#: The reader asked to find candidates for somebody else, which is their work.
+_FIND_SOMEBODY = re.compile(
+    r"\b(?:if you know (?:anyone|someone|somebody)|know anyone (?:good|who)|"
+    r"please (?:share|forward|pass on) (?:it|this|the posting))\b")
+
+#: The user's own application or interview named, which makes a meeting part
+#: of a process rather than networking.
+_IN_A_PROCESS = re.compile(
+    r"\b(?:your (?:application|candidacy|interview)|you applied|applied (?:for|to)|"
+    r"the interview|interview(?:ing)? with|thanks for applying|"
+    r"(?:assessment|interview|hiring|selection|recruiting|recruitment) process|"
+    r"withdraw\w* from (?:our|the|this) process)\b")
+
+
+_QUOTE_HEADER = re.compile(
+    r"^\s*>?\s*on [^\n]{0,60}?,?\s+([^\n<,]{2,60}?)\s*(?:<[^>\n]*>)?\s*wrote:\s*$",
+    re.I | re.M)
+
+
+def _follows_up_itself(body: str, sender: str) -> bool:
+    """Whether a reply quotes nobody but its own sender: a recruiter's
+    second note on top of the first. Such a thread is not the reader's."""
+    quoted = [match.group(1).strip().lower() for match in _QUOTE_HEADER.finditer(body or "")]
+    if not quoted:
+        return False
+    name = (sender or "").split("<")[0].strip().strip('"').lower()
+    if not name:
+        return False
+    return all(author == name or author.split()[-1:] == name.split()[-1:]
+               for author in quoted)
+
+
+#: Several applications reported at once, by a tracker or a careers site:
+#: job mail, and no one stage of anything.
+_DIGEST_PHRASE = re.compile(
+    r"\b(?:updates? on|status of|changes? (?:to|in)|summary of|news on) (?:\d+|two|"
+    r"three|four|five|several|multiple) (?:of )?(?:your )?(?:job )?"
+    r"(?:applications|candidacies)\b|\byour applications this week\b|"
+    r"\byou applied to \d+ (?:roles|jobs|positions)\b|"
+    r"\bwhat changed in your applications\b")
+_STATUS_LINE = re.compile(
+    r"(?:\||:|-|\u2013)\s*(?:applied|interviewing|phone screen|final round|rejected|"
+    r"closed|under review|in review|assessment(?: requested)?|offer(?: made)?|"
+    r"position closed|not selected|withdrawn)\s*$", re.M)
+
+
+def application_digest(subject: str, body: str) -> str:
+    """Why this reports several applications at once, or nothing: it says
+    so, or it is a list of them with a status each."""
+    if _DIGEST_PHRASE.search(f"{subject} {body}"):
+        return "it reports on several of your applications"
+    if len(_STATUS_LINE.findall(body)) >= 3:
+        return "a list of applications, each with its status"
+    return ""
+
+
+def networking_score(subject: str, body: str) -> Tuple[float, List[str]]:
+    """How much a message reads as networking for the reader's search, and
+    the moves it makes. Nothing where the reader is asked to find somebody."""
+    blob = f"{subject} {body}"
+    if _FIND_SOMEBODY.search(blob) or not _CAREER_CUE.search(blob):
+        return 0.0, []
+    score, reasons = 0.0, []
+    for describes, weight, pattern in _NETWORKING_MOVES:
+        if pattern.search(blob):
+            score += weight
+            reasons.append(describes)
+    if score < 2.0:
+        return 0.0, []
+    return min(4.2, score), reasons
 
 
 def _family_score(families, blob: str, counts: dict) -> Tuple[float, List[str]]:
@@ -1836,9 +2182,17 @@ def we_have_it_score(subject: str, body: str) -> Tuple[float, List[str]]:
 
 def headhunt_score(subject: str, body: str) -> Tuple[float, List[str]]:
     """How strongly a stranger is sounding you out about a role you did not
-    ask about."""
-    return _family_score(_HEADHUNT, f"{subject} {body}",
-                         {0: 0.0, 1: 0.0, 2: 3.6, 3: 3.8})
+    ask about. An agency's template words count only where hiring is
+    named."""
+    blob = f"{subject} {body}"
+    score, reasons = _family_score(_HEADHUNT, blob, {0: 0.0, 1: 0.0, 2: 3.6, 3: 3.8})
+    if not _HIRING_ANCHOR.search(blob):
+        return score, reasons
+    more = [describes for describes, pattern in _HEADHUNT_MORE if pattern.search(blob)]
+    found = len(reasons) + len(more)
+    if found < 2:
+        return 0.0, []
+    return max(score, {2: 3.6, 3: 3.8}.get(found, 4.2)), reasons + more
 
 
 #: A call being arranged: the subject names a role and a call, or the body
@@ -1913,7 +2267,8 @@ _OTHER_WORLD_SENDER = re.compile(
     r"\b(?:admissions|registry|student|faculty|school|college|university|academy|"
     r"court|courts|hmcts|tribunal|jury|nhs|dental|dentist|dentists|clinic|surgery|"
     r"practice|lettings|estates?|property|properties|homes|conveyanc\w*|solicitors?|"
-    r"legal|radio|press|newsroom|editorial|producer|bbc|itv)\b")
+    r"legal|radio|press|newsroom|editorial|producer|bbc|itv|rescue|shelter|humane|"
+    r"pantry|hoa|financial aid|finaid)\b")
 
 
 def other_world_sender(sender: str) -> Tuple[float, str]:
@@ -1970,7 +2325,7 @@ _SENDER_PURPOSE_COMPILED = tuple(
 #: "a_smith"): two name-ish pieces, few digits, and none of the role words
 #: above.
 _PERSON_LOCAL = re.compile(
-    r"^[a-z]{1,20}[._-][a-z]{2,20}\d{0,2}$|^[a-z]{2,20}\d{0,2}$", re.I)
+    r"^[a-z]{1,20}(?:[._-][a-z]{1,20}){1,2}\d{0,4}$|^[a-z]{2,20}\d{0,4}$", re.I)
 _ROLE_WORDS = re.compile(
     r"no.?reply|do.?not.?reply|donotreply|mailer|bounce|postmaster|admin|"
     r"info|hello|hi|contact|support|help|service|team|care|customer|"
@@ -2040,14 +2395,27 @@ def agency_sender(sender: str) -> bool:
     return any(hint in (sender or "").replace(" ", "") for hint in AGENCY_SENDER_HINTS)
 
 
+#: Platforms that write to candidates for employers and to nobody else: an
+#: assessment or a one-way interview. LeetCode is left out; most of what it
+#: sends is its own marketing.
+PLATFORM_SENDER_DOMAINS: Tuple[str, ...] = tuple(
+    domain for domain in ASSESSMENT_LINK_DOMAINS + VIDEO_INTERVIEW_DOMAINS
+    if domain != "leetcode.com")
+
+
 def hiring_mailbox(sender: str) -> str:
     """The word that says this mailbox exists to talk about hiring, if any.
     "Your details are with us" could come from anywhere; from a recruitment
     mailbox it is an application acknowledgement, and only the From line
     says so. Both halves are read: a company sending from no-reply@ still
-    puts "Careers" or "Talent" in the display name.
+    puts "Careers" or "Talent" in the display name. An assessment or
+    interviewing platform's own domain says it too.
     """
     sender = sender or ""
+    domain = sender.split("@")[-1].strip(" >").lower() if "@" in sender else ""
+    if domain and any(domain == known or domain.endswith("." + known)
+                      for known in PLATFORM_SENDER_DOMAINS):
+        return "candidate-platform"
     name = sender.split("<")[0]
     local = sender.split("@")[0].split("<")[-1]
     for part in (name, local):
@@ -2069,23 +2437,120 @@ _CHURCH_SENDER = re.compile(
     r"pentecostal|evangelical|adventist|orthodox\w*church|"
     r"catholicchurch|uniting\w*church|christchurch",
     re.I)
+#: The same words standing on their own in a display name, where "Fenchurch"
+#: is a shop and "Chapelford" a town.
+_CHURCH_WORD = re.compile(r"\b(?:" + _CHURCH_SENDER.pattern + r")(?:e?s)?\b", re.I)
+#: A denomination names churches, and also hospitals that carry nothing
+#: else in their names but a city's.
+_DENOMINATION = re.compile(
+    r"lutheran|baptist|methodist|anglican|episcopal|presbyterian|pentecostal|"
+    r"evangelical|adventist|mennonite|unitarian|lcms|elca|pcusa|umc|sbc", re.I)
 
 
-def church_sender(sender: str) -> str:
-    """The word that says this sender is a place of worship, if any. A notice
-    about a bereavement reads the same from anyone; the From line is what
-    makes it a church notice. The domain is checked as one string, since
-    church domains run their words together (``stmarysparish.example``, not
-    ``st-marys-parish.example``).
+#: A parish's own domain, named for its saint and often its town: stmarysparish,
+#: stjosephs and the town's name. Only on a parish's kind of ending.
+_SAINT_DOMAIN = re.compile(
+    r"^(?:st|saint)(?:john|mary|paul|peter|joseph|michael|patrick|james|francis|anne?|"
+    r"luke|mark|matthew|andrew|thomas|brendan|catherine|theresa|therese|teresa|jude|"
+    r"anthony|agnes|gabriel|raphael|elizabeth|margaret|bridget|brigid|benedict|ignatius|"
+    r"vincent|monica|rita|cecilia|clare|dominic|isidore|pius|stephen|timothy|barnabas|"
+    r"lawrence|alphonsus|charles|edward|george|joan|columba|aidan|david|giles|martin|"
+    r"nicholas|philip|bartholomew|simon|helen|lucy|ambrose|augustine|gregory|leo)"
+    r"s?[a-z]*\.(?:org|church|parish)$")
+#: What else takes a saint's or a denomination's name: a Lutheran hospital,
+#: an Adventist health system, a parish school, a Baptist university, a
+#: Methodist retirement village, a credit union.
+_NOT_A_PARISH = re.compile(
+    r"hospital|health|medical|clinic|school|academy|college|universit|seminary|"
+    r"prep|high(?!land|way|ridge|point|view)|social services|senior|village|"
+    r"credit union|\bf?cu\b|insurance|mutual", re.I)
+#: Where a church word is a town's, a street's or a firm's name.
+_NOT_A_CHURCH = re.compile(
+    r"chapel\s*hill|cathedral\s*city|christchurch\s*(?:city|airport|council)|"
+    r"church\s*(?:street|st\b|road|rd\b|lane|hill)|church\s*(?:&|and)?\s*dwight|"
+    r"parish\s*(?:council|government|sheriff|assessor|clerk|president|librar|utilit)",
+    re.I)
+#: The church words that are surnames too, and how a congregation's name
+#: opens where a person's would have a first name.
+_SURNAME_CHURCH_WORDS = frozenset({"church", "chapel", "parish"})
+_CONGREGATION_OPENS = re.compile(
+    r"^(?:st\b|saint|the|first|second|third|holy|grace|trinity|christ|calvary|"
+    r"bethel|faith|hope|new|our|community|united|old|sacred|immaculate|blessed|"
+    r"ascension|resurrection|epiphany|annunciation|transfiguration|visitation|"
+    r"nativity|assumption|incarnation|good shepherd|precious blood|corpus christi)",
+    re.I)
+
+
+def _a_surname(name: str, word: str, sender: str) -> bool:
+    """Whether the church word in a display name is somebody's surname:
+    "Sarah Church" or "Parish, Tom" writing from their own address, rather
+    than "Grace Church" or "Elevation Church" writing from the office's."""
+    if word not in _SURNAME_CHURCH_WORDS or len(_CHURCH_WORD.findall(name)) > 1:
+        return False
+    words = re.findall(r"[A-Za-z][\w'.-]*", name)
+    if not 2 <= len(words) <= 3 or not looks_like_a_person(sender):
+        return False
+    if "," in name and words[0].lower() == word:
+        return True
+    return words[-1].lower() == word and not _CONGREGATION_OPENS.match(name.strip())
+
+
+def _settles(name: str, word: str) -> bool:
+    """Whether a church word in a congregation's display name says outright
+    that it is one. A denomination alone does not (a city's name and
+    "Methodist" is a hospital's), and neither does "parish" after a place's
+    name, which is also
+    a county in Louisiana: "Jefferson Parish", against "St. Mary's Parish"
+    and "Parish of the Ascension"."""
+    if _DENOMINATION.fullmatch(word):
+        return False
+    if word == "parish":
+        return bool(_CONGREGATION_OPENS.match(name.strip())
+                    or re.match(r"\s*parish\b", name, re.I)
+                    or re.search(r"\bparish\s+of\b", name, re.I))
+    return True
+
+
+#: A death in a congregation, in the words its office gives it: the prompt's
+#: own example of mail written personally that is still parish business.
+_A_DEATH_NOTICE = re.compile(
+    r"\b(?:funeral (?:arrangements|service|mass|home)|memorial (?:arrangements|service|"
+    r"mass)|visitation (?:will be|is|at|for)|wake (?:will be|is)|passed away|"
+    r"past member|longtime member|entered (?:into )?eternal rest)\b")
+
+
+def church_sender(sender: str) -> Tuple[str, bool]:
+    """What says this sender is a place of worship, if anything, and whether
+    that settles it. A notice about a bereavement reads the same from anyone;
+    the From line is what makes it a church notice.
+
+    A congregation's own name settles it: "St. Brendan Parish", "Grace
+    Church". The rest only suggest it and count beside what a church writes
+    about: a church word run into a domain (church domains run their words
+    together, and so does ``fenchurch``, a shop), a denomination on its own
+    (a hospital's name, often) and a saint's name (a children's hospital's
+    too).
+    A hospital, a school, a government, a firm the lexicon knows and a person
+    called Church are never one.
     """
     sender = sender or ""
-    name = sender.split("<")[0]
-    domain = sender.rsplit("@", 1)[-1].strip("<>() \t") if "@" in sender else ""
-    for part in (name, domain):
-        found = _CHURCH_SENDER.search(part or "")
-        if found:
-            return found.group(0).lower()
-    return ""
+    name = sender.split("<")[0].strip().strip("\"'")
+    domain = sender.rsplit("@", 1)[-1].strip("<>() \t").lower() if "@" in sender else ""
+    if (domain.endswith((".gov", ".mil")) or ".gov." in domain or ".govt." in domain
+            or any(p.search(name) or p.search(domain) for p in (_NOT_A_PARISH, _NOT_A_CHURCH))
+            or lexicon.sector_of(sender)[0]):
+        return "", False
+    named = [w for w in (m.group(0).lower() for m in _CHURCH_WORD.finditer(name))
+             if not _a_surname(name, w, sender)]
+    if named:
+        settling = [w for w in named if _settles(name, w)]
+        return (settling or named)[0], bool(settling)
+    found = _CHURCH_SENDER.search(domain)
+    if found:
+        return found.group(0).lower(), False
+    if _SAINT_DOMAIN.match(domain):
+        return "a saint's name", False
+    return "", False
 
 
 def looks_like_a_person(sender: str) -> bool:
@@ -2264,6 +2729,11 @@ _DELIVERY_WINDOW = re.compile(
 _PARCEL = re.compile(
     r"\b(?:parcel|package|courier|driver|doorstep|delivery office|"
     r"left (?:it )?with your neighbour|no answer|needs a signature|stops before yours)\b")
+#: A parcel's journey: what makes "the package" one on its way.
+_DELIVERED = re.compile(
+    r"\b(?:deliver\w*|tracking|track (?:it|your)|dispatch\w*|shipped|out for|"
+    r"on (?:its|the) way|arriv\w+|collect\w*|pick ?up|drop(?:ped)? off|left (?:it )?"
+    r"(?:with|at|in|by)|signed for|depot|sorting)\b")
 #: A flight number: two letters then three or four digits.
 _FLIGHT = re.compile(r"\b[A-Za-z]{2}\d{3,4}\b")
 #: A booking or confirmation reference: mixed letters and digits, 5 to 8 long.
@@ -2305,8 +2775,57 @@ _SWINDLE = (
                r"dear (?:customer|user|valued|sir/madam)|kindly (?:verify|confirm|"
                r"update)|good day)\b"),
     re.compile(r"\b(?:a fee of|pay (?:the |a )?(?:fee|charge) (?:now|within)|"
-               r"click here to pay|reply for details|release the funds)\b"),
+               r"click here to pay|reply for details|release the funds|"
+               r"unpaid (?:fee|charge|customs|duty)|(?:redelivery|customs) fee|"
+               r"pay (?:now|online) to (?:schedule|release|receive|reschedule))\b"),
+    # Money moved for a stranger: the cheque deposited and the rest wired on,
+    # the gift cards bought, the bank details sent for a job never applied for.
+    re.compile(r"\b(?:deposit (?:it|the check|the cheque)|keep \$?\d+ as your|"
+               r"wire the (?:rest|remaining|balance)|(?:purchase|buy) (?:\w+ )?gift cards?|"
+               r"send (?:us|me) the (?:codes|card numbers)|gift card codes|"
+               r"(?:reply|respond) with your (?:full name|name)?,? ?(?:address,? )?(?:and )?"
+               r"(?:bank|ssn|social security))\b"),
 )
+
+#: The favour asked in a pastor's, a manager's or a friend's name: gift cards
+#: bought, and their codes or photographs of them sent on, pressed for in a
+#: hurry or in confidence. Nobody who knows the reader asks for the codes.
+_CODES_SENT_ON = (
+    r"(?:(?:send|text|email|forward) (?:me|us) (?:the |their |all the |all |both )?"
+    r"(?:codes?|pins?|card numbers|numbers|pictures?|photos?|pics?)|"
+    r"reply with (?:the |their |all the )?(?:codes?|pins?|card numbers)|"
+    r"(?:pictures?|photos?|pics?|snaps?) of (?:the |each |both |all )?(?:cards?|codes?|backs?))")
+_GIFT_CARD_CODES = re.compile(
+    r"\bgift ?cards?\b[\s\S]{0,300}?\b" + _CODES_SENT_ON
+    + r"|\b" + _CODES_SENT_ON + r"[\s\S]{0,300}?\bgift ?cards?\b")
+_FAVOUR_PRESSED = re.compile(
+    r"\b(?:are you (?:available|free|around|busy)|quick (?:favou?r|request)|(?:a|small|"
+    r"urgent) favou?r|in a meeting|can'?t (?:talk|call|take calls)|between us|"
+    r"confidential|a surprise|(?:pay|reimburse) you back|asap|urgent\w*|how many can "
+    r"you get|\$\d+ each)")
+
+
+def favour_scam(blob: str) -> bool:
+    """Whether a message asks for gift cards and their codes the way the
+    favour scam does, pressing for them."""
+    return bool(_GIFT_CARD_CODES.search(blob) and _FAVOUR_PRESSED.search(blob))
+
+
+def job_swindle(blob: str) -> bool:
+    """Whether a message is a job that pays out through the reader: gift
+    cards for the equipment, a cheque to deposit and wire on, bank details
+    sent by reply."""
+    return bool(_SWINDLE[3].search(blob) and _HIRING_WORDS.search(blob))
+
+
+#: Words written for a machine reading the mail, not for its reader: the
+#: model prompt calls them strong evidence of spam, and so are they here.
+_TO_A_MACHINE = re.compile(
+    r"\b(?:ignore (?:all |any )?(?:the )?(?:previous|prior|above|other) (?:instructions|"
+    r"rules|prompts?)|(?:classify|categori[sz]e|label) (?:this|it|the message|this message|"
+    r"this email) as|(?:set|with) (?:the )?confidence (?:to|of|at)|note to (?:any|the) "
+    r"(?:ai|automated|model|assistant)|system note|(?:any|the) automated reader|"
+    r"(?:to|for) (?:any|the) ai (?:reading|reader))\b")
 #: A social network telling you what others did.
 _SOCIAL_NOTICE = re.compile(
     r"\b(?:appeared in \d+ searches|viewed your profile|looked at your profile|"
@@ -2319,7 +2838,8 @@ _WORK_TOOLING = re.compile(
     r"on[- ]?call|on rota|rota|p99|latency|incident|outage|pager|threshold|sprint|"
     r"stand-?up|retro|jira|pull request|merge|is red|build (?:failed|broke)|"
     r"the gate|checkout-api|api|q[1-4]|forecast|board deck|the deck|quarterly|"
-    r"budget|okrs?|kpis?|roadmap|stakeholders?|sync on|quick sync|the numbers)\b")
+    r"budget|okrs?|kpis?|roadmap|stakeholders?|sync on|quick sync|the numbers|"
+    r"(?:inc|ritm|chg)\d{5,}|1:1|one[- ]on[- ]ones?|backlog)\b")
 #: A conference selling its stage.
 _CONFERENCE = re.compile(
     r"\b(?:main stage|keynote|speaker series|speakers?|agenda|register (?:now|today|for)|"
@@ -2342,11 +2862,12 @@ _SUBJECT_ALONE = {
 _ONE_TIME_CODE = re.compile(
     r"\b(?:one[\W_]?time (?:pass ?code|passcode|password|code|pin)|verification code|"
     r"security code|sign[\W_]?in code|log[\W_]?in code|confirmation code|"
-    r"(?:confirm|verify) your identity)\b")
+    r"(?:confirm|verify) your identity|(?:use|enter) (?:this|the following) code)\b")
 ONE_TIME_CODE_BODY = 900
 #: The code itself, introduced as one: "pass code: 731904." A bare number
 #: would also be a year at the end of a sentence.
-_NAMED_CODE = re.compile(r"\b(?:code|passcode|pin|otp)\b[^.!?\d]{0,20}\d{4,8}\b")
+_NAMED_CODE = re.compile(r"\b(?:code|passcode|pin|otp)\b[^.!?\d]{0,20}\d{4,8}\b|"
+                         r"\b(?:code|passcode|pin|otp)\b[^.!?\d]{0,80}:\s*\d{4,8}\b")
 _VERIFY_SUBJECT = re.compile(
     r"\b(?:account verification|verify your (?:account|email)|activate your account|"
     r"complete your (?:profile|registration))\b")
@@ -2354,7 +2875,25 @@ _WORK_ADMIN = re.compile(
     r"\b(?:benefits? (?:enrol\w*|elections?|window|choices)|open enrol\w+|"
     r"medical and dental|dental and medical|roll over onto|your plan for next year|"
     r"payroll|payslip|expenses claim|timesheet|annual review|performance review|"
-    r"people team|hr team|all[- ]hands|town hall|line manager|your line manager)\b")
+    r"people team|hr team|all[- ]hands|town hall|line manager|your line manager|"
+    r"self[- ]?(?:evaluation|assessment|appraisal)|appraisal|"
+    r"(?:pto|time[- ]off|leave) request|(?:mandatory|compliance) training)\b")
+#: The job the reader already has, in a people team's words: what makes its
+#: mail work rather than hiring.
+_CURRENT_JOB = re.compile(
+    r"\b(?:self[- ]?(?:evaluation|assessment|appraisal|review)|appraisal|"
+    r"performance (?:review|evaluation|conversation|cycle|check[- ]?in)|"
+    r"(?:annual|yearly|year[- ]end|mid[- ]year) (?:review|check[- ]?in)|"
+    r"(?:pto|time[- ]off|leave|holiday) (?:request|balance)|open enrol\w+|"
+    r"benefits? (?:enrol\w*|elections?|window)|payroll|payslip|pay ?stubs?|"
+    r"timesheets?|all[- ]hands|town hall|(?:mandatory|compliance) training|"
+    r"all (?:employees|staff)|staff portal|employee handbook|your (?:line )?manager)\b")
+#: Being hired, which a people team writes about too.
+_BEING_HIRED = re.compile(
+    r"\b(?:candidate\w*|candidacy|interview\w*|applications?|applied|applying|"
+    r"apply|offer letter|your offer|start date|first day|onboarding|new hire|"
+    r"new starter|background check|references?|requisition|vacanc\w+|"
+    r"openings?|positions?)\b")
 #: A night out: doors, a table, a ticket.
 _OUTING = re.compile(
     r"\b(?:doors (?:at|open)|on at \d|standing|seated|tickets?|box office|line[- ]?up|"
@@ -2375,6 +2914,19 @@ _IMPERSONATED = (
     "monzo", "wise", "coinbase", "binance", "dhl", "fedex", "ups", "usps",
     "evri", "royalmail", "hmrc", "irs", "dvla",
 )
+
+#: The words a phishing domain is built from. Two of them hyphenated
+#: together, or one on a throwaway ending, is a domain nobody would register
+#: to send honest mail: parcel-redelivery-fee, invoice-secure-pay.
+_SCAM_DOMAIN_WORDS = frozenset({
+    "verify", "verification", "secure", "security", "account", "accounts", "login",
+    "signin", "update", "support", "billing", "payment", "pay", "fee", "fees",
+    "redelivery", "delivery", "parcel", "quota", "mailbox", "alert", "alerts",
+    "claim", "reward", "rewards", "winner", "prize", "refund", "invoice", "income",
+    "cash", "assignments", "survey",
+})
+_THROWAWAY_ENDINGS = frozenset({"top", "xyz", "click", "biz", "loan", "work", "gq",
+                                "cf", "ml", "tk", "buzz", "rest"})
 #: Pressure plus a threat plus a link: the shape of phishing, whatever brand it
 #: wears.
 _URGENCY = re.compile(
@@ -2401,6 +2953,20 @@ def _registrable(domain: str) -> str:
     return ".".join(parts[-2:])
 
 
+def scam_domain(sender: str) -> str:
+    """Why the sending domain is one nobody would register to send honest
+    mail, or nothing: scam words hyphenated together (parcel-redelivery-fee),
+    or one on a throwaway ending."""
+    address = sender.rpartition("<")[2].rstrip(">").strip() or sender
+    root = _registrable(address.split("@")[-1].lower())
+    stem = root.split(".")[0]
+    scammy = len(set(re.split(r"[-.]", stem)) & _SCAM_DOMAIN_WORDS)
+    if ("-" in stem and scammy >= 2) or (
+            scammy and root.rsplit(".", 1)[-1] in _THROWAWAY_ENDINGS):
+        return f"a domain made of a scam's words ({root})"
+    return ""
+
+
 def impersonation_score(sender: str, subject: str, body: str) -> Tuple[float, str]:
     """Whether the From line claims to be somebody the domain says it is not: a
     display name is free text and the domain is not, so the gap between them
@@ -2421,6 +2987,9 @@ def impersonation_score(sender: str, subject: str, body: str) -> Tuple[float, st
     # apple-account-verify, paypal-secure-login.
     if "-" in stem and any(brand in stem for brand in _IMPERSONATED):
         return 2.6, f"a brand name inside a longer domain ({root})"
+    scam = scam_domain(sender)
+    if scam:
+        return 2.6, scam
 
     blob = f"{subject} {body}"
     pressure = sum(bool(pattern.search(blob))
@@ -2456,6 +3025,22 @@ _LURE = re.compile(
     r"jackpot|cash ?out|picked up)\b")
 
 
+#: A library's hold or loan: waiting at the desk or due back there.
+_LOAN_WORDS = re.compile(
+    r"\b(?:on hold|placed (?:a |on )?hold|ready for pick ?up|due back|due date|"
+    r"checked out|overdue|renew\w*)\b")
+
+
+def library_loan(blob: str, sender: str = "") -> bool:
+    """Whether a message is a library's hold or loan. "Ready for pickup" and
+    "placed on hold" are a shop's words too, so they count where a library
+    is named, in the message or the From line."""
+    if re.search(r"\b(?:public library|your holds? (?:is|are) ready)\b", blob):
+        return True
+    library = re.search(r"\blibrar(?:y|ies)\b", blob) or "librar" in (sender or "").lower()
+    return bool(library and _LOAN_WORDS.search(blob))
+
+
 def structural_topic_scores(
     subject: str, body: str, sender: str, list_unsubscribe: str = "",
     links: Sequence[str] = (),
@@ -2475,6 +3060,8 @@ def structural_topic_scores(
     fake, why = impersonation_score(sender, subject, body)
     if fake:
         add(OtherCategory.SPAM, fake, why)
+    if _TO_A_MACHINE.search(blob):
+        add(OtherCategory.SPAM, 3.4, "words written to a machine reading the mail")
 
     selling, selling_why = solicitation_score(subject, body, subject)
     if selling >= 2.6:
@@ -2501,6 +3088,32 @@ def structural_topic_scores(
     elif swindle == 1 and (fake or selling >= 1.0):
         add(OtherCategory.SPAM, 1.6, "a scam's turn of phrase")
 
+    # The favour asked in somebody's name. Asked for without the pressing,
+    # gift card codes are only a hint: a friend may want back the one they
+    # gave.
+    if favour_scam(blob):
+        add(OtherCategory.SPAM, 3.4, "gift cards and their codes asked for, in a hurry")
+    elif job_swindle(blob):
+        # A job that pays out through the reader's gift cards, a cheque to
+        # deposit or bank details sent by reply: a swindle wearing a job.
+        add(OtherCategory.SPAM, 3.0, "a job that asks for money")
+    elif _GIFT_CARD_CODES.search(blob):
+        add(OtherCategory.SPAM, 1.6, "gift card codes asked for")
+
+    # The reader's pay, from the employer that pays it.
+    if _PAYROLL.search(blob):
+        add(OtherCategory.WORK, 3.4, "the reader's pay, from their employer")
+
+    # A forum's digest of what its members wrote, which the prompt files as
+    # social. Not an economic forum's newsletter: threads are a forum's own.
+    if (re.search(r"\bforum\b", f"{blob} {sender}")
+            and re.search(r"\b(?:threads|replies)\b", blob)):
+        add(OtherCategory.SOCIAL, 4.6, "a forum's digest")
+
+    # The reader interviewing somebody for their employer: work, not a search.
+    if _INTERVIEWER.search(blob):
+        add(OtherCategory.WORK, 3.0, "the reader interviewing for their employer")
+
     # A social network telling you what happened without you.
     if _SOCIAL_NOTICE.search(blob):
         add(OtherCategory.SOCIAL, 2.4, "a social network's notification")
@@ -2511,6 +3124,21 @@ def structural_topic_scores(
         add(OtherCategory.WORK, 2.6 if tooling == 2 else 3.2, "the business of a workplace")
     if _WORK_ADMIN.search(blob) and not (bulk and _SELLING.search(blob)):
         add(OtherCategory.WORK, 2.4, "a workplace's own administration")
+
+    # A library's hold, which no courier delivers.
+    if library_loan(blob, sender):
+        add(OtherCategory.OTHER, 3.4, "a library's hold or loan")
+
+    # A stranger selling to the reader's team: a product, a demo, a calendar.
+    if (re.search(r"\b(?:demo|our (?:\w+ )?(?:platform|product|software|tool|solution))\b", blob)
+            and re.search(r"\b(?:teams? like yours|companies like yours|for teams|your (?:it )?"
+                          r"(?:team|stack))\b", blob)):
+        add(OtherCategory.PROMOTION, 3.0, "a stranger selling to the reader's team")
+
+    # A conference selling its days.
+    if re.search(r"\b(?:summit|symposium|expo)\b", blob) and re.search(
+            r"\b(?:early[- ]bird|talks|speakers|sessions|labs|keynote|register)\b", blob):
+        add(OtherCategory.EVENT, 2.6, "a conference and its programme")
 
     # A night out, a table, a ticket.
     if len(set(_OUTING.findall(blob))) >= 2:
@@ -2551,7 +3179,8 @@ def structural_topic_scores(
         add(OtherCategory.SPAM, 3.2, "a prize offered from a borrowed service")
 
     # An account changed: a new primary email, a password, a sign-in method.
-    if re.search(r"\b(?:your (?:email|email address|address|password|details|phone number) "
+    if re.search(r"\b(?:your (?:\w+ )?(?:email|email address|address|password|details|"
+                 r"phone number) "
                  r"(?:has been|have been|was|were) (?:updated|changed)|primary email|"
                  r"new sign-?in method|recovery (?:email|phone)|security settings|"
                  r"made [^.!?]{0,60}? your primary)\b", blob):
@@ -2582,7 +3211,11 @@ def structural_topic_scores(
         if not _SPENT.search(blob) and not _OWED.search(blob):
             add(OtherCategory.FINANCE, 0.8, "an amount of money")
 
-    if _PARCEL.search(blob):
+    # One word is not a parcel: an npm package, a printer driver and a
+    # newspaper called the Courier are not on a van. Two are, or one with its
+    # delivery.
+    if _PARCEL.search(blob) and (len(set(_PARCEL.findall(blob))) >= 2
+                                 or _DELIVERED.search(blob)):
         add(OtherCategory.SHIPPING, 2.4, "describes a parcel")
     if _DELIVERY_WINDOW.search(blob):
         add(OtherCategory.SHIPPING, 2.2, "gives a delivery window")
@@ -2669,6 +3302,8 @@ _NOT_A_REQUEST = re.compile(
     r"\bthank(?:s| you) for\b|\btaking the time to\b|\byou have already\b|"
     r"\bthe time you (?:took|spent)\b|\byou took the time\b|"
     r"\bwe have received\b)[^.!?]{0,70}$"
+    # "No action is required": the request negated where it stands.
+    r"|\b(?:no|no further|not)\s*$"
 )
 
 
@@ -2835,6 +3470,14 @@ class RuleClassifier:
             self._tables[category] = merged
             self._compiled[id(merged)] = [_Matcher(signal) for signal in merged]
 
+        #: Each table's phrases that say nothing about hiring by themselves.
+        self._generic: Dict[Category, Tuple[Signal, ...]] = {}
+        for category, merged in self._tables.items():
+            generic = tuple(signal for signal in merged
+                            if signal.phrase in GENERIC_STAGE_PHRASES)
+            self._generic[category] = generic
+            self._compiled[id(generic)] = [_Matcher(signal) for signal in generic]
+
         self._context = JOB_CONTEXT_SIGNALS + self.ruleset.context
         self._compiled[id(self._context)] = [_Matcher(s) for s in self._context]
         self._compiled[id(NON_JOB_SIGNALS)] = [_Matcher(s) for s in NON_JOB_SIGNALS]
@@ -2947,10 +3590,21 @@ class RuleClassifier:
             self._context, subject_n, subject_t, body_n, body_t)
         named_process, _named_why = self._score(
             HIRING_SPECIFIC_SIGNALS, subject_n, subject_t, body_n, body_t)
+        if _YOUR_ONSITE.search(f"{subject_n} {body_n}"):
+            # "Your onsite" is the day of interviews itself.
+            named_process = max(named_process, 1.0)
         # Who it came from is context too: a careers mailbox has one job, and
         # its mail is about that job even at four words, where no phrase table
         # reaches.
-        from_hiring = hiring_mailbox(sender)
+        from_hiring = hiring_mailbox(sender) or (
+            "tracking-system" if any(domain in sender_n for domain in TRACKING_SYSTEMS)
+            else "")
+        # A people team also writes about the job the reader already has - a
+        # review, leave, pay, training - and that is work mail, not hiring.
+        if (re.search(r"people|human", from_hiring)
+                and _CURRENT_JOB.search(f"{subject_n} {body_n}")
+                and not _BEING_HIRED.search(f"{subject_n} {body_n}")):
+            from_hiring = ""
         if from_hiring:
             context_now += 1.6
         working = (professional > 0.0 or context_now >= 1.0
@@ -2988,8 +3642,34 @@ class RuleClassifier:
         if have_it and (from_hiring or working):
             read.append((Category.APPLICATION_RECEIVED, have_it, have_it_why, 2.0))
         headhunt, headhunt_why = headhunt_score(subject_n, body_n)
-        if headhunt and (person or agency_sender(sender_n)) and not list_unsubscribe.strip():
+        # Not the reader's own process: a recruiter writing about it is in it.
+        # A list footer on a recruiter's own note is a sequence tool; three
+        # of the moves together are a pitch whatever sent it.
+        if (headhunt and not _IN_A_PROCESS.search(f"{subject_n} {body_n}")
+                and ((person and (not list_unsubscribe.strip() or len(headhunt_why) >= 3))
+                     or agency_sender(sender_n))):
             read.append((Category.UNSOLICITED, headhunt, headhunt_why, 2.0))
+        else:
+            headhunt_why = []
+        # An invitation to interview sent to a list: "multiple remote roles
+        # with our partner companies", "spots are limited". Nobody's process.
+        mass_moves = {found.group(0) for found in
+                      _MASS_INVITATION.finditer(f"{subject_n} {body_n}")}
+        # "Book your interview slot" is the pitch; only an application the
+        # reader made says otherwise.
+        massed = bool(list_unsubscribe.strip() and mass_moves
+                      and (not from_hiring or len(mass_moves) >= 3)
+                      and not _APPLIED.search(f"{subject_n} {body_n}")
+                      and _INTERVIEW_OFFERED.search(f"{subject_n} {body_n}"))
+        if massed:
+            read.append((Category.UNSOLICITED, 3.6, ["an invitation sent to a list"], 2.0))
+        networked, networked_why = networking_score(subject_n, body_n)
+        # No application behind it, or it is that process's mail.
+        if (networked and person and not list_unsubscribe.strip() and not from_hiring
+                and not named_process
+                and not _IN_A_PROCESS.search(f"{subject_n} {body_n}")
+                and not _PROGRAMME_SOLD.search(f"{subject_n} {body_n}")):
+            read.append((Category.NETWORKING, networked, networked_why, 2.0))
         relayed, relayed_why = relay_score(subject_n, body_n, sender_n)
         if relayed:
             read.append((Category.UNSOLICITED, relayed, relayed_why, 2.4))
@@ -3005,13 +3685,30 @@ class RuleClassifier:
         # A university, a lender and a landlord all receive applications and
         # turn them down; a statement is a hiring one when something besides
         # the word "application" says hiring, and nothing says another world.
+        # A school's, a hospital's or a court's own people team is an
+        # employer, writing about its own vacancies, not another world.
+        elsewhere_sender = ((0.0, "") if (from_hiring or _EMPLOYER_SIDE.search(sender_n))
+                            else other_world_sender(sender_n))
         hiring_said = bool(
             from_hiring or named_process
             or any(domain in link_blob or domain in sender_n for domain in ATS_LINK_DOMAINS)
-            or (_HIRING_WORDS.search(f"{subject_n} {body_n}")
-                and not other_world_sender(sender_n)[0]))
+            or _APPLIED_FOR_A_TITLE.search(f"{subject_n} {body_n}")
+            or agency_sender(sender_n)
+            or (_HIRING_WORDS.search(f"{subject_n} {body_n}") and not elsewhere_sender[0]))
+        offer_unsaid = False
         if not hiring_said:
-            stated = statements.Reading()
+            # Except a move that says hiring itself, a title joined; and the
+            # business of an offer from a person writing for an organisation,
+            # read but looked at before it is filed.
+            kept = [found for found in stated.offers if found.move in statements.SELF_EVIDENT]
+            if (not kept and _NAMED_MAILBOX.search(sender_n)
+                    and not _MAIL_PROVIDERS.search(sender_n)
+                    and not list_unsubscribe.strip()
+                    and not _SALE.search(f"{subject_n} {body_n}")):
+                kept = [found for found in stated.offers
+                        if found.move in statements.SOFT_EVIDENT]
+                offer_unsaid = bool(kept)
+            stated = statements.Reading(offers=tuple(kept))
         if stated.declines and (person or from_hiring or working):
             said[Category.NOT_INTERESTED] = stated.moves("declines")
         if stated.offers and (person or from_hiring or working):
@@ -3031,9 +3728,16 @@ class RuleClassifier:
         if stated.invitations and anchored and (
                 working or (in_process and (person or from_hiring))):
             said[Category.INTERVIEW] = stated.moves("invitations")
+        progress = bool(set(stated.moves("acknowledgements")) & statements._PROGRESS)
         if stated.acknowledged and (from_hiring or (working and (
-                not person or stated.names_an_application))):
+                not person or stated.names_an_application or progress))):
             said[Category.APPLICATION_RECEIVED] = stated.moves("acknowledgements")
+        if "an offer not made" in stated.moves("declines"):
+            # "We will not be extending an offer" is a decision, and the offer
+            # in it is the thing not done.
+            scores[Category.OFFER] = 0.0
+            strongest[Category.OFFER] = 0.0
+            matches[Category.OFFER].append("(discounted: the offer is one not made)")
         for category, moves in said.items():
             read.append((category, STATED_WEIGHT, ["it states " + move for move in moves],
                          2.0))
@@ -3117,6 +3821,21 @@ class RuleClassifier:
                 strongest[Category.INTERVIEW] *= 0.3
                 matches[Category.INTERVIEW].append(
                     "(discounted: a meeting, but nothing says it is about work)")
+        # In bulk mail an interview nobody is offered is a word in the copy:
+        # "our clients get 3x more interview invitations". An interview held
+        # out to the reader, an application of theirs, a hiring system or a
+        # booking link keeps it.
+        if (list_unsubscribe.strip() and scores[Category.INTERVIEW]
+                and not from_hiring and Category.INTERVIEW not in said
+                and not any(domain in link_blob or domain in sender_n
+                            for domain in ATS_LINK_DOMAINS)
+                and not _INTERVIEW_OFFERED.search(f"{subject_n} {body_n}")
+                and not _APPLIED.search(f"{subject_n} {body_n}")
+                and not any(domain in link_blob for domain in SCHEDULING_LINK_DOMAINS)):
+            scores[Category.INTERVIEW] *= 0.3
+            strongest[Category.INTERVIEW] *= 0.3
+            matches[Category.INTERVIEW].append(
+                "(discounted: an interview in bulk mail, offered to nobody)")
 
         # An acknowledgement is the absence of a decision. A rejection
         # acknowledges the application too, and there the decision is the
@@ -3171,7 +3890,7 @@ class RuleClassifier:
 
         raw_scores = dict(scores)
         replying = bool(re.match(r"^\s*(re|fw|fwd)\s*:", subject or "", re.I))
-        if replying:
+        if replying and not _follows_up_itself(body, sender):
             # An existing thread is strong evidence the user started it.
             scores[Category.UNSOLICITED] *= 0.35
             matches[Category.UNSOLICITED].append("(discounted: this is a reply in an existing thread)")
@@ -3187,6 +3906,10 @@ class RuleClassifier:
         if read_context:
             job_score += read_context
             job_matches.extend(read_notes[:2])
+        digest = application_digest(subject_n, (body or "").lower())
+        if digest:
+            job_score += 3.0
+            job_matches.append(digest)
         if posting:
             # A description is job-search material without one hiring-process
             # word: it is all headings.
@@ -3272,6 +3995,35 @@ class RuleClassifier:
             qualified = [category for category in qualified
                          if category in said or category in shaped
                          or category is Category.UNSOLICITED]
+        if (Category.NETWORKING in shaped
+                and set(networked_why) & {"a referral", "an introduction", "a reference"}
+                and not set(headhunt_why) & {"a recruiter's own words", "a client's role"}):
+            # Help offered by somebody the reader knows, not a recruiter's
+            # pitch: a referral is networking.
+            qualified = [category for category in qualified
+                         if category is not Category.UNSOLICITED]
+        if massed:
+            qualified = [category for category in qualified
+                         if category is not Category.INTERVIEW]
+        if (Category.APPLICATION_RECEIVED in said and Category.INTERVIEW not in said
+                and not any(domain in link_blob for domain in SCHEDULING_LINK_DOMAINS)):
+            # An acknowledgement that sketches the process to come ("a call
+            # with a recruiter, then a final round") arranges none of it.
+            qualified = [category for category in qualified
+                         if category is not Category.INTERVIEW]
+        if (Category.NETWORKING in shaped and Category.INTERVIEW not in said
+                and not _IN_A_PROCESS.search(f"{subject_n} {body_n}")):
+            # A chat proposed with no application behind it is networking:
+            # an interview is a step of a process the reader is in.
+            qualified = [category for category in qualified
+                         if category is not Category.INTERVIEW]
+        if (Category.NOT_INTERESTED in said and Category.INTERVIEW not in said
+                and not any(domain in link_blob for domain in SCHEDULING_LINK_DOMAINS)):
+            # Only a concrete invitation outranks a decision: "we won't be
+            # moving you forward to the final round" names the round it
+            # takes away.
+            qualified = [category for category in qualified
+                         if category is not Category.INTERVIEW]
         if qualified:
             best_category = qualified[0]
         else:
@@ -3292,6 +4044,15 @@ class RuleClassifier:
         # Measured before the reply discount: a reply in a thread is more
         # clearly part of a job search, not less.
         job_evidence = job_score + max(max(raw_scores.values(), default=0.0), best_score)
+        if not (working or ats_present or posting):
+            # Nothing says hiring: the stage phrases any form uses count for
+            # nothing as evidence that this is job mail at all.
+            generic = {category: self._score(self._generic[category], subject_n,
+                                             subject_t, body_n, body_t)[0]
+                       for category in raw_scores if self._generic[category]}
+            job_evidence = job_score + max(
+                (max(0.0, score - generic.get(category, 0.0))
+                 for category, score in raw_scores.items()), default=0.0)
 
         # "Application", "interview" and "offer" belong to other parts of life
         # too; where a message is plainly about one of those, it counts against
@@ -3305,6 +4066,14 @@ class RuleClassifier:
             non_job_score += selling
             non_job_matches.append(
                 "reads as unsolicited commercial mail (" + ", ".join(selling_why[:2]) + ")")
+
+        # A sale to job seekers - a resume rewritten, a course, coaching - in
+        # bulk: the job words describe its audience, not the reader's search.
+        if (list_unsubscribe.strip() and _SALE.search(f"{subject_n} {body_n}")
+                and not from_hiring and not _APPLIED.search(f"{subject_n} {body_n}")):
+            job_evidence = 0.0
+            non_job_score += 2.4
+            non_job_matches.append("a sale to people looking for work")
 
         blast, blast_why = job_board_blast(subject_n, body_n, list_unsubscribe)
         if blast:
@@ -3333,8 +4102,59 @@ class RuleClassifier:
             job_evidence = 0.0
             non_job_score += 3.0
             non_job_matches.append("a one-time code, which is the account's business")
+        elif (len(body_n) < ONE_TIME_CODE_BODY
+                and _PASSWORD_RESET.search(f"{subject_n} {body_n}")):
+            job_evidence = 0.0
+            non_job_score += 3.0
+            non_job_matches.append("a password reset, which is the account's business")
 
+        # A sender pretending to be a service, or text written to the machine
+        # reading it: whatever it says about hiring is bait.
+        # An application for a loan, a course or a dog, with no word of a job
+        # in it; the reader interviewing somebody else; an interview for a
+        # podcast.
+        blob_n = f"{subject_n} {body_n}"
+        elsewhere_now = ""
+        if _OTHER_APPLICATION.search(blob_n) and not _HIRING_WORDS.search(blob_n):
+            elsewhere_now = "an application for something other than a job"
+        elif _INTERVIEWER.search(blob_n):
+            elsewhere_now = "the reader is the one interviewing"
+        elif _MEDIA_INTERVIEW.search(blob_n) or (
+                _ON_A_PROGRAMME.search(blob_n) and re.search(r"\binterview", blob_n)):
+            elsewhere_now = "an interview for a programme or a publication"
+        elif _SWINDLE[3].search(blob_n):
+            # Gift cards bought, a cheque deposited and the rest wired on: no
+            # employer asks for money like that.
+            elsewhere_now = "money asked for the way a swindle asks"
+        if (not elsewhere_now and list_unsubscribe.strip()
+                and _CAREER_INSTITUTION.search(sender_n)
+                and not _IN_A_PROCESS.search(blob_n)):
+            elsewhere_now = "a school's or a board's list about careers"
+        if elsewhere_now:
+            job_evidence = 0.0
+            non_job_score += 3.0
+            non_job_matches.append(elsewhere_now)
+            if (elsewhere_now.startswith("an interview for") or (
+                    elsewhere_now.startswith("an application")
+                    and not re.search(r"\b(?:loan|mortgage|credit|account|insurance)\b",
+                                      blob_n))):
+                # Another world's business, which is the Other topic.
+                elsewhere_extra = 3.6
+            else:
+                elsewhere_extra = 0.0
+        else:
+            elsewhere_extra = 0.0
+        bait = scam_domain(sender_n) or (
+            "words written to a machine reading the mail"
+            if _TO_A_MACHINE.search(f"{subject_n} {body_n}") else "")
+        if bait:
+            job_evidence = 0.0
+            non_job_score += 3.0
+            non_job_matches.append(bait)
         elsewhere, elsewhere_why = other_world_context(subject_n, body_n)
+        if elsewhere_extra:
+            elsewhere = max(elsewhere, elsewhere_extra)
+            elsewhere_why = elsewhere_why or elsewhere_now
         if elsewhere:
             job_evidence = max(0.0, job_evidence - elsewhere)
             non_job_score += elsewhere
@@ -3343,7 +4163,7 @@ class RuleClassifier:
         # an application: the sender settles it, and the job reading needs
         # twice the usual evidence to stand.
         bar = 2.4
-        far, far_why = other_world_sender(sender_n) if not from_hiring else (0.0, "")
+        far, far_why = elsewhere_sender
         if far:
             job_evidence = max(0.0, job_evidence - far)
             non_job_score += far
@@ -3354,7 +4174,7 @@ class RuleClassifier:
                 # agreeing, which is what settles a topic.
                 elsewhere += far
         kith, kith_why = kith_score(subject_n, body_n, sender)
-        if kith:
+        if kith and Category.NETWORKING not in shaped:
             job_evidence = max(0.0, job_evidence - kith)
             non_job_score += kith
             non_job_matches.append(kith_why)
@@ -3363,7 +4183,7 @@ class RuleClassifier:
         # A list writing about hiring is a newsletter: nothing in it is a
         # step of anybody's application.
         if (looks_job_related and list_unsubscribe.strip() and best_score < MIN_SCORE
-                and _EDITORIAL.search(f"{subject_n} {body_n}")):
+                and not digest and _EDITORIAL.search(f"{subject_n} {body_n}")):
             looks_job_related = False
             non_job_matches.append("a mailing list talking about hiring, with no step in it")
 
@@ -3381,7 +4201,7 @@ class RuleClassifier:
                 kith=kith, kith_why=kith_why,
             )
 
-        if best_score < MIN_SCORE:
+        if best_score < MIN_SCORE or digest:
             return RuleVerdict(
                 is_job_related=True,
                 category=Category.UNCLASSIFIED_OTHER,
@@ -3438,7 +4258,7 @@ class RuleClassifier:
             confidence = self._confidence(
                 best_score, runner_up, truncated, strongest[best_category]
             )
-        if unanchored:
+        if unanchored or (offer_unsaid and best_category is Category.OFFER):
             confidence = min(confidence, SOFT_EVIDENCE_CEILING)
         matched = matches[best_category]
         return RuleVerdict(
@@ -3499,12 +4319,33 @@ class RuleClassifier:
             topic_peak[topic] = max(topic_peak.get(topic, 0.0), weight)
         # A scam wears a courier's or a bank's words: once the shape says
         # scam, those words count for little.
-        if shape.get(OtherCategory.SPAM, 0.0) >= 2.4:
+        scam_shaped = shape.get(OtherCategory.SPAM, 0.0) >= 2.4
+        if scam_shaped:
             for topic in TRANSACTIONAL_TOPICS:
                 if topic_scores.get(topic):
                     topic_scores[topic] *= 0.35
                     topic_matches.setdefault(topic, []).append(
                         "(discounted: the words of a courier or a bank in a scam's shape)")
+        # The reader's pay is their employer's business, whatever money words
+        # it uses.
+        if _PAYROLL.search(f"{subject_n} {body_n}") and topic_scores.get(OtherCategory.FINANCE):
+            topic_scores[OtherCategory.FINANCE] *= 0.5
+            topic_matches.setdefault(OtherCategory.FINANCE, []).append(
+                "(discounted: the reader's pay, which is their employer's business)")
+        # A courier or a shop never writes from somebody's own mailbox: their
+        # words from a friend or a neighbour are news, not a notice.
+        if looks_like_a_person(raw_sender or sender_n) and _MAIL_PROVIDERS.search(sender_n):
+            for topic in (OtherCategory.SHIPPING, OtherCategory.RECEIPT):
+                if topic_scores.get(topic):
+                    topic_scores[topic] *= 0.25
+                    topic_matches.setdefault(topic, []).append(
+                        "(discounted: somebody's own mailbox, which no courier or shop uses)")
+        # A library's hold waits at its desk, not on a courier's van.
+        if library_loan(f"{subject_n} {body_n}", sender_n) and topic_scores.get(
+                OtherCategory.SHIPPING):
+            topic_scores[OtherCategory.SHIPPING] *= 0.35
+            topic_matches.setdefault(OtherCategory.SHIPPING, []).append(
+                "(discounted: a library's hold, which no courier brings)")
         # Another world - a surgery, a court, a landlord - is an answer in
         # itself, and outranks the register it was written in. One word of
         # it is not: a bank's code naming a letting agent is still a code.
@@ -3520,6 +4361,51 @@ class RuleClassifier:
             topic_peak[OtherCategory.PERSONAL] = max(
                 topic_peak.get(OtherCategory.PERSONAL, 0.0), kith)
             topic_matches.setdefault(OtherCategory.PERSONAL, []).append(kith_why)
+        # A swindle borrows a trusted voice - a pastor's, a manager's, a
+        # mother's, a payroll team's - and those words, family's included,
+        # count for little in it.
+        favour = favour_scam(f"{subject_n} {body_n}")
+        if favour or job_swindle(f"{subject_n} {body_n}"):
+            voices = (OtherCategory.PERSONAL, OtherCategory.WORK, OtherCategory.CHURCH)
+            for topic in voices:
+                if topic_scores.get(topic):
+                    topic_scores[topic] *= 0.35
+                    topic_matches.setdefault(topic, []).append(
+                        "(discounted: a trusted voice borrowed to ask for money)")
+        if favour:
+            # However warmly it is written: nobody who knows the reader asks
+            # for the codes.
+            topic_scores[OtherCategory.SPAM] = max(
+                topic_scores.get(OtherCategory.SPAM, 0.0),
+                max(topic_scores.get(topic, 0.0) for topic in voices) + 1.0)
+        worship, settled = church_sender(raw_sender or sender_n)
+        # What a church writes about, beyond the denomination's own name,
+        # which a Methodist hospital's footer carries too.
+        churchly = topic_scores.get(OtherCategory.CHURCH, 0.0) >= 2.4 and any(
+            not _DENOMINATION.search(found)
+            for found in topic_matches.get(OtherCategory.CHURCH, []))
+        church_said = bool(worship and (settled or churchly) and not scam_shaped)
+        # A death notice from a sender that may be a parish is most likely
+        # the parish's. Most likely is all: a club mourns its members too.
+        mourned = bool(worship and not church_said and not scam_shaped
+                       and _A_DEATH_NOTICE.search(f"{subject_n} {body_n}"))
+        if church_said or mourned:
+            # The prompt's own rule: a place of worship's mail is church mail,
+            # its giving included, and preferred over a newsletter, an event
+            # or a personal note - a bulletin is a newsletter in form, and a
+            # death in the congregation is written personally. A security
+            # code from one is still a code, and a swindle in a pastor's name
+            # is still a swindle.
+            rivals = max((score for topic, score in topic_scores.items() if topic not in (
+                OtherCategory.CHURCH, OtherCategory.SECURITY, OtherCategory.SPAM)),
+                default=0.0)
+            topic_scores[OtherCategory.CHURCH] = max(
+                topic_scores.get(OtherCategory.CHURCH, 0.0) + 3.0, rivals + 1.0)
+            topic_peak[OtherCategory.CHURCH] = max(
+                topic_peak.get(OtherCategory.CHURCH, 0.0), 3.0)
+            topic_matches.setdefault(OtherCategory.CHURCH, []).append(
+                f"a place of worship wrote it ({worship})" if church_said
+                else f"a death notice from what may be a parish ({worship})")
 
         # Three more ways to recognise a message with no word saying what it
         # is: the mailbox, the shapes in it, and whether it reads as one person
@@ -3636,6 +4522,13 @@ class RuleClassifier:
         # without this, wrong answers passed the filing threshold.
         gentle = soft.get(best_topic, 0.0)
         if best > 0 and gentle >= best * 0.5:
+            confidence = min(confidence, SOFT_EVIDENCE_CEILING)
+        # A sender that may be a place of worship, with nothing in the message
+        # to say so: if it is one, this is church mail, which the prompt
+        # prefers over a newsletter, an event or a personal note.
+        if worship and not church_said and best_topic in (
+                OtherCategory.NEWSLETTER, OtherCategory.EVENT, OtherCategory.PERSONAL,
+                OtherCategory.CHURCH):
             confidence = min(confidence, SOFT_EVIDENCE_CEILING)
 
         matched = topic_matches.get(best_topic, [])

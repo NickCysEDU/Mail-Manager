@@ -99,8 +99,8 @@ def test_the_held_out_set_is_never_used_to_tune(rules):
     genuinely generalised or somebody quietly fitted to it. Both are worth
     stopping to look at, and the second is the likely one.
 
-    It has fired twice. The first held-out set was tuned against while the
-    sorter learnt to read shapes, so it was retired to ``oblique.json`` (a
+    It has fired three times. The first held-out set was tuned against while
+    the sorter learnt to read shapes, so it was retired to ``oblique.json`` (a
     dev set now) and a fresh set of 34 was written and measured once, on
     7 October 2026: 79.4% exact, 91.2% job against not, everything it filed
     filed right.
@@ -111,9 +111,26 @@ def test_the_held_out_set_is_never_used_to_tune(rules):
     unseen. It was retired all the same, to ``retired_holdout.json``, and a
     fresh set of 39 was written before the sorter saw any of it and measured
     once: 87.2% exact, 92.3% job against not, 20 of the 21 it filed filed
-    right (the release before scored 82.1%, filing 15). Nothing in the engine
-    has been changed to suit it since, and nothing should be: look at its
-    misses only to write the next set.
+    right (the release before scored 82.1%, filing 15).
+
+    The third time, on 11 October, that set had risen to 92.3% unseen while
+    the sorter learnt to read what people write, and it was retired. The set
+    written to replace it was measured once by mistake partway through the
+    work, so it was retired too, unread, and a third set of 120 was written:
+    61.7% exact with that morning's code, 76.7% once the work was done, with
+    two confident mistakes. Two patterns added after it was written echo its
+    wording with no dev-set source, so that figure is a message or two high.
+    It was retired and a fourth set of 116 was written: 79.3% with that code,
+    81.0% after its predecessor's misses were mended, and the same two
+    confident mistakes, which the next check fails on. That set was retired
+    as well, and the set here (116) was written after its misses had been
+    read and before anything else changed: 83.6% exact with that code, 84.5%
+    and 94.8% job against not at the end, 43 of the 44 it filed filed right.
+    Its author knew the fourth set's weak spots when writing it, so it leans
+    towards them, and a few of its sentences repeat the unit tests' wording. Nothing in the engine has been changed to suit it, and
+    nothing should be: look at its misses only to write the next set, and
+    before measuring the next, check that no code added since it was written
+    echoes its wording.
     """
     holdout = load("holdout.json")
     correct = sum(
