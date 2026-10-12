@@ -289,7 +289,11 @@ def test_words_are_offered_and_one_chosen_goes_in(arch):
                                             argtypes=[ctypes.c_ulong]),
                                     "replacementString"))
                     for index in range(count)]
-        spin_until(lambda: "you " in offered())
+        # macOS answers from its spelling service, which a runner that has
+        # just started starts cold: on a hosted one that has taken longer
+        # than the usual five seconds. Waited for as long as it takes, to
+        # half a minute; here it is a moment.
+        spin_until(lambda: "you " in offered(), ms=30000)
         out["kind"] = rt.objc.object_getClassName(words).decode()
         out["offered"] = offered()
         out["main_thread"] = threads
@@ -316,7 +320,7 @@ def test_words_are_offered_and_one_chosen_goes_in(arch):
         first = renderer._latest[words]
         renderer._ask(words, {"text": "Thank yo", "at": 0, "start": 8,
                               "length": 0})
-        spin_until(lambda: held and len(renderer._asked) == 1)
+        spin_until(lambda: held and len(renderer._asked) == 1, ms=30000)
         offer(*held[0])
         out["after_two"] = offered()
     """)

@@ -570,6 +570,26 @@ GLOW_TEST = textwrap.dedent("""
         sharp_pixels = 0
         def reset(self):
             pass
+
+    def polished(made, ticks=3, bare=None):
+        # The frame with its polish, and the frame without it. A shared
+        # runner's card now and then hands back a frame without the polish
+        # laid; it is taken again, up to three times, until it differs from
+        # the frame without. How much it adds and where it lands are then
+        # measured on that one, as ever, and a polish that never lands still
+        # fails.
+        if bare is None:
+            made.set_post(False)
+            made._tick()
+            bare = made._canvas.grabFramebuffer()
+        made.set_post(True)
+        for tries in range(1, 4):
+            for i in range(ticks):
+                made._tick()
+            lit = made._canvas.grabFramebuffer()
+            if lit != bare:
+                break
+        return lit, bare, tries
 """)
 
 
@@ -602,12 +622,7 @@ class TestTheGlowOnTheCard:
                         QPointF(rect.left(), top),
                         QPointF(rect.right(), top + rect.width() * SLOPE))
             made = pane(scene=Slant(), size=(1440, 900))
-            for i in range(3):
-                made._tick()
-            lit = made._canvas.grabFramebuffer()
-            made.set_post(False)
-            made._tick()
-            bare = made._canvas.grabFramebuffer()
+            lit, bare, tries = polished(made)
             r = made._canvas.devicePixelRatioF()
             w = lit.width()
             def spread_of(weights, centre):
@@ -637,7 +652,7 @@ class TestTheGlowOnTheCard:
                 w, lit.height()).width()
             print(json.dumps({
                 "gpu": made.on_gpu, "glow": made._canvas.glow is not None,
-                "spread": block / 2.0,
+                "tries": tries, "spread": block / 2.0,
                 "clipped": clipped,
                 "most": max(abs(a) for a in apart),
                 "width": (sum(widths) / len(widths)) ** 0.5}))
@@ -690,13 +705,12 @@ class TestTheGlowOnTheCard:
                     found.append(sum(w * (x - middle) ** 2
                                      for x, w in weights) / total)
                 return sum(found) / len(found)
-            made.set_post(True)
             seen = {}
             for label, recipe in (("glow", {"bloom": 0.9}),
                                   ("fringes", {"aberration": 1.6})):
                 visualizers.POST["Glow test"] = recipe
-                made._tick()
-                seen[label] = spread(made._canvas.grabFramebuffer())
+                lit, _bare, _tries = polished(made, ticks=1, bare=bare)
+                seen[label] = spread(lit)
             print(json.dumps({"ratio": r,
                               "apart": max(0.0, seen["fringes"]
                                            - seen["glow"]) ** 0.5}))
@@ -724,12 +738,7 @@ class TestTheGlowOnTheCard:
                     ("faded", {"bloom": 0.9, "aberration": 1.2}, 0.5)):
                 made._reveal_changed(reveal)
                 visualizers.POST["Glow test"] = recipe
-                made.set_post(True)
-                made._tick()
-                lit = made._canvas.grabFramebuffer()
-                made.set_post(False)
-                made._tick()
-                bare = made._canvas.grabFramebuffer()
+                lit, bare, _tries = polished(made, ticks=1)
                 x, y = lit.width() // 2, lit.height() // 2
                 got[label] = (lit.pixelColor(x, y).green()
                               / bare.pixelColor(x, y).green())
@@ -765,12 +774,7 @@ class TestTheGlowOnTheCard:
             made = pane(scene=TopQuarter(), size=(800, 600))
             made._card.choice = lambda pixels, ratio, scene: RUNG
             made.set_reserve(200)
-            for i in range(3):
-                made._tick()
-            lit = made._canvas.grabFramebuffer()
-            made.set_post(False)
-            made._tick()
-            bare = made._canvas.grabFramebuffer()
+            lit, bare, tries = polished(made)
             r = made._canvas.devicePixelRatioF()
             box = made._scene_box(QRectF(0, 0, 800, 400))
             top, height = box.y() * r, box.height() * r
@@ -783,6 +787,7 @@ class TestTheGlowOnTheCard:
                 return sum(values) / max(1, len(values))
             band = top + height * 0.25
             print(json.dumps({"glow": made._canvas.glow is not None,
+                              "tries": tries,
                               "below": added(band + 1, band + 5),
                               "bottom": added(top + height * 0.5,
                                               top + height - 2)}))
@@ -790,7 +795,8 @@ class TestTheGlowOnTheCard:
         assert got["glow"] is True
         assert got["below"] > 5, (
             f"the band lit at the top of the scene spills only "
-            f"{got['below']:.1f} below itself: the glow was not laid there")
+            f"{got['below']:.1f} below itself: the glow was not laid there "
+            f"(the frame was taken {got['tries']} times)")
         assert got["bottom"] < 1, (
             f"and {got['bottom']:.1f} reaches the bottom of the scene, "
             f"which is black: the glow came from the wrong band")
@@ -813,10 +819,8 @@ class TestTheGlowOnTheCard:
             made = pane(scene=Grey(), size=(640, 400))
             for i in range(4):
                 made._tick()
-                lit = made._canvas.grabFramebuffer()
-            made.set_post(False)
-            made._tick()
-            bare = made._canvas.grabFramebuffer()
+                made._canvas.grabFramebuffer()
+            lit, bare, _tries = polished(made, ticks=1)
             x, y = lit.width() // 2, lit.height() // 2
             print(json.dumps({
                 "gpu": made.on_gpu, "tries": len(tries),

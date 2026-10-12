@@ -471,7 +471,15 @@ describes the app itself.
   will not build it gets the small copy (`_halo_on_gpu`, `last_halo`),
   logged once; the CPU path still stretches a small copy. What made the
   rave look bad in a window was its haze, stretched from a small tile, and
-  `HAZE_DOUBLINGS` is the fix for that.
+  `HAZE_DOUBLINGS` is the fix for that. Its tests take the polished frame
+  again, up to three times, when the hosted runner's shared card hands one
+  back without it (once in four runs there, never on a Mac here in 120
+  tries under load): `polished` in `tests/test_gpu_canvas.py`. A glow that
+  never lands or lands upside down still fails them; both were tried.
+- **macOS's spelling service starts cold on a fresh runner:** the Touch Bar
+  test of the words it offers waits up to thirty seconds for the first
+  answer, where five ran out once. The wait ends when the words come, and
+  with the words never shown the test fails.
 - **A wide line on the card is a real pen** (`visualizers.stroke`). The
   stack of hairlines is a CPU speed-up; on the card each pass went through
   the samples on its own, and the wireframe came out ridged down each line
