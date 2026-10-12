@@ -249,9 +249,9 @@ class TestTopics:
             ("Sign-in code", "Your verification code is 481902. Do not share this code.",
              OtherCategory.SECURITY),
             ("Your order", "Thanks for your order. Order number 12345, total charged $40.",
-             OtherCategory.RECEIPT),
+             OtherCategory.TRANSACTIONS),
             ("Shipped", "Your package has shipped. Tracking number 1Z999.",
-             OtherCategory.SHIPPING),
+             OtherCategory.TRANSACTIONS),
             ("This week", "In this week's issue we look at platform teams. You subscribed.",
              OtherCategory.NEWSLETTER),
             ("50% off", "Limited time offer, save up to 50%. Shop now with this discount code.",
@@ -626,7 +626,7 @@ class TestReading:
         found = verdict(rules, "Your refund is on its way", "Your 18:15 service did not "
                         "run, so the 12.80 you paid is on its way back to your card.",
                         "Linewise <no-reply@linewise.example>")
-        assert found.other_category is OtherCategory.RECEIPT
+        assert found.other_category is OtherCategory.TRANSACTIONS
 
     def test_a_note_with_nothing_in_it_from_a_person(self, rules):
         found = verdict(rules, "Test here", "", "Elena Vasquez <elena.vasquez@fastmail.example>")
@@ -700,6 +700,18 @@ class TestReadingRealShapes:
         assert not looks_like_a_person("notifications@acme.example")
         assert not looks_like_a_person("no-reply@acme.example")
         assert not looks_like_a_person("chris.hr@acme.example")
+
+    @pytest.mark.parametrize("sender", [
+        "receipts@hopcab.example", "payments@pinegrovedental.example",
+        "invoices@studio.example", "statements@smallaccountant.example",
+        "returns@kettleandco.example", "refunds@kettleandco.example",
+        "shipping@tinycandles.example", "tracking@parcelgo.example",
+        "delivery@grocer.example", "dispatch@tinycandles.example",
+    ])
+    def test_a_mailbox_for_money_or_parcels_is_not_a_person(self, sender):
+        from rules_engine import looks_like_a_person
+
+        assert not looks_like_a_person(sender)
 
     def test_a_job_description_mailed_to_yourself_is_not_a_step(self, rules):
         found = verdict(
@@ -892,7 +904,7 @@ class TestEverydayTopicsByWhatTheyState:
             "Please do not reply to this email. Copyright 2026. All rights reserved.")
         found = verdict(rules, "Your payment to Pinecrest Rides Ltd. has been processed",
                         body, "service@payments.example")
-        assert found.other_category is OtherCategory.RECEIPT
+        assert found.other_category is OtherCategory.TRANSACTIONS
 
     def test_the_footer_under_every_receipt_does_not_make_it_a_statement(self, rules):
         body = ("Thanks for your order! Order summary: one pair of trail shoes, size 9, "
@@ -902,7 +914,7 @@ class TestEverydayTopicsByWhatTheyState:
                 "and account statement are always one tap away in the app. Help centre. "
                 "Privacy. Terms. Copyright 2026 Trailhead Outfitters. All rights reserved.")
         found = verdict(rules, "Order confirmed", body, "orders@trailhead.example")
-        assert found.other_category is OtherCategory.RECEIPT
+        assert found.other_category is OtherCategory.TRANSACTIONS
 
     def test_a_purchase_names_where_and_a_summary_names_when(self, rules):
         bought = verdict(rules, "You spent $12.75 at Corner Bakery",
@@ -910,12 +922,17 @@ class TestEverydayTopicsByWhatTheyState:
         month = verdict(rules, "Your September summary",
                         "You spent $980 last month, 5% less than in August. Most of it "
                         "went on groceries.", "hey@bank.example")
-        assert bought.other_category is OtherCategory.RECEIPT
+        assert bought.other_category is OtherCategory.TRANSACTIONS
         assert month.other_category is OtherCategory.FINANCE
 
-    def test_money_sent_to_you_is_finance(self, rules):
+    def test_money_sent_to_you_is_a_transaction(self, rules):
         found = verdict(rules, "Sam sent you $40 for the guitar lesson",
                         "Sam sent you $40 for the guitar lesson.", "cash@wallet.example")
+        assert found.other_category is OtherCategory.TRANSACTIONS
+
+    def test_money_asked_of_you_is_finance(self, rules):
+        found = verdict(rules, "Sam requested $40 for the guitar lesson",
+                        "Sam requested $40 for the guitar lesson.", "cash@wallet.example")
         assert found.other_category is OtherCategory.FINANCE
 
     def test_a_one_time_code_from_a_careers_site_is_security(self, rules):

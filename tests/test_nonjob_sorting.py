@@ -16,7 +16,7 @@ from models import (Category, Classification, EmailMessage, FolderPlan,
                     NonJobRouting, OtherCategory, TriageItem)
 
 
-def other(topic=OtherCategory.RECEIPT, confidence=0.97,
+def other(topic=OtherCategory.TRANSACTIONS, confidence=0.97,
           routing=NonJobRouting.LEAVE, **kwargs) -> TriageItem:
     return TriageItem(
         email=EmailMessage(uid="1", subject="Your order",
@@ -170,14 +170,14 @@ class TestOneClickTurnsItOn:
 class TestChoosingTopics:
     def test_every_topic_can_be_turned_off(self, window):
         window._switch_routing(NonJobRouting.FILE)
-        window._set_topics([OtherCategory.RECEIPT])
-        assert window.settings.chosen_topics == (OtherCategory.RECEIPT,)
+        window._set_topics([OtherCategory.TRANSACTIONS])
+        assert window.settings.chosen_topics == (OtherCategory.TRANSACTIONS,)
 
     def test_unticked_topics_go_to_other(self, window):
         window._switch_routing(NonJobRouting.FILE)
-        window._set_topics([OtherCategory.RECEIPT])
+        window._set_topics([OtherCategory.TRANSACTIONS])
         plan = window.folder_plan
-        assert plan.for_other_category(OtherCategory.RECEIPT).endswith("Receipts")
+        assert plan.for_other_category(OtherCategory.TRANSACTIONS).endswith("Transactions")
         assert plan.for_other_category(OtherCategory.TRAVEL).endswith("Other")
 
     def test_toggling_one_leaves_the_rest(self, window):

@@ -42,6 +42,21 @@ class TestTheRecipe:
         base = Settings()
         assert recipe_for(base) != recipe_for(replace(base, **{field: value}))
 
+    def test_folding_one_topic_into_another_changes_the_hash(self, monkeypatch):
+        """A verdict kept from before Receipts and Shipping became one topic
+        would still call a payment received Finance."""
+        from config import Settings
+        import verdict_cache
+        now = recipe_for(Settings())
+        monkeypatch.setattr(verdict_cache, "TOPICS", verdict_cache.TOPICS.replace(
+            "TRANSACTIONS", "RECEIPT,SHIPPING"))
+        assert recipe_for(Settings()) != now
+
+    def test_the_topics_in_the_hash_are_the_real_ones(self):
+        import verdict_cache
+        from models import OtherCategory
+        assert verdict_cache.TOPICS.split(",") == [t.value for t in OtherCategory]
+
     def test_things_that_do_not_change_the_answer_do_not(self):
         """The threshold and the folder names act on a verdict, not in it."""
         from dataclasses import replace

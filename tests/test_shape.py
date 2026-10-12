@@ -35,8 +35,8 @@ class TestWhoTheSenderIs:
         ("newsletter@paper.example", OtherCategory.NEWSLETTER),
         ("billing@phoneco.example", OtherCategory.FINANCE),
         ("accounts@utility.example", OtherCategory.FINANCE),
-        ("shipping@parcelco.example", OtherCategory.SHIPPING),
-        ("tracking@courier.example", OtherCategory.SHIPPING),
+        ("shipping@parcelco.example", OtherCategory.TRANSACTIONS),
+        ("tracking@courier.example", OtherCategory.TRANSACTIONS),
         ("security@bank.example", OtherCategory.SECURITY),
         ("bookings@trattoria.example", OtherCategory.EVENT),
         ("tickets@venue.example", OtherCategory.EVENT),
@@ -86,7 +86,7 @@ class TestShapesRatherThanWords:
                  "Lane. Bring the QR code or your order number; we'll keep it "
                  "for five days.",
             sender="noreply@shop.example")
-        assert got.other_category is OtherCategory.SHIPPING
+        assert got.other_category is OtherCategory.TRANSACTIONS
 
     def test_a_direct_debit(self):
         found, _why = entity_scores(

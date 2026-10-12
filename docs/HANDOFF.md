@@ -172,10 +172,13 @@ describes the app itself.
   discount the personal, work and church words they wear; the favour scam
   then outranks them outright. Both are flagged, not junked unasked. The
   same idea for the everyday topics: no courier or shop writes from somebody's
-  own mailbox (`_MAIL_PROVIDERS`), and the reader's pay is their employer's
-  (`_PAYROLL`).
+  own mailbox (`_MAIL_PROVIDERS`), or bills from one and asks to be rung
+  about the charge (`_CALL_ABOUT_A_CHARGE`); a parcel is not held for a
+  fee of a few dollars paid "here" (the last alternative of `_SWINDLE[2]`);
+  and the reader's pay is their employer's (`_PAYROLL`).
 - **Every guard in the sorter was broken on purpose and a test failed** - 130
-  of them in the October work, one test per way of saying a thing (a test
+  of them in the October work and 49 of 51 for Transactions (the two left
+  are below), one test per way of saying a thing (a test
   that says it three ways passes with any two). Run each mutant with
   `PYTHONDONTWRITEBYTECODE=1` and the target's `__pycache__` cleared: two
   same-size mutants of one file written in the same second run the first
@@ -198,6 +201,30 @@ describes the app itself.
   (`_head_and_footer`, `FOOTER_SHARE`): "your statement can be viewed any
   time" is under every receipt a payment service sends. Not other topics:
   a parish bulletin is about the parish to its last line.
+- **Transactions is money or goods already on the move; Finance is what is
+  still to come.** Receipts and Shipping became one topic on 12 October, and
+  a payment confirmed by a bank moved out of Finance. Words that only say
+  whose money it is (a card ending in, a balance, a direct deposit, autopay,
+  a bank's domain: `MONEY_ACCOUNT_SIGNALS`) go to whichever of the two the
+  rest of the message is about, and to Finance on a tie or when no payment
+  is reported (`says_money_moved`, which leaves out `_SPENT`: "charged" is
+  said of batteries). Weak words of the two old kinds now add up, so a
+  phrase either side could shrug off can now decide: "track your" (a site, a
+  habit) and a bare "paid" (a paid subscription) were narrowed for that, and
+  the SpamAssassin corpus was compared verdict by verdict against the commit
+  before. Old names still parse (`models._MERGED_TOPICS`) in saved settings,
+  cached verdicts and a model's answer; folders already made are left alone,
+  and the verdict cache's recipe carries the topic list
+  (`verdict_cache.TOPICS`), so the first scan after a change like this reads
+  everything again. Untested: the solicitation discount on Transactions,
+  renamed from the two old topics and never exercised; and putting
+  "requested" back into `_MONEY_IN` changes no verdict, because
+  `_MONEY_ASKED` still wins.
+- **The sets were relabelled by a rule written before any output was read**
+  (12 October): RECEIPT and SHIPPING became TRANSACTIONS by search and
+  replace, and Finance only where the message confirms one movement of money
+  that has happened. The held-out sets' Finance rows were judged after the
+  engine was frozen, and are listed in `tests/test_sorter_safety.py`.
 - **Context, after each message is read alone:** `workers.read_with_the_thread`
   (a conversation) and `workers.read_with_the_correspondent` (a calendar
   invitation from a person you are in a hiring process with). Both carry only
@@ -813,7 +840,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 5,665 tests
+./dev test                     # 5,732 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus
@@ -964,6 +991,13 @@ About's security link is a 404 for everyone but the owner.
   (see Everywhere). That removes where most of these landed, not whatever
   spoils the widget: if a run still loses a worker, read its report in
   `~/Library/Logs/DiagnosticReports` before anything else.
+- **A script on the card crashed the same way once** (12 October, full
+  local run): `test_the_world_flies_the_level_s_craft_and_it_hides_no_more`
+  got exit -11 from its own process, which segfaulted constructing a
+  `QOpenGLWidget` (`PySide::SignalManager::retrieveMetaObject` under
+  `Sbk_QOpenGLWidget_Init`). The script builds and drops four rider panes
+  in a row; its class passed three times alone. A fresh process, so not the
+  workers' corruption carried over, but the same library.
 - **A hosted runner's graphics vary from run to run.** On 8 October one
   drew the rider's world at least sixty times slower than a Mac: four world
   scripts each ran out their three minutes and the run its half hour, where

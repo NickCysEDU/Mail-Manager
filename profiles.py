@@ -28,8 +28,7 @@ from models import (
 ALL_TOPICS: Tuple[OtherCategory, ...] = (
     OtherCategory.SECURITY,
     OtherCategory.FINANCE,
-    OtherCategory.RECEIPT,
-    OtherCategory.SHIPPING,
+    OtherCategory.TRANSACTIONS,
     OtherCategory.TRAVEL,
     OtherCategory.EVENT,
     OtherCategory.CHURCH,
@@ -45,7 +44,7 @@ ALL_TOPICS: Tuple[OtherCategory, ...] = (
 ESSENTIAL_TOPICS: Tuple[OtherCategory, ...] = (
     OtherCategory.SECURITY,
     OtherCategory.FINANCE,
-    OtherCategory.RECEIPT,
+    OtherCategory.TRANSACTIONS,
     OtherCategory.TRAVEL,
     OtherCategory.NEWSLETTER,
     OtherCategory.PROMOTION,
@@ -115,8 +114,9 @@ PROFILES: Tuple[Profile, ...] = (
     Profile(
         name="everything",
         label="Job search and everyday mail",
-        blurb="Keeps the seven Job Search folders and also files receipts, "
-              "travel, security notices and the rest into Sorted Mail.",
+        blurb="Keeps the seven Job Search folders and also files "
+              "transactions, travel, security notices and the rest into "
+              "Sorted Mail.",
         detailed_job_folders=True,
         topics=ALL_TOPICS,
         non_job_routing=NonJobRouting.FILE,
@@ -133,8 +133,8 @@ PROFILES: Tuple[Profile, ...] = (
     Profile(
         name="essentials",
         label="Essentials only",
-        blurb="A short list: security, finance, receipts, travel, newsletters "
-              "and promotions. Everything else stays where it is.",
+        blurb="A short list: security, finance, transactions, travel, "
+              "newsletters and promotions. Everything else stays where it is.",
         detailed_job_folders=False,
         topics=ESSENTIAL_TOPICS,
         non_job_routing=NonJobRouting.FILE,

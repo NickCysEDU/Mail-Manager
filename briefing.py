@@ -69,7 +69,7 @@ TOPIC_URGENCY: Dict[OtherCategory, Tuple[int, str]] = {
     OtherCategory.PERSONAL: (Urgency.ANSWER, "a message from a person"),
     OtherCategory.WORK: (Urgency.ANSWER, "work"),
     OtherCategory.TRAVEL: (Urgency.NOTE, "travel"),
-    OtherCategory.SHIPPING: (Urgency.NOTE, "a delivery"),
+    OtherCategory.TRANSACTIONS: (Urgency.NOTE, "a payment or a delivery"),
 }
 
 #: How many of each list is worth printing before it stops being a summary.

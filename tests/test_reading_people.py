@@ -744,7 +744,7 @@ class TestEverydayTopicsByShape:
         got = read(rules, "Fwd: Out for delivery", "---------- Forwarded message ---------\n"
                    "From: Parcelo\nYour package is out for delivery today and should arrive by "
                    "8 PM.", "Lia Moss <lia.moss.home@gmail.example>")
-        assert got.other_category is OtherCategory.SHIPPING
+        assert got.other_category is OtherCategory.TRANSACTIONS
 
     def test_a_sale_to_people_looking_for_work(self, rules):
         got = read(rules, "Land more interviews", "Our coaches have helped 5,000 job seekers get "
@@ -757,7 +757,7 @@ class TestEverydayTopicsByShape:
         ("Tax documents", "Your Form 1099-DIV for last year is available under Documents.",
          "Tansy Brokerage <documents@tansybrokerage.example>", OtherCategory.FINANCE),
         ("Return update", "Your return has made it back to our warehouse and a refund is on "
-         "the way.", "Ottley Home <returns@ottleyhome.example>", OtherCategory.SHIPPING),
+         "the way.", "Ottley Home <returns@ottleyhome.example>", OtherCategory.TRANSACTIONS),
         ("Panel on Thursday", "Would you be on the interview panel for the network technician "
          "candidate on Thursday? I'll forward the resume.",
          "Gil Moss <gil.moss@sorrelfoods.example>", OtherCategory.WORK),
@@ -796,12 +796,12 @@ class TestEverydayTopicsByShape:
          "sparse tables.", "Pkgwatch <notify@pkgwatch.example>"),
     ])
     def test_one_word_is_not_a_parcel(self, rules, subject, body, sender):
-        assert read(rules, subject, body, sender).other_category is not OtherCategory.SHIPPING
+        assert read(rules, subject, body, sender).other_category is not OtherCategory.TRANSACTIONS
 
     def test_a_parcel_with_its_delivery_is_one(self, rules):
         got = read(rules, "We missed you", "Our driver tried to deliver your package but "
                    "nobody was home.", "Swiftmoor Couriers <track@swiftmoor.example>")
-        assert got.other_category is OtherCategory.SHIPPING
+        assert got.other_category is OtherCategory.TRANSACTIONS
 
     @pytest.mark.parametrize("subject,body,sender,unsub,topic", [
         ("Ready for pickup", "The book you placed on hold is ready. We'll keep it at the "
@@ -813,7 +813,7 @@ class TestEverydayTopicsByShape:
          OtherCategory.PROMOTION),
         ("Your order is on hold", "Your order has been placed on hold while we confirm "
          "your payment details.", "Cedarline Shop <orders@cedarline.example>", "",
-         OtherCategory.RECEIPT),
+         OtherCategory.TRANSACTIONS),
         ("Early-bird ends Friday", "The Northwind Cloud Summit returns in May: two days of "
          "talks, hands-on labs and a keynote from our CTO. Register now.",
          "Northwind Events <events@northwind.example>", "<https://unsub.example/x>",

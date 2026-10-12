@@ -147,6 +147,14 @@ DEFAULT_OTHER_ROOT = "Sorted Mail"
 BIN_LEAF = "To Delete"
 
 
+#: Topics that were folded into another. Saved settings, cached verdicts and a
+#: model's answer can still name them, and mean the topic that took them in.
+_MERGED_TOPICS: Dict[str, str] = {
+    "RECEIPT": "TRANSACTIONS",
+    "SHIPPING": "TRANSACTIONS",
+}
+
+
 class OtherCategory(str, Enum):
     """Second-level classification for mail that is not job related, so it is
     described rather than dumped into one bucket.
@@ -156,8 +164,10 @@ class OtherCategory(str, Enum):
     PERSONAL = "PERSONAL"
     WORK = "WORK"
     FINANCE = "FINANCE"
-    RECEIPT = "RECEIPT"
-    SHIPPING = "SHIPPING"
+    #: Money or goods already on the move: an order, a receipt, a payment
+    #: made or received, a refund, a renewal, a parcel on its way. Finance
+    #: keeps what is still to come: statements, bills, reminders.
+    TRANSACTIONS = "TRANSACTIONS"
     SECURITY = "SECURITY"
     NEWSLETTER = "NEWSLETTER"
     PROMOTION = "PROMOTION"
@@ -178,6 +188,7 @@ class OtherCategory(str, Enum):
         if not isinstance(value, str):
             return None
         normalised = value.strip().upper().replace(" ", "_").replace("-", "_")
+        normalised = _MERGED_TOPICS.get(normalised, normalised)
         try:
             return cls(normalised)
         except ValueError:
@@ -197,8 +208,7 @@ _OTHER_LABELS: Dict["OtherCategory", str] = {
     OtherCategory.PERSONAL: "Personal",
     OtherCategory.WORK: "Work",
     OtherCategory.FINANCE: "Finance & Bills",
-    OtherCategory.RECEIPT: "Receipts & Orders",
-    OtherCategory.SHIPPING: "Shipping",
+    OtherCategory.TRANSACTIONS: "Transactions",
     OtherCategory.SECURITY: "Security & Account",
     OtherCategory.NEWSLETTER: "Newsletters",
     OtherCategory.PROMOTION: "Promotions",
@@ -212,11 +222,10 @@ _OTHER_LABELS: Dict["OtherCategory", str] = {
 
 TOPIC_COLORS.update({
     OtherCategory.SECURITY: "#C0453B",     # red - an alert, read it now
-    OtherCategory.FINANCE: "#2F7D4F",      # green - money owed or moving
+    OtherCategory.FINANCE: "#2F7D4F",      # green - money owed or held
     # A deeper teal than Application Received's, so the one column showing both
     # does not give two meanings one colour.
-    OtherCategory.RECEIPT: "#0B6E66",      # deep teal - money already spent
-    OtherCategory.SHIPPING: "#B5701F",     # brown - a parcel
+    OtherCategory.TRANSACTIONS: "#0B6E66", # deep teal - money already moved
     OtherCategory.TRAVEL: "#2D8FC4",       # sky - somewhere to be
     OtherCategory.EVENT: "#8A5BD6",        # purple - a date in a diary
     OtherCategory.CHURCH: "#5B63C4",       # indigo
@@ -235,8 +244,7 @@ _OTHER_LEAF: Dict["OtherCategory", str] = {
     OtherCategory.PERSONAL: "Personal",
     OtherCategory.WORK: "Work",
     OtherCategory.FINANCE: "Finance",
-    OtherCategory.RECEIPT: "Receipts",
-    OtherCategory.SHIPPING: "Shipping",
+    OtherCategory.TRANSACTIONS: "Transactions",
     OtherCategory.SECURITY: "Security",
     OtherCategory.NEWSLETTER: "Newsletters",
     OtherCategory.PROMOTION: "Promotions",

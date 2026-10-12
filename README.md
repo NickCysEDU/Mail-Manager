@@ -23,7 +23,7 @@ confidence score for every row. Tick what you want filed and press Apply.
 
 - Job-search mail goes into folders such as Interview, Next Steps, Offers and
   Not Interested.
-- Everyday mail can be sorted too, into as many of thirteen topics as you
+- Everyday mail can be sorted too, into as many of twelve topics as you
   like, or left where it is.
 - Anything it is unsure of goes to Needs Review rather than a guess.
 - It opens on the last month of your inbox, with your mailboxes down the
@@ -69,7 +69,7 @@ step or arranges a call, an offer by its terms, a second interview by the
 days offered, with conditions ("if we decide not to...") and quoted replies
 read for what they are. A calendar invitation from a recruiter you are
 already talking to joins that conversation. On 292 messages from a real inbox
-that it had never seen, it named the exact category for 89% and filed 137 of
+that it had never seen, it named the exact category for 90% and filed 137 of
 the 152 job messages itself, none of them into the wrong folder.
 
 You can use a model instead: Ollama on your Mac, or Gemini, Claude or an
@@ -108,7 +108,7 @@ turns that off. See [SECURITY.md](SECURITY.md).
 
 ```bash
 ./dev demo     # the app with sample mail, no setup
-./dev test     # 5,665 tests, about eighteen minutes on four workers
+./dev test     # 5,732 tests, about eighteen minutes on four workers
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 

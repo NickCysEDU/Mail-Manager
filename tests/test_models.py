@@ -97,6 +97,12 @@ class TestOtherCategory:
     def test_parse_rejects_unknown(self):
         assert OtherCategory.parse("CRYPTO") is None
 
+    @pytest.mark.parametrize("raw", ["RECEIPT", "receipt", "SHIPPING", "Shipping"])
+    def test_a_topic_folded_into_transactions_reads_as_it(self, raw):
+        """Saved settings, cached verdicts and a model's answer from before
+        the two became one still name them."""
+        assert OtherCategory.parse(raw) is OtherCategory.TRANSACTIONS
+
 
 class TestFolderPlan:
     def test_default_tree(self):
@@ -196,6 +202,13 @@ class TestClassificationValidation:
         result = Classification.from_payload(self.base(other_category="NEWSLETTER"))
         assert result.other_category is OtherCategory.NOT_APPLICABLE
         assert any("cleared to NOT_APPLICABLE" in a for a in result.adjustments)
+
+    def test_a_verdict_from_before_the_merge_names_transactions(self):
+        result = Classification.from_payload(self.base(
+            is_job_related=False, category="UNCLASSIFIED_OTHER",
+            other_category="SHIPPING"))
+        assert result.other_category is OtherCategory.TRANSACTIONS
+        assert result.adjustments == ()
 
     def test_non_job_mail_always_gets_a_topic(self):
         result = Classification.from_payload(

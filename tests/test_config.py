@@ -20,7 +20,7 @@ from config import (
     parse_iso,
     settings_path,
 )
-from models import NonJobRouting, TimeWindow
+from models import NonJobRouting, OtherCategory, TimeWindow
 
 
 class TestPaths:
@@ -146,6 +146,18 @@ class TestSettingsValidation:
 
     def test_unknown_window_falls_back(self):
         assert Settings(last_window="LAST_CENTURY").normalized().window is TimeWindow.LAST_24_HOURS
+
+    def test_receipts_ticked_before_the_merge_stay_ticked_as_transactions(self):
+        settled = Settings.from_dict({"topics": ["RECEIPT", "SECURITY"]})
+        assert settled.topics == ["TRANSACTIONS", "SECURITY"]
+
+    def test_shipping_ticked_before_the_merge_stays_ticked_as_transactions(self):
+        settled = Settings.from_dict({"topics": ["SHIPPING"]})
+        assert settled.chosen_topics == (OtherCategory.TRANSACTIONS,)
+
+    def test_both_old_topics_make_one_tick(self):
+        settled = Settings.from_dict({"topics": ["RECEIPT", "SHIPPING"]})
+        assert settled.topics == ["TRANSACTIONS"]
 
     def test_unknown_routing_falls_back_to_the_safe_option(self):
         assert Settings(non_job_routing="DELETE_EVERYTHING").normalized().routing is NonJobRouting.LEAVE

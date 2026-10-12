@@ -5,7 +5,7 @@ days of mail that cannot change, and paying a model to reach the same
 conclusions costs money or minutes. A message is identified by its mailbox
 and UID, which IMAP keeps stable and never reuses, and a verdict is handed
 back only when the *recipe* matches: provider, model, effort, ruleset,
-profile and body limit, hashed together.
+profile, body limit and the topics a verdict can name, hashed together.
 
 Never cached:
 
@@ -29,11 +29,15 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import vault
-from models import Classification
+from models import Classification, OtherCategory
 
 log = logging.getLogger(__name__)
 
 FILENAME = "verdicts.json"
+
+#: Every topic a verdict can name. Folding one topic into another changes
+#: what an old verdict would be today, so the list is part of every recipe.
+TOPICS = ",".join(topic.value for topic in OtherCategory)
 
 #: Entries beyond this go, oldest first. Twenty thousand is far more than a
 #: year of ordinary mail and still a file measured in megabytes.
@@ -67,6 +71,7 @@ def recipe_for(settings) -> str:
         ",".join(sorted(getattr(settings, "topics", []) or [])),
         str(getattr(settings, "max_body_chars", "")),
         str(getattr(settings, "base_url", "")),
+        TOPICS,
     ]
     return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:16]
 

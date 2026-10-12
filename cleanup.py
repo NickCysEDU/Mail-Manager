@@ -50,8 +50,8 @@ __all__ = [
 _MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
-#: Kinds of non-job mail that pile up and are safe to offer. Finance, security
-#: and receipts are absent: people need those later.
+#: Kinds of non-job mail that pile up and are safe to offer. Finance,
+#: transactions and security are absent: people need those later.
 DISPOSABLE = frozenset({
     "NEWSLETTER", "PROMOTION", "SOCIAL", "SPAM",
 })

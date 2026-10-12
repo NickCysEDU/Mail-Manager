@@ -269,9 +269,8 @@ So: "Thanks for applying, please complete this assessment" is NEXT_STEPS, not AP
 Exactly NOT_APPLICABLE when is_job_related is true. Otherwise pick the single best fit:
 - PERSONAL: correspondence from a real individual the user knows, written to them personally.
 - WORK: their current job - colleagues, internal systems, payroll, benefits, HR.
-- FINANCE: banks, cards, investments, tax, invoices, bills, payment reminders, statements.
-- RECEIPT: order and purchase confirmations, subscription renewals, refunds.
-- SHIPPING: dispatch, tracking, delivery, and returns notifications.
+- FINANCE: statements, bills and invoices to pay, payment reminders, balances, tax, loans, investments, insurance, and news about a bank or card account.
+- TRANSACTIONS: money or goods already on the move - orders placed or cancelled, purchase confirmations, receipts, payments made or received, transfers and deposits, refunds, subscription renewals and cancellations, and shipping, tracking, delivery, pickup and returns notices. A confirmation of one payment is TRANSACTIONS even when a bank sends it.
 - SECURITY: sign-in alerts, verification and one-time codes, password resets, account and privacy notices.
 - NEWSLETTER: subscribed editorial or informational sends, digests, product changelogs.
 - PROMOTION: marketing, sales, discounts, upsells, cold B2B sales outreach.

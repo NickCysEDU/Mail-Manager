@@ -1001,20 +1001,15 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
     OtherCategory.FINANCE: (
         Signal("your statement is ready", 3.0), Signal("statement is available", 3.0),
         Signal("account statement", 2.6), Signal("payment due", 2.8),
-        Signal("minimum payment", 2.8), Signal("your balance", 2.4),
-        Signal("direct debit", 2.4), Signal("invoice", 2.2),
-        Signal("tax", 1.6), Signal("credit card", 2.0),
-        Signal("transaction", 1.8), Signal("interest rate", 1.8),
-        Signal("overdraft", 2.4), Signal("investment", 1.8),
-        # Money owed or moved, as opposed to money already spent on something.
+        Signal("minimum payment", 2.8), Signal("invoice", 2.2),
+        Signal("tax", 1.6), Signal("interest rate", 1.8),
+        Signal("overdraft", 2.4), Signal("overdraft fee", 3.0),
+        Signal("investment", 1.8),
+        # Money owed, due or reported on, as opposed to money that has moved.
         Signal("your bill is ready", 3.0), Signal("your invoice is ready", 3.0),
         Signal("payment is due", 2.8), Signal("payment scheduled", 2.6),
-        Signal("autopay", 2.6), Signal("automatic payment", 2.6),
-        Signal("account balance", 2.6), Signal("available balance", 2.8),
         Signal("low balance", 2.8), Signal("insufficient funds", 3.0),
-        Signal("deposit posted", 2.8), Signal("direct deposit", 2.8),
-        Signal("withdrawal", 2.4), Signal("your card ending in", 3.0),
-        Signal("card ending in", 2.8), Signal("credit score", 1.4),
+        Signal("credit score", 1.4),
         Signal("annual percentage rate", 1.2), Signal("loan payment", 2.0),
         Signal("student loan", 1.6), Signal("mortgage", 1.0),
         Signal("loan application", 2.6), Signal("auto loan", 2.4),
@@ -1025,14 +1020,13 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("tax document", 2.8), Signal("premium is due", 2.6),
         Signal("insurance policy", 1.4), Signal("policy renewal", 2.6),
         Signal("e statement", 2.8), Signal("paperless statement", 2.8),
-        Signal("chase.com", 2.6, field="sender", label="a bank's own domain"),
-        Signal("bankofamerica.com", 2.6, field="sender", label="a bank's own domain"),
-        Signal("wellsfargo.com", 2.6, field="sender", label="a bank's own domain"),
-        Signal("capitalone.com", 2.6, field="sender", label="a bank's own domain"),
         Signal("irs.gov", 2.8, field="sender", label="the tax authority"),
         Signal("intuit.com", 2.2, field="sender", label="a tax or accounting service"),
     ),
-    OtherCategory.RECEIPT: (
+    # Money or goods already on the move: a purchase, a payment made or
+    # received, a refund, a renewal, a parcel. The tense is what separates
+    # this from Finance, which keeps what is still to come.
+    OtherCategory.TRANSACTIONS: (
         Signal("your receipt", 3.0), Signal("order confirmation", 3.0),
         Signal("thanks for your order", 3.0), Signal("your order", 2.2),
         Signal("purchase confirmation", 3.0), Signal("subscription renewed", 2.8),
@@ -1044,6 +1038,8 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("your order is confirmed", 3.0), Signal("order placed", 2.8),
         Signal("we have received your order", 3.0),
         Signal("here is your receipt", 3.0), Signal("transaction receipt", 3.0),
+        Signal("receipt for your", 2.8), Signal("payment confirmation", 3.0),
+        Signal("trip total", 2.4),
         Signal("amount charged", 2.8), Signal("you were charged", 2.8),
         Signal("charged to your", 2.6), Signal("payment successful", 2.8),
         Signal("order summary", 2.6), Signal("order id", 2.4),
@@ -1054,26 +1050,24 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("refund processed", 2.8), Signal("return has been received", 2.6),
         # A payment already made to a merchant, as payment services word it.
         Signal("you sent a payment", 3.0), Signal("your payment was processed", 2.8),
+        Signal("deposit posted", 2.8),
         Signal("payment has been processed", 2.6), Signal("you paid", 2.6),
         Signal("you authorized", 2.2),
         Signal("your payment to", 1.8), Signal("payment details", 1.2),
         Signal("merchant", 1.0),
         Signal("stripe.com", 2.4, field="sender", label="a payment processor"),
         Signal("squareup.com", 2.2, field="sender", label="a payment processor"),
-    ),
-    OtherCategory.SHIPPING: (
         # Collecting a parcel, in the words the notices use.
         Signal("collection point", 2.8),
         Signal("pick up point", 2.4),
         Signal("ready to collect", 2.8),
-        Signal("out for delivery", 3.0),
         Signal("we will hold it", 2.0),
         Signal("bring the qr code", 2.4),
         Signal("your parcel", 2.8),
         Signal("parcel is", 2.4),
         Signal("has shipped", 3.0), Signal("out for delivery", 3.0),
         Signal("your package", 2.8), Signal("tracking number", 3.0),
-        Signal("track your", 2.4), Signal("delivered today", 2.6),
+        Signal("delivered today", 2.6),
         Signal("delivery attempt", 2.6), Signal("return label", 2.4),
         Signal("your return has", 2.6), Signal("received your return", 2.8),
         # Where the parcel is, rather than what it cost.
@@ -1084,7 +1078,10 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("delivery scheduled", 2.8), Signal("in transit", 2.8),
         Signal("on its way", 2.6), Signal("label created", 2.6),
         Signal("ready for pickup", 2.8), Signal("available for pickup", 2.8),
+        Signal("ready for collection", 2.8),
+        Signal("click and collect", 2.6), Signal("click collect", 2.6),
         Signal("track your package", 3.0), Signal("track your order", 2.8),
+        Signal("track your delivery", 2.8), Signal("track your item", 2.6),
         Signal("tracking information", 2.8), Signal("signature required", 2.6),
         Signal("missed delivery", 2.8), Signal("we could not deliver", 3.0),
         Signal("courier", 2.2),
@@ -1388,11 +1385,28 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
 }
 
 
+#: Words that say whose money it is - a card, an account, a bank - and not
+#: whether it has moved or is still owed. They count for whichever of Finance
+#: and Transactions the rest of the message is about, and for Finance when
+#: nothing says: "your card ending in 4417" is under a statement and under a
+#: payment received alike.
+MONEY_ACCOUNT_SIGNALS: Tuple[Signal, ...] = (
+    Signal("credit card", 2.0), Signal("transaction", 1.8),
+    Signal("direct debit", 2.4), Signal("your balance", 2.4),
+    Signal("account balance", 2.6), Signal("available balance", 2.8),
+    Signal("direct deposit", 2.8), Signal("withdrawal", 2.4),
+    Signal("autopay", 2.6), Signal("automatic payment", 2.6),
+    Signal("your card ending in", 3.0), Signal("card ending in", 2.8),
+    Signal("chase.com", 2.6, field="sender", label="a bank's own domain"),
+    Signal("bankofamerica.com", 2.6, field="sender", label="a bank's own domain"),
+    Signal("wellsfargo.com", 2.6, field="sender", label="a bank's own domain"),
+    Signal("capitalone.com", 2.6, field="sender", label="a bank's own domain"),
+)
+
 #: Filled in here rather than at the top, where OtherCategory is not yet used.
 TRANSACTIONAL_TOPICS = (
     OtherCategory.TRAVEL,
-    OtherCategory.RECEIPT,
-    OtherCategory.SHIPPING,
+    OtherCategory.TRANSACTIONS,
     OtherCategory.FINANCE,
     OtherCategory.SECURITY,
 )
@@ -2308,9 +2322,9 @@ _SENDER_PURPOSE: Tuple[Tuple[str, "OtherCategory", float], ...] = (
     (r"news(letter)?|digest|weekly|monthly|bulletin|update[sz]?", OtherCategory.NEWSLETTER, 1.6),
     (r"billing|invoices?|payments?|accounts?|statements?|finance|creditcontrol",
      OtherCategory.FINANCE, 1.8),
-    (r"receipts?|orders?|purchase\w*", OtherCategory.RECEIPT, 1.6),
+    (r"receipts?|orders?|purchase\w*", OtherCategory.TRANSACTIONS, 1.6),
     (r"shipping|delivery|deliveries|dispatch|tracking|parcels?|courier",
-     OtherCategory.SHIPPING, 2.0),
+     OtherCategory.TRANSACTIONS, 2.0),
     (r"security|auth\w*|verify|verification|2fa|otp|login|signin",
      OtherCategory.SECURITY, 2.0),
     (r"bookings?|reservations?|tickets?|events?|rsvp", OtherCategory.EVENT, 1.8),
@@ -2332,7 +2346,9 @@ _ROLE_WORDS = re.compile(
     r"notification|alerts?|news|mail|robot|auto|system|daemon|"
     r"reception|bookings?|appointments?|clinic|surgery|practice|admissions|"
     r"registry|lettings|sales|enquiries|office|careers|jobs|recruit\w*|talent|"
-    r"people|hr|payroll|billing|accounts?|orders?|sec|secretary|committee", re.I)
+    r"people|hr|payroll|billing|accounts?|orders?|sec|secretary|committee|"
+    r"receipts?|payments?|invoices?|statements?|returns?|refunds?|shipping|"
+    r"tracking|deliver(?:y|ies)|dispatch", re.I)
 #: A whole piece of an address that is a role, plural or not.
 _ROLE_PIECE = re.compile(rf"(?:{_ROLE_WORDS.pattern})s?", re.I)
 
@@ -2584,7 +2600,7 @@ _ENTITIES: Tuple[Tuple[str, "re.Pattern", "OtherCategory", float], ...] = (
 
     ("a tracking number", re.compile(
         r"\b(?:tracking|consignment|waybill)\s*(?:number|no\.?|#|:)?\s*"
-        r"[A-Z0-9]{8,}\b", re.I), OtherCategory.SHIPPING, 2.6),
+        r"[A-Z0-9]{8,}\b", re.I), OtherCategory.TRANSACTIONS, 2.6),
     ("an amount of money", re.compile(
         r"[£$€]\s?\d[\d,]*(?:\.\d{2})?\b|\b\d[\d,]*\.\d{2}\b"),
      OtherCategory.FINANCE, 0.8),
@@ -2712,10 +2728,46 @@ _MONEY = re.compile(r"(?:[$£€]\s?\d[\d,]*(?:\.\d{2})?)|(?:\b\d[\d,]*\.\d{2}\s
 #: Money that has already gone.
 _SPENT = re.compile(
     r"\b(?:we[\W_]?ve|we have|weve)?\s*(?:taken|charged|debited|deducted|"
-    r"refunded|credited|put\s+\S+\s+back|paid)\b")
+    r"refunded|credited|put\s+\S+\s+back)\b"
+    r"|\b(?:you|we|you've|we've|you have|we have|has been|have been|was|were|"
+    r"is|amount|total) paid\b|\bpaid (?:in full|with|using|via|on|[$\u00a3\u20ac\d])")
 _MONEY_IN = re.compile(
-    r"\b(?:sent you|paid you|you(?:'ve| have)? received|requested) "
+    r"\b(?:sent you|paid you|you(?:'ve| have)? received) "
     r"(?:[$\u00a3\u20ac]\s?)?\d")
+#: Money asked for, as a payment service words a request: still to pay.
+_MONEY_ASKED = re.compile(r"\brequested (?:[$\u00a3\u20ac]\s?)?\d")
+#: One movement of money that has happened, said outright: a deposit posted,
+#: a transfer done, a purchase approved, money sent, a plan renewed, a gift
+#: given. Not a payment that is due, scheduled, declined or not yet in.
+_MONEY_MOVED = re.compile(
+    r"(?<!\bno )\b(?:payment|deposit|transfer|refund|withdrawal|purchase|charge)s?"
+    r"(?: of [$\u00a3\u20ac]?\s?\d[\d,]*(?:\.\d{2})?)?"
+    r"(?: (?!(?:is|was|were|has|have|had|will|be|been|not|due|if)\b)"
+    r"(?:[$\u00a3\u20ac]?\d[\d,]*(?:\.\d{2})?|[^\s.!?]+)){0,6}?"
+    r" (?:was|were|has been|have been|has|is now|is) (?:successfully )?"
+    r"(?:received|posted|completed?|processed|credited|deposited|sent|approved|"
+    r"accepted|issued|made(?! (?:possible|up|available|aware|clear|public))|"
+    r"collected|successful)\b"
+    r"|\byou(?:'ve| have)? (?:sent|paid|transferred|donated) (?:\w+ ){0,3}?"
+    r"[$\u00a3\u20ac]\s?\d"
+    r"|\brenewed (?:for|at) [$\u00a3\u20ac]?\s?\d"
+    r"|\b(?:thank you|thanks) for your (?:gift|donation|payment|purchase|order|"
+    r"contribution) of [$\u00a3\u20ac]?\s?\d")
+#: The refund scam's move: a charge the reader did not make, and a number to
+#: ring about it.
+_CALL_ABOUT_A_CHARGE = re.compile(
+    r"\bif you (?:did not|didn't|do not|don't) (?:authori[sz]e|recogni[sz]e|make|"
+    r"place|request)\b[^.!?]{0,60}\bcall\b")
+_PHONE_NUMBER = re.compile(r"\b1?[-. (]*\d{3}[-. )]+\d{3}[-. ]+\d{4}\b")
+#: A purchase called off: an order, a subscription, a plan, a membership.
+_CALLED_OFF = re.compile(
+    r"\b(?:order|subscription|membership|plan)s? (?:has been |have been |was |were |"
+    r"is (?:now )?)?cancell?ed\b")
+#: A payment acknowledged by whoever received it, amount or not.
+_PAYMENT_ACKNOWLEDGED = re.compile(
+    r"(?<!\bnot )(?<!n't )\b(?:received|got) your (?:\w+ )?"
+    r"(?:payment|deposit|donation|gift|contribution)\b"
+    r"|\b(?:thank you|thanks) for your (?:\w+ )?payment\b")
 _SPENT_AT = re.compile(
     r"\byou spent (?:[$\u00a3\u20ac]\s?)?\d[\d,]*(?:\.\d{2})?(?:\s?(?:usd|gbp|eur))? at\b")
 #: Money that has not gone yet.
@@ -2760,6 +2812,22 @@ _BARE_AMOUNT = re.compile(r"\b\d{1,4}(?:,\d{3})*\.\d{2}\b")
 _MONEY_WORDS = re.compile(
     r"\b(?:card|refund\w*|bill\w*|payment|direct debit|debit|renew\w*|premium|"
     r"collect\w*|charged|fee|invoice|balance|policy|quote|paid|pay)\b")
+
+
+def says_money_moved(blob: str) -> bool:
+    """Whether a message reports one payment that has happened: money sent
+    or received, a deposit posted, a purchase made, a payment acknowledged.
+    The plain words for money taken are left out: "charged" and "credited"
+    are said of batteries and of authors too.
+    """
+    if _PAYMENT_ACKNOWLEDGED.search(blob):
+        return True
+    money = bool(_MONEY.search(blob)) or (
+        bool(_BARE_AMOUNT.search(blob)) and bool(_MONEY_WORDS.search(blob)))
+    return money and bool(_MONEY_MOVED.search(blob) or _MONEY_IN.search(blob)
+                          or _SPENT_AT.search(blob))
+
+
 #: Things said about a journey or a stay.
 _JOURNEY = re.compile(
     r"\b(?:gate|bag drop|leaves at|departs|nights? in|you arrive|arrive on|"
@@ -2777,7 +2845,9 @@ _SWINDLE = (
     re.compile(r"\b(?:a fee of|pay (?:the |a )?(?:fee|charge) (?:now|within)|"
                r"click here to pay|reply for details|release the funds|"
                r"unpaid (?:fee|charge|customs|duty)|(?:redelivery|customs) fee|"
-               r"pay (?:now|online) to (?:schedule|release|receive|reschedule))\b"),
+               r"pay (?:now|online) to (?:schedule|release|receive|reschedule)|"
+               r"pay (?:the |a )?[$\u00a3\u20ac]\s?\d(?:\.\d{2})?(?: \w+){0,2} "
+               r"(?:here|now|today))\b"),
     # Money moved for a stranger: the cheque deposited and the rest wired on,
     # the gift cards bought, the bank details sent for a job never applied for.
     re.compile(r"\b(?:deposit (?:it|the check|the cheque)|keep \$?\d+ as your|"
@@ -3070,8 +3140,8 @@ def structural_topic_scores(
         add(OtherCategory.SPAM, min(3.4, selling), selling_why[0])
         # A bank reporting a statement and a stranger selling a mortgage use
         # the same words; one reports something that happened, the other sells.
-        for topic in (OtherCategory.FINANCE, OtherCategory.RECEIPT,
-                      OtherCategory.SHIPPING, OtherCategory.TRAVEL):
+        for topic in (OtherCategory.FINANCE, OtherCategory.TRANSACTIONS,
+                      OtherCategory.TRAVEL):
             if topic in scores:
                 scores[topic] *= 0.45
                 notes.setdefault(topic, []).append("but it is soliciting, not reporting")
@@ -3198,27 +3268,42 @@ def structural_topic_scores(
 
     # Money, and which way it went
     if _MONEY.search(blob) or plain_money:
-        if _SPENT.search(blob):
-            add(OtherCategory.RECEIPT, 2.6, "an amount already taken")
+        spent = bool(_SPENT.search(blob))
+        moved = bool(_MONEY_MOVED.search(blob))
+        if spent:
+            add(OtherCategory.TRANSACTIONS, 2.6, "an amount already taken")
         # A purchase names where; a month's summary names when.
         if _SPENT_AT.search(blob):
-            add(OtherCategory.RECEIPT, 2.4, "an amount spent at a merchant")
+            add(OtherCategory.TRANSACTIONS, 2.4, "an amount spent at a merchant")
+        if moved:
+            add(OtherCategory.TRANSACTIONS, 2.6, "money that has moved")
         if _OWED.search(blob):
             add(OtherCategory.FINANCE, 2.6, "an amount still owed")
-        # Money coming in is the account's news, not a purchase.
+        # Money coming in has moved as surely as money going out; money
+        # asked for has not moved yet.
         if _MONEY_IN.search(blob):
-            add(OtherCategory.FINANCE, 2.8, "money sent to you")
-        if not _SPENT.search(blob) and not _OWED.search(blob):
+            add(OtherCategory.TRANSACTIONS, 2.8, "money sent to you")
+        if _MONEY_ASKED.search(blob):
+            add(OtherCategory.FINANCE, 2.8, "money asked of you")
+        if not spent and not moved and not _OWED.search(blob):
             add(OtherCategory.FINANCE, 0.8, "an amount of money")
+    if _PAYMENT_ACKNOWLEDGED.search(blob):
+        add(OtherCategory.TRANSACTIONS, 2.4, "a payment acknowledged")
+    # No shop bills from somebody's own mailbox and asks to be rung about it.
+    if (_MAIL_PROVIDERS.search(sender) and _CALL_ABOUT_A_CHARGE.search(blob)
+            and _PHONE_NUMBER.search(blob) and (_MONEY.search(blob) or plain_money)):
+        add(OtherCategory.SPAM, 3.0, "a charge to ring about, from a free mail account")
+    if _CALLED_OFF.search(blob):
+        add(OtherCategory.TRANSACTIONS, 2.4, "a purchase called off")
 
     # One word is not a parcel: an npm package, a printer driver and a
     # newspaper called the Courier are not on a van. Two are, or one with its
     # delivery.
     if _PARCEL.search(blob) and (len(set(_PARCEL.findall(blob))) >= 2
                                  or _DELIVERED.search(blob)):
-        add(OtherCategory.SHIPPING, 2.4, "describes a parcel")
+        add(OtherCategory.TRANSACTIONS, 2.4, "describes a parcel")
     if _DELIVERY_WINDOW.search(blob):
-        add(OtherCategory.SHIPPING, 2.2, "gives a delivery window")
+        add(OtherCategory.TRANSACTIONS, 2.2, "gives a delivery window")
 
     travel_hits = 0
     if _FLIGHT.search(f"{subject} {body}"):
@@ -3390,8 +3475,7 @@ _CATEGORY_TABLES: Tuple[Tuple[Category, Tuple[Signal, ...]], ...] = (
 _TOPIC_PRECEDENCE: Tuple[OtherCategory, ...] = (
     OtherCategory.SECURITY,     # a code or a sign-in alert is unmistakable
     OtherCategory.TRAVEL,       # a flight number is not a metaphor
-    OtherCategory.SHIPPING,     # nor is a tracking number
-    OtherCategory.RECEIPT,      # money that already moved
+    OtherCategory.TRANSACTIONS, # nor is a tracking number; money that moved
     OtherCategory.FINANCE,      # money that has not
     # More specific than the three it is often mistaken for: a carol service is
     # an event, arrives as a newsletter and reads like a note from a friend.
@@ -3481,6 +3565,8 @@ class RuleClassifier:
         self._context = JOB_CONTEXT_SIGNALS + self.ruleset.context
         self._compiled[id(self._context)] = [_Matcher(s) for s in self._context]
         self._compiled[id(NON_JOB_SIGNALS)] = [_Matcher(s) for s in NON_JOB_SIGNALS]
+        self._compiled[id(MONEY_ACCOUNT_SIGNALS)] = [
+            _Matcher(s) for s in MONEY_ACCOUNT_SIGNALS]
         self._compiled[id(HIRING_SPECIFIC_SIGNALS)] = [
             _Matcher(s) for s in HIRING_SPECIFIC_SIGNALS]
         for table in TOPIC_SIGNALS.values():
@@ -3494,6 +3580,7 @@ class RuleClassifier:
             sum(len(t) for t in self._tables.values())
             + len(self._context) + len(NON_JOB_SIGNALS)
             + sum(len(t) for t in TOPIC_SIGNALS.values())
+            + len(MONEY_ACCOUNT_SIGNALS)
         )
 
     def _score(
@@ -4291,8 +4378,8 @@ class RuleClassifier:
         # topics: a parish bulletin is about the parish to its last line.
         head_n, tail_n = _head_and_footer(body_n)
         head_t = tighten(head_n) if tail_n else body_t
-        for topic, table in TOPIC_SIGNALS.items():
-            footed = bool(tail_n) and topic in TRANSACTIONAL_TOPICS
+
+        def read_table(table, footed: bool) -> Tuple[float, List[str], float]:
             score, matched, peak = self._score_detail(
                 table, subject_n, subject_t, head_n if footed else body_n,
                 head_t if footed else body_t, sender_n
@@ -4305,9 +4392,12 @@ class RuleClassifier:
                     matched = matched + [why + " (in the footer)" for why in whole_matched
                                          if why not in matched]
                     peak = max(peak, whole_peak * FOOTER_SHARE)
-            topic_scores[topic] = score
-            topic_matches[topic] = matched
-            topic_peak[topic] = peak
+            return score, matched, peak
+
+        for topic, table in TOPIC_SIGNALS.items():
+            footed = bool(tail_n) and topic in TRANSACTIONAL_TOPICS
+            topic_scores[topic], topic_matches[topic], topic_peak[topic] = (
+                read_table(table, footed))
 
         # Shape as opposed to wording, which phrase tables cannot see in typed
         # mail.
@@ -4317,6 +4407,19 @@ class RuleClassifier:
             topic_scores[topic] = topic_scores.get(topic, 0.0) + weight
             topic_matches.setdefault(topic, []).extend(shape_notes.get(topic, ()))
             topic_peak[topic] = max(topic_peak.get(topic, 0.0), weight)
+        # Whose money it is says nothing about which way it went: the
+        # account's own words follow the rest of the message, and stay with
+        # Finance when nothing else says.
+        held, held_why, held_peak = read_table(MONEY_ACCOUNT_SIGNALS, bool(tail_n))
+        if held:
+            owner = (OtherCategory.TRANSACTIONS
+                     if topic_scores[OtherCategory.TRANSACTIONS]
+                     > topic_scores[OtherCategory.FINANCE]
+                     and says_money_moved(f"{subject_n} {body_n}")
+                     else OtherCategory.FINANCE)
+            topic_scores[owner] += held
+            topic_matches[owner].extend(held_why)
+            topic_peak[owner] = max(topic_peak[owner], held_peak)
         # A scam wears a courier's or a bank's words: once the shape says
         # scam, those words count for little.
         scam_shaped = shape.get(OtherCategory.SPAM, 0.0) >= 2.4
@@ -4334,17 +4437,16 @@ class RuleClassifier:
                 "(discounted: the reader's pay, which is their employer's business)")
         # A courier or a shop never writes from somebody's own mailbox: their
         # words from a friend or a neighbour are news, not a notice.
-        if looks_like_a_person(raw_sender or sender_n) and _MAIL_PROVIDERS.search(sender_n):
-            for topic in (OtherCategory.SHIPPING, OtherCategory.RECEIPT):
-                if topic_scores.get(topic):
-                    topic_scores[topic] *= 0.25
-                    topic_matches.setdefault(topic, []).append(
-                        "(discounted: somebody's own mailbox, which no courier or shop uses)")
+        if (looks_like_a_person(raw_sender or sender_n) and _MAIL_PROVIDERS.search(sender_n)
+                and topic_scores.get(OtherCategory.TRANSACTIONS)):
+            topic_scores[OtherCategory.TRANSACTIONS] *= 0.25
+            topic_matches.setdefault(OtherCategory.TRANSACTIONS, []).append(
+                "(discounted: somebody's own mailbox, which no courier or shop uses)")
         # A library's hold waits at its desk, not on a courier's van.
         if library_loan(f"{subject_n} {body_n}", sender_n) and topic_scores.get(
-                OtherCategory.SHIPPING):
-            topic_scores[OtherCategory.SHIPPING] *= 0.35
-            topic_matches.setdefault(OtherCategory.SHIPPING, []).append(
+                OtherCategory.TRANSACTIONS):
+            topic_scores[OtherCategory.TRANSACTIONS] *= 0.35
+            topic_matches.setdefault(OtherCategory.TRANSACTIONS, []).append(
                 "(discounted: a library's hold, which no courier brings)")
         # Another world - a surgery, a court, a landlord - is an answer in
         # itself, and outranks the register it was written in. One word of
@@ -4454,7 +4556,9 @@ class RuleClassifier:
             # veto, so a genuine confirmation with the header still wins on its
             # evidence.
             for topic in TRANSACTIONAL_TOPICS:
-                vouched = self._sender_backs(TOPIC_SIGNALS[topic], sender_n)
+                vouched = self._sender_backs(TOPIC_SIGNALS[topic], sender_n) or (
+                    topic in (OtherCategory.FINANCE, OtherCategory.TRANSACTIONS)
+                    and self._sender_backs(MONEY_ACCOUNT_SIGNALS, sender_n))
                 topic_scores[topic] *= (
                     TRANSACTIONAL_IN_BULK if vouched
                     else TRANSACTIONAL_IN_BULK_UNVOUCHED

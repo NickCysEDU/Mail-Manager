@@ -57,7 +57,7 @@ rules finish the scan; a rejected key is reported instead.
 
 ### The built-in rules
 
-`rules_engine.py` scores 1,122 weighted signals: phrases, senders, links and
+`rules_engine.py` scores 1,129 weighted signals: phrases, senders, links and
 the shape of a message. It copes with messy text (mojibake, accents, smart
 quotes, zero-width characters, look-alike letters, spaced-out words) and has
 phrases in Spanish, French, German and Portuguese for the commonest verdicts.
@@ -123,11 +123,15 @@ text is passed to a model as data, never as instructions.
 | **Unsolicited** | Recruiter outreach you never asked for |
 | **Needs Review** | Job mail the sorter could not place |
 
-Everyday mail is sorted into thirteen topics: Security, Finance, Receipts,
-Shipping, Travel, Events, Church, Work, Personal, Social, Newsletters,
-Promotions and Spam. The **Sorting** button chooses what happens to it: left
-in place, gathered into Needs Review, or filed under `Sorted Mail/`, with as
-many or as few of the topics as you want.
+Everyday mail is sorted into twelve topics: Security, Finance, Transactions,
+Travel, Events, Church, Work, Personal, Social, Newsletters, Promotions and
+Spam. Transactions is money and goods already on the move: receipts, payments
+made or received, refunds, renewals and deliveries. Finance is what is still
+to come: statements, bills and reminders. The **Sorting** button chooses what
+happens to it: left in place, gathered into Needs Review, or filed under
+`Sorted Mail/`, with as many or as few of the topics as you want. Receipts and
+Shipping folders made by earlier versions are left as they are; new mail of
+both kinds goes to Transactions.
 
 Folders are made on the first scan that needs them, under `Job Search/` and
 `Sorted Mail/` (both renameable), using the separator your server reports.
@@ -402,7 +406,7 @@ See [SECURITY.md](../SECURITY.md) for reporting a problem.
 ./dev dry      # scan for real, with moves disabled
 ./dev fake     # the pipeline in the terminal, offline
 ./dev scan     # the pipeline on real mail, read-only
-./dev test     # 5,665 tests (with the evaluation sets present)
+./dev test     # 5,732 tests (with the evaluation sets present)
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 

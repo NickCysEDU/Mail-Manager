@@ -18,7 +18,7 @@ from models import (CATEGORY_COLORS, OTHER_COLOR, TOPIC_COLORS, Category,
 from triage_table import category_color
 
 
-def other(topic=OtherCategory.RECEIPT, confidence=0.97,
+def other(topic=OtherCategory.TRANSACTIONS, confidence=0.97,
           routing=NonJobRouting.FILE, topics=()) -> TriageItem:
     return TriageItem(
         email=EmailMessage(uid="1", subject="Your order",
@@ -161,8 +161,8 @@ class TestGreyMeansNotSorted:
             assert category_color(item.classification, item) == TOPIC_COLORS[topic]
 
     def test_a_topic_left_out_of_the_list_stays_grey(self):
-        chosen = (OtherCategory.RECEIPT,)
-        kept = other(OtherCategory.RECEIPT, topics=chosen)
+        chosen = (OtherCategory.TRANSACTIONS,)
+        kept = other(OtherCategory.TRANSACTIONS, topics=chosen)
         dropped = other(OtherCategory.CHURCH, topics=chosen)
         assert category_color(kept.classification, kept) != OTHER_COLOR
         assert category_color(dropped.classification, dropped) == OTHER_COLOR

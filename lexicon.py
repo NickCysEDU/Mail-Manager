@@ -40,8 +40,8 @@ SECTOR_TOPICS: Dict[str, Tuple[str, float]] = {
     "bank": ("FINANCE", 1.4),
     "telecom": ("FINANCE", 1.2),
     "utility": ("FINANCE", 1.4),
-    "retail": ("RECEIPT", 1.0),
-    "courier": ("SHIPPING", 2.0),
+    "retail": ("TRANSACTIONS", 1.0),
+    "courier": ("TRANSACTIONS", 2.0),
     "social": ("SOCIAL", 1.6),
     "news": ("NEWSLETTER", 1.2),
 }

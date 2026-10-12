@@ -403,7 +403,8 @@ DEMO_MESSAGES: Tuple[DemoMessage, ...] = (
         ),
         reasoning=(
             "Bank sender, statement-availability language and a secure sign-in prompt. "
-            "Runner-up was RECEIPT, rejected because no purchase or order is involved."
+            "Runner-up was TRANSACTIONS, rejected because no single payment, purchase "
+            "or delivery is involved."
         ),
     ),
     DemoMessage(

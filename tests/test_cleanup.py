@@ -169,7 +169,7 @@ class TestWhatItOffersToDelete:
         assert suggest(rows) == []
 
     def test_money_and_security_mail_is_never_offered(self):
-        for kind in (OtherCategory.FINANCE, OtherCategory.RECEIPT,
+        for kind in (OtherCategory.FINANCE, OtherCategory.TRANSACTIONS,
                      OtherCategory.SECURITY, OtherCategory.PERSONAL,
                      OtherCategory.WORK):
             rows = [item(uid=str(n), other=kind) for n in range(30)]

@@ -131,6 +131,18 @@ def test_the_held_out_set_is_never_used_to_tune(rules):
     nothing should be: look at its misses only to write the next set, and
     before measuring the next, check that no code added since it was written
     echoes its wording.
+
+    On 12 October Receipts and Shipping became one topic, Transactions, and
+    payments confirmed by a bank moved to it from Finance. Every set was
+    relabelled by a rule written before any output was read: the two old
+    topics by search and replace, and a Finance row only where the message
+    confirms one movement of money that has happened. Of this set's five
+    Finance rows one moved, a transfer received, judged after the engine was
+    frozen and before the sorter saw it. On the new labels the code before
+    the change scores 83.6% and the code after 84.5%, 43 of 44 filed right
+    both times; the real inbox's held set went from 262 to 264 of 292. No
+    rule was written from either set, and the code added was checked for
+    their wording first.
     """
     holdout = load("holdout.json")
     correct = sum(

@@ -29,6 +29,7 @@ from models import (
     DEFAULT_FOLDER_ROOT,
     DEFAULT_OTHER_ROOT,
     NonJobRouting,
+    OtherCategory,
     TimeWindow,
 )
 
@@ -305,8 +306,12 @@ class Settings:
         data["active_accounts"] = [str(a).strip() for a in chosen if str(a).strip()]
         if not profiles.exists(str(data.get("sort_profile", ""))):
             data["sort_profile"] = profiles.DEFAULT_PROFILE
+        # A topic since folded into another (Receipts and Shipping into
+        # Transactions) is kept as the one that took it in, once.
         known = {t.value for t in profiles.ALL_TOPICS}
-        data["topics"] = [str(t) for t in (data.get("topics") or []) if str(t) in known]
+        named = (OtherCategory.parse(t) for t in (data.get("topics") or []))
+        data["topics"] = list(dict.fromkeys(
+            t.value for t in named if t is not None and t.value in known))
         data["imap_host"] = str(data["imap_host"]).strip() or DEFAULT_IMAP_HOST
         data["imap_port"] = _valid_int(data["imap_port"], 1, 65535, DEFAULT_IMAP_PORT)
         data["source_mailbox"] = str(data["source_mailbox"]).strip() or "INBOX"

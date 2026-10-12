@@ -39,6 +39,7 @@ def everything() -> str:
 def signal_count() -> int:
     total = sum(len(t) for _c, t in rules_engine._CATEGORY_TABLES)
     total += sum(len(t) for t in rules_engine.TOPIC_SIGNALS.values())
+    total += len(rules_engine.MONEY_ACCOUNT_SIGNALS)
     total += len(rules_engine.JOB_CONTEXT_SIGNALS)
     total += len(rules_engine.NON_JOB_SIGNALS)
     total += sum(len(t) for t in rules_engine.CONDITIONAL_SIGNALS.values())
