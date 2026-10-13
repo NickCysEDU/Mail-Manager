@@ -507,9 +507,11 @@ class TestTheImageIsTriedAgain:
 
         def run(command, *args, **kwargs):
             if command[:2] == ["hdiutil", "attach"]:
-                calls.append(command)
-                if len(calls) <= refusals:
-                    return real.CompletedProcess(command, 1, b"", b"hdiutil: attach failed - Resource busy")
+                if len(calls) < refusals:
+                    calls.append(real.CompletedProcess(command, 1, b"", b"hdiutil: attach failed - Resource busy"))
+                else:
+                    calls.append(done(command, *args, **kwargs))
+                return calls[-1]
             return done(command, *args, **kwargs)
 
         monkeypatch.setattr(updates.subprocess, "run", run)
@@ -520,7 +522,13 @@ class TestTheImageIsTriedAgain:
         old, data, release, _tmp = made
         calls = self._refusing(monkeypatch, 1)
         updates.Installer(release, old, opener=_opener(data)).run()
-        assert len(calls) == 2
+        # A hosted runner's own hdiutil can refuse as well, and trying again
+        # is for that too: every attach before the last was refused, and the
+        # last opened the image.
+        refused, opened = calls[:-1], calls[-1]
+        assert refused and all(call.returncode != 0 for call in refused), \
+            [call.stderr for call in calls]
+        assert opened.returncode == 0
         assert (old / "Contents" / "MacOS" / "Test App").exists()
 
     def test_three_refusals_say_why(self, made, monkeypatch):
