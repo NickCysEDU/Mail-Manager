@@ -17,7 +17,6 @@ Finder, against the quarantine flag the save sets.
 
 from __future__ import annotations
 
-import os
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -322,12 +321,17 @@ def quarantine(path) -> bool:
     """Mark a saved file as downloaded, so Gatekeeper checks it.
 
     Without this an attachment saved by this app is more trusted by macOS
-    than the same file saved by a browser, which is exactly backwards.
+    than the same file saved by a browser, which is exactly backwards. The
+    mark is a browser's: its flags, when the file came, in seconds since
+    1970 written in hexadecimal, and what brought it. The time was once the
+    process's running time, a float that cannot be written in hexadecimal,
+    which raised after the file was written and left it unmarked.
     """
     import subprocess
+    import time
 
-    value = f"0083;{os.times().elapsed:08x};Mail Manager;"
     try:
+        value = f"0083;{int(time.time()):08x};Mail Manager;"
         subprocess.run(
             ["xattr", "-w", "com.apple.quarantine", value, str(path)],
             check=True, capture_output=True, timeout=10,

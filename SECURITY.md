@@ -59,10 +59,12 @@ version number. Nothing else is sent.
 ## A pinned dependency
 
 `cryptography` is pinned to 48.x, which has three open advisories
-(CVE-2026-69247, -69248 and -69249). None is reachable: the app uses only its
-AES-GCM, and TLS goes through Python's own `ssl`. Later versions ship only for
-Apple silicon. `tests/test_abuse.py` fails if the app starts using anything
-else from `cryptography`.
+(CVE-2026-69247, -69248 and -69249), in PKCS#7 decryption and in X.509
+certificate checking. None is reachable: the app uses only its AES (AES-GCM
+for its own files, and plain AES to open an Office document protected with a
+password, as Office's protection is built), and TLS goes through Python's own
+`ssl`. Later versions ship only for Apple silicon. `tests/test_abuse.py` fails
+if the app starts using anything else from `cryptography`.
 
 ## Supported versions
 

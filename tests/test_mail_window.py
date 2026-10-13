@@ -408,6 +408,219 @@ class TestTheComposeWindow:
         assert window.link_action.shortcut().toString() == "Ctrl+K"
 
 
+def _page(editor, base: str, text: str) -> None:
+    """``editor`` on a page of ``base`` with text of ``text``: a theme's."""
+    from PySide6.QtGui import QColor, QPalette
+
+    palette = editor.palette()
+    palette.setColor(QPalette.ColorRole.Base, QColor(base))
+    palette.setColor(QPalette.ColorRole.Text, QColor(text))
+    editor.setPalette(palette)
+
+
+def _stands_out(editor, words: str) -> float:
+    """How far the line holding ``words`` stands from what it is shown on,
+    as drawn: the lightness between the line's commonest colour and the
+    pixel furthest from it. Text that cannot be seen stands nowhere."""
+    from collections import Counter
+
+    from PySide6.QtGui import QColor
+    from PySide6.QtWidgets import QApplication
+
+    editor.setCursorWidth(0)        # the caret is not text
+    QApplication.processEvents()
+    found = editor.document().find(words)
+    assert not found.isNull(), words
+    image = editor.viewport().grab().toImage()
+    ratio = image.devicePixelRatio()
+    box = editor.document().documentLayout().blockBoundingRect(found.block())
+    seen = Counter(
+        image.pixel(x, y)
+        for y in range(int(box.top() * ratio) + 1, int(box.bottom() * ratio) - 1)
+        for x in range(int(box.left() * ratio), min(int(box.right() * ratio), image.width())))
+    behind = QColor.fromRgb(seen.most_common(1)[0][0]).lightnessF()
+    return max(abs(QColor.fromRgb(pixel).lightnessF() - behind) for pixel in seen)
+
+
+class TestTheLetterKeepsTheEditorsPage:
+    """A reply to mail written on a white page opened on that page, with
+    the signature and everything typed in a dark theme's white text on it.
+    Whatever the message answered wears, the letter is written on the
+    editor's own page, and the message is shown as it is, in a box."""
+
+    WHITE_PAGE = ('<html><head><style>body{background-color:#ffffff;color:#000000}'
+                  'p{color:#000000;font-family:Arial}</style></head>'
+                  '<body bgcolor="#ffffff"><table width="100%" bgcolor="#ffffff"><tr><td>'
+                  '<p>The picnic moves indoors this year.</p></td></tr></table>'
+                  '</body></html>')
+    DARK_PAGE = ('<html><body style="background-color:#101010;color:#eeeeee">'
+                 '<p>The lanterns go up on Friday.</p></body></html>')
+    #: Readable text stands this far from what is behind it; text the colour
+    #: of its page stands nowhere.
+    APART = 0.4
+
+    def _reply(self, windows, body_html, base, text, forward=False):
+        from PySide6.QtWidgets import QApplication
+
+        from mail_window import ComposeWindow
+
+        owner = _Owner()
+        message = _message(body_html=body_html)
+        quote = (outgoing.forward_html(message) if forward
+                 else outgoing.quoted_html(message))
+        window = ComposeWindow(owner, outgoing.Draft(
+            from_address="you@icloud.example", to=["dana@northwind.example"]),
+            owner.accounts, owner.accounts[0], quote,
+            outgoing.quoted_text(message))
+        windows.append(window)
+        _page(window.editor, base, text)
+        window.resize(760, 560)
+        window.show()
+        QApplication.processEvents()
+        window.editor.insertPlainText("Count me in")
+        return window
+
+    def test_a_white_page_stays_in_the_quote(self, windows):
+        window = self._reply(windows, self.WHITE_PAGE, "#1e1e1e", "#ffffff")
+        from PySide6.QtCore import Qt
+
+        root = window.editor.document().rootFrame().frameFormat()
+        assert root.background().style() == Qt.BrushStyle.NoBrush, "no page of its own"
+        editor = window.editor
+        assert _stands_out(editor, "Count me in") > self.APART, "what is typed"
+        assert _stands_out(editor, "You") > self.APART, "the signature"
+        assert _stands_out(editor, "wrote:") > self.APART
+        assert _stands_out(editor, "The picnic moves indoors") > self.APART, "the quote"
+
+    def test_a_dark_page_stays_in_the_quote_too(self, windows):
+        window = self._reply(windows, self.DARK_PAGE, "#ffffff", "#141414")
+        editor = window.editor
+        assert _stands_out(editor, "Count me in") > self.APART
+        assert _stands_out(editor, "You") > self.APART
+        assert _stands_out(editor, "wrote:") > self.APART, "pale on its dark page"
+        assert _stands_out(editor, "The lanterns go up") > self.APART
+
+    def test_a_forward_keeps_the_page_too(self, windows):
+        window = self._reply(windows, self.WHITE_PAGE, "#1e1e1e", "#ffffff",
+                             forward=True)
+        assert _stands_out(window.editor, "Count me in") > self.APART
+        assert _stands_out(window.editor, "You") > self.APART
+        assert _stands_out(window.editor, "The picnic moves indoors") > self.APART
+
+    def test_words_the_message_gave_no_colour_read_in_its_box(self, windows):
+        window = self._reply(windows, "<p>Bring a folding chair.</p>",
+                             "#1e1e1e", "#ffffff")
+        assert _stands_out(window.editor, "Bring a folding chair") > self.APART
+
+    def test_what_is_typed_in_an_empty_cell_of_the_quote_reads(self, windows):
+        window = self._reply(
+            windows, "<table><tr><td>Seats left</td><td></td></tr></table>",
+            "#1e1e1e", "#ffffff")
+        editor = window.editor
+        seats = editor.document().find("Seats left")
+        cell = seats.currentTable().cellAt(0, 1).firstCursorPosition()
+        editor.setTextCursor(cell)
+        editor.insertPlainText("Two of us")
+        assert _stands_out(editor, "Two of us") > self.APART
+
+    def test_what_is_sent_carries_no_page_but_the_quotes_own(self, windows):
+        import re
+
+        window = self._reply(windows, self.WHITE_PAGE, "#1e1e1e", "#ffffff")
+        sent = window.draft()
+        assert "bgcolor" not in re.search(r"<body[^>]*>", sent.html).group(0)
+        assert re.search(r'<table[^>]*bgcolor="#ffffff"', sent.html)
+        assert "Count me in" in sent.text and "The picnic moves indoors" in sent.text
+        assert sent.text.index("Count me in") < sent.text.index("You") < (
+            sent.text.index("The picnic"))
+
+
+class TestPastedWordsReadOnThePage:
+    """Rich text pasted in brought the page it was copied off: black words
+    on a white page's colour, which on a dark page is black on dark."""
+
+    BROWSER = ('<span style="color: rgb(0, 0, 0); background-color: rgb(255, 255, 255);">'
+               'Warm wishes from the allotment</span><br>'
+               '<span style="color: rgb(0, 0, 0); background-color: rgb(255, 255, 0);">'
+               'marked</span> <span style="color: #d93025;">in red</span>'
+               '<table bgcolor="#ffffff"><tr>'
+               '<td bgcolor="#ffffff" style="color:#000000">Plot nine</td>'
+               '<td bgcolor="#3366cc" style="color:#ffffff">Shed</td></tr></table>')
+
+    def _paste(self, windows, html, base="#1e1e1e", text="#ffffff"):
+        from PySide6.QtCore import QMimeData
+        from PySide6.QtWidgets import QApplication
+
+        from mail_window import RichEditor
+
+        editor = RichEditor()
+        windows.append(editor)
+        _page(editor, base, text)
+        editor.resize(640, 400)
+        editor.show()
+        copied = QMimeData()
+        copied.setHtml(html)
+        copied.setText("pasted")
+        editor.insertFromMimeData(copied)
+        QApplication.processEvents()
+        return editor
+
+    @staticmethod
+    def _format(editor, words):
+        found = editor.document().find(words)
+        cursor = editor.textCursor()
+        cursor.setPosition(found.selectionStart() + 1)
+        return cursor.charFormat()
+
+    def test_words_off_a_white_page_read_on_a_dark_one(self, windows):
+        from PySide6.QtCore import Qt
+
+        editor = self._paste(windows, self.BROWSER)
+        assert _stands_out(editor, "Warm wishes") > 0.4
+        assert _stands_out(editor, "Plot nine") > 0.4
+        # On the editor's own page, not on the white one they came off.
+        nothing = Qt.BrushStyle.NoBrush
+        assert self._format(editor, "Warm wishes").background().style() == nothing
+        plot = editor.document().find("Plot nine")
+        assert plot.currentTable().cellAt(plot).format().background().style() == nothing
+
+    def test_words_off_a_dark_page_read_on_a_light_one(self, windows):
+        editor = self._paste(
+            windows, '<span style="color:#f0f0f0; background-color:#121212">'
+                     'Seedlings by the gate</span>', "#ffffff", "#141414")
+        assert _stands_out(editor, "Seedlings") > 0.4
+
+    def test_a_highlight_a_colour_and_a_tinted_cell_are_kept(self, windows):
+        from PySide6.QtCore import Qt
+
+        def painted(brush):
+            # An empty brush says black too.
+            return (brush.color().name()
+                    if brush.style() != Qt.BrushStyle.NoBrush else None)
+
+        editor = self._paste(windows, self.BROWSER)
+        marked = self._format(editor, "marked")
+        assert painted(marked.background()) == "#ffff00"
+        assert painted(marked.foreground()) == "#000000", "black on the marker is kept"
+        assert painted(self._format(editor, "in red").foreground()) == "#d93025"
+        shed = editor.document().find("Shed")
+        cell = shed.currentTable().cellAt(shed)
+        assert painted(cell.format().background()) == "#3366cc"
+        assert painted(self._format(editor, "Shed").foreground()) == "#ffffff"
+
+    def test_plain_text_still_pastes(self, windows):
+        from PySide6.QtCore import QMimeData
+
+        from mail_window import RichEditor
+
+        editor = RichEditor()
+        windows.append(editor)
+        copied = QMimeData()
+        copied.setText("Just words")
+        editor.insertFromMimeData(copied)
+        assert editor.toPlainText() == "Just words"
+
+
 class TestNothingIsCutOff:
     """A narrow window keeps every control: the formatting row wraps, and
     the message window's bar is sized for its buttons."""

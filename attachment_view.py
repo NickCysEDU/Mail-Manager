@@ -25,19 +25,21 @@ from typing import Callable, List, Optional
 from PySide6.QtCore import (QCoreApplication, QEvent, QSize, QStandardPaths,
                             Qt, QThread, QTimer, QUrl, Signal, Slot)
 from PySide6.QtGui import (QAction, QGuiApplication, QImage, QKeySequence,
-                           QPixmap)
+                           QPixmap, QTextDocument)
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox,
                                QFrame, QHBoxLayout,
-                               QLabel, QListWidget, QListWidgetItem,
+                               QLabel, QLineEdit, QListWidget, QListWidgetItem,
                                QMessageBox, QPlainTextEdit, QPushButton,
                                QScrollArea, QSizePolicy, QSlider,
-                               QStackedWidget, QVBoxLayout, QWidget)
+                               QStackedWidget, QTextBrowser, QVBoxLayout,
+                               QWidget)
 
 import shiboken6
 
 import attachment_meta
 import attachments
 import leftovers
+import office
 from attachment_widgets import (FlowHolder, FlowRow, SeekBar, Spectrum,
                                 Waveform)
 import widgets
@@ -2247,6 +2249,9 @@ class PdfPane(QWidget):
         self._layout.addWidget(self._fallback)
 
     def load(self, path: Path) -> str:
+        """Show the PDF at ``path``, or say it wants a password: then
+        ``locked`` is true until unlock() is given the right one."""
+        self.locked = False
         try:
             from PySide6.QtPdf import QPdfDocument
             from PySide6.QtPdfWidgets import QPdfView
@@ -2260,10 +2265,35 @@ class PdfPane(QWidget):
             self._fallback.hide()
             self._layout.addWidget(self._view, 1)
             self.mode_box.setEnabled(True)
-        self._document.load(str(path))
+        self._document.setPassword("")
+        refused = self._document.load(str(path))
+        if refused == QPdfDocument.Error.IncorrectPassword:
+            self.locked = True
+            return "Protected with a password"
+        return self._shown()
+
+    #: Whether the PDF last loaded is waiting for its password.
+    locked = False
+
+    def unlock(self, path: Path, password: str) -> bool:
+        """Open the PDF at ``path`` with ``password``: whether it opened.
+        The password goes to Qt's own reader and is kept nowhere."""
+        from PySide6.QtPdf import QPdfDocument
+
+        self._document.setPassword(password)
+        refused = self._document.load(str(path))
+        self._document.setPassword("")
+        self.locked = refused == QPdfDocument.Error.IncorrectPassword
+        return refused == QPdfDocument.Error.None_
+
+    def _shown(self) -> str:
         self._set_mode(self.mode_box.currentText())
         pages = self._document.pageCount()
         return f"{pages} page{'s' if pages != 1 else ''}"
+
+    def pages(self) -> str:
+        """How many pages the PDF on show has, in words."""
+        return self._shown() if self._document is not None else ""
 
     @Slot(str)
     def _set_mode(self, label: str) -> None:
@@ -2275,6 +2305,169 @@ class PdfPane(QWidget):
         self._view.setZoomMode(mode)
         if label == "Actual size":
             self._view.setZoomFactor(1.0)
+
+
+def _document_picture(data: bytes) -> Optional[QImage]:
+    """A picture a document carries, decoded only once its size is known to
+    be sane, and no wider than a page of text."""
+    from PySide6.QtCore import QBuffer, QByteArray, QIODevice
+    from PySide6.QtGui import QImageReader
+
+    buffer = QBuffer()
+    buffer.setData(QByteArray(data))
+    buffer.open(QIODevice.OpenModeFlag.ReadOnly)
+    reader = QImageReader(buffer)
+    size = reader.size()
+    if not size.isValid() or size.width() * size.height() > attachments.MAX_PIXELS:
+        return None
+    image = reader.read()
+    if image.isNull():
+        return None
+    if image.width() > 640:
+        image = image.scaledToWidth(640, Qt.TransformationMode.SmoothTransformation)
+    return image
+
+
+class _Paper(QTextBrowser):
+    """A document's page: white, as paper is and as documents are written
+    for, whatever the window's theme. It opens no link and loads nothing
+    but the pictures the document carried."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        from PySide6.QtGui import QColor, QPalette
+
+        self.setReadOnly(True)
+        self.setOpenLinks(False)
+        self.setOpenExternalLinks(False)
+        page = self.palette()
+        page.setColor(QPalette.ColorRole.Base, QColor(255, 255, 255))
+        page.setColor(QPalette.ColorRole.Text, QColor(20, 20, 20))
+        self.setPalette(page)
+        self.setStyleSheet(
+            "QTextBrowser { background-color: #ffffff; color: #141414; "
+            "selection-background-color: #b3d4fc; selection-color: #141414; }")
+        self._pictures: dict = {}
+
+    def loadResource(self, kind, name):      # noqa: N802 - Qt's name
+        if kind == QTextDocument.ResourceType.ImageResource:
+            return self._pictures.get(name.toString())
+        return None
+
+    def show_document(self, shown: "office.Shown") -> None:
+        self._pictures = {}
+        for name, data in shown.pictures.items():
+            image = _document_picture(data)
+            if image is not None:
+                self._pictures[name] = image
+        self.setHtml(shown.html)
+
+
+class DocumentPane(QWidget):
+    """A Word, Excel or PowerPoint file as its words, tables and pictures,
+    read by office.py from the document's own XML: nothing in it runs."""
+
+    SIZES = (11, 13, 15, 18, 22)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.view = _Paper()
+        self._size = 13
+        smaller = QPushButton("Smaller text")
+        larger = QPushButton("Larger text")
+        smaller.setToolTip("Reduce the type size.")
+        larger.setToolTip("Increase the type size.")
+        smaller.clicked.connect(lambda: self._resize(-1))
+        larger.clicked.connect(lambda: self._resize(1))
+        bar = QHBoxLayout()
+        bar.setContentsMargins(0, 0, 0, 0)
+        bar.addWidget(smaller)
+        bar.addWidget(larger)
+        bar.addStretch(1)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addLayout(bar)
+        layout.addWidget(self.view, 1)
+        self._apply_font()
+
+    def show_document(self, shown: "office.Shown") -> str:
+        """Show ``shown``, and say what it is: its size, and anything of it
+        left out."""
+        self.view.show_document(shown)
+        said = f"{office.NAMES.get(shown.kind, 'Document')}, {shown.summary}"
+        return " ".join([said + "."] + shown.notes) if shown.notes else said
+
+    def _resize(self, direction: int) -> None:
+        order = list(self.SIZES)
+        nearest = min(order, key=lambda s: abs(s - self._size))
+        index = min(len(order) - 1, max(0, order.index(nearest) + direction))
+        self._size = order[index]
+        self._apply_font()
+
+    def _apply_font(self) -> None:
+        font = self.view.font()
+        font.setPointSize(self._size)
+        self.view.setFont(font)
+        self.view.document().setDefaultFont(font)
+
+
+class LockedPane(QWidget):
+    """A file that wants its password before it can be shown. The password
+    opens it in memory, here, and is kept nowhere: not in the file, not in
+    the settings, not after the file is open."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.title = QLabel("")
+        self.title.setWordWrap(True)
+        self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.field = QLineEdit()
+        self.field.setEchoMode(QLineEdit.EchoMode.Password)
+        self.field.setPlaceholderText("Password")
+        self.field.setMinimumWidth(240)
+        self.field.returnPressed.connect(self._submit)
+        self.open_button = QPushButton("Open")
+        self.open_button.setToolTip("Open it with this password.")
+        self.open_button.clicked.connect(self._submit)
+        self.said = QLabel("")
+        self.said.setWordWrap(True)
+        self.said.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.said.setStyleSheet("color: #c65b4e;")
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(self.field)
+        row.addWidget(self.open_button)
+        row.addStretch(1)
+        layout = QVBoxLayout(self)
+        layout.addStretch(1)
+        layout.addWidget(self.title)
+        layout.addLayout(row)
+        layout.addWidget(self.said)
+        layout.addStretch(1)
+        self._attempt: Optional[Callable[[str], str]] = None
+
+    def ask(self, title: str, attempt: Callable[[str], str]) -> None:
+        """Ask for the password to ``title``'s file. ``attempt`` is given
+        each one tried, and says why it did not open, or "" once it has."""
+        self.title.setText(title)
+        self._attempt = attempt
+        self.field.clear()
+        self.said.setText("")
+        self.field.setFocus()
+
+    @Slot()
+    def _submit(self) -> None:
+        password = self.field.text()
+        if self._attempt is None or not password:
+            return
+        said = self._attempt(password)
+        if said:
+            self.said.setText(said)
+            self.field.selectAll()
+            self.field.setFocus()
+        else:
+            self.field.clear()
+            self.said.setText("")
 
 
 class MetadataPane(QPlainTextEdit):
@@ -2367,6 +2560,11 @@ class AttachmentViewer(QDialog):
         self.audio.enable_box.clicked.connect(self._picture_switched)
         self.text = TextPane()
         self.pdf = PdfPane()
+        self.document = DocumentPane()
+        self.locked = LockedPane()
+        #: Documents opened with their password, by row, for as long as the
+        #: window is open, so stepping back to one does not ask again.
+        self._opened: dict = {}
         self.meta = MetadataPane()
         self.blank = QWidget()
         blank_layout = QVBoxLayout(self.blank)
@@ -2379,7 +2577,7 @@ class AttachmentViewer(QDialog):
 
         self.stack = QStackedWidget()
         for pane in (self.blank, self.image, self.audio, self.text, self.pdf,
-                     self.meta):
+                     self.document, self.locked, self.meta):
             self.stack.addWidget(pane)
 
         self.heading = QLabel("")
@@ -2842,7 +3040,13 @@ class AttachmentViewer(QDialog):
             f"{_html(item.content_type)} · {item.human_size()}")
         self.heading.show()
 
-        note = self._warning_for(item)
+        data = item.data or b""
+        kind, _mime = attachments.sniff(data[:32], item.content_type, item.name)
+        # Only what the bytes leave unexplained is looked at as an Office
+        # file: a picture or a program is never read as a document.
+        found = (office.identify(data, item.name, item.content_type)
+                 if kind in ("archive", "other") else None)
+        note = self._warning_for(item, found)
         self.warning.setText(note)
         self.warning.setVisible(bool(note))
 
@@ -2852,8 +3056,6 @@ class AttachmentViewer(QDialog):
             self.status.setText("")
             return
 
-        data = item.data or b""
-        kind, _mime = attachments.sniff(data[:32], item.content_type, item.name)
         self._say_keys("image" if kind == "image" and item.ext != "svg"
                        else kind)
         if kind == "image" and item.ext != "svg":
@@ -2869,17 +3071,91 @@ class AttachmentViewer(QDialog):
             self.heading.hide()
         elif kind == "pdf":
             path = self._materialise(item)
-            self.stack.setCurrentWidget(self.pdf)
-            self.status.setText(self.pdf.load(path))
+            said = self.pdf.load(path)
+            if self.pdf.locked:
+                self._ask_password("This PDF is protected with a password.",
+                                   lambda password: self._unlock_pdf(item, path, password))
+            else:
+                self.stack.setCurrentWidget(self.pdf)
+            self.status.setText(said)
             self._let_go_of_copy("pdf", path)
         elif kind in ("text", "program") or item.ext in ("svg", "html", "htm", "xml"):
             self.stack.setCurrentWidget(self.text)
             self.status.setText(self.text.show_bytes(data))
+        elif found is not None:
+            self._show_office(row, item, found)
         else:
             self.blank_label.setText(
                 f"{_describe(kind)}\n\nSave it, or press Info to see what it is.")
             self.stack.setCurrentWidget(self.blank)
             self.status.setText("")
+
+    def _ask_password(self, title: str, attempt: Callable[[str], str]) -> None:
+        self.locked.ask(title, attempt)
+        self.stack.setCurrentWidget(self.locked)
+
+    def _unlock_pdf(self, item, path: Path, password: str) -> str:
+        if self._current() is not item:
+            return ""
+        if not self.pdf.unlock(path, password):
+            return "That password does not open it."
+        self.stack.setCurrentWidget(self.pdf)
+        self.status.setText(self.pdf.pages())
+        return ""
+
+    def _show_office(self, row: int, item, found: "office.Found") -> None:
+        """A Word, Excel or PowerPoint file: shown, asked the password of,
+        or said why it cannot be."""
+        if found.state == office.OPEN:
+            self._show_document(lambda: office.read(item.data))
+        elif found.state == office.PASSWORD:
+            if row in self._opened:
+                self._show_document(lambda: self._opened[row])
+                return
+            self._ask_password(f"This {found.name} is protected with a password.",
+                               lambda password: self._open_with(row, item, password))
+            self.status.setText(f"{found.name}, protected with a password")
+        else:
+            self.blank_label.setText(office.explain(found))
+            self.stack.setCurrentWidget(self.blank)
+            self.status.setText(found.name)
+
+    def _open_with(self, row: int, item, password: str) -> str:
+        """Open the protected document at ``row`` with ``password``, in
+        memory: why it did not open, or "" once it is shown."""
+        try:
+            shown = office.read(office.decrypt(item.data or b"", password))
+        except office.CannotRead as exc:
+            return str(exc)
+        except Exception:      # noqa: BLE001 - a document must not take the window down
+            import logging
+
+            logging.getLogger(__name__).exception("A protected document could not be opened")
+            return "It could not be opened."
+        self._opened[row] = shown
+        if self._current() is item:
+            self._show_document(lambda: shown)
+        return ""
+
+    def _show_document(self, reading: Callable[[], "office.Shown"]) -> None:
+        try:
+            shown = reading()
+        except office.CannotRead as exc:
+            self.blank_label.setText(f"{exc}\n\nSave it to open it in Office.")
+            self.stack.setCurrentWidget(self.blank)
+            self.status.setText("")
+            return
+        except Exception:      # noqa: BLE001 - a document must not take the window down
+            import logging
+
+            logging.getLogger(__name__).exception("A document could not be shown")
+            self.blank_label.setText("This document could not be read.\n\n"
+                                     "Save it to open it in Office.")
+            self.stack.setCurrentWidget(self.blank)
+            self.status.setText("")
+            return
+        self.status.setText(self.document.show_document(shown))
+        self.stack.setCurrentWidget(self.document)
 
     @Slot(bool)
     def _toggle_metadata(self, showing: bool) -> None:
@@ -2887,11 +3163,16 @@ class AttachmentViewer(QDialog):
         self._show(self.list.currentRow())
 
     @staticmethod
-    def _warning_for(item) -> str:
+    def _warning_for(item, found: Optional["office.Found"] = None) -> str:
         if item.executable:
             return ("This is a program, whatever it is called. Saving it is "
                     "fine; running it is not something this app will do, and "
                     "macOS will ask you about it if you try.")
+        if found is not None:
+            # A Word file is a zip inside: not an archive to anyone opening it.
+            return ("It carries macros, which the viewer never runs. Office "
+                    "asks before it runs them; say no unless you expected them."
+                    if found.macros else "")
         if item.archive:
             return "An archive. It is saved as one file."
         if item.signature:
@@ -3080,8 +3361,30 @@ class AttachmentViewer(QDialog):
             _COPIES.discard(self._temp)
 
 
+#: What an Office file is called in the list.
+_OFFICE_LABELS = {office.WORD: "Word", office.EXCEL: "Excel",
+                  office.POWERPOINT: "PowerPoint"}
+
+
+def _office_kind(item) -> str:
+    """Which Office application an attachment is a document of, or "": by
+    its bytes once they are here, by its name or type before."""
+    if item.data:
+        if item.kind not in ("archive", "other"):
+            return ""
+        found = office.identify(item.data, item.name, item.content_type)
+        return (found.kind or "office") if found is not None else ""
+    return office.guess(item.name, item.content_type)
+
+
 def _row_tooltip(item) -> str:
     """What this attachment is, in a sentence, before it is opened."""
+    application = _office_kind(item)
+    if application:
+        name = office.NAMES.get(application, "Office file")
+        article = "An" if name[0] in "AEIOU" else "A"
+        return (f"{item.shown}\n{_size_label(item)}\n{article} {name}. It opens "
+                "here, or says why it cannot.")
     kind = item.kind if item.data else _kind_from_type(item)
     said = {
         "image": "An image. It opens here.",
@@ -3096,6 +3399,10 @@ def _row_tooltip(item) -> str:
 
 
 def _row_label(item) -> str:
+    application = _office_kind(item)
+    if application:
+        return (f"{item.shown}\n{_size_label(item)} · "
+                f"{_OFFICE_LABELS.get(application, 'Office')}")
     kind = item.kind if item.data else _kind_from_type(item)
     suffix = {"program": " · program", "archive": " · archive",
               "image": " · image", "audio": " · audio", "video": " · video",

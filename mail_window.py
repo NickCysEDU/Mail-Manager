@@ -14,7 +14,9 @@ from typing import Optional
 
 from PySide6.QtCore import QEvent, QSize, Qt, QUrl, Signal
 from PySide6.QtGui import (QAction, QColor, QFont, QKeySequence,
-                           QTextCharFormat, QTextCursor, QTextListFormat)
+                           QTextCharFormat, QTextCursor, QTextDocument,
+                           QTextDocumentFragment, QTextFrameFormat,
+                           QTextListFormat)
 from PySide6.QtWidgets import (QComboBox, QCompleter,
                                QFormLayout, QHBoxLayout, QLabel, QMainWindow,
                                QMenu, QMessageBox, QPushButton, QSizePolicy,
@@ -569,6 +571,68 @@ class RichEditor(QTextEdit):
         cursor.setCharFormat(QTextCharFormat())
         self.setCurrentCharFormat(QTextCharFormat())
 
+    #: The page the reading pane shows a message on, and its text: a
+    #: quoted message that paints no page of its own is shown on it here.
+    QUOTE_PAGE = QColor(255, 255, 255)
+    QUOTE_INK = QColor(20, 20, 20)
+    #: The text of a quoted message that paints a dark page of its own.
+    QUOTE_INK_ON_DARK = QColor(242, 242, 242)
+
+    def add_quote(self, html: str) -> None:
+        """``html``, the message this answers or forwards, at the end, in a
+        box of its own. It is read in a document of its own first: read
+        with the letter, its page colour became the whole editor's and its
+        style sheet reached the signature, so a message on a white page put
+        a dark theme's white writing on white."""
+        quoted = QTextDocument()
+        quoted.setDefaultFont(self.document().defaultFont())
+        quoted.setHtml(html)
+        painted = quoted.rootFrame().frameFormat().background()
+        page = (painted.color() if painted.style() != Qt.BrushStyle.NoBrush
+                else self.QUOTE_PAGE)
+        _ink_unpainted(quoted, self.QUOTE_INK if page.lightnessF() >= 0.5
+                       else self.QUOTE_INK_ON_DARK)
+        box = QTextFrameFormat()
+        box.setBackground(page)
+        box.setBorder(1)
+        box.setBorderBrush(QColor(209, 209, 214))
+        box.setBorderStyle(QTextFrameFormat.BorderStyle.BorderStyle_Solid)
+        box.setPadding(10)
+        box.setTopMargin(4)
+        cursor = QTextCursor(self.document())
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        if not self.document().isEmpty():
+            cursor.insertBlock()
+        cursor.insertFrame(box)
+        cursor.insertFragment(QTextDocumentFragment(quoted))
+
+    def insertFromMimeData(self, source) -> None:      # noqa: N802 - Qt's name
+        """Rich text pasted or dropped in keeps its formatting, bar what it
+        brings of the page it was copied off: that page's colour behind the
+        words, and a text colour that cannot be read on this one. Black text
+        copied off a white page was black on this one, which is dark in
+        dark mode."""
+        html = ""
+        if self.acceptRichText() and source.formats()[:1] != ["text/markdown"]:
+            if source.hasFormat("application/x-qrichtext"):
+                html = ('<meta name="qrichtext" content="1" />' + bytes(
+                    source.data("application/x-qrichtext")).decode("utf-8", "replace"))
+            elif source.hasHtml():
+                html = source.html()
+        if not html:
+            super().insertFromMimeData(source)
+            return
+        from PySide6.QtGui import QPalette
+
+        pasted = QTextDocument()
+        QTextCursor(pasted).insertFragment(
+            QTextDocumentFragment.fromHtml(html, self.document()))
+        _fit_to_page(pasted, self.palette().color(QPalette.ColorRole.Base))
+        cursor = self.textCursor()
+        cursor.insertFragment(QTextDocumentFragment(pasted))
+        self.setTextCursor(cursor)
+        self.ensureCursorVisible()
+
     def html(self) -> str:
         return self.toHtml()
 
@@ -586,6 +650,153 @@ class RichEditor(QTextEdit):
 
     def text(self) -> str:
         return self.toPlainText()
+
+
+def _ink_unpainted(document: QTextDocument, ink: QColor) -> None:
+    """Every word in ``document`` that has no colour of its own takes
+    ``ink``, and so does what is typed on a line of it with none: it is
+    shown on its own page, which the editor's text colour may vanish on."""
+    from PySide6.QtGui import QTextFormat
+
+    words, lines = [], []
+    block = document.begin()
+    while block.isValid():
+        if not block.charFormat().hasProperty(QTextFormat.Property.ForegroundBrush):
+            lines.append(block.position())
+        found = block.begin()
+        while not found.atEnd():
+            piece = found.fragment()
+            if piece.isValid() and piece.charFormat().foreground().style() == (
+                    Qt.BrushStyle.NoBrush):
+                words.append((piece.position(), piece.length()))
+            found += 1
+        block = block.next()
+    paint = QTextCharFormat()
+    paint.setForeground(ink)
+    cursor = QTextCursor(document)
+    for start, length in words:
+        cursor.setPosition(start)
+        cursor.setPosition(start + length, QTextCursor.MoveMode.KeepAnchor)
+        cursor.mergeCharFormat(paint)
+    for start in lines:
+        cursor.setPosition(start)
+        cursor.mergeBlockCharFormat(paint)
+
+
+#: Text that stands less far apart from what is behind it than this is lost
+#: on it: WCAG's floor, for large text.
+READABLE = 3.0
+
+
+def _contrast(one: QColor, other: QColor) -> float:
+    """How far apart two colours stand, 1 to 21, as WCAG reckons it."""
+    def lit(colour: QColor) -> float:
+        def channel(value: float) -> float:
+            return (value / 12.92 if value <= 0.03928
+                    else ((value + 0.055) / 1.055) ** 2.4)
+        return (0.2126 * channel(colour.redF()) + 0.7152 * channel(colour.greenF())
+                + 0.0722 * channel(colour.blueF()))
+
+    dark, light = sorted((lit(one), lit(other)))
+    return (light + 0.05) / (dark + 0.05)
+
+
+def _paper(brush) -> bool:
+    """Whether ``brush`` is the page some text was copied off rather than a
+    highlight: a grey near white or near black. A yellow marker or a tinted
+    table heading is kept."""
+    if brush.style() == Qt.BrushStyle.NoBrush:
+        return False
+    colour = brush.color()
+    return colour.hslSaturationF() < 0.12 and not 0.15 < colour.lightnessF() < 0.9
+
+
+def _fit_to_page(document: QTextDocument, page: QColor) -> None:
+    """Pasted text made to read on ``page``: the page it was copied off goes
+    from behind it, in the words, the lines, the tables and their cells,
+    and where words are then on ``page`` itself, a text colour that cannot
+    be read on it goes, so they take the editor's own."""
+    from PySide6.QtGui import QTextTable
+
+    def unpapered(frame) -> None:
+        fmt = frame.frameFormat()
+        if _paper(fmt.background()):
+            fmt.clearBackground()
+            frame.setFrameFormat(fmt)
+        if isinstance(frame, QTextTable):
+            for row in range(frame.rows()):
+                for column in range(frame.columns()):
+                    cell = frame.cellAt(row, column)
+                    shade = cell.format()
+                    if _paper(shade.background()):
+                        shade.clearBackground()
+                        cell.setFormat(shade)
+        for inner in frame.childFrames():
+            unpapered(inner)
+
+    for frame in document.rootFrame().childFrames():
+        unpapered(frame)
+    cursor = QTextCursor(document)
+
+    def behind(position: int, fmt: QTextCharFormat):
+        """What a word at ``position`` is shown on, or None for the page."""
+        if fmt.background().style() != Qt.BrushStyle.NoBrush:
+            return fmt.background()
+        cursor.setPosition(position)
+        line = cursor.blockFormat().background()
+        if line.style() != Qt.BrushStyle.NoBrush:
+            return line
+        table = cursor.currentTable()
+        if table is not None:
+            shade = table.cellAt(cursor).format().background()
+            if shade.style() != Qt.BrushStyle.NoBrush:
+                return shade
+        frame = cursor.currentFrame()
+        while frame is not None and frame is not document.rootFrame():
+            shade = frame.frameFormat().background()
+            if shade.style() != Qt.BrushStyle.NoBrush:
+                return shade
+            frame = frame.parentFrame()
+        return None
+
+    lines, words = [], []
+    block = document.begin()
+    while block.isValid():
+        if _paper(block.blockFormat().background()):
+            lines.append(block.position())
+        block = block.next()
+    for start in lines:
+        cursor.setPosition(start)
+        fmt = cursor.blockFormat()
+        fmt.clearBackground()
+        cursor.setBlockFormat(fmt)
+    block = document.begin()
+    while block.isValid():
+        found = block.begin()
+        while not found.atEnd():
+            piece = found.fragment()
+            found += 1
+            if not piece.isValid():
+                continue
+            fmt = piece.charFormat()
+            changed = _paper(fmt.background())
+            if changed:
+                fmt.clearBackground()
+            # Words on a highlight or a cell that was kept were coloured for
+            # it; only those on the page itself are weighed against it.
+            ink = fmt.foreground()
+            if (ink.style() != Qt.BrushStyle.NoBrush
+                    and behind(piece.position(), fmt) is None
+                    and _contrast(ink.color(), page) < READABLE):
+                fmt.clearForeground()
+                changed = True
+            if changed:
+                words.append((piece.position(), piece.length(), fmt))
+        block = block.next()
+    for start, length, fmt in words:
+        cursor.setPosition(start)
+        cursor.setPosition(start + length, QTextCursor.MoveMode.KeepAnchor)
+        cursor.setCharFormat(fmt)
 
 
 class ComposeWindow(QMainWindow):
@@ -660,7 +871,11 @@ class ComposeWindow(QMainWindow):
         quote = quoted_html or _html(quoted_text).replace("\n", "<br>")
         signature = (owner.signature_html(replying=bool(quote))
                      if hasattr(owner, "signature_html") else "")
-        self.editor.setHtml(opening + signature + (f"<br>{quote}" if quote else ""))
+        if quoted_html:
+            self.editor.setHtml(opening + signature)
+            self.editor.add_quote(quoted_html)
+        else:
+            self.editor.setHtml(opening + signature + (f"<br>{quote}" if quote else ""))
         cursor = self.editor.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.Start)
         if not opening and (signature or quote):

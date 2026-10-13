@@ -41,8 +41,10 @@ app.
 
 ## Encryption
 
-The app encrypts two local files with AES-GCM via the `cryptography` package
-and uses TLS for connections; it implements no cryptography itself.
+The app encrypts two local files with AES-GCM via the `cryptography` package,
+opens an Office document protected with a password, with the password given,
+using the same package's AES and Python's own hashing as Microsoft's format
+describes, and uses TLS for connections. It implements no cipher itself.
 Encryption software is regulated in some countries, including under the US
 Export Administration Regulations. If you redistribute it where such rules
 apply, compliance is yours to determine.

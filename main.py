@@ -340,6 +340,26 @@ def self_test(offline: bool = False) -> int:
         if QPdfDocument() is None:
             raise RuntimeError("PDF is not in this build")
         working.append("PDF")
+        # Word, Excel and PowerPoint files: a small one made here and read,
+        # and the cipher a protected one is opened with, imported inside a
+        # function and so the kind of module a bundle can lose.
+        import io
+        import zipfile
+
+        import office
+        made = io.BytesIO()
+        with zipfile.ZipFile(made, "w") as package:
+            package.writestr("[Content_Types].xml", "<Types/>")
+            package.writestr(
+                "word/document.xml",
+                '<w:document xmlns:w="http://schemas.openxmlformats.org/'
+                'wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>probe'
+                "</w:t></w:r></w:p></w:body></w:document>")
+        if "probe" not in office.read(made.getvalue()).html:
+            raise RuntimeError("Office documents are not read in this build")
+        if len(office._aes(bytes(16), bytes(16), bytes(16))) != 16:
+            raise RuntimeError("protected Office documents cannot be opened in this build")
+        working.append("Office documents")
 
         # Checked, not named: this line ends up in a public build log.
         import visualizers

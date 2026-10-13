@@ -265,7 +265,11 @@ window and the viewer.
 
 A reply opens addressed, with the message quoted under your sign-off, and
 goes out through the mailbox it arrived in - any of yours, from the From
-list. The sign-off is written on **Settings → Signature**: as many lines as
+list. The message answered sits in a box of its own, shown as the message
+view shows it: whatever page it paints stays inside the box, and what you
+write keeps the page and the colours of your theme, light or dark. Text
+pasted in from elsewhere keeps its formatting, but not the colours of the
+page it was copied off. The sign-off is written on **Settings → Signature**: as many lines as
 you like, with formatting, links and a picture, and a switch each for new
 messages and for replies; with nothing written there, the name alone is
 signed. The bar above the message is laid out as a word processor's: a size
@@ -315,12 +319,20 @@ fetched from wherever the sender keeps them, which tells the sender it was
 opened, so **Settings** can turn them off, and each is then shown as [image].
 **Plain text** is the text alone.
 
-**Attachments** opens a viewer for images, audio, PDF and text. Only the part
-you open is downloaded, and nothing is ever run:
+**Attachments** opens a viewer for images, audio, PDF, text, and Word, Excel
+and PowerPoint documents. Only the part you open is downloaded, and nothing
+is ever run:
 
 - A file's bytes decide what it is, not its name.
 - Filenames are cleaned, so `../` and right-to-left tricks do nothing.
 - SVG and HTML are shown as text, and archives are never expanded.
+- A Word, Excel or PowerPoint file is shown as its words, tables and
+  pictures, read from the file itself: no macro or link in it runs, and one
+  that carries macros says so.
+- A document or a PDF protected with a password asks for it, and opens in
+  the viewer; the password and the opened copy are kept nowhere. One
+  protected by Microsoft's rights management, a message Microsoft sealed
+  (`.rpmsg`), and the Office formats from before 2007 say how to open them.
 - Saved files carry the quarantine flag, like a download.
 
 Audio files can be played with a music visualiser, including a game. Its
@@ -406,7 +418,7 @@ See [SECURITY.md](../SECURITY.md) for reporting a problem.
 ./dev dry      # scan for real, with moves disabled
 ./dev fake     # the pipeline in the terminal, offline
 ./dev scan     # the pipeline on real mail, read-only
-./dev test     # 5,763 tests (with the evaluation sets present)
+./dev test     # 5,839 tests (with the evaluation sets present)
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 

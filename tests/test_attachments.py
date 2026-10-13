@@ -7,6 +7,7 @@ the bytes, and that none of the three agrees with the others.
 from __future__ import annotations
 
 import email.message
+import sys
 from pathlib import Path
 
 import pytest
@@ -152,6 +153,99 @@ class TestSavingDoesNotOverwrite:
     def test_a_name_without_an_extension_still_works(self, tmp_path):
         (tmp_path / "README").write_bytes(b"x")
         assert attachments.unique_path(tmp_path, "README").name == "README (2)"
+
+
+def _mark(path) -> str:
+    """The download mark on ``path``, or "" for none."""
+    import subprocess
+
+    found = subprocess.run(["xattr", "-p", "com.apple.quarantine", str(path)],
+                           capture_output=True, text=True)
+    return found.stdout.strip() if found.returncode == 0 else ""
+
+
+_MAC = pytest.mark.skipif(sys.platform != "darwin", reason="the mark is macOS's")
+
+
+class TestASavedFileIsMarkedAsDownloaded:
+    """Saving an attachment raised a ValueError once the file was written:
+    the mark's time was the process's running time, a float, which has no
+    hexadecimal form. Nothing saved was marked, so macOS never checked a
+    program saved from a message before it ran."""
+
+    @_MAC
+    def test_the_mark_says_when_and_who(self, tmp_path):
+        import time
+
+        saved = tmp_path / "notes.txt"
+        saved.write_bytes(b"hello")
+        assert attachments.quarantine(saved) is True
+        flags, when, agent, _rest = _mark(saved).split(";", 3)
+        assert flags == "0083" and agent == "Mail Manager"
+        assert abs(int(when, 16) - time.time()) < 120, "when the file came"
+
+    def test_marking_never_raises(self, tmp_path, monkeypatch):
+        import subprocess
+
+        assert attachments.quarantine(tmp_path / "not there") is False
+
+        def refused(*_args, **_kwargs):
+            raise OSError("no xattr here")
+
+        monkeypatch.setattr(subprocess, "run", refused)
+        saved = tmp_path / "a.txt"
+        saved.write_bytes(b"x")
+        assert attachments.quarantine(saved) is False
+
+
+class TestTheViewerSaves:
+    """What the viewer saves is written, marked as downloaded, and every
+    one of them is saved: Save All stopped at the first when marking it
+    raised."""
+
+    @staticmethod
+    def _viewer(qtbot, names):
+        from attachment_view import AttachmentViewer
+
+        found = [attachments.Attachment(part=str(number), name=name,
+                                        content_type="text/plain",
+                                        size=len(name), data=name.encode())
+                 for number, name in enumerate(names, 1)]
+        viewer = AttachmentViewer(found)
+        qtbot.addWidget(viewer)
+        return viewer
+
+    def test_one_is_written_and_marked(self, qtbot, tmp_path, monkeypatch):
+        import widgets
+
+        viewer = self._viewer(qtbot, ["agenda.txt"])
+        target = tmp_path / "agenda.txt"
+        monkeypatch.setattr(widgets, "save_file", lambda *a, **k: (str(target), ""))
+        viewer.list.setCurrentRow(0)
+        viewer._save_current()
+        assert target.read_bytes() == b"agenda.txt"
+        assert viewer.status.text() == f"Saved to {target}"
+        if sys.platform == "darwin":
+            assert _mark(target).startswith("0083;")
+        viewer._sweep()
+
+    def test_save_all_saves_every_one(self, qtbot, tmp_path, monkeypatch):
+        from PySide6.QtWidgets import QMessageBox
+
+        import widgets
+
+        viewer = self._viewer(qtbot, ["one.txt", "two.txt", "three.txt"])
+        monkeypatch.setattr(widgets, "choose_directory", lambda *a, **k: str(tmp_path))
+        said = []
+        monkeypatch.setattr(QMessageBox, "information",
+                            staticmethod(lambda *a, **k: said.append(a[2])))
+        viewer._save_all()
+        assert sorted(path.name for path in tmp_path.iterdir()) == [
+            "one.txt", "three.txt", "two.txt"]
+        assert said == ["3 attachments saved."]
+        if sys.platform == "darwin":
+            assert all(_mark(path).startswith("0083;") for path in tmp_path.iterdir())
+        viewer._sweep()
 
 
 class TestParsingARealMessage:

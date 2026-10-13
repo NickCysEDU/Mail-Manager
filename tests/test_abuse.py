@@ -1017,14 +1017,20 @@ class TestTheCipherSurfaceStaysNarrow:
     48.x is the last release with a universal2 macOS wheel; 49 and 50 are
     arm64 only. 48.0.1 carries three advisories (a Bleichenbacher oracle in
     PKCS#7 EnvelopedData decryption, and two in the X.509 path verifier),
-    none reachable here: the app asks cryptography only for AES-GCM, and TLS
-    is Python's own ssl module.
+    none reachable here: the app asks cryptography only for AES, and TLS is
+    Python's own ssl module. AES-GCM keeps the app's own files; plain AES,
+    in the CBC and ECB modes Office's password protection is built on, opens
+    a protected document in office.py.
 
     If anything starts verifying certificates or decrypting PKCS#7 with this
     library, the pin stops being safe, and this test says so.
     """
 
     ALLOWED = "cryptography.hazmat.primitives.ciphers.aead"
+    #: Plain AES for Office's password protection, in the one module that
+    #: opens it: the cipher alone, nowhere near PKCS#7 or X.509.
+    OFFICE = ("office.py",
+              "from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes")
 
     def test_only_aesgcm_is_imported_from_cryptography(self):
         import re
@@ -1039,11 +1045,11 @@ class TestTheCipherSurfaceStaysNarrow:
                     continue
                 if line.lstrip().startswith("#"):
                     continue
-                if self.ALLOWED in line:
+                if self.ALLOWED in line or (path.name, line.strip()) == self.OFFICE:
                     continue
                 offenders.append(f"{path.name}:{number}: {line.strip()}")
         assert not offenders, (
-            "cryptography is used outside AES-GCM, so the <49 pin no longer "
+            "cryptography is used beyond AES, so the <49 pin no longer "
             "avoids the advisories against 48.x:\n  " + "\n  ".join(offenders))
 
     def test_the_pin_still_says_why(self):

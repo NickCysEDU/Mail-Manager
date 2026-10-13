@@ -542,6 +542,9 @@ class ModelsDialog(QDialog):
 class SettingsDialog(QDialog):
     """Credentials, model, routing and folder configuration."""
 
+    #: What the status line says while the stored password is fetched.
+    READING_KEYCHAIN = "Reading the Keychain…"
+
     def __init__(self, settings: Settings, store: CredentialStore, parent=None,
                  sample_items: Sequence[TriageItem] = ()) -> None:
         super().__init__(parent)
@@ -2948,7 +2951,7 @@ class SettingsDialog(QDialog):
         """
         from workers import KeychainReadWorker
 
-        self.status.setText("Reading the Keychain…")
+        self.status.setText(self.READING_KEYCHAIN)
         worker = KeychainReadWorker(self._store, address, parent=self)
         self._keychain_worker = worker
         worker.finished_ok.connect(self._on_keychain_read)
@@ -2964,7 +2967,10 @@ class SettingsDialog(QDialog):
         # Only if nobody has started typing in the meantime.
         if not self.password_edit.text():
             self.password_edit.setText(found.get("password", ""))
-        self.status.setText("")
+        # Only its own words: what was said since, a mailbox tested or an
+        # on-device step that failed, is not this read's to take away.
+        if self.status.text() == self.READING_KEYCHAIN:
+            self.status.setText("")
 
     def _routing_changed(self) -> None:
         routing = NonJobRouting.parse(self.routing_combo.currentData())

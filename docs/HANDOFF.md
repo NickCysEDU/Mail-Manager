@@ -27,7 +27,9 @@ describes the app itself.
   (scenes; `Rider` is the game), `rider_gl.py` (the game's lit world),
   `rider_sound.py`, `rider_layout.py`, `rider_bests.py`, `trackstyle.py`
   (tempo, beat, downbeat, sections), `harmony.py` (key and chords),
-  `beat_clock.py`, `beatmap.py`, `av_sync.py`.
+  `beat_clock.py`, `beatmap.py`, `av_sync.py`; `office.py` (Word, Excel
+  and PowerPoint read for the viewer, no Qt, and protected ones opened with
+  their password).
 
 ## Rules that break things if forgotten
 
@@ -285,6 +287,11 @@ describes the app itself.
 - **The inbox opens newest first, every time** (`_restore_geometry`): the
   header's saved state carries its sort, and a sort by category or oldest
   first came back on every launch. A header clicked sorts for the session.
+- **Settings' status line keeps what was said since** (`_on_keychain_read`):
+  the stored password is read as the dialog opens, off the drawing thread,
+  and when it came back it cleared the line whatever was on it; now only its
+  own `READING_KEYCHAIN`. A failed on-device step lost its reason that way,
+  and its test failed now and then on a busy machine.
 - **The inbox is two lists** (`MainWindow._listed`, `_sorted`): the messages
   a `ListWorker` read when the window opened (`TriageItem.analysed` False,
   shown as Not sorted yet), and the last scan's rows, shown together by
@@ -354,6 +361,18 @@ describes the app itself.
 
 ### Mail going out
 
+- **The message answered is read on its own** (`RichEditor.add_quote`): in a
+  QTextDocument of its own, then put in as a fragment inside a frame painted
+  with the page Qt read from it (else the reading pane's white), its words
+  and empty lines without a colour inked for that page (`_ink_unpainted`).
+  Read with the letter, its `<body bgcolor>` became the editor's page and its
+  `<style>` reached the signature: a dark theme's white writing on white.
+  The frame goes out as a table with its own bgcolor.
+- **Pasted rich text is fitted to the page** (`insertFromMimeData`,
+  `_fit_to_page`): the page it was copied off, a grey near white or near
+  black (`_paper`), goes from behind words, lines and cells; then a colour on
+  the editor's own page standing under 3:1 from it goes. Highlights, tinted
+  cells and the words coloured for them are kept.
 - **The windows own nothing.** `MessageWindow` and `ComposeWindow` hand every
   action to the main window - `compose`, `act_on_rows`, `send_mail`,
   `save_draft`, `neighbour_row`, `select_row`, `folder_choices`,
@@ -434,6 +453,28 @@ describes the app itself.
   import the main module again.
 - **Mutation runs edit source in place.** A killed run leaves the mutant in;
   check `git diff` after one.
+
+### Attachments
+
+- **Office files are read, never opened** (`office.py`): `identify` by the
+  bytes, asked only of what `sniff` calls an archive or other; `read` builds
+  plain HTML from the XML, with pictures by name for `_Paper.loadResource`,
+  which loads nothing else. Every bound (parts, sizes, rows, cells, slides,
+  pictures, depth, the page) is read when used: a bound held in a default
+  argument once ignored a changed one. A part declaring a DTD is refused.
+- **The protections are Microsoft's** (MS-OFFCRYPTO agile and standard, in
+  MS-CFB). The decrypter was checked byte for byte against a separate one
+  (msoffcrypto-tool) on files real Office made, and `tests/office_samples.py`
+  makes its protected files to the same check. The repository keeps no
+  documents, so the samples are made when the tests run.
+- **A password goes nowhere:** the opened document is kept per row for the
+  window's life (`_opened`), and Save writes the protected bytes. A PDF's
+  password is cleared from `QPdfDocument` once it is open.
+- **Saved files are marked** (`attachments.quarantine`): the time is
+  `int(time.time())` in hex. From September to 1.15.0 the mark was built
+  outside its `try` from `os.times().elapsed`, a float: every save raised
+  once the file was written, nothing was marked, and Save All stopped at
+  the first.
 
 ### The visualiser window
 
@@ -879,7 +920,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 5,763 tests
+./dev test                     # 5,839 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus

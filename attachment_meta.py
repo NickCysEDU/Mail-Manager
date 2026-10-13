@@ -314,6 +314,16 @@ def pdf_facts(data: bytes) -> Dict[str, str]:
     return facts
 
 
+#: What each state of an Office file means for opening it here.
+_OFFICE_STATES = {
+    "open": "opens here",
+    "password": "protected with a password, which opens it here",
+    "rights": "protected by Microsoft's rights management; only Office opens it",
+    "older": "in the format from before 2007; Office opens it",
+    "sealed": "a message Microsoft sealed; only Outlook opens it",
+}
+
+
 def facts_for(item) -> List[Tuple[str, str]]:
     """Everything worth showing about one attachment, in display order."""
     rows: List[Tuple[str, str]] = [
@@ -334,7 +344,17 @@ def facts_for(item) -> List[Tuple[str, str]]:
     import attachments
 
     kind, sniffed = attachments.sniff(data[:32], item.content_type, item.name)
-    if sniffed and sniffed != item.content_type:
+    import office
+
+    found = office.identify(data, item.name, item.content_type) if kind in (
+        "archive", "other") else None
+    if found is not None:
+        # A Word file is a zip, and a protected one a compound file, by
+        # design: neither is the declared type being wrong.
+        rows.append(("Document", f"{found.name}, {_OFFICE_STATES[found.state]}"))
+        if found.macros:
+            rows.append(("Macros", "yes, never run here"))
+    elif sniffed and sniffed != item.content_type:
         rows.append(("Actually", f"{sniffed} (the declared type differs)"))
     if kind == "image":
         rows += sorted(image_facts(data).items())

@@ -1165,6 +1165,45 @@ class TestTheOnDevicePanelNeverFreezes:
         finally:
             dialog.deleteLater()
 
+    def test_a_password_read_late_leaves_what_was_said_since(self, window,
+                                                             monkeypatch):
+        """The dialog reads the stored password as it opens, off the drawing
+        thread, and when the password came back it cleared the status line,
+        whatever had been said there since: a step that failed lost its
+        reason, and the test above failed now and then on a busy machine."""
+        monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+
+        class SlowKeychain(InMemoryCredentialStore):
+            def get_mailbox_password(self, email):
+                time.sleep(0.6)
+                return ""
+
+            get_icloud_password = get_mailbox_password
+
+        dialog = SettingsDialog(window.settings, SlowKeychain(), window)
+        try:
+            assert dialog.status.text() == dialog.READING_KEYCHAIN
+            dialog._begin_ollama_step("pull", ["/nope/ollama", "pull", "x"])
+            started = time.perf_counter()
+            while (dialog._keychain_worker is not None or dialog._ollama_worker
+                   is not None) and time.perf_counter() - started < 12:
+                QApplication.processEvents()
+                time.sleep(0.01)
+            QApplication.processEvents()
+            assert dialog._keychain_worker is None, "the password never came back"
+            assert "not on this Mac" in dialog.status.text()
+        finally:
+            dialog.deleteLater()
+
+    def test_the_password_read_clears_its_own_words(self, window):
+        dialog = SettingsDialog(window.settings, InMemoryCredentialStore(), window)
+        try:
+            dialog.status.setText(dialog.READING_KEYCHAIN)
+            dialog._on_keychain_read({"password": "", "error": ""})
+            assert dialog.status.text() == ""
+        finally:
+            dialog.deleteLater()
+
     def test_two_presses_do_not_start_two_installs(self, window):
         dialog = SettingsDialog(window.settings, InMemoryCredentialStore(), window)
         try:
