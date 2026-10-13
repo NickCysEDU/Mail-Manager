@@ -251,8 +251,10 @@ class TestThePaneIsOnTheCard:
                 s.chart = {"Kick": tuple(i * 0.47 for i in range(80))}
                 s.settle()
                 return s
-            def paint(target_painter):
-                scene = type(visualizers.by_name("Music rider"))()
+            def paint(target_painter, drop=()):
+                kind = type(visualizers.by_name("Music rider"))
+                scene = type("Part", (kind,), {
+                    name: (lambda *args, **kwargs: None) for name in drop})()
                 scene._last = None
                 was = visualizers.time.monotonic
                 visualizers.time.monotonic = lambda: 500.0
@@ -265,34 +267,52 @@ class TestThePaneIsOnTheCard:
             context = QOpenGLContext()
             context.create()
             context.makeCurrent(surface)
-            shape = QOpenGLFramebufferObjectFormat()
-            shape.setSamples(4)
-            shape.setAttachment(
-                QOpenGLFramebufferObject.Attachment.CombinedDepthStencil)
-            buffer = QOpenGLFramebufferObject(QSize(W, H), shape)
-            buffer.bind()
-            device = QOpenGLPaintDevice(QSize(W, H))
-            p = QPainter(device)
-            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-            p.fillRect(QRectF(0, 0, W, H), QColor(0, 0, 0))
-            paint(p)
-            p.end()
-            buffer.release()
-            gpu = buffer.toImage()
-            cpu = QImage(W, H, QImage.Format.Format_ARGB32_Premultiplied)
-            cpu.fill(QColor(0, 0, 0))
-            p = QPainter(cpu)
-            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-            paint(p)
-            p.end()
             points = [(x, y) for x in range(0, W, 6) for y in range(0, H, 6)]
-            diff = sum(abs(lightness(gpu, x, y) - lightness(cpu, x, y))
-                       for x, y in points) / len(points)
-            print(json.dumps({"diff": diff}))
+            def both(drop=()):
+                shape = QOpenGLFramebufferObjectFormat()
+                shape.setSamples(4)
+                shape.setAttachment(
+                    QOpenGLFramebufferObject.Attachment.CombinedDepthStencil)
+                buffer = QOpenGLFramebufferObject(QSize(W, H), shape)
+                buffer.bind()
+                device = QOpenGLPaintDevice(QSize(W, H))
+                p = QPainter(device)
+                p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                p.fillRect(QRectF(0, 0, W, H), QColor(0, 0, 0))
+                paint(p, drop)
+                p.end()
+                buffer.release()
+                gpu = buffer.toImage()
+                cpu = QImage(W, H, QImage.Format.Format_ARGB32_Premultiplied)
+                cpu.fill(QColor(0, 0, 0))
+                p = QPainter(cpu)
+                p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                paint(p, drop)
+                p.end()
+                diff = sum(abs(lightness(gpu, x, y) - lightness(cpu, x, y))
+                           for x, y in points) / len(points)
+                return diff, gpu, cpu
+            diff, gpu, cpu = both()
+            out = {"diff": diff}
+            if diff >= 0.01:
+                # What it is, where a card does draw differently: each
+                # image's own brightness, and the difference with each
+                # part of the picture left out.
+                out["card"] = sum(lightness(gpu, x, y) for x, y in points) / len(points)
+                out["cpu"] = sum(lightness(cpu, x, y) for x, y in points) / len(points)
+                out["without"] = {
+                    name: round(both(drop)[0], 4) for name, drop in (
+                        ("sky", ("_sky",)), ("city", ("_pillars",)),
+                        ("numbers", ("_flat_numbers",)),
+                        ("road", ("_surface", "_lanes", "_markings",
+                                  "_edges")), ("craft", ("_ship",)))}
+            print(json.dumps(out))
         """)
         assert got["diff"] < 0.01, (
             f"the card and the CPU draw the same moment "
-            f"{got['diff']:.4f} apart in brightness on average")
+            f"{got['diff']:.4f} apart in brightness on average "
+            f"(card {got.get('card', 0):.3f}, CPU {got.get('cpu', 0):.3f}; "
+            f"without each part: {got.get('without')})")
 
     def test_the_bloom_is_made_from_an_even_average(self):
         """Where the card will not work the bloom out itself (see

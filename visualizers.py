@@ -6357,17 +6357,16 @@ class Rider(Scene):
             hue % 1.0, 0.85, 1.0,
             min(self.SUN_HALO_MOST, 0.10 + surge * 0.06 + punch * 0.08)))
         halo.setColorAt(1.0, QColor(0, 0, 0, 0))
-        painter.save()
-        painter.setClipRect(QRectF(horizon.x() - wide, low - wide,
-                                   wide * 2.0, wide + 1.0))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(halo)
-        self._ring_fill(painter, rect.adjusted(-wide, -wide, wide, wide),
-                        sun_at, reach)
+        # Its upper half only, cut by its own shape: a clip across a turned
+        # picture goes through the card's stencil, which a card may not draw
+        # as the CPU does.
+        painter.drawRect(QRectF(sun_at.x() - reach, sun_at.y() - reach,
+                                reach * 2.0, reach + 1.0))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         self._hills(painter, horizon, wide, tall, hue, punch)
         self._sun(painter, sun_at, tall, hue, punch)
-        painter.restore()
 
     #: The sun at the end of the road and the reach of its light, as shares of
     #: the frame's height, and the most of its light at the middle.
