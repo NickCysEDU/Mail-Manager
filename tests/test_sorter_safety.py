@@ -142,7 +142,9 @@ def test_the_held_out_set_is_never_used_to_tune(rules):
     the change scores 83.6% and the code after 84.5%, 43 of 44 filed right
     both times; the real inbox's held set went from 262 to 264 of 292. No
     rule was written from either set, and the code added was checked for
-    their wording first.
+    their wording first. On 13 October, with a business's own receipt no
+    longer read as junk for its trade, it was measured again: 86.2%, 43 of
+    44 filed right, and the real held set 264 of 292 as before.
     """
     holdout = load("holdout.json")
     correct = sum(

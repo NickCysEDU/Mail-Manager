@@ -2463,6 +2463,190 @@ class TestTheVisualiserControlsFitTheirRow:
         host.deleteLater()
 
 
+class TestTheFlatRideByChoice:
+    """Option-Shift-C while the rider is on screen draws it flat, as on a
+    card that cannot draw its world, and again brings the world back; kept
+    for next time. Never by accident: the key alone, or with one of the two,
+    does nothing, and nothing happens in any other scene."""
+
+    @staticmethod
+    def _key(key, held):
+        from PySide6.QtCore import QEvent
+        from PySide6.QtGui import QKeyEvent
+
+        return QKeyEvent(QEvent.Type.KeyPress, key, held)
+
+    @staticmethod
+    def _rider_pane():
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        pane.scene_box.setCurrentText("Music rider")
+        return pane
+
+    def test_option_shift_c_is_the_chord(self, qapp):
+        from PySide6.QtCore import Qt
+
+        from attachment_view import AudioPane
+
+        mods = Qt.KeyboardModifier
+        assert AudioPane.classic_chord(
+            self._key(Qt.Key.Key_C, mods.AltModifier | mods.ShiftModifier))
+
+    def test_the_letter_option_makes_of_it_is_the_chord_too(self, qapp):
+        from PySide6.QtCore import Qt
+
+        from attachment_view import AudioPane
+
+        mods = Qt.KeyboardModifier
+        assert AudioPane.classic_chord(
+            self._key(Qt.Key.Key_Ccedilla, mods.AltModifier | mods.ShiftModifier))
+
+    @pytest.mark.parametrize("held", ["none", "shift", "option", "more"])
+    def test_anything_less_or_more_is_not(self, qapp, held):
+        from PySide6.QtCore import Qt
+
+        from attachment_view import AudioPane
+
+        mods = Qt.KeyboardModifier
+        chosen = {"none": mods.NoModifier, "shift": mods.ShiftModifier,
+                  "option": mods.AltModifier,
+                  "more": mods.AltModifier | mods.ShiftModifier
+                  | mods.ControlModifier}[held]
+        assert not AudioPane.classic_chord(self._key(Qt.Key.Key_C, chosen))
+
+    def test_it_draws_the_rider_flat_and_back(self, qapp):
+        pane = self._rider_pane()
+        assert not pane.spectrum.classic
+        assert pane.toggle_classic()
+        assert pane.spectrum.classic
+        assert pane.toggle_classic()
+        assert not pane.spectrum.classic
+
+    def test_only_while_the_rider_is_on_screen(self, qapp):
+        import visualizers
+        from attachment_view import AudioPane
+
+        pane = AudioPane()
+        other = next(scene.name for scene in visualizers.SCENES
+                     if scene.name != "Music rider")
+        pane.scene_box.setCurrentText(other)
+        assert not pane.toggle_classic()
+        assert not pane.spectrum.classic
+
+    def test_the_choice_is_kept_for_next_time(self, qapp):
+        from attachment_view import AudioPane
+
+        self._rider_pane().toggle_classic()
+        assert AudioPane().spectrum.classic
+
+    def test_the_world_is_left_alone_while_flat(self, qapp):
+        from types import SimpleNamespace
+
+        from attachment_widgets import Spectrum
+
+        built = object()
+        lit, flat = Spectrum(), Spectrum()
+        flat.set_classic(True)
+        for pane in (lit, flat):
+            pane._canvas = SimpleNamespace(world=built, world_failed=False)
+        assert lit._world() is built
+        assert flat._world() is None
+
+    def test_the_window_hands_the_chord_to_the_pane(self, qtbot):
+        from PySide6.QtCore import Qt
+
+        import attachments
+        from attachment_view import AttachmentViewer
+
+        viewer = AttachmentViewer([attachments.Attachment(
+            part="1", name="a.txt", content_type="text/plain", size=5,
+            data=b"hello")])
+        qtbot.addWidget(viewer)
+        viewer.stack.setCurrentWidget(viewer.audio)
+        viewer.audio.scene_box.setCurrentText("Music rider")
+        mods = Qt.KeyboardModifier
+        viewer.keyPressEvent(self._key(Qt.Key.Key_C,
+                                       mods.AltModifier | mods.ShiftModifier))
+        assert viewer.audio.spectrum.classic
+        viewer._sweep()
+
+    def test_full_screen_hands_the_chord_to_the_pane(self, qapp):
+        from types import SimpleNamespace
+
+        from PySide6.QtCore import Qt
+
+        from attachment_widgets import FullScreenSpectrum
+
+        pane = self._rider_pane()
+        mods = Qt.KeyboardModifier
+        event = self._key(Qt.Key.Key_C, mods.AltModifier | mods.ShiftModifier)
+        assert FullScreenSpectrum._play_it(SimpleNamespace(_owner=pane), event,
+                                           held=True)
+        assert pane.spectrum.classic
+
+
+class TestABadFrameOfTheWorld:
+    """A slip in the game while the world was drawn once put the flat ride
+    on for the rest of the session. One bad frame is drawn flat and the world
+    tried again; a card that cannot draw it fails frame after frame, and is
+    let go after a few."""
+
+    class Shaky:
+        name = "Shaky"
+        blurb = "test"
+
+        def __init__(self):
+            self.flat = 0
+
+        def reset(self):
+            pass
+
+        def paint_on_card(self, painter, rect, state, world):
+            raise KeyError(15)
+
+        def paint(self, painter, rect, state):
+            self.flat += 1
+
+    def _paint(self, qapp, frames):
+        from types import SimpleNamespace
+
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QImage, QPainter
+
+        from attachment_widgets import Spectrum
+
+        pane = Spectrum()
+        scene = self.Shaky()
+        pane._scene = scene
+        pane._on_gpu = True
+        pane._post = False
+        canvas = SimpleNamespace(world=object(), world_failed=False,
+                                 world_slips=0, world_samples=4)
+        pane._canvas = canvas
+        image = QImage(64, 64, QImage.Format.Format_ARGB32_Premultiplied)
+        painter = QPainter(image)
+        try:
+            for _frame in range(frames):
+                pane._paint_scene(painter, QRectF(0, 0, 64, 64))
+        finally:
+            painter.end()
+        return scene, canvas
+
+    def test_one_bad_frame_is_drawn_flat_and_the_world_kept(self, qapp):
+        scene, canvas = self._paint(qapp, 1)
+        assert scene.flat == 1, "the bad frame was not drawn at all"
+        assert not canvas.world_failed
+        assert canvas.world is not None
+
+    def test_frame_after_frame_lets_the_world_go(self, qapp):
+        from attachment_widgets import Spectrum
+
+        scene, canvas = self._paint(qapp, Spectrum.WORLD_SLIPS)
+        assert canvas.world_failed and canvas.world is None
+        assert scene.flat == Spectrum.WORLD_SLIPS
+
+
 class TestTheTransportKeys:
     """J back ten seconds, K play or pause, L forward ten. A second
     keyPressEvent once replaced the first and silenced J, K and L, and a
@@ -9634,9 +9818,10 @@ class TestTheRiderIsDecorated:
             f"foot of the block at row {foot:.0f}, so it is not in the road")
 
     def test_the_end_of_the_road_is_lit(self, qapp):
-        """The road runs into something rather than into nothing."""
+        """The road runs into something rather than into nothing: the sun
+        and its glow, where the lamp was."""
         with_lamp = self._frame(self._flat())
-        without = self._frame(self._flat(drop=("_glow",)))
+        without = self._frame(self._flat(drop=("_sky",)))
         gauge = self._flat()
         self._frame(gauge)
         spot = self._place(gauge, 0.0, gauge.FAR)
@@ -13945,6 +14130,67 @@ class TestWakeboardLeavesTheRoad:
             f"{side}, so the craft is not drawn off the road")
 
 
+class TestAStrobeByHandOnTheFlatRide:
+    """The strobe keys over the flat ride: stepped on and off at full, the
+    whole picture went with them, its brightness halving and doubling five
+    times a second. Eased and held below full, it swells instead."""
+
+    W, H = 320, 180
+
+    def test_the_picture_swells_rather_than_flashing(self, qapp):
+        import statistics
+
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QColor, QImage, QPainter
+
+        import visualizers
+        from attachment_widgets import SpectrumState
+
+        scene = visualizers.Rider()
+        scene._last = None
+        scene._pop = lambda *args, **kwargs: None
+        image = QImage(self.W, self.H, QImage.Format.Format_ARGB32_Premultiplied)
+        painter = QPainter(image)
+        clock = [1000.0]
+        was = visualizers.time.monotonic
+        visualizers.time.monotonic = lambda: clock[0]
+        means = []
+        try:
+            for frame in range(180):
+                clock[0] += 1 / 60
+                state = SpectrumState()
+                state.levels = [0.4] * 27
+                state.bass, state.mid, state.high = 0.4, 0.3, 0.3
+                state.synth = 0.2
+                state.kit = {}
+                state.at = frame / 60
+                state.tempo = 128.0
+                state.beat_at = 0.5
+                state.chart = {"Kick": ()}
+                # Held for six frames and let go for six, at full.
+                state.strobe = (frame // 6) % 2 == 0
+                state.hit = 1.0
+                state.settle()
+                image.fill(QColor(0, 0, 0))
+                scene.paint(painter, QRectF(0, 0, self.W, self.H), state)
+                means.append(statistics.mean(
+                    image.pixelColor(x, y).lightnessF()
+                    for y in range(0, self.H, 6) for x in range(0, self.W, 6)))
+        finally:
+            painter.end()
+            visualizers.time.monotonic = was
+        live = means[60:]
+        worst = max(abs(b - a) for a, b in zip(live, live[1:]))
+        # 0.035 before; 0.010 stepped at full on this picture, 0.005 eased,
+        # 0.004 with no strobe at all.
+        assert worst < 0.007, (
+            f"a strobe by hand moves the whole picture {worst:.3f} in a frame")
+        # And how far it swells: 0.012 eased at full, 0.008 held down.
+        assert max(live) - min(live) < 0.011, (
+            f"a strobe by hand swings the picture "
+            f"{max(live) - min(live):.3f} between its lightest and darkest")
+
+
 class TestTheBeatHitsHardEnoughToFeel:
     """The rider's beat hits harder. Through the same 128 bpm track, a beat
     swung the rider's brightness 0.026 and changed 7 per cent of the frame,
@@ -14045,14 +14291,20 @@ class TestTheBeatHitsHardEnoughToFeel:
         """
         import visualizers
 
-        scene = visualizers.Rider()
+        class Open(visualizers.Rider):
+            # The city's towers stand tall enough to pass through a top
+            # corner, which is passing, not pulsing.
+            def _pillars(self, *args, **kwargs):
+                pass
+
+        scene = Open()
         scene._last = None
         scene._pop = lambda *args, **kwargs: None
         # No kick and the playhead pinned between beats: nothing should pulse.
         shots = self._played(scene, kicks=False)
         live = [s for s in shots if s[0] > 1.0]
-        # The top corners: the road runs up the middle and the pillars sweep
-        # the sides at road height, so only the rim lights a corner.
+        # The top corners: the road runs up the middle, and with the city out
+        # of the frame only the rim lights a corner.
         corners = ((2, 2), (self.W - 3, 2))
         swing = max(
             abs(self._light(b, x, y) - self._light(a, x, y))
@@ -14599,7 +14851,20 @@ class TestTheCraftLeansIntoWhatItIsDoing:
         import visualizers
         from attachment_widgets import SpectrumState
 
-        scene = visualizers.Rider()
+        def nothing(*args, **kwargs):
+            return None
+
+        class Craft(visualizers.Rider):
+            # The craft alone on the frame: the city's windows, the road's
+            # lines and the numbers were all read as the craft once.
+            _sky = _flat_tunnel = _pillars = _surface = _lanes = nothing
+            _markings = _edges = _walls = _bits = _rim = nothing
+            _pops_now = _wash = _card = _results = _matrix = nothing
+
+            def _flat_numbers(self):
+                return None
+
+        scene = Craft()
         scene._last = None
         image = QImage(cls.W, cls.H,
                        QImage.Format.Format_ARGB32_Premultiplied)
@@ -14633,24 +14898,24 @@ class TestTheCraftLeansIntoWhatItIsDoing:
 
     @classmethod
     def _tilt(cls, shot):
-        """Which way the craft leans, as how far its nose sits to one side of
-        its tail: a roll swings them opposite ways. Lit-pixel heights were
-        too blunt on a shape this small.
+        """Which way the craft leans, in degrees, from the long axis of
+        everything drawn: a craft is wider than it is deep on the glass, so
+        the axis runs wing to wing, and a roll that lifts the side it heads
+        for turns it that way. Read from the whole shape, so it holds for a
+        triangle and a jet alike; a guess from the nose and the tail did not.
         """
         lit = [(x, y) for y in range(cls.H // 2, cls.H)
                for x in range(cls.W)
-               if shot.pixelColor(x, y).greenF() > 0.55
-               and shot.pixelColor(x, y).redF() < 0.8]
+               if shot.pixelColor(x, y).lightnessF() > 0.2]
         if len(lit) < 30:
             return None
-        rows = sorted({y for _x, y in lit})
-        top = rows[:max(2, len(rows) // 4)]
-        bottom = rows[-max(2, len(rows) // 4):]
-        nose = [x for x, y in lit if y in set(top)]
-        tail = [x for x, y in lit if y in set(bottom)]
-        if not nose or not tail:
-            return None
-        return sum(nose) / len(nose) - sum(tail) / len(tail)
+        mx = sum(x for x, _y in lit) / len(lit)
+        my = sum(y for _x, y in lit) / len(lit)
+        xx = sum((x - mx) ** 2 for x, _y in lit)
+        yy = sum((y - my) ** 2 for _x, y in lit)
+        xy = sum((x - mx) * (y - my) for x, y in lit)
+        # Heights grow downwards: the right side up is a negative slope.
+        return -math.degrees(0.5 * math.atan2(2.0 * xy, xx - yy))
 
     def test_the_craft_is_drawn_rolled(self, qapp):
         """The bank itself, off the frame, with the craft held in one lane."""

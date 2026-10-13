@@ -3150,7 +3150,7 @@ class Rider(Scene):
     HURT_FOR = 0.6
     #: How hard a hit washes the frame, throws the camera and dims everything
     #: else.
-    HURT_WASH = 0.34
+    HURT_WASH = 0.26
     HURT_THROW = 2.3
     HURT_DIM = 0.72
 
@@ -4528,7 +4528,11 @@ class Rider(Scene):
         if first:
             jumped = False
         elif jumps is not None:
-            jumped = jumps != self._jumps_seen
+            # A seek is counted by the pane; a track started again from the
+            # top, or the next one, is not, and its playhead goes back with
+            # no count at all. Its beats are not the ones laid already.
+            jumped = (jumps != self._jumps_seen
+                      or said < self._was_at - self.JUMP)
         else:
             jumped = abs(said - self._was_at) > self.JUMP
         self._jumps_seen = jumps
@@ -5247,6 +5251,14 @@ class Rider(Scene):
         that beat where it is known, otherwise the bass now, eased after a
         hit.
         """
+        # Behind every beat decided: those were laid on another pass of the
+        # track, and a road counted from here would leave a gap before them.
+        if self._paces and now < min(self._paces):
+            self._lunges = {}
+            self._paces = {}
+            self._starts = {}
+            self._drives = {}
+            self._marks = None
         # From the beat after the last decided, out past everything shown.
         number = now if not self._paces else min(now, max(self._paces) + 1)
         horizon = None
@@ -5493,20 +5505,33 @@ class Rider(Scene):
         hud.draw(painter, rect, self, state)
         self._results(painter, rect)
 
+    def _flat_numbers(self):
+        """The world's numbers for the flat picture, made once: None where the
+        module that draws them will not load, and the card says it instead."""
+        hud = getattr(self, "_flat_hud", None)
+        if hud is None and not getattr(self, "_flat_hud_failed", False):
+            try:
+                import rider_gl
+
+                hud = self._flat_hud = rider_gl.Hud()
+            except Exception:      # noqa: BLE001 - the card is there
+                logging.getLogger(__name__).exception(
+                    "the rider's numbers would not load; using the card")
+                self._flat_hud_failed = True
+        return hud
+
     def paint(self, painter, rect, state) -> None:
         self._relief = self.FLAT_RELIEF
         self._step(state)
 
-        flash = self.flash(state)
+        # The strobe eased in and out and held below full: stepped at full
+        # strength, a strobe by hand turned the whole flat picture on and off.
+        flash = min(self.FLAT_FLASH, self.bloom(state))
         surge = self._loudness
         kit = state.kit or {}
         bass = max(state.bass, kit.get("Bass", 0.0))
 
-        painter.fillRect(rect, QColor(3, 2, 8))
-        # The same morphing field as Ambience, behind everything and dim.
-        self._plasma.paint(painter, rect, state,
-                           strength=0.07 + surge * 0.07 + flash * 0.05,
-                           flash=flash, going=self._rolling)
+        painter.fillRect(rect, QColor(2, 1, 6))
 
         horizon, focal, tilt = self._camera(rect, surge, bass)
         hue = self._tier(surge, state.synth)
@@ -5525,7 +5550,8 @@ class Rider(Scene):
         painter.translate(horizon)
         painter.rotate(lean + self._rolled * 360.0)
         painter.translate(-horizon)
-        self._glow(painter, rect, horizon, hue, surge, bass, beat, flash)
+        self._sky(painter, rect, horizon, hue, surge,
+                  max(beat, kit.get("Kick", 0.0)))
         self._flat_tunnel(painter, rect, horizon, focal, hue, beat, flash)
         self._pillars(painter, horizon, focal, hue, kit, beat, flash)
         painter.restore()
@@ -5559,7 +5585,13 @@ class Rider(Scene):
         self._wash(painter, rect)
         if self._mode == "Puzzle":
             self._matrix(painter, rect)
-        self._card(painter, rect, hue)
+        hud = self._flat_numbers()
+        if hud is not None:
+            # The world's own numbers, so the ride reads the same however it
+            # is drawn.
+            hud.draw(painter, rect, self, state)
+        else:
+            self._card(painter, rect, hue)
         self._results(painter, rect)
 
     #: Where the grid sits and how big it is, as shares of the frame: bottom
@@ -5713,16 +5745,12 @@ class Rider(Scene):
             return
         # Strongest at the hit and gone in HURT_FOR, front-loaded.
         hurt = self._hurt * self._hurt
-        # Multiplied, not washed over, so the frame goes red and dark rather
-        # than brighter.
-        painter.save()
-        painter.setCompositionMode(
-            QPainter.CompositionMode.CompositionMode_Multiply)
+        # A dark red veil over the frame, so it goes red and dark rather than
+        # brighter. Laid over, not multiplied in: the painter on the graphics
+        # card has no Multiply, and drew the veil's own pale colour over
+        # everything instead.
         painter.fillRect(rect, QColor(
-            255,
-            int(255 - (255 - 46) * hurt * self.HURT_DIM),
-            int(255 - (255 - 38) * hurt * self.HURT_DIM)))
-        painter.restore()
+            30, 0, 4, int(255 * min(1.0, hurt * self.HURT_DIM * 0.65))))
         # A rim of red light from the edges in.
         middle = rect.center()
         edge = QRadialGradient(middle, max(rect.width(), rect.height()) * 0.62)
@@ -5812,7 +5840,7 @@ class Rider(Scene):
                 marks.lineTo(self._eye(horizon, focal, across + wide, 0.0, at))
         self._beam(painter, marks, QColor.fromHsvF(
             (hue + 0.10) % 1.0, 0.55, 1.0,
-            min(1.0, 0.20 + kick * 0.45 + flash * 0.3)))
+            min(1.0, 0.12 + kick * 0.30 + flash * 0.15)))
 
     def _edges(self, painter, rect, horizon, focal, hue, kit, flash) -> None:
         """The rails either side: the left answers the snare, the right the
@@ -5835,10 +5863,15 @@ class Rider(Scene):
                     first = point
                 else:
                     rail.lineTo(point)
-            self._beam(painter, rail, QColor.fromHsvF(
-                (hue + (0.42 if side < 0 else 0.16)) % 1.0,
-                max(0.0, 0.85 - flash * 0.4), 1.0,
-                min(1.0, 0.35 + lit * 0.6 + flash * 0.3)))
+            # Both in the road's own colour, as the world lights them: one
+            # rail in each of two other hues read as a rainbow, not a road.
+            painter.setPen(QPen(QColor.fromHsvF(
+                hue % 1.0, max(0.0, 0.80 - flash * 0.3), 1.0,
+                min(1.0, 0.55 + lit * 0.45 + flash * 0.2)),
+                max(1.0, rect.height() / 380.0), Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(rail)
 
     #: The colour of each kind of block, as a turn from the road's hue.
     BLOCK_HUE = {"wall": 0.42, "block": 0.30, "run": 0.16}
@@ -6028,15 +6061,6 @@ class Rider(Scene):
             backs = QPainterPath()
             edges = QPainterPath()
 
-    #: The horizon lamp: how far it reaches as a share of the frame, and how
-    #: much the bass opens it. Kept small, since it sits where a block is read
-    #: while there is still time to move; reaching half the frame, it washed
-    #: those blocks out.
-    GLOW_REACH = 0.30
-    GLOW_BASS = 0.10
-    #: The most of the frame the lamp may take.
-    GLOW_MOST = 0.26
-
     #: How the screen answers a run: a ring spreading from the craft, a flash
     #: of colour from the frame's edge, and for moments that deserve one, a
     #: callout. Drawn in screen space, outside the bank and the shake, and gone
@@ -6170,7 +6194,7 @@ class Rider(Scene):
         glow = QRadialGradient(centre, reach)
         glow.setColorAt(0.45, QColor(0, 0, 0, 0))
         glow.setColorAt(1.0, QColor.fromHsvF(hue, sat, 1.0,
-                                             min(1.0, amount)))
+                                             min(self.POP_FLASH_MOST, amount)))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(glow)
         painter.drawRect(rect)
@@ -6205,8 +6229,8 @@ class Rider(Scene):
     #: The road is kept dark so blocks read against it, so the beat hits the
     #: edge instead: a rim of the road's colour on the kick, transparent well
     #: before the middle.
-    RIM_MOST = 0.45
-    RIM_REACH = 0.58
+    RIM_MOST = 0.25
+    RIM_REACH = 0.66
 
     def _rim(self, painter, rect, hue, punch) -> None:
         """The frame's edge, lit on the beat. Outside the bank and the shake:
@@ -6258,12 +6282,14 @@ class Rider(Scene):
             from PySide6.QtGui import QConicalGradient
 
             wheel = QConicalGradient(middle, (self._bend * 60.0) % 360.0)
+            # As dark as the world's tunnel: lit at full, the wheel of every
+            # colour filled the frame bright enough to dazzle.
             for step in range(7):
                 wheel.setColorAt(step / 6.0, QColor.fromHsvF(
-                    (hue + step / 6.0 + self._climb * 0.05) % 1.0, 0.95,
-                    0.55 + beat * 0.25 + flash * 0.2))
+                    (hue + step / 6.0 + self._climb * 0.05) % 1.0, 0.92,
+                    0.24 + beat * 0.10 + flash * 0.06))
             painter.save()
-            painter.setOpacity(painter.opacity() * inside * 0.85)
+            painter.setOpacity(painter.opacity() * inside * 0.8)
             # Past the frame's corners every way: the picture turns over
             # through a corkscrew, and a frame-sized fill left the corners
             # black.
@@ -6296,33 +6322,145 @@ class Rider(Scene):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawEllipse(centre, reach, reach)
 
-    def _glow(self, painter, rect, horizon, hue, surge, bass, beat,
-              flash) -> None:
-        """A lamp at the end of the road, behind everything: the cheapest depth
-        in the scene, one gradient a frame.
+    def _sky(self, painter, rect, horizon, hue, surge, punch) -> None:
+        """The sky the road runs into, as the world draws it: dark overhead
+        and lit low in the passage's colour, still stars, a line of hills, and
+        the banded sun the road runs towards. Behind everything, turned with
+        the world.
         """
-        reach = max(1.0, rect.height() * (self.GLOW_REACH
-                                          + bass * self.GLOW_BASS))
-        # The area to fill comes from the widest the lamp can ever be, which is
-        # constant for a frame size. The bass never settles exactly, so an area
-        # measured from it creeps, and its edge shows as one pixel changing
-        # under a stopped track.
-        widest = max(1.0, rect.height() * (self.GLOW_REACH
-                                           + self.GLOW_BASS))
-        lamp = QRadialGradient(horizon, reach)
-        lamp.setColorAt(0.0, QColor.fromHsvF(
-            (hue + 0.08) % 1.0, max(0.0, 0.70 - flash * 0.4), 1.0,
-            min(self.GLOW_MOST,
-                0.14 + surge * 0.14 + beat * 0.09 + flash * 0.12)))
-        lamp.setColorAt(0.45, QColor.fromHsvF(
-            (hue + 0.02) % 1.0, 0.85, 0.8,
-            min(self.GLOW_MOST, 0.06 + surge * 0.08 + beat * 0.05)))
-        lamp.setColorAt(1.0, QColor(0, 0, 0, 0))
+        wide = math.hypot(rect.width(), rect.height())
+        tall = max(1.0, rect.height())
+        low = horizon.y()
+        # Past the frame's corners every way: the picture turns over in a
+        # corkscrew, and a frame-sized fill left the corners black.
+        air = QLinearGradient(0.0, low - tall, 0.0, low + tall * 0.25)
+        # Dim enough near the horizon for a block at the far end to be read
+        # against it in the brightest colour a passage takes.
+        air.setColorAt(0.0, QColor.fromHsvF((hue + 0.66) % 1.0, 0.75, 0.03))
+        air.setColorAt(0.55, QColor.fromHsvF((hue + 0.90) % 1.0, 0.80, 0.05))
+        air.setColorAt(0.80, QColor.fromHsvF(hue % 1.0, 0.90,
+                                             0.12 + surge * 0.03))
+        # A haze where the road meets the sky, so the road runs into light
+        # rather than into the dark; below the horizon, out of the sky a far
+        # block is read against.
+        air.setColorAt(0.84, QColor.fromHsvF(hue % 1.0, 0.70,
+                                             0.15 + surge * 0.03))
+        air.setColorAt(1.0, QColor.fromHsvF(hue % 1.0, 0.90, 0.025))
+        painter.fillRect(rect.adjusted(-wide, -wide, wide, wide), QBrush(air))
+        self._stars(painter, horizon, wide, tall, punch)
+        # The sun's light, in the sky only: below the horizon is where a block
+        # at the far end is read, and a lamp over it washed it out.
+        reach = tall * self.SUN_HALO
+        sun_at = QPointF(horizon.x(), low)
+        halo = QRadialGradient(sun_at, reach)
+        halo.setColorAt(0.0, QColor.fromHsvF(
+            hue % 1.0, 0.85, 1.0,
+            min(self.SUN_HALO_MOST, 0.10 + surge * 0.06 + punch * 0.08)))
+        halo.setColorAt(1.0, QColor(0, 0, 0, 0))
+        painter.save()
+        painter.setClipRect(QRectF(horizon.x() - wide, low - wide,
+                                   wide * 2.0, wide + 1.0))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(lamp)
-        # Only where the lamp can reach. See _ring_fill.
-        self._ring_fill(painter, rect, horizon, widest)
+        painter.setBrush(halo)
+        self._ring_fill(painter, rect.adjusted(-wide, -wide, wide, wide),
+                        sun_at, reach)
         painter.setBrush(Qt.BrushStyle.NoBrush)
+        self._hills(painter, horizon, wide, tall, hue, punch)
+        self._sun(painter, sun_at, tall, hue, punch)
+        painter.restore()
+
+    #: The sun at the end of the road and the reach of its light, as shares of
+    #: the frame's height, and the most of its light at the middle.
+    SUN_SIZE = 0.11
+    SUN_HALO = 0.22
+    SUN_HALO_MOST = 0.16
+    #: How many stars, and where they keep from: none low in the glow.
+    STARS = 110
+    STARS_ABOVE = 0.06
+    #: The most the strobe brightens the flat picture, and the most of the
+    #: frame's colour an answer's edge flash may take.
+    FLAT_FLASH = 0.45
+    POP_FLASH_MOST = 0.32
+
+    def _stars(self, painter, horizon, wide, tall, punch) -> None:
+        """Still, as in the world: a sky that moves reads as the camera
+        moving. Placed once, against the horizon, and twinkling on the track's
+        clock, so a stopped track stops them."""
+        placed = getattr(self, "_star_places", None)
+        if placed is None:
+            import random
+
+            shuffle = random.Random(29)
+            placed = self._star_places = [
+                (shuffle.uniform(-1.0, 1.0), shuffle.uniform(
+                    self.STARS_ABOVE, 1.0), shuffle.uniform(0.0, math.tau),
+                 shuffle.uniform(0.6, 1.6))
+                for _ in range(self.STARS)]
+        dot = max(1.0, tall / 520.0)
+        for across, up, phase, size in placed:
+            twinkle = 0.55 + 0.45 * math.sin(self._heard * 3.0 + phase)
+            alpha = min(0.9, (0.25 + 0.5 * twinkle) * (1.0 + punch * 0.3)
+                        * min(1.0, up / 0.25))
+            point = QRectF(horizon.x() + across * wide * 0.6 - dot * size / 2,
+                           horizon.y() - up * tall - dot * size / 2,
+                           dot * size, dot * size)
+            painter.fillRect(point, QColor(230, 240, 255, int(255 * alpha)))
+
+    def _hills(self, painter, horizon, wide, tall, hue, punch) -> None:
+        """The range every synthwave road runs towards, low either side and
+        clear in the middle where the sun sets, lit along its ridge."""
+        ridge = QPainterPath()
+        outline = QPainterPath()
+        steps = 72
+        span = max(1.0, tall * 0.9)
+        for step in range(steps + 1):
+            x = horizon.x() - wide + 2.0 * wide * step / steps
+            q = (x - horizon.x()) / span
+            u = q * 2.2
+            up = 0.055 * (0.55 * math.sin(u * 3.1 + 1.3)
+                          + 0.3 * math.sin(u * 7.7 + 0.4)
+                          + 0.15 * math.sin(u * 17.3 + 2.1)) \
+                + 0.07 * abs(math.sin(u * 1.3 + 0.8))
+            middle = min(1.0, max(0.0, (abs(q) - 0.02) / 0.33))
+            up = max(up, 0.0) * middle * middle * (3.0 - 2.0 * middle)
+            point = QPointF(x, horizon.y() - up * tall)
+            if step == 0:
+                ridge.moveTo(QPointF(x, horizon.y() + 2.0))
+                outline.moveTo(point)
+            else:
+                outline.lineTo(point)
+            ridge.lineTo(point)
+        ridge.lineTo(QPointF(horizon.x() + wide, horizon.y() + 2.0))
+        ridge.closeSubpath()
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.fillPath(ridge, QColor.fromHsvF((hue + 0.55) % 1.0, 0.6, 0.03))
+        stroke(painter, outline, QColor.fromHsvF(
+            hue % 1.0, 0.85, 1.0, min(1.0, 0.55 + punch * 0.25)),
+            max(1.0, tall / 520.0))
+
+    def _sun(self, painter, middle, tall, hue, punch) -> None:
+        """A disc on the horizon, its lower part cut into bands that thicken
+        towards the horizon it sits on."""
+        radius = tall * self.SUN_SIZE * (1.0 + punch * 0.04)
+        disc = QPainterPath()
+        disc.addEllipse(middle, radius, radius)
+        above = QPainterPath()
+        above.addRect(QRectF(middle.x() - radius - 1.0,
+                             middle.y() - radius - 1.0,
+                             radius * 2.0 + 2.0, radius + 1.0))
+        bands = QPainterPath()
+        for band in range(5):
+            height = radius * (0.04 + band * 0.085)
+            thick = radius * (0.075 - band * 0.012)
+            bands.addRect(QRectF(middle.x() - radius - 1.0,
+                                 middle.y() - height - thick / 2.0,
+                                 radius * 2.0 + 2.0, thick))
+        fill = QLinearGradient(0.0, middle.y() - radius, 0.0, middle.y())
+        fill.setColorAt(0.0, QColor.fromHsvF((hue + 0.12) % 1.0, 0.75, 1.0))
+        fill.setColorAt(1.0, QColor.fromHsvF((hue - 0.05) % 1.0, 0.95, 1.0))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.fillPath(disc.intersected(above).subtracted(bands),
+                         QBrush(fill))
 
     def _lanes(self, painter, horizon, focal, hue, beat, flash) -> None:
         """The lines between the lanes, brighter than the chevrons and dashed
@@ -6348,36 +6486,130 @@ class Rider(Scene):
             (hue + 0.06) % 1.0, max(0.0, 0.30 - flash * 0.25), 1.0,
             min(1.0, 0.55 + beat * 0.30 + flash * 0.25)))
 
-    #: How far apart the pillars are down the road, and how tall.
+    #: How far apart the towers either side are down the road. See _pillars.
     PILLAR_EVERY = 5.0
-    PILLAR_TALL = 1.45
+    #: How far from the road's edge a tower stands, and how wide, deep and
+    #: tall it is, each somewhere between two bounds, in road units.
+    TOWER_OFF = 1.1
+    TOWER_WIDE = (1.2, 2.6)
+    TOWER_DEEP = (1.6, 3.4)
+    TOWER_TALL = (1.4, 3.2)
 
     def _pillars(self, painter, horizon, focal, hue, kit, beat,
                  flash) -> None:
-        """Gates down either side, passing at the road's own speed: they stand
-        on the kick and light on the snare.
+        """The city either side of the road, as the world draws it: a tower
+        every PILLAR_EVERY, passing at the road's own speed, dark against the
+        sky, its roofline lit on the snare and its windows with the music.
+        The far ones first, so the near ones stand in front.
         """
-        edge = self.LANE_WIDE * self.LANES / 2.0 + 0.45
-        tall = self.PILLAR_TALL * (1.0 + kit.get("Kick", 0.0) * 0.35)
-        posts = QPainterPath()
+        # Outside a corkscrew's tunnel, as in the world.
+        open_air = 1.0 - self._tunnel_at(self._heard)
+        if open_air <= 0.01:
+            return
+        edge = self.LANE_WIDE * self.LANES / 2.0
+        roof = min(1.0, 0.45 + kit.get("Snare", 0.0) * 0.40 + beat * 0.15
+                   + flash * 0.20)
+        lit = 0.15 + 0.55 * max(0.0, min(1.0, self._loudness))
         first = math.ceil((self._near + self._at) / self.PILLAR_EVERY)
-        for index in range(first, first + int(self.FAR / self.PILLAR_EVERY) + 2):
-            at = index * self.PILLAR_EVERY - self._at
-            if not self._near + 0.3 <= at <= self.FAR:
-                continue
-            for side in (-1.0, 1.0):
-                foot = self._eye(horizon, focal, side * edge, 0.0, at)
-                head = self._eye(horizon, focal, side * edge, -tall, at)
-                posts.moveTo(foot)
-                posts.lineTo(head)
-                # A short arm turning in over the road, so a pillar reads as a
-                # gate.
-                posts.lineTo(self._eye(horizon, focal,
-                                       side * (edge - 0.55), -tall, at))
-        self._beam(painter, posts, QColor.fromHsvF(
-            (hue + 0.30) % 1.0, max(0.0, 0.75 - flash * 0.4), 1.0,
-            min(1.0, 0.35 + kit.get("Snare", 0.0) * 0.45 + beat * 0.20
-                + flash * 0.3)))
+        last = first + int(self.FAR / self.PILLAR_EVERY) + 2
+        painter.save()
+        painter.setOpacity(painter.opacity() * open_air)
+        try:
+            for index in range(last, first - 1, -1):
+                at = index * self.PILLAR_EVERY - self._at
+                if not self._near + 0.3 <= at <= self.FAR:
+                    continue
+                near = 1.0 - (at - self._near) / max(1e-6,
+                                                     self.FAR - self._near)
+                seen = 0.35 + 0.65 * max(0.0, min(1.0, near))
+                for side in (-1.0, 1.0):
+                    self._tower(painter, horizon, focal, hue, index, side,
+                                edge, at, seen, roof, lit)
+        finally:
+            painter.restore()
+
+    def _tower(self, painter, horizon, focal, hue, index, side, edge, at,
+               seen, roof, lit) -> None:
+        """One tower: the face towards the road, the face towards the camera
+        with its windows, and the roofline over both. Its size and its lit
+        windows come from its place on the road, so it is the same tower
+        every frame it is in sight."""
+        def chance(salt: int) -> float:
+            return math.sin(index * 12.9898 + side * 4.137 + salt * 78.233
+                            ) * 43758.5453 % 1.0
+
+        def between(bounds, salt: int) -> float:
+            return bounds[0] + (bounds[1] - bounds[0]) * chance(salt)
+
+        wide = between(self.TOWER_WIDE, 1)
+        deep = between(self.TOWER_DEEP, 2)
+        tall = between(self.TOWER_TALL, 3)
+        inner = side * (edge + self.TOWER_OFF)
+        outer = side * (edge + self.TOWER_OFF + wide)
+        back = min(self.FAR, at + deep)
+        foot = self._eye(horizon, focal, inner, 0.0, at)
+        foot_out = self._eye(horizon, focal, outer, 0.0, at)
+        head = self._eye(horizon, focal, inner, -tall, at)
+        head_out = self._eye(horizon, focal, outer, -tall, at)
+        foot_back = self._eye(horizon, focal, inner, 0.0, back)
+        head_back = self._eye(horizon, focal, inner, -tall, back)
+        tone = (hue + 0.6) % 1.0
+        painter.setPen(Qt.PenStyle.NoPen)
+        beside = QPainterPath()
+        beside.moveTo(foot)
+        beside.lineTo(foot_back)
+        beside.lineTo(head_back)
+        beside.lineTo(head)
+        beside.closeSubpath()
+        painter.fillPath(beside, QColor.fromHsvF(tone, 0.5, 0.075))
+        front = QPainterPath()
+        front.moveTo(foot)
+        front.lineTo(foot_out)
+        front.lineTo(head_out)
+        front.lineTo(head)
+        front.closeSubpath()
+        painter.fillPath(front, QColor.fromHsvF(tone, 0.55, 0.045))
+        light = (hue + 0.5 + (chance(4) - 0.5) * 0.12) % 1.0
+        # The windows, while the face is big enough to have any.
+        high = math.hypot(head.x() - foot.x(), head.y() - foot.y())
+        if high > 10.0:
+            rows = max(3, int(tall / 0.28))
+            columns = 3 if wide < 1.8 else 4
+            painter.save()
+            painter.setTransform(QTransform(
+                foot_out.x() - foot.x(), foot_out.y() - foot.y(),
+                head.x() - foot.x(), head.y() - foot.y(),
+                foot.x(), foot.y()), True)
+            # Two lots, bright and dim, each filled once: a fill a window cost
+            # more than the towers themselves.
+            bright, dim = QPainterPath(), QPainterPath()
+            for row in range(rows):
+                for column in range(columns):
+                    salt = 10 + row * 7 + column
+                    if chance(salt) >= lit:
+                        continue
+                    (bright if chance(salt + 500) > 0.45 else dim).addRect(
+                        QRectF((column + 0.32) / columns, (row + 0.34) / rows,
+                               0.36 / columns, 0.32 / rows))
+            alpha = 0.25 + 0.5 * seen
+            painter.fillPath(bright, QColor.fromHsvF(light, 0.6, 1.0, alpha))
+            painter.fillPath(dim, QColor.fromHsvF(light, 0.6, 1.0,
+                                                  alpha * 0.55))
+            painter.restore()
+        rim = QPainterPath()
+        rim.moveTo(head_out)
+        rim.lineTo(head)
+        rim.lineTo(head_back)
+        painter.setPen(QPen(QColor.fromHsvF(light, 0.70, 1.0, roof * seen),
+                            max(1.0, min(2.5, high / 120.0)), Qt.PenStyle.SolidLine,
+                            Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPath(rim)
+        corner = QPainterPath()
+        corner.moveTo(foot)
+        corner.lineTo(head)
+        self._beam(painter, corner, QColor.fromHsvF(light, 0.70, 1.0,
+                                                   0.35 * roof * seen))
 
     def _bits(self, painter, horizon, focal, hue) -> None:
         """The pieces thrown off a block that was hit."""
@@ -6428,12 +6660,18 @@ class Rider(Scene):
     #: The flat craft of each level, as how wide it is and how far its nose
     #: reaches against the first: a broad cruiser at Easy, a needle at
     #: Expert, as the world on the card flies them (rider_gl.CRAFT_FOR).
+    #: The jet's outline on one side, from the nose to the middle of its
+    #: tail: how far along towards the nose and how far out towards a wing
+    #: tip, as shares of the craft. Mirrored for the other side.
+    FLAT_JET = ((1.00, 0.00), (0.72, 0.09), (0.46, 0.15), (0.18, 0.86),
+                (0.06, 1.00), (0.00, 0.93), (0.10, 0.36), (-0.02, 0.32),
+                (-0.10, 0.30), (-0.09, 0.14), (-0.13, 0.00))
     FLAT_CRAFT = {"Easy": (1.25, 0.85), "Normal": (1.0, 1.0),
                   "Hard": (0.85, 1.15), "Expert": (0.62, 1.32)}
 
     def _ship(self, painter, rect, horizon, focal, hue, flash,
               punch=0.0) -> None:
-        """The rider: a lit triangle, low on the road."""
+        """The rider: a jet seen from behind and above, low on the road."""
         at = self.RIDER_AT
         across = self._lane_here
         broad, long = self.FLAT_CRAFT.get(self._difficulty, (1.0, 1.0))
@@ -6476,10 +6714,24 @@ class Rider(Scene):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawEllipse(middle, reach, reach)
             painter.setBrush(Qt.BrushStyle.NoBrush)
+        # The jet, laid on three points: the nose up the road and the wing
+        # tips either side of the tail, as the world's craft sits.
+        back = QPointF((left.x() + right.x()) / 2.0,
+                       (left.y() + right.y()) / 2.0)
+        ahead = QPointF(nose.x() - back.x(), nose.y() - back.y())
+        half = QPointF((right.x() - left.x()) / 2.0,
+                       (right.y() - left.y()) / 2.0)
+
+        def on_craft(along: float, out: float) -> QPointF:
+            return QPointF(back.x() + ahead.x() * along + half.x() * out,
+                           back.y() + ahead.y() * along + half.y() * out)
+
         path = QPainterPath()
-        path.moveTo(nose)
-        path.lineTo(left)
-        path.lineTo(right)
+        path.moveTo(on_craft(*self.FLAT_JET[0]))
+        for along, out in self.FLAT_JET[1:]:
+            path.lineTo(on_craft(along, out))
+        for along, out in reversed(self.FLAT_JET[1:-1]):
+            path.lineTo(on_craft(along, -out))
         path.closeSubpath()
         # Banked into the move around the craft's own middle, so the nose comes
         # up on the side it is heading for. Everything to the end of the craft
@@ -6497,11 +6749,35 @@ class Rider(Scene):
         hurt = self._sore > 0.0 and int(self._sore * 14) % 2 == 0
         shade = 0.0 if hurt else (hue + 0.5) % 1.0
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.fillPath(path, QColor.fromHsvF(
-            shade, 0.85 if hurt else max(0.0, 0.40 - flash * 0.3),
-            1.0, 0.85))
-        stroke(painter, path, QColor.fromHsvF(shade, 0.2, 1.0, 1.0),
-               2.0 * max(0.75, min(1.3, rect.height() / 700.0)))
+        body = QLinearGradient(on_craft(-0.13, 0.0), on_craft(1.0, 0.0))
+        body.setColorAt(0.0, QColor.fromHsvF(
+            shade, 0.85 if hurt else max(0.0, 0.32 - flash * 0.2), 1.0))
+        body.setColorAt(1.0, QColor.fromHsvF(
+            shade, 0.85 if hurt else 0.42, 0.78))
+        painter.fillPath(path, QBrush(body))
+        canopy = QPainterPath()
+        canopy.moveTo(on_craft(0.66, 0.0))
+        canopy.lineTo(on_craft(0.50, 0.055))
+        canopy.lineTo(on_craft(0.34, 0.0))
+        canopy.lineTo(on_craft(0.50, -0.055))
+        canopy.closeSubpath()
+        painter.fillPath(canopy, QColor.fromHsvF((hue + 0.5) % 1.0, 0.6, 1.0,
+                                                 0.9))
+        stroke(painter, path, QColor.fromHsvF(shade, 0.2, 1.0, 0.9),
+               1.3 * max(0.75, min(1.3, rect.height() / 700.0)))
+        # The engines, lit harder on the kick.
+        span = math.hypot(half.x(), half.y())
+        for out in (-0.17, 0.17):
+            spot = on_craft(-0.10, out)
+            reach = max(2.0, span * (0.16 + punch * 0.05))
+            engine = QRadialGradient(spot, reach)
+            engine.setColorAt(0.0, QColor(255, 255, 255, 235))
+            engine.setColorAt(0.35, QColor.fromHsvF((hue + 0.5) % 1.0, 0.55,
+                                                    1.0, 0.8))
+            engine.setColorAt(1.0, QColor(0, 0, 0, 0))
+            painter.setBrush(engine)
+            painter.drawEllipse(spot, reach, reach)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
         # The bumpers, when up: two short bars either side of the craft, faint
         # while they are coming back.
         if self._shield > 0.01:

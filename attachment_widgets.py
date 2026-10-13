@@ -394,6 +394,8 @@ class _GpuCanvas(QOpenGLWidget):
         #: The rider's lit world, for this context. See Spectrum._world.
         self.world = None
         self.world_failed = False
+        #: How many frames the world has failed to draw. See WORLD_SLIPS.
+        self.world_slips = 0
         #: The samples the governor asked for this frame, for the world.
         self.world_samples = 4
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents,
@@ -580,6 +582,10 @@ class Spectrum(QWidget):
     #: Sixty a second, which is what the scenes are budgeted against.
     FRAME_MS = 16
 
+    #: How many frames the rider's world may fail before the flat ride takes
+    #: over for good. See _paint_scene.
+    WORLD_SLIPS = 3
+
     #: How long one scene takes to give way to the next; the first is the
     #: default.
     CHANGES = (("Quick", 0.2), ("Smooth", 0.6), ("Slow", 1.5), ("Cut", 0.0))
@@ -723,6 +729,9 @@ class Spectrum(QWidget):
         self._spamming = False
         #: The strobe switch; see set_strobe.
         self._strobe_on = False
+        #: The rider drawn flat even where the card could draw its world: a
+        #: choice the player makes, kept by the viewer. See set_classic.
+        self._classic = False
         #: What the two sliders mean in Manual (see HAND_SLOWEST and HAND_ON),
         #: kept apart from the automatic pair so switching mode carries nothing
         #: over.
@@ -845,6 +854,16 @@ class Spectrum(QWidget):
         self._frame_shown()
         super().update()
 
+    def set_classic(self, on: bool) -> None:
+        """Draw the rider flat, as on a card that cannot draw its world, or
+        let it have the world again."""
+        self._classic = bool(on)
+        self.update()
+
+    @property
+    def classic(self) -> bool:
+        return self._classic
+
     def _world(self):
         """The rider's world for the canvas's context, made on first use. None
         without a canvas, with ``MAIL_MANAGER_WORLD=0``, or where this card
@@ -854,7 +873,7 @@ class Spectrum(QWidget):
         import os
 
         canvas = self._canvas
-        if canvas is None or canvas.world_failed:
+        if canvas is None or canvas.world_failed or self._classic:
             return None
         if os.environ.get("MAIL_MANAGER_WORLD", "1").strip() == "0":
             return None
@@ -2772,11 +2791,19 @@ class Spectrum(QWidget):
                 except Exception:      # noqa: BLE001 - the flat one is there
                     import logging
 
+                    # One bad frame is drawn flat and the world tried again:
+                    # a slip in the game once put the flat ride on for the
+                    # rest of the session. A card that cannot draw it fails
+                    # every frame, and is let go after a few.
+                    canvas = self._canvas
+                    canvas.world_slips += 1
+                    gone = canvas.world_slips >= self.WORLD_SLIPS
                     logging.getLogger(__name__).exception(
                         "the rider's world failed on this card; drawing it "
-                        "flat from here on")
-                    self._canvas.world = None
-                    self._canvas.world_failed = True
+                        "flat %s", "from here on" if gone else "for a frame")
+                    if gone:
+                        canvas.world = None
+                        canvas.world_failed = True
             # Straight in, at every pixel the screen has: no buffer to shrink
             # into and nothing stretched. The polish goes on afterwards; see
             # _paint_on_gpu.
@@ -3187,6 +3214,10 @@ class FullScreenSpectrum(QWidget):
             event.accept()
             return True
         owner = self._owner
+        chord = getattr(owner, "classic_chord", None)
+        if held and chord is not None and chord(event) and owner.toggle_classic():
+            event.accept()
+            return True
         reader = getattr(owner, "vj_action", None)
         handler = getattr(owner, "vj", None)
         if reader is None or handler is None:

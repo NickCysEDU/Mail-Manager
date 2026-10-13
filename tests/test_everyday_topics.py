@@ -456,6 +456,78 @@ class TestNotEveryMoneyWordIsATransaction:
         assert found.other_category is not OtherCategory.TRANSACTIONS
 
 
+# -- a business's own record of money that moved, whatever trade it is in.
+class TestATradesOwnReceipt:
+    def test_a_sportsbooks_deposit_with_its_casino_in_the_footer(self, rules):
+        found = sort(rules, "Your deposit confirmation",
+                     "Hi Sam, your deposit is confirmed. Amount: $25.00. Good luck "
+                     "out there! Sportsbook | Casino | Lottery | Help",
+                     "account@northpeakbets.example")
+        assert found.other_category is OtherCategory.TRANSACTIONS
+
+    def test_a_banks_wire_sent(self, rules):
+        found = sort(rules, "Wire transfer completed",
+                     "Your outgoing wire of $1,500.00 was sent on May 2 from the "
+                     "account ending in 4826.", "alerts@lindenbank.example")
+        assert found.other_category is OtherCategory.TRANSACTIONS
+
+    def test_a_wire_with_no_other_word_for_it(self, rules):
+        found = sort(rules, "Outgoing wire",
+                     "Your wire of $1,500.00 was sent on May 2.",
+                     "alerts@lindenbank.example")
+        assert found.other_category is OtherCategory.TRANSACTIONS
+
+    def test_a_deposit_confirmed_by_the_book(self, rules):
+        found = sort(rules, "Account update",
+                     "A deposit of $25.00 has been confirmed on your account. "
+                     "Sportsbook | Casino | Lottery | Help",
+                     "account@northpeakbets.example")
+        assert found.other_category is OtherCategory.TRANSACTIONS
+
+    def test_a_deposit_confirmation_named_as_one(self, rules):
+        found = sort(rules, "Deposit confirmation",
+                     "Amount: $25.00 to checking.", "notices@lindenbank.example")
+        assert found.other_category is OtherCategory.TRANSACTIONS
+
+    def test_a_withdrawal_confirmation_named_as_one(self, rules):
+        found = sort(rules, "Withdrawal confirmation",
+                     "Amount: $60.00 from checking.", "notices@lindenbank.example")
+        assert found.other_category is OtherCategory.TRANSACTIONS
+
+    def test_a_transfer_named_in_its_headline(self, rules):
+        found = sort(rules, "Transfer received",
+                     "Amount: $300.00 into savings.", "notices@lindenbank.example")
+        assert found.other_category is OtherCategory.TRANSACTIONS
+
+    def test_a_payment_confirmed_in_so_many_words(self, rules):
+        found = sort(rules, "Thanks",
+                     "Your payment is confirmed and your plan carries on.",
+                     "hello@sketchpad.example")
+        assert found.other_category is OtherCategory.TRANSACTIONS
+
+    def test_the_same_words_from_a_free_mail_account_are_not_vouched_for(
+            self, rules):
+        found = sort(rules, "Your deposit confirmation",
+                     "Your deposit is confirmed. Amount: $25.00. Play the casino "
+                     "and the lottery now, bonus inside.",
+                     "northpeak.bets.payouts@gmail.example")
+        assert found.other_category is not OtherCategory.TRANSACTIONS
+
+    def test_a_lottery_win_that_calls_itself_confirmed(self, rules):
+        found = sort(rules, "Lottery winnings confirmed",
+                     "Dear customer, your deposit of $950,000.00 is confirmed. "
+                     "Kindly pay $9.99 here to release the funds: "
+                     "http://win.example/x", "claims@lotto-office.example")
+        assert found.other_category is OtherCategory.SPAM
+
+    def test_a_count_of_orders_is_not_money_received(self, rules):
+        found = sort(rules, "Make $38,500 in 90 days",
+                     "Send $5 to each name on the list. Once you have received 100 "
+                     "or more orders, the reports sell themselves.",
+                     "profits@cashflow-reports.example")
+        assert found.other_category is not OtherCategory.TRANSACTIONS
+
+
 # -- the scams that wear a receipt or a courier's notice.
 class TestAScamDressedAsATransaction:
     def test_a_parcel_held_for_a_small_fee(self, rules):

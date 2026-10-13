@@ -57,7 +57,7 @@ rules finish the scan; a rejected key is reported instead.
 
 ### The built-in rules
 
-`rules_engine.py` scores 1,129 weighted signals: phrases, senders, links and
+`rules_engine.py` scores 1,128 weighted signals: phrases, senders, links and
 the shape of a message. It copes with messy text (mojibake, accents, smart
 quotes, zero-width characters, look-alike letters, spaced-out words) and has
 phrases in Spanish, French, German and Portuguese for the commonest verdicts.
@@ -94,7 +94,7 @@ On 292 messages from a real inbox that it had never seen, labelled by hand
 before it ran, it names the exact category for 90% (an earlier version: 72%)
 and files 137 of the 152 job messages without asking, none of them into the
 wrong folder (that earlier version filed 92). On a hand-written held-out set
-of 116 harder messages, written to trip it up, it scores 85% exact and files
+of 116 harder messages, written to trip it up, it scores 86% exact and files
 43 of the 44 it is sure of correctly. Its confidence is capped, and a message that fits two
 categories lands in Needs Review.
 
@@ -406,7 +406,7 @@ See [SECURITY.md](../SECURITY.md) for reporting a problem.
 ./dev dry      # scan for real, with moves disabled
 ./dev fake     # the pipeline in the terminal, offline
 ./dev scan     # the pipeline on real mail, read-only
-./dev test     # 5,732 tests (with the evaluation sets present)
+./dev test     # 5,763 tests (with the evaluation sets present)
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 

@@ -826,6 +826,74 @@ class TestASeekIsNotARide:
             "the power block went with the road it was laid on")
 
 
+class TestATrackPlayedAgain:
+    """Played to its end and started again, or followed by the next, a track
+    goes back to its start with no seek counted by the pane. The road kept
+    the beats of the pass before, the road laid from the new start stopped
+    short of them, building the marks across the gap raised, and the world
+    was drawn flat for the rest of the session."""
+
+    LENGTH = 200.0
+
+    @classmethod
+    def _track(cls):
+        # One chart and one shape for every frame, as the pane gives them.
+        made = _state(0.0, length=cls.LENGTH,
+                      chart=tuple(0.25 + i * 0.5 for i in range(400)))
+        return made.chart, made.contour
+
+    @classmethod
+    def _play(cls, scene, clock, track, start, seconds, jumps=4):
+        chart, contour = track
+        for index in range(max(1, int(seconds * 60))):
+            clock[0] += 1.0 / 60.0
+            made = _state(start + index / 60.0, length=cls.LENGTH)
+            made.chart, made.contour = chart, contour
+            # Playing, with the pane's count of seeks, which does not move.
+            made.playing = True
+            made.jumps = jumps
+            scene._step(made)
+
+    @staticmethod
+    def _unbroken(scene) -> bool:
+        numbers = sorted(scene._starts)
+        return numbers == list(range(numbers[0], numbers[-1] + 1))
+
+    def test_starting_again_from_the_top_is_a_new_run(self, qapp, clock):
+        import visualizers
+
+        scene = visualizers.Rider()
+        track = self._track()
+        self._play(scene, clock, track, 150.0, 3.0)
+        assert scene._offered, "nothing was offered on the first pass"
+        self._play(scene, clock, track, 0.5, 1 / 60)
+        assert scene._offered == 0, "the pass before ran on into the new one"
+
+    def test_a_road_decided_from_behind_it_has_no_gap(self, qapp, clock):
+        import visualizers
+
+        scene = visualizers.Rider()
+        # From the top, long enough for the first beats to be let go.
+        self._play(scene, clock, self._track(), 0.0, 30.0)
+        assert min(scene._starts) > 20
+        # Asked straight for the beats from the top, as nothing but a jump
+        # the pane missed would ask.
+        scene._decide_lunges(0, 0.5)
+        assert self._unbroken(scene)
+        first, starts = scene._marks
+        assert first == min(scene._starts) and len(starts) == len(scene._starts)
+
+    def test_the_ride_goes_on_from_the_top(self, qapp, clock):
+        import visualizers
+
+        scene = visualizers.Rider()
+        track = self._track()
+        self._play(scene, clock, track, 150.0, 2.0)
+        self._play(scene, clock, track, 0.5, 3.0)
+        assert self._unbroken(scene)
+        assert scene._heard == pytest.approx(0.5 + (3 * 60 - 1) / 60.0)
+
+
 class TestEachLevelKeepsItsOwnBest:
     def test_normal_is_where_the_old_bests_are_and_the_rest_apart(self):
         from attachment_view import AudioPane

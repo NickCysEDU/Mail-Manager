@@ -734,6 +734,37 @@ class TestTheSameGameEitherWay:
         assert game(painted) == game(stepped)
 
 
+class TestTheFlatRideOnTheCard:
+    """The flat ride drawn on the card, as it is where the world cannot be
+    drawn or is not wanted. A hit there filled the frame with a pale wash:
+    the painter on the card has no Multiply, said so on every frame, and
+    painted the veil's own colour over everything instead."""
+
+    def test_a_hit_darkens_the_frame_rather_than_whiting_it_out(self):
+        got = on_the_card(RIDER + textwrap.dedent("""
+            from PySide6.QtCore import qInstallMessageHandler
+            warned = []
+            qInstallMessageHandler(
+                lambda kind, context, text: warned.append(text))
+            made, scene = rider_pane(size=(640, 400))
+            made.set_classic(True)
+            calm = mean_colour(play(made, 1.5))
+            def hurt(i):
+                scene._hurt = 1.0
+            sore = mean_colour(play(made, 0.05, start=12.0, each=hurt))
+            print(json.dumps({
+                "calm": sum(calm) / 3.0, "sore": sum(sore) / 3.0,
+                "flat": made._canvas.world is None,
+                "unsupported": sum("composition mode" in text
+                                   for text in warned)}))
+        """))
+        assert got["flat"], "the world was drawn with the flat ride chosen"
+        assert got["unsupported"] == 0, (
+            f"the card refused a blend {got['unsupported']} times")
+        assert got["sore"] <= got["calm"] + 0.02, (
+            f"a hit lit the frame to {got['sore']:.2f} from {got['calm']:.2f}")
+
+
 class TestTheWorldOnTheCard:
     def test_it_draws_at_every_rung(self):
         """At full resolution as well as half: a GL paint device already

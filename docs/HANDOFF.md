@@ -220,6 +220,14 @@ describes the app itself.
   renamed from the two old topics and never exercised; and putting
   "requested" back into `_MONEY_IN` changes no verdict, because
   `_MONEY_ASKED` still wins.
+- **A business's own record of money that moved is not junk for its trade**
+  (`worded_spam`, discounted unless the shape says scam or the sender is a
+  free mail account): the words that mark junk elsewhere are a trade's own
+  words in its receipts, a casino's, an exchange's or a bank's wire.
+  What counts as moved (`says_money_moved`) needs an amount said as one
+  (`_AN_AMOUNT`): "once you have received 100 orders" is a chain letter's
+  count. Untested: discounting inside a scam's shape too would change no
+  verdict, since the shape outscores the transaction it wears.
 - **The sets were relabelled by a rule written before any output was read**
   (12 October): RECEIPT and SHIPPING became TRANSACTIONS by search and
   replace, and Finance only where the message confirms one movement of money
@@ -274,6 +282,9 @@ describes the app itself.
   since any account can list a command line, with each value single-quoted
   (`%q` let bash expand a `~` in PATH). `tests/test_dev_launch.py` runs it.
   Away from a terminal, `./dev` runs Python directly, as before.
+- **The inbox opens newest first, every time** (`_restore_geometry`): the
+  header's saved state carries its sort, and a sort by category or oldest
+  first came back on every launch. A header clicked sorts for the session.
 - **The inbox is two lists** (`MainWindow._listed`, `_sorted`): the messages
   a `ListWorker` read when the window opened (`TriageItem.analysed` False,
   shown as Not sorted yet), and the last scan's rows, shown together by
@@ -591,6 +602,34 @@ describes the app itself.
 - **A seek re-lays the road; a re-count keeps what is in sight.** Blocks in
   sight are carried over through the exact inverse of the road's curve
   (`_when(..., exact=True)`).
+- **A playhead gone back is a jump, counted or not** (`Rider._advance`).
+  The pane counts seeks, not a track started again from the top or the
+  next one after the end, and the road kept the last pass's beats: decided
+  again from beat 0, it stopped short of them, and building `_marks` across
+  the gap raised (`KeyError: 15`, 13 October), which put the flat ride on
+  for the rest of the session. `_decide_lunges` also starts its tables
+  again if asked from behind them.
+- **The world is let go after `Spectrum.WORLD_SLIPS` bad frames,** not one
+  (`_paint_scene`): a bad frame is drawn flat and the world tried again.
+- **The flat ride is drawn as the world is** (`Rider.paint`): the sky, sun,
+  hills and stars (`_sky`), towers either side (`_pillars`, `_tower`), a
+  jet (`_ship`, `FLAT_JET`) and the world's own numbers (`rider_gl.Hud`,
+  through `_flat_numbers`; the old card only if that will not load). It is
+  also what draws on the card when the world fails or is not wanted, and
+  the painter on the card has none of the advanced blend modes: Multiply
+  there drew the hit's veil as a pale sheet over the frame and logged
+  "Unsupported composition mode" every frame. Use SourceOver, Plus and the
+  plain Porter-Duff modes only in anything that may be painted on the card.
+  The strobe is eased and held below `FLAT_FLASH`, an answer's edge flash
+  is held under `POP_FLASH_MOST`, and a corkscrew's tunnel is as dark as the
+  world's; at full strength each of them flashed the whole picture. The
+  towers' sky behind the road is kept dim enough to read a block against
+  in the brightest passage (`TestTheRiderUnderAPlaythrough`).
+- **Option-Shift-C while the rider is on screen draws it flat by choice**
+  (`AudioPane.classic_chord`, `toggle_classic`, `Spectrum.set_classic`),
+  kept in `viewer.json` as `classic_rider`. Deliberately not in the keys
+  list or the handbook: a hidden setting, two modifiers so it is never hit
+  by accident, and nothing in any other scene.
 - **A corkscrew's turn is in the road samples, not the camera;** towers stand
   on the road with the corkscrew's roll taken out unless inside the tunnel.
 - **The city stands upright** (`onRoadUpright`): a tower takes neither the
@@ -840,7 +879,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 5,732 tests
+./dev test                     # 5,763 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus

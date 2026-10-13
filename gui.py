@@ -2178,6 +2178,11 @@ class MainWindow(QMainWindow):
             self.table.horizontalHeader().restoreState(
                 QByteArray.fromBase64(self.settings.table_state.encode())
             )
+        # Newest first whenever the window opens, as a mailbox is read: the
+        # saved header carried a sort by category, or oldest first, from one
+        # launch to the next. A header clicked still sorts for the session.
+        self.table.sortByColumn(TriageTableModel.COL_DATE,
+                                Qt.SortOrder.DescendingOrder)
         # A header saved while there was one mailbox would keep the Mailbox
         # column hidden after a second is added.
         self._restore_hidden_columns()

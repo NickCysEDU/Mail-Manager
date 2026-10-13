@@ -574,6 +574,37 @@ class TestMailboxSetup:
 class TestTheMailboxColumnIsActuallyVisible:
     """Every one of these was a real bug: the column existed and could not be seen."""
 
+    def test_the_inbox_opens_newest_first_whatever_was_saved(
+            self, qapp, tmp_path, monkeypatch):
+        """A header sorted by category, oldest first, was saved and opened that
+        way every time after."""
+        monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))
+        first = MainWindow(Settings(icloud_email="you@icloud.example").normalized(),
+                           InMemoryCredentialStore())
+        first.show()
+        first.table.sortByColumn(TriageTableModel.COL_CATEGORY,
+                                 Qt.SortOrder.AscendingOrder)
+        saved = bytes(
+            first.table.horizontalHeader().saveState().toBase64()).decode()
+        first.close()
+
+        again = MainWindow(Settings(icloud_email="you@icloud.example",
+                                    table_state=saved).normalized(),
+                           InMemoryCredentialStore(), demo=True)
+        again.show()
+        try:
+            header = again.table.horizontalHeader()
+            assert header.sortIndicatorSection() == TriageTableModel.COL_DATE
+            assert header.sortIndicatorOrder() == Qt.SortOrder.DescendingOrder
+            again._load_demo_data()
+            dates = [again.model.items[again.proxy.mapToSource(
+                again.proxy.index(row, 0)).row()].email.date
+                for row in range(again.proxy.rowCount())]
+            dated = [when for when in dates if when is not None]
+            assert len(dated) > 3 and dated == sorted(dated, reverse=True)
+        finally:
+            again.close()
+
     def test_a_saved_header_cannot_hide_it_forever(self, qapp, tmp_path, monkeypatch):
         """The state saved when there was one mailbox said to hide the column."""
         monkeypatch.setenv("ICLOUD_TRIAGE_HOME", str(tmp_path))

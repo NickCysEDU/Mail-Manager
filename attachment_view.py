@@ -510,6 +510,8 @@ class AudioPane(QWidget):
         self.tags = _muted("")
 
         self.spectrum = Spectrum()
+        # The flat ride, if that is what the player chose last time.
+        self.spectrum.set_classic(_viewer_prefs().get(self.CLASSIC_PREF) is True)
         import attachment_audio
         import visualizers
 
@@ -1477,6 +1479,39 @@ class AudioPane(QWidget):
 
     #: The game last chosen, kept between windows as the level is.
     GAME_PREF = "game"
+
+    #: Whether the rider is drawn flat by choice. See toggle_classic.
+    CLASSIC_PREF = "classic_rider"
+
+    @staticmethod
+    def classic_chord(event) -> bool:
+        """Option-Shift-C and nothing else held: two keys more than anything
+        played by hand, so the flat ride is never put on by accident. Option
+        makes C a C with a cedilla on some keyboards, so either is the key.
+        """
+        held = event.modifiers() & (Qt.KeyboardModifier.AltModifier
+                                    | Qt.KeyboardModifier.ShiftModifier
+                                    | Qt.KeyboardModifier.ControlModifier
+                                    | Qt.KeyboardModifier.MetaModifier)
+        wanted = (Qt.KeyboardModifier.AltModifier
+                  | Qt.KeyboardModifier.ShiftModifier)
+        return held == wanted and event.key() in (Qt.Key.Key_C,
+                                                  Qt.Key.Key_Ccedilla)
+
+    def toggle_classic(self) -> bool:
+        """The rider drawn flat, or its world back, while the rider is on
+        screen; nothing in any other scene. Remembered for next time."""
+        scene = self._steering()
+        if scene is None:
+            return False
+        on = not self.spectrum.classic
+        self.spectrum.set_classic(on)
+        _keep_viewer_pref(self.CLASSIC_PREF, on)
+        pop = getattr(scene, "_pop", None)
+        if callable(pop):
+            pop("milestone", hue=0.52, sat=0.35,
+                text="CLASSIC RIDE" if on else "LIT WORLD")
+        return True
 
     def _game_chosen(self, name: str) -> None:
         import visualizers as _vis
@@ -2617,6 +2652,8 @@ class AttachmentViewer(QDialog):
             return False
         if self.audio._full is not None:
             return False      # the full screen window is handling them
+        if held and self.audio.classic_chord(event):
+            return self.audio.toggle_classic()
         found = self.audio.vj_action(event.key())
         if found is None:
             return False

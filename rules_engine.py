@@ -1038,7 +1038,7 @@ TOPIC_SIGNALS: Dict[OtherCategory, Tuple[Signal, ...]] = {
         Signal("your order is confirmed", 3.0), Signal("order placed", 2.8),
         Signal("we have received your order", 3.0),
         Signal("here is your receipt", 3.0), Signal("transaction receipt", 3.0),
-        Signal("receipt for your", 2.8), Signal("payment confirmation", 3.0),
+        Signal("receipt for your", 2.8),
         Signal("trip total", 2.4),
         Signal("amount charged", 2.8), Signal("you were charged", 2.8),
         Signal("charged to your", 2.6), Signal("payment successful", 2.8),
@@ -2731,23 +2731,29 @@ _SPENT = re.compile(
     r"refunded|credited|put\s+\S+\s+back)\b"
     r"|\b(?:you|we|you've|we've|you have|we have|has been|have been|was|were|"
     r"is|amount|total) paid\b|\bpaid (?:in full|with|using|via|on|[$\u00a3\u20ac\d])")
+#: An amount, said as one: a currency's sign, or pounds and pence. A bare
+#: number is a count ("once you have received 100 orders").
+_AN_AMOUNT = r"(?:[$\u00a3\u20ac]\s?\d|\d[\d,]*\.\d{2}\b)"
 _MONEY_IN = re.compile(
-    r"\b(?:sent you|paid you|you(?:'ve| have)? received) "
-    r"(?:[$\u00a3\u20ac]\s?)?\d")
+    r"\b(?:sent you|paid you|you(?:'ve| have)? received) " + _AN_AMOUNT)
 #: Money asked for, as a payment service words a request: still to pay.
-_MONEY_ASKED = re.compile(r"\brequested (?:[$\u00a3\u20ac]\s?)?\d")
+_MONEY_ASKED = re.compile(r"\brequested " + _AN_AMOUNT)
 #: One movement of money that has happened, said outright: a deposit posted,
 #: a transfer done, a purchase approved, money sent, a plan renewed, a gift
 #: given. Not a payment that is due, scheduled, declined or not yet in.
 _MONEY_MOVED = re.compile(
-    r"(?<!\bno )\b(?:payment|deposit|transfer|refund|withdrawal|purchase|charge)s?"
+    r"(?<!\bno )\b(?:payment|deposit|transfer|wire|refund|withdrawal|purchase|"
+    r"charge)s?"
     r"(?: of [$\u00a3\u20ac]?\s?\d[\d,]*(?:\.\d{2})?)?"
     r"(?: (?!(?:is|was|were|has|have|had|will|be|been|not|due|if)\b)"
     r"(?:[$\u00a3\u20ac]?\d[\d,]*(?:\.\d{2})?|[^\s.!?]+)){0,6}?"
     r" (?:was|were|has been|have been|has|is now|is) (?:successfully )?"
     r"(?:received|posted|completed?|processed|credited|deposited|sent|approved|"
-    r"accepted|issued|made(?! (?:possible|up|available|aware|clear|public))|"
-    r"collected|successful)\b"
+    r"accepted|confirmed|issued|"
+    r"made(?! (?:possible|up|available|aware|clear|public))|collected|"
+    r"successful)\b"
+    r"|(?<!\bno )\b(?:payment|deposit|transfer|wire|refund|withdrawal)s? "
+    r"(?:received|completed?|sent|posted|processed|confirmed|issued|accepted)\b"
     r"|\byou(?:'ve| have)? (?:sent|paid|transferred|donated) (?:\w+ ){0,3}?"
     r"[$\u00a3\u20ac]\s?\d"
     r"|\brenewed (?:for|at) [$\u00a3\u20ac]?\s?\d"
@@ -2767,7 +2773,10 @@ _CALLED_OFF = re.compile(
 _PAYMENT_ACKNOWLEDGED = re.compile(
     r"(?<!\bnot )(?<!n't )\b(?:received|got) your (?:\w+ )?"
     r"(?:payment|deposit|donation|gift|contribution)\b"
-    r"|\b(?:thank you|thanks) for your (?:\w+ )?payment\b")
+    r"|\b(?:thank you|thanks) for your (?:\w+ )?payment\b"
+    r"|\byour (?:payment|deposit|withdrawal|transfer|wire) (?:is |has been |was )?"
+    r"confirmed\b"
+    r"|\b(?:payment|deposit|withdrawal|transfer|wire) confirmation\b")
 _SPENT_AT = re.compile(
     r"\byou spent (?:[$\u00a3\u20ac]\s?)?\d[\d,]*(?:\.\d{2})?(?:\s?(?:usd|gbp|eur))? at\b")
 #: Money that has not gone yet.
@@ -4398,6 +4407,7 @@ class RuleClassifier:
             footed = bool(tail_n) and topic in TRANSACTIONAL_TOPICS
             topic_scores[topic], topic_matches[topic], topic_peak[topic] = (
                 read_table(table, footed))
+        worded_spam = topic_scores[OtherCategory.SPAM]
 
         # Shape as opposed to wording, which phrase tables cannot see in typed
         # mail.
@@ -4429,6 +4439,14 @@ class RuleClassifier:
                     topic_scores[topic] *= 0.35
                     topic_matches.setdefault(topic, []).append(
                         "(discounted: the words of a courier or a bank in a scam's shape)")
+        # And the other way: a business's own record of money that moved is
+        # not junk for the trade it is in. A sportsbook's deposit names its
+        # casino and its lottery, and a bank's confirmation its wire.
+        elif (worded_spam and not _MAIL_PROVIDERS.search(sender_n)
+              and says_money_moved(f"{subject_n} {body_n}")):
+            topic_scores[OtherCategory.SPAM] -= worded_spam * (1.0 - 0.35)
+            topic_matches.setdefault(OtherCategory.SPAM, []).append(
+                "(discounted: a business's own record of money that moved)")
         # The reader's pay is their employer's business, whatever money words
         # it uses.
         if _PAYROLL.search(f"{subject_n} {body_n}") and topic_scores.get(OtherCategory.FINANCE):
