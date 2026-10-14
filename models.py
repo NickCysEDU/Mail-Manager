@@ -220,20 +220,23 @@ _OTHER_LABELS: Dict["OtherCategory", str] = {
     OtherCategory.OTHER: "Other",
 }
 
+#: Told apart by eye as well as by value, beside each other and beside the job
+#: colours: Promotion's amber was once Unclassified's to within a shade, and
+#: Social's violet Offer's magenta (test_no_two_chips_look_alike).
 TOPIC_COLORS.update({
-    OtherCategory.SECURITY: "#C0453B",     # red - an alert, read it now
+    OtherCategory.SECURITY: "#C61010",     # red - an alert, read it now
     OtherCategory.FINANCE: "#2F7D4F",      # green - money owed or held
     # A deeper teal than Application Received's, so the one column showing both
     # does not give two meanings one colour.
     OtherCategory.TRANSACTIONS: "#0B6E66", # deep teal - money already moved
     OtherCategory.TRAVEL: "#2D8FC4",       # sky - somewhere to be
-    OtherCategory.EVENT: "#8A5BD6",        # purple - a date in a diary
+    OtherCategory.EVENT: "#7C13EC",        # purple - a date in a diary
     OtherCategory.CHURCH: "#5B63C4",       # indigo
     OtherCategory.WORK: "#4A6FA5",         # slate - the job you have
     OtherCategory.PERSONAL: "#C25E8A",     # warm pink - a person
-    OtherCategory.SOCIAL: "#9A4FD0",       # violet - a network
+    OtherCategory.SOCIAL: "#1BA6BB",       # cyan - a network
     OtherCategory.NEWSLETTER: "#7A8C3A",   # olive - subscribed to
-    OtherCategory.PROMOTION: "#C98A14",    # amber - sold to
+    OtherCategory.PROMOTION: "#E06629",    # orange - sold to
     OtherCategory.SPAM: "#8A4A4A",         # dull red - unwanted
     OtherCategory.OTHER: OTHER_COLOR,      # the absence of an answer
     OtherCategory.NOT_APPLICABLE: OTHER_COLOR,

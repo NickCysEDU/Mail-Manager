@@ -42,6 +42,33 @@ class TestARowNotSortedYet:
         assert _cell(model, COL.COL_CONFIDENCE, Qt.ItemDataRole.ToolTipRole) == \
             NOT_SORTED + "."
 
+    def test_a_pictures_stand_in_does_not_take_the_first_line(self, qapp, item_factory):
+        made = TriageTableModel()
+        made.set_items([item_factory(analysed=False, email_kwargs={
+            "body_text": "[image: image]\n[image: Acme Logo]\nThe courier collects your parcel at noon."})])
+        assert _cell(made, COL.COL_SUMMARY) == "The courier collects your parcel at noon."
+
+    def test_the_opening_is_made_once_for_each_text(self, qapp, item_factory, monkeypatch):
+        """Every paint of the row asks for it, and the whole body was
+        collapsed each time. The whole message, fetched later, is read
+        again."""
+        import html_utils
+
+        read = []
+        real = html_utils.readable_opening
+        monkeypatch.setattr(html_utils, "readable_opening",
+                            lambda text: read.append(text) or real(text))
+        made = TriageTableModel()
+        item = item_factory(analysed=False, email_kwargs={"body_text": "First words."})
+        made.set_items([item])
+        for _ in range(5):
+            _cell(made, COL.COL_SUMMARY)
+            _cell(made, COL.COL_SUMMARY, Qt.ItemDataRole.ToolTipRole)
+        assert read == ["First words."]
+        item.email.body_text = "The whole message, fetched."
+        assert _cell(made, COL.COL_SUMMARY) == "The whole message, fetched."
+        assert len(read) == 2
+
     def test_it_sorts_below_every_verdict(self, model, item_factory):
         model.set_items([model.items[0], item_factory(
             classification_kwargs={"confidence_score": 0.0})])

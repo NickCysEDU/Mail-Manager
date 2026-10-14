@@ -351,6 +351,42 @@ def normalize_whitespace(text: str) -> str:
     return text.strip()
 
 
+#: What the text of a designed message is cluttered with that is not words:
+#: the stand-ins for its pictures, the link behind a word repeated after it,
+#: and lines ruled in characters.
+_OPENING_CLUTTER = re.compile(r"""(?xi)
+    \[ (?: image | img | cid ) \b [^\]]* \]
+  | \[ [^\]\n]{0,60} \b logo \]
+  | \[ [^\]\n]{0,80} \. (?: png | jpe?g | gif | webp | bmp | svg | tiff? ) \]
+  | [<\[] (?: https?: | mailto: | www\. ) [^>\]\s]* [>\]]
+  | (?: [-=_*~#] [\ \t]? ){3,}
+""")
+
+#: How much of a body is read for its opening: enough to clear a designed
+#: message's clutter and still have a line of words.
+_OPENING_SOURCE = 4000
+
+
+def _host(match: re.Match) -> str:
+    found = match.group(0)
+    host = urlparse(found if "://" in found else "http://" + found).hostname or ""
+    return host[4:] if host.startswith("www.") else host
+
+
+def readable_opening(text: str, limit: int = 200) -> str:
+    """How a message begins, on one line of words a person reads: without
+    the stand-ins for its pictures, the links behind its words or lines
+    ruled in characters. A link standing on its own is named by its host,
+    so a message that is only a link still says where it goes."""
+    # Entities written out as text (&nbsp;, &zwnj;) come back as characters,
+    # some of them invisible.
+    head = _INVISIBLE_CHARS.sub("", unescape((text or "")[:_OPENING_SOURCE]))
+    head = _OPENING_CLUTTER.sub(" ", head)
+    head = _URL_RE.sub(_host, head)
+    words = " ".join(head.split()).lstrip("|-–—•·:;, ")
+    return words if len(words) <= limit else words[: limit - 1] + "…"
+
+
 def find_urls(text: str) -> Tuple[str, ...]:
     """Recover bare URLs from plain-text bodies."""
     found: List[str] = []

@@ -18,9 +18,21 @@ few days.
 | Logs | `~/Library/Logs/Mail Manager/`, `0600`, no message bodies |
 | Your mail | Read over TLS, kept in memory for a scan, never written to disk |
 
-With the default sorter, no message text leaves your Mac. With a model
-backend, the subject, sender and a trimmed body go to that provider.
-Attachments are never uploaded.
+With the default sorter, or a model running on this Mac, no message text
+leaves it. With a model elsewhere, each message a scan reads goes to that
+provider: who sent it and to whom, its subject and date, the names of its
+attachments, up to twelve of its links, and its text without quoted history,
+signatures and footers, trimmed when long. While "Reuse verdicts from earlier
+scans" is on, as it is to begin with, a message already sorted with the same
+settings is not sent again. A rule that drafts a reply with a model
+sends the message it answers, your name and what the rule asks for.
+Attachments themselves are never uploaded.
+
+What a provider keeps, for how long and what for is up to its own terms.
+On Gemini's free tier, Google may use what it is sent to improve its
+products and have people read it; with billing on the key's project, it
+does not. Claude's and OpenAI's APIs do not train on what they are sent
+unless you opt in, and keep it for a limited time to check for abuse.
 
 The pictures in a message are fetched from wherever the sender keeps them
 when the preview shows it, which tells the sender it was opened. Settings

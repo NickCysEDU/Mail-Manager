@@ -6,9 +6,10 @@ chip, and the preview shows the selected row. gui re-exports these.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from datetime import datetime, timezone
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence
 
 from PySide6.QtCore import (QAbstractTableModel, QModelIndex, QSize, QUrl,
                             QSortFilterProxyModel, Qt, Signal, Slot)
@@ -29,7 +30,7 @@ from models import (CATEGORY_COLORS, OTHER_COLOR, TOPIC_COLORS, Category,
                     Disposition, TriageItem, TriageSummary)
 from widgets import (ACCENT_BLUE, ACCENT_RED, RoomyCombo, _attr_url,
                      _confidence_rgb, _draw_wrapped, _html, _is_dark,
-                     _mono_font, _one_line, _tint, _wrap, system_font)
+                     _mono_font, _tint, _wrap, system_font)
 
 log = logging.getLogger(__name__)
 
@@ -42,9 +43,15 @@ NOT_SORTED = "Not sorted yet"
 
 
 def opening(email) -> str:
-    """How a message begins, on one line: what a row not sorted yet shows
-    where a sorted one shows the sorter's summary."""
-    return _one_line(email.body_text, limit=200)
+    """How a message begins, on one line of words: what a row not sorted yet
+    shows where a sorted one shows the sorter's summary. Every paint of the
+    row asks for it, so it is kept with the message until the text changes,
+    as it does when the whole message is fetched."""
+    kept = getattr(email, "_opening", None)
+    if kept is None or kept[0] is not email.body_text:
+        kept = email._opening = (email.body_text,
+                                 html_utils.readable_opening(email.body_text))
+    return kept[1]
 
 
 def first_recipient(email) -> str:
@@ -138,9 +145,6 @@ class TriageTableModel(QAbstractTableModel):
         #: Whether the rows are mail sent, from Sent or Drafts: the sender
         #: column then says who it went to.
         self._addressed = False
-        #: Collapsed one-line summary and reasoning per row: they never change
-        #: once a scan lands.
-        self._one_line_cache: List[Tuple[str, str]] = []
 
     @property
     def items(self) -> List[TriageItem]:
@@ -149,10 +153,6 @@ class TriageTableModel(QAbstractTableModel):
     def set_items(self, items: Sequence[TriageItem]) -> None:
         self.beginResetModel()
         self._items = list(items)
-        self._one_line_cache = [
-            (_one_line(item.classification.summary), _one_line(item.classification.reasoning))
-            for item in self._items
-        ]
         self.endResetModel()
         self.selectionChanged.emit()
 
@@ -433,9 +433,6 @@ class TriageTableModel(QAbstractTableModel):
         first = len(self._items)
         self.beginInsertRows(QModelIndex(), first, first + len(items) - 1)
         self._items.extend(items)
-        self._one_line_cache.extend(
-            (_one_line(item.classification.summary),
-             _one_line(item.classification.reasoning)) for item in items)
         self.endInsertRows()
         self.selectionChanged.emit()
 
@@ -447,7 +444,6 @@ class TriageTableModel(QAbstractTableModel):
             if gone(self._items[row]):
                 self.beginRemoveRows(QModelIndex(), row, row)
                 del self._items[row]
-                del self._one_line_cache[row]
                 self.endRemoveRows()
                 removed += 1
         if removed:
@@ -493,30 +489,41 @@ class TriageFilterProxy(QSortFilterProxyModel):
         #: choosing what to scan.
         self._accounts: set = set()
 
+    @contextlib.contextmanager
+    def _filter_change(self):
+        """Which rows show changes, and nothing else, so their order stands:
+        invalidate() sorted every row again on each key typed into the
+        search."""
+        self.beginFilterChange()
+        try:
+            yield
+        finally:
+            self.endFilterChange(QSortFilterProxyModel.Direction.Rows)
+
     def set_text_filter(self, text: str) -> None:
-        self._text = (text or "").strip().lower()
-        self.invalidate()
+        with self._filter_change():
+            self._text = (text or "").strip().lower()
 
     def set_category_filter(self, category: Optional[str]) -> None:
-        self._category = category
-        self.invalidate()
+        with self._filter_change():
+            self._category = category
 
     def set_hide_non_job(self, hide: bool) -> None:
-        self._hide_non_job = bool(hide)
-        self.invalidate()
+        with self._filter_change():
+            self._hide_non_job = bool(hide)
 
     def set_hide_job(self, hide: bool) -> None:
         """The other way round: everything the run did not call job mail."""
-        self._hide_job = bool(hide)
-        self.invalidate()
+        with self._filter_change():
+            self._hide_job = bool(hide)
 
     def set_account_filter(self, account_ids) -> None:
-        self._accounts = set(account_ids or ())
-        self.invalidate()
+        with self._filter_change():
+            self._accounts = set(account_ids or ())
 
     def set_only_selected(self, only: bool) -> None:
-        self._only_selected = bool(only)
-        self.invalidate()
+        with self._filter_change():
+            self._only_selected = bool(only)
 
     def active_filters(self) -> List[str]:
         """Which filters are hiding rows, in words: an empty grid with a search
@@ -539,13 +546,13 @@ class TriageFilterProxy(QSortFilterProxyModel):
 
     def clear_filters(self) -> None:
         """Undo every one of them at once."""
-        self._text = ""
-        self._category = None
-        self._hide_non_job = False
-        self._hide_job = False
-        self._only_selected = False
-        self._accounts = set()
-        self.invalidate()
+        with self._filter_change():
+            self._text = ""
+            self._category = None
+            self._hide_non_job = False
+            self._hide_job = False
+            self._only_selected = False
+            self._accounts = set()
 
     def filterAcceptsRow(self, source_row: int, parent: QModelIndex) -> bool:  # noqa: N802
         model = self.sourceModel()
@@ -647,11 +654,14 @@ class ConfidenceDelegate(QStyledItemDelegate):
 class WrapDelegate(QStyledItemDelegate):
     """Wrapped multi-line text clipped to a fixed number of lines: one elided
     line cuts a long summary off after a few words; three show most whole.
+    ``centred`` sets a short value in the middle of the row, as the category
+    beside it is, rather than at the top where a long text starts.
     """
 
-    def __init__(self, lines: int = 3, parent=None) -> None:
+    def __init__(self, lines: int = 3, parent=None, centred: bool = False) -> None:
         super().__init__(parent)
         self.lines = max(1, int(lines))
+        self.centred = centred
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
         text = index.data(Qt.ItemDataRole.DisplayRole)
@@ -675,7 +685,7 @@ class WrapDelegate(QStyledItemDelegate):
         )
         font = index.data(Qt.ItemDataRole.FontRole) or option.font
         painter.setFont(font)
-        _draw_wrapped(painter, rect, str(text), self.lines, font)
+        _draw_wrapped(painter, rect, str(text), self.lines, font, self.centred)
         painter.restore()
 
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:

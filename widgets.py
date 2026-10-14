@@ -215,8 +215,13 @@ def _wrap_lines(text: str, width: int, metrics, max_lines: int) -> List[str]:
     return lines[:max_lines], len(" ".join(lines[:max_lines])) < len(text.rstrip())
 
 
-def _draw_wrapped(painter: QPainter, rect, text: str, max_lines: int, font) -> None:
-    """Draw `text` wrapped into `rect`, eliding the final visible line."""
+def _draw_wrapped(painter: QPainter, rect, text: str, max_lines: int, font,
+                  centred: bool = False) -> None:
+    """Draw `text` wrapped into `rect`, eliding the final visible line.
+
+    ``centred`` sets the lines in the middle of the rect's height, measured
+    as Qt's AlignVCenter measures one line, so a single line sits level with
+    text drawn that way beside it."""
     metrics = QFontMetrics(font)
     collapsed = " ".join(text.split())
     lines, overflowed = _wrap_lines(collapsed, rect.width(), metrics, max_lines)
@@ -229,6 +234,9 @@ def _draw_wrapped(painter: QPainter, rect, text: str, max_lines: int, font) -> N
             rect.width(),
         )
     y = rect.y() + metrics.ascent()
+    if centred:
+        used = metrics.height() + metrics.lineSpacing() * (len(lines) - 1)
+        y += max(0, (rect.height() - used) / 2)
     for line in lines:
         painter.drawText(int(rect.x()), int(y), line)
         y += metrics.lineSpacing()

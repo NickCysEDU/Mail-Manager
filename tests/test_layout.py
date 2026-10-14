@@ -214,6 +214,32 @@ class TestReadability:
                        TriageTableModel.COL_SUMMARY, TriageTableModel.COL_REASONING):
             assert isinstance(window.table.itemDelegateForColumn(column), WrapDelegate)
 
+    def test_the_folder_sits_level_with_the_category(self, qapp, window):
+        """Both are a word or two, and the category was set in the middle of
+        the row while the folder sat at the top of its box. Measured on the
+        ink of the two words, which are the same word here."""
+        window.model.set_items([make_item("1")])
+        window.resize(1400, 700)
+        window.show()
+        window.table.clearSelection()
+        qapp.processEvents()
+        shot = window.table.viewport().grab().toImage()
+
+        def ink(column, skip=0):
+            rect = window.table.visualRect(window.proxy.index(0, column))
+            paper = shot.pixelColor(rect.right() - 3, rect.top() + 2)
+            rows = [y for y in range(rect.top(), rect.bottom())
+                    if any(abs(shot.pixelColor(x, y).lightness() - paper.lightness()) > 60
+                           for x in range(rect.left() + skip, rect.right() - 3))]
+            assert rows, f"nothing drawn in column {column}"
+            return rows[0], rows[-1]
+
+        folder = ink(TriageTableModel.COL_FOLDER)
+        category = ink(TriageTableModel.COL_CATEGORY, skip=24)
+        assert window.model.item_at(0).folder_short == "Interview"
+        assert abs(folder[0] - category[0]) <= 1 and abs(folder[1] - category[1]) <= 1, (
+            f"the folder's word spans rows {folder}, the category's {category}")
+
     def test_the_last_column_does_not_stretch(self, window):
         """Stretching the last section makes every other resize feel wrong."""
         assert window.table.horizontalHeader().stretchLastSection() is False

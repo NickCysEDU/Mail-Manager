@@ -329,6 +329,28 @@ describes the app itself.
   own box empty deleted that one's password. OK now writes only the kept
   mailboxes' entries. An address changed in place keeps its old entry: only
   Remove deletes one, after asking, as an app password cannot be seen again.
+- **A row not sorted yet shows its opening** (`triage_table.opening`,
+  `html_utils.readable_opening`): the first words, without `[image: …]`
+  stand-ins, links behind words or ruled lines; a link on its own becomes
+  its host. Kept on the message as `_opening` with the body it was made
+  from, and made again when the body is replaced by the whole message:
+  every paint asked, and it collapsed the whole body each time.
+- **Filters change which rows show, not their order**
+  (`TriageFilterProxy._filter_change`, `beginFilterChange` and
+  `endFilterChange(Rows)`; Qt 6.11 deprecates `invalidateFilter`):
+  `invalidate()` sorted every row again on each key typed, 0.45 s a key on
+  2,000 rows, now 0.03 s. A test that counts what Qt asks a model counts in
+  a subclass: Qt finds a model's `data()` once, and a patch made after that
+  is never called.
+- **Chips are told apart by eye** (`test_no_two_chips_look_alike`):
+  CIEDE2000 of at least 6.5 between every pair as the column draws them, in
+  both themes; only the two greys, which both mean nothing is done, may
+  match. Different hex values passed the old test at 2.5 apart.
+- **A scan still reads again what the listing read**: both call
+  `fetch_window` with the same size, and only the listing passes `skip`.
+  Reusing the listed bodies needs each mailbox's UIDVALIDITY kept with the
+  listing first: without it, a mailbox made again between the two would
+  have a scan file a different message under a reused UID.
 - **The inbox is two lists** (`MainWindow._listed`, `_sorted`): the messages
   a `ListWorker` read when the window opened (`TriageItem.analysed` False,
   shown as Not sorted yet), and the last scan's rows, shown together by
@@ -957,7 +979,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 5,857 tests
+./dev test                     # 5,877 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus

@@ -158,14 +158,15 @@ it inside, between two folders to put it beside them, or onto the account's
 name for the top level; or right-click it and choose **Move To**. While you
 hold it, a bar shows where it will be listed, and the folder it goes into is
 outlined. The folder moves on the server with everything in it; the inbox
-and the mailboxes the server keeps for itself stay put. The
-button at the left of the toolbar, or ⌃⌘S, hides the sidebar and brings it
-back. The window
-opens on the last month of your inbox, read without marking anything, so it
-is never empty. Until a scan reads them those rows say **Not sorted yet**,
-and a scan's verdicts then show over them: a message outside the scan's
-window stays as it was listed. Mail in any other mailbox can be read and
-answered there, but only mail in the inbox is filed.
+and the mailboxes the server keeps for itself stay put. The button at the
+left of the toolbar, or ⌃⌘S, hides the sidebar and brings it back. The
+window opens on the last month of your inbox, read without marking
+anything, so it is never empty. Until a scan reads them those rows say
+**Not sorted yet** and show how each message begins, in its own words,
+without the stand-ins for its pictures or the links behind them. A scan's
+verdicts then show over them: a message outside the scan's window stays as
+it was listed. Mail in any other mailbox can be read and answered there, but
+only mail in the inbox is filed.
 
 Right-click the app in the Dock for every window it has open, by title,
 the one in front ticked; choose one to bring it forward. **Show Mail
@@ -405,8 +406,11 @@ button opens the release page instead.
 
 ## Privacy
 
-- With the built-in rules, no message text leaves your Mac. With a model,
-  message text goes to that service.
+- With the built-in rules, or a model on this Mac, no message text leaves
+  it. With a model elsewhere, each message a scan reads goes to that
+  service: sender, recipients, subject, date, attachment names, links and a
+  trimmed body. Its terms decide what it keeps: on Gemini's free tier,
+  Google may use what it is sent to improve its products.
 - Passwords and keys live in the Keychain. The settings file holds no secrets
   and is `0600`.
 - The summaries kept between scans and what the app learns from corrections
@@ -424,7 +428,7 @@ See [SECURITY.md](../SECURITY.md) for reporting a problem.
 ./dev dry      # scan for real, with moves disabled
 ./dev fake     # the pipeline in the terminal, offline
 ./dev scan     # the pipeline on real mail, read-only
-./dev test     # 5,857 tests (with the evaluation sets present)
+./dev test     # 5,877 tests (with the evaluation sets present)
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 

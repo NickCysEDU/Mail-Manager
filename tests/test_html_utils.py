@@ -595,3 +595,59 @@ class TestTheMessageReadsOnALightPage:
     def test_dark_text_is_left_alone(self):
         shown = html_utils.sanitise_for_view('<p style="color: #222222">Hello</p>')
         assert 'style="color: #222222"' in shown
+
+
+class TestTheOpeningIsWords:
+    """What a row not sorted yet shows: how the message begins. The text of a
+    designed message starts with stand-ins for its pictures, the links behind
+    its words and rules drawn in characters, and they filled the line before
+    a word of the message was read."""
+
+    @pytest.mark.parametrize("clutter", [
+        "[image: image]", "[image: Acme Logo]", "[image]", "[IMAGE: banner]",
+        "[cid:image001.png@01DA0B1C.2F3E4D50]", "[Acme logo]", "[header_2x.png]",
+    ])
+    def test_a_pictures_stand_in_is_not_read(self, clutter):
+        assert html_utils.readable_opening(
+            f"{clutter}\n{clutter} Your parcel is on its way.") == "Your parcel is on its way."
+
+    def test_what_a_stand_in_leaves_at_the_start_goes_with_it(self):
+        assert html_utils.readable_opening(
+            "[image: Acme Logo] | [image: Sale] | Your parcel is on its way.") == \
+            "Your parcel is on its way."
+
+    def test_the_link_behind_a_word_is_not_repeated(self):
+        assert html_utils.readable_opening(
+            "Read the guide<https://docs.example.com/start?id=7> before Friday.") == \
+            "Read the guide before Friday."
+        assert html_utils.readable_opening(
+            "Confirm your place [https://events.example.org/rsvp/42] by noon.") == \
+            "Confirm your place by noon."
+
+    def test_a_link_on_its_own_is_named_by_its_host(self):
+        """A message that is only a link still says where it goes."""
+        assert html_utils.readable_opening("https://www.example.com/watch?v=a1b2c3") == \
+            "example.com"
+        assert html_utils.readable_opening(
+            "Notes are at http://wiki.example.net/team/notes, as before.") == \
+            "Notes are at wiki.example.net, as before."
+
+    def test_lines_ruled_in_characters_are_not_read(self):
+        assert html_utils.readable_opening(
+            "------------------------\nWeekly notes\n* * * * * *\n"
+            "The stand-up moves to ten.\n________") == \
+            "Weekly notes The stand-up moves to ten."
+
+    def test_entities_written_out_read_as_what_they_stand_for(self):
+        assert html_utils.readable_opening(
+            "&zwnj;&nbsp;&zwnj;&nbsp;Fish&nbsp;&amp; chips on Friday") == \
+            "Fish & chips on Friday"
+
+    def test_plain_words_are_left_as_they_are(self):
+        text = ("Hi Sam,\n\nThanks for the call - the 3 - 4 pm slot works. C++ and "
+                "C# are both fine; see #general for the notes.")
+        assert html_utils.readable_opening(text) == " ".join(text.split())
+
+    def test_it_stops_at_the_limit(self):
+        got = html_utils.readable_opening("word " * 100, limit=40)
+        assert len(got) == 40 and got.endswith("…")

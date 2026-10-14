@@ -285,6 +285,48 @@ class TestFilterProxy:
         proxy.set_text_filter("take-home")
         assert proxy.rowCount() == 1
 
+    def test_narrowing_a_search_does_not_sort_again(self, model):
+        """Each key typed sorted every row again, which on a long list was
+        most of what typing into the search cost. Narrowing only takes rows
+        away, so no sort key is needed. Counted in a subclass: Qt finds a
+        model's data() once, and a patch made after that is never called."""
+        asked = []
+
+        class Counting(TriageTableModel):
+            def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+                if role == Qt.ItemDataRole.UserRole:
+                    asked.append(index.row())
+                return super().data(index, role)
+
+        counting = Counting()
+        counting.set_items(model.items)
+        proxy = TriageFilterProxy()
+        proxy.setSourceModel(counting)
+        proxy.sort(TriageTableModel.COL_CONFIDENCE, Qt.SortOrder.AscendingOrder)
+        assert asked, "the sort did not ask through the count"
+        proxy.set_text_filter("d")
+        assert proxy.rowCount() == 4
+        asked.clear()
+        proxy.set_text_filter("interview")
+        assert proxy.rowCount() == 2
+        assert asked == []
+
+    def test_rows_a_filter_gives_back_come_back_in_order(self, proxy):
+        proxy.sort(TriageTableModel.COL_CONFIDENCE, Qt.SortOrder.AscendingOrder)
+
+        def order():
+            return [proxy.data(proxy.index(row, TriageTableModel.COL_CONFIDENCE),
+                               Qt.ItemDataRole.UserRole) for row in range(proxy.rowCount())]
+
+        before = order()
+        proxy.set_text_filter("interview")
+        proxy.set_hide_non_job(True)
+        proxy.clear_filters()
+        assert order() == before == sorted(before)
+        proxy.set_text_filter("zzz")
+        proxy.set_text_filter("")
+        assert order() == before
+
     def test_sorting_by_confidence(self, proxy):
         proxy.sort(TriageTableModel.COL_CONFIDENCE, Qt.SortOrder.AscendingOrder)
         first = proxy.data(proxy.index(0, TriageTableModel.COL_CONFIDENCE), Qt.ItemDataRole.UserRole)

@@ -748,7 +748,9 @@ class MainWindow(QMainWindow):
             for column in (TriageTableModel.COL_SENDER, TriageTableModel.COL_SUBJECT,
                            TriageTableModel.COL_SUMMARY, TriageTableModel.COL_REASONING,
                            TriageTableModel.COL_FOLDER):
-                delegate = WrapDelegate(lines, self.table)
+                delegate = WrapDelegate(
+                    lines, self.table,
+                    centred=column == TriageTableModel.COL_FOLDER)
                 self.table.setItemDelegateForColumn(column, delegate)
                 self._wrap_delegates.append(delegate)
             self.confidence_delegate = ConfidenceDelegate(

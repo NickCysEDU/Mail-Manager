@@ -7,6 +7,9 @@ nested inside the non-job one, and three copies of the version number.
 
 from __future__ import annotations
 
+import itertools
+import math
+
 import pytest
 
 import profiles
@@ -28,6 +31,57 @@ def other(topic=OtherCategory.TRANSACTIONS, confidence=0.97,
             category=Category.UNCLASSIFIED_OTHER, other_category=topic,
             confidence_score=confidence, reasoning="r", model="t"),
         folders=FolderPlan(topics=topics), non_job_routing=routing)
+
+
+def _lab(colour):
+    """CIELAB, D65, for a QColor."""
+    linear = [v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
+              for v in (colour.redF(), colour.greenF(), colour.blueF())]
+    xyz = (
+        (0.4124564 * linear[0] + 0.3575761 * linear[1] + 0.1804375 * linear[2]) / 0.95047,
+        0.2126729 * linear[0] + 0.7151522 * linear[1] + 0.0721750 * linear[2],
+        (0.0193339 * linear[0] + 0.1191920 * linear[1] + 0.9503041 * linear[2]) / 1.08883,
+    )
+    fx, fy, fz = (t ** (1 / 3) if t > 216 / 24389 else (24389 / 27 * t + 16) / 116
+                  for t in xyz)
+    return 116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)
+
+
+def _ciede2000(first, second) -> float:
+    """How different two colours look (Sharma, Wu and Dalal's formulation)."""
+    (l1, a1, b1), (l2, a2, b2) = first, second
+    chroma = (math.hypot(a1, b1) + math.hypot(a2, b2)) / 2
+    g = 0.5 * (1 - math.sqrt(chroma ** 7 / (chroma ** 7 + 25 ** 7)))
+    a1, a2 = (1 + g) * a1, (1 + g) * a2
+    c1, c2 = math.hypot(a1, b1), math.hypot(a2, b2)
+    h1 = math.degrees(math.atan2(b1, a1)) % 360
+    h2 = math.degrees(math.atan2(b2, a2)) % 360
+    turn = h2 - h1
+    if c1 * c2 == 0:
+        turn = 0
+    elif turn > 180:
+        turn -= 360
+    elif turn < -180:
+        turn += 360
+    big_h = 2 * math.sqrt(c1 * c2) * math.sin(math.radians(turn / 2))
+    mean_l, mean_c = (l1 + l2) / 2, (c1 + c2) / 2
+    if c1 * c2 == 0:
+        mean_h = h1 + h2
+    elif abs(h1 - h2) <= 180:
+        mean_h = (h1 + h2) / 2
+    else:
+        mean_h = (h1 + h2 + (360 if h1 + h2 < 360 else -360)) / 2
+    t = (1 - 0.17 * math.cos(math.radians(mean_h - 30))
+         + 0.24 * math.cos(math.radians(2 * mean_h))
+         + 0.32 * math.cos(math.radians(3 * mean_h + 6))
+         - 0.20 * math.cos(math.radians(4 * mean_h - 63)))
+    rotation = 30 * math.exp(-(((mean_h - 275) / 25) ** 2))
+    r_c = 2 * math.sqrt(mean_c ** 7 / (mean_c ** 7 + 25 ** 7))
+    s_l = 1 + 0.015 * (mean_l - 50) ** 2 / math.sqrt(20 + (mean_l - 50) ** 2)
+    s_c, s_h = 1 + 0.045 * mean_c, 1 + 0.015 * mean_c * t
+    r_t = -math.sin(math.radians(2 * rotation)) * r_c
+    dl, dc, dh = (l2 - l1) / s_l, (c2 - c1) / s_c, big_h / s_h
+    return math.sqrt(dl ** 2 + dc ** 2 + dh ** 2 + r_t * dc * dh)
 
 
 def job(category=Category.INTERVIEW, confidence=0.98) -> TriageItem:
@@ -174,6 +228,27 @@ class TestGreyMeansNotSorted:
     def test_no_topic_colour_collides_with_a_job_colour(self):
         assert not (set(TOPIC_COLORS[t] for t in profiles.ALL_TOPICS)
                     & set(CATEGORY_COLORS.values()) - {OTHER_COLOR})
+
+    def test_no_two_chips_look_alike(self):
+        """A different value is not a different colour to the eye:
+        Promotion's amber was within 2.5 of Unclassified's (CIEDE2000), and
+        Social's violet stood beside Offer's magenta. Measured as the column
+        draws them, in both themes. The two greys both mean that nothing is
+        done with the message, so they may match."""
+        from PySide6.QtGui import QColor
+
+        chips = {f"job {c.name}": colour for c, colour in CATEGORY_COLORS.items()}
+        chips.update({f"topic {t.name}": TOPIC_COLORS[t] for t in profiles.ALL_TOPICS})
+        chips["not sorted"] = OTHER_COLOR
+        greys = {f"job {Category.UNSOLICITED.name}", "not sorted"}
+        for (one, first), (two, second) in itertools.combinations(chips.items(), 2):
+            if {one, two} == greys:
+                continue
+            for dark in (False, True):
+                inks = [QColor(c).lighter(125) if dark else QColor(c).darker(105)
+                        for c in (first, second)]
+                apart = _ciede2000(_lab(inks[0]), _lab(inks[1]))
+                assert apart >= 6.5, f"{one} and {two} are {apart:.1f} apart"
 
     def test_without_an_item_the_old_answer_is_given(self):
         """Callers that have only a classification still get grey."""
