@@ -93,6 +93,24 @@ class TestPatientTooltips:
         _rest(help_filter, button)
         assert help_filter.shown == ["Bold (⌘B)"]
 
+    def test_an_icon_can_ask_in_a_window_that_did_not(self, qtbot, help_filter,
+                                                      monkeypatch):
+        """The main window keeps its quiet, bar its icons: a control asks for
+        itself, and the words beside it stay quiet."""
+        window, words = _window(qtbot, patient=False)
+        icon = QPushButton("", window)
+        icon.setToolTip("Get New Mail (⇧⌘N)")
+        icon.setProperty(helpmode.PATIENT, True)
+        window.layout().addWidget(icon)
+        _pointer_on(monkeypatch, words)
+        _rest(help_filter, words)
+        qtbot.wait(300)
+        assert help_filter.shown == []
+        _pointer_on(monkeypatch, icon)
+        _rest(help_filter, icon)
+        qtbot.waitUntil(lambda: help_filter.shown == ["Get New Mail (⇧⌘N)"],
+                        timeout=2000)
+
 
 class TestEveryQuestionMarkIsTheSameSwitch:
     def test_pressing_one_switches_help_and_every_other_shows_it(self, qtbot):

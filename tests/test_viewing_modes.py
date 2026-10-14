@@ -144,6 +144,19 @@ class TestTheMainWindow:
             f"at {size[0]}x{size[1]} with the preview {place}:\n  "
             + "\n  ".join(faults(window)))
 
+    @pytest.mark.parametrize("spacing", ["comfortable", "compact", "dense"])
+    def test_the_icons_stand_no_taller_than_the_words(self, qapp, window,
+                                                      dressed, spacing):
+        """At 18 px, the size they are drawn at: in the style's own slot the
+        bar's icons stood a pixel taller than the buttons beside them, and the
+        bar with them, which the preview paid for at the smallest window."""
+        dressed(spacing)
+        qapp.processEvents()
+        words = window.window_buttons[window.settings.window]
+        for button in (window.sidebar_button, window.get_mail_button,
+                       window.new_message_button):
+            assert button.height() <= words.height(), button.toolTip()
+
     def test_the_preview_keeps_its_words_at_the_narrowest(self, qapp,
                                                           window):
         """The narrowest the preview is ever given: beside the table on

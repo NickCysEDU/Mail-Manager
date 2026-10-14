@@ -807,6 +807,64 @@ class TestTheAccountEditorCannotCorruptAMailbox:
             ["me@icloud.com", "work@gmail.com"]
         assert store.get_mailbox_password("work@gmail.com") == "another-app-password"
 
+    @staticmethod
+    def _mailbox_entries(store):
+        return {name for name in store._data if name.startswith("icloud:")}
+
+    def test_an_address_typed_key_by_key_saves_its_password_once(self, dialog):
+        """Every letter typed into the address box counted as a mailbox, and
+        OK saved the password under each: an entry in the Keychain for every
+        key pressed, typos included.
+        """
+        from PySide6.QtTest import QTest
+
+        subject, store = dialog
+        subject.email_edit.clear()
+        QTest.keyClicks(subject.email_edit, "renamd")
+        QTest.keyClick(subject.email_edit, Qt.Key.Key_Backspace)
+        QTest.keyClicks(subject.email_edit, "ed@icloud.example")
+        assert subject.email_edit.text() == "renamed@icloud.example"
+        subject.persist_credentials(subject.collect())
+        assert self._mailbox_entries(store) == {
+            "icloud:me@icloud.com", "icloud:renamed@icloud.example"}
+        assert store.get_mailbox_password(
+            "renamed@icloud.example") == "icloud-app-password"
+
+    def test_typing_past_another_mailboxs_address_leaves_its_password(self, dialog):
+        """A new mailbox's address, on its way through an existing one's with
+        its own password box still empty, deleted that mailbox's password.
+        """
+        from PySide6.QtTest import QTest
+
+        subject, store = dialog
+        subject._add_account()
+        QTest.keyClicks(subject.email_edit, "me@icloud.com")
+        for _ in "icloud.com":
+            QTest.keyClick(subject.email_edit, Qt.Key.Key_Backspace)
+        QTest.keyClicks(subject.email_edit, "example.com")
+        QTest.keyClicks(subject.password_edit, "other-app-password")
+        subject.account_list.setCurrentRow(0)
+        assert subject.password_edit.text() == "icloud-app-password"
+        subject.account_list.setCurrentRow(1)
+        assert subject.password_edit.text() == "other-app-password"
+        subject.persist_credentials(subject.collect())
+        assert store.get_mailbox_password("me@icloud.com") == "icloud-app-password"
+        assert store.get_mailbox_password("me@example.com") == "other-app-password"
+        assert self._mailbox_entries(store) == {
+            "icloud:me@icloud.com", "icloud:me@example.com"}
+
+    def test_an_address_typed_then_cleared_saves_nothing(self, dialog):
+        from PySide6.QtTest import QTest
+
+        subject, store = dialog
+        subject._add_account()
+        QTest.keyClicks(subject.password_edit, "typed-first")
+        QTest.keyClicks(subject.email_edit, "x@icloud.example")
+        subject.email_edit.selectAll()
+        QTest.keyClick(subject.email_edit, Qt.Key.Key_Backspace)
+        subject.persist_credentials(subject.collect())
+        assert self._mailbox_entries(store) == {"icloud:me@icloud.com"}
+
     def test_an_abandoned_blank_mailbox_is_dropped(self, dialog):
         subject, _store = dialog
         subject._add_account()
@@ -1248,6 +1306,108 @@ class TestTheOnDevicePanelNeverFreezes:
             if dialog._ollama_probe is not None:
                 dialog._ollama_probe.stop(3000)
             dialog.deleteLater()
+
+
+class TestGettingAndWritingMailFromTheBar:
+    """Get New Mail and New Message were in the menus alone: the window's
+    own bar had no way to look for mail or to write one."""
+
+    def test_they_lead_what_acts_as_mail_has_compose(self, window):
+        import helpmode
+        from flowlayout import Spacer
+        from format_bar import keys_of
+
+        row = window.action_bar_layout
+        items = [row.itemAt(at).widget() for at in range(row.count())]
+        assert items[0] is window.sidebar_button
+        at = items.index(window.mail_buttons)
+        assert isinstance(items[at - 1], Spacer), "where the right-hand group starts"
+        assert items.index(window.model_button) > at
+        assert items.index(window.scan_button) > at
+        pair = window.mail_buttons.layout()
+        assert [pair.itemAt(n).widget() for n in range(pair.count())] == [
+            window.get_mail_button, window.new_message_button], "one item, kept together"
+        for button in (window.sidebar_button, window.get_mail_button,
+                       window.new_message_button):
+            assert button.property("iconOnly") == "true"
+        for button in (window.get_mail_button, window.new_message_button):
+            assert not button.icon().isNull() and not button.text()
+            assert button.property(helpmode.PATIENT), "an icon names itself on a rest"
+        assert not window.property(helpmode.PATIENT), "the words keep their quiet"
+        assert window.get_mail_button.toolTip().startswith(
+            f"Get New Mail ({keys_of('Ctrl+Shift+N')})")
+        assert window.new_message_button.toolTip().startswith(
+            f"New Message ({keys_of('Ctrl+N')})")
+        assert window.get_mail_button.accessibleName() == "Get new mail"
+        assert window.new_message_button.accessibleName() == "New message"
+        menu_keys = {action.text().replace("&", ""): action.shortcut().toString()
+                     for action in window.message_menu.actions()}
+        assert menu_keys["New Message"] == "Ctrl+N"
+        assert window.new_mail_action.shortcut().toString() == "Ctrl+Shift+N"
+
+    def test_new_message_opens_one_to_write(self, window):
+        from mail_window import ComposeWindow
+
+        window.show()
+        before = {id(found) for found in QApplication.topLevelWidgets()
+                  if isinstance(found, ComposeWindow)}
+        window.new_message_button.click()
+        QApplication.processEvents()
+        made = [found for found in QApplication.topLevelWidgets()
+                if isinstance(found, ComposeWindow) and id(found) not in before]
+        try:
+            assert len(made) == 1 and made[0].isVisible()
+            assert made[0].windowTitle() == "New Message"
+        finally:
+            for found in made:
+                found._saved = True
+                found.close()
+
+    def test_get_mail_says_why_it_cannot_look(self, window, qapp):
+        window._mailboxes_opened = True
+        window.get_mail_button.click()
+        assert window._status_text == (
+            "Could not look in Inbox: no mailbox that holds it has an app "
+            "password stored. Add it in Settings.")
+        assert window._listings == {}
+        others = []
+        try:
+            bare = MainWindow(Settings().normalized(), InMemoryCredentialStore())
+            others.append(bare)
+            bare._mailboxes_opened = True
+            bare.get_mail_button.click()
+            assert bare._status_text.startswith("No mailbox is set up yet")
+            demo = MainWindow(Settings(icloud_email="you@icloud.example").normalized(),
+                              InMemoryCredentialStore(), demo=True)
+            others.append(demo)
+            demo.get_mail_button.click()
+            assert "samples" in demo._status_text
+        finally:
+            for made in others:
+                made.close()
+                made.deleteLater()
+
+    def test_their_icons_follow_the_look(self, window):
+        from PySide6.QtGui import QPalette
+
+        import icons
+
+        was = window.settings.appearance_mode
+        inks = []
+        try:
+            for mode in ("dark", "light"):
+                window.settings.appearance_mode = mode
+                window.apply_appearance()
+                ink = window.palette().color(QPalette.ColorRole.ButtonText).name()
+                inks.append(ink)
+                for button, name in ((window.get_mail_button, "get-mail"),
+                                     (window.new_message_button, "compose")):
+                    assert (button.icon().pixmap(18, 18).toImage()
+                            == icons.icon(name, ink, 18).pixmap(18, 18).toImage()), name
+        finally:
+            window.settings.appearance_mode = was
+            window.apply_appearance()
+        assert inks[0] != inks[1], "the two looks gave the same ink"
 
 
 class TestTheVersionInTheCorner:

@@ -189,6 +189,119 @@ class TestDemoMode:
             window.close()
 
 
+class TestTheScreenshotKeepsToItself:
+    """./dev screenshot draws the demo window, and the window saves its
+    settings as it closes. Run in the person's own home, it wrote the demo's
+    settings over theirs, mailboxes and all."""
+
+    def test_nothing_of_the_app_is_written_in_the_home_it_runs_in(self, tmp_path):
+        import os
+        import subprocess
+        import sys
+
+        home = tmp_path / "home"
+        home.mkdir()
+        picture = tmp_path / "shot.png"
+        env = {key: value for key, value in os.environ.items()
+               if key != "ICLOUD_TRIAGE_HOME"}
+        env.update(HOME=str(home), QT_QPA_PLATFORM="offscreen")
+        done = subprocess.run(
+            [sys.executable, str(ROOT / "tools" / "make_screenshot.py"),
+             "--width", "900", "--height", "600", "--out", str(picture)],
+            env=env, capture_output=True, text=True, timeout=180)
+        assert done.returncode == 0, done.stderr[-2000:]
+        assert picture.stat().st_size > 0
+        for mine in (home / "Library" / "Application Support" / "Mail Manager",
+                     home / "Library" / "Logs" / "Mail Manager",
+                     home / ".config" / "Mail Manager"):
+            assert not mine.exists(), f"it wrote into {mine.relative_to(home)}"
+
+
+class TestTheSuiteKeepsToItself:
+    """Every fixture is undone as its test ends, and pytest-qt runs the
+    event loop once more after that. A timer a test left behind ran in that
+    gap with the person's own home in place and the network open: a shown
+    window's update check asked GitHub and saved the test's settings over
+    the person's."""
+
+    PROBE = '''
+import json
+import os
+import time
+
+import pytest
+
+kept = []
+
+
+def world():
+    import imaplib
+
+    import config
+    import conftest
+    import update_dialog
+
+    return {
+        "home": os.environ.get("ICLOUD_TRIAGE_HOME"),
+        "imap": imaplib.IMAP4_SSL is conftest._Refused,
+        "keychain": config.CredentialStore._keyring is conftest._no_real_keychain,
+        "updates": update_dialog.Look.run is conftest._no_update_check,
+    }
+
+
+@pytest.fixture(scope="module")
+def slow_to_finish():
+    yield
+    time.sleep(0.5)
+
+
+def test_leaves_a_save_behind(qapp, slow_to_finish):
+    from PySide6.QtCore import QTimer
+
+    import config
+
+    settings = config.Settings(icloud_email="probe@icloud.example")
+    record = {"inside": world()}
+
+    def later():
+        record["after"] = world()
+        record["saved"] = str(settings.save())
+        with open("record.json", "w") as out:
+            json.dump(record, out)
+
+    kept.append(later)
+    QTimer.singleShot(250, later)
+'''
+
+    def test_what_a_test_leaves_running_stays_in_the_suite(self, tmp_path):
+        import os
+        import subprocess
+        import sys
+
+        home = tmp_path / "home"
+        home.mkdir()
+        (tmp_path / "test_probe.py").write_text(self.PROBE)
+        env = {key: value for key, value in os.environ.items()
+               if key != "ICLOUD_TRIAGE_HOME" and not key.startswith("PYTEST_")}
+        env.update(HOME=str(home), QT_QPA_PLATFORM="offscreen",
+                   PYTHONPATH=os.pathsep.join((str(ROOT / "tests"), str(ROOT))))
+        done = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", "-p", "conftest",
+             "-p", "no:cacheprovider", "--rootdir", str(tmp_path),
+             "test_probe.py"],
+            cwd=tmp_path, env=env, capture_output=True, text=True, timeout=50)
+        assert done.returncode == 0, (done.stdout + done.stderr)[-2000:]
+        record = json.loads((tmp_path / "record.json").read_text())
+        inside, after = record["inside"], record["after"]
+        assert after["home"] != inside["home"], "the timer ran inside the test"
+        assert after["home"], "nothing stood in for the person's own home"
+        assert not Path(after["home"]).is_relative_to(home)
+        assert not Path(record["saved"]).is_relative_to(home)
+        assert not (home / "Library" / "Application Support" / "Mail Manager").exists()
+        for stand_in in ("imap", "keychain", "updates"):
+            assert inside[stand_in] and after[stand_in], f"the real {stand_in}"
+
+
 class TestDryRunMode:
     @pytest.fixture
     def window(self, qapp, tmp_path, monkeypatch):

@@ -287,11 +287,48 @@ describes the app itself.
 - **The inbox opens newest first, every time** (`_restore_geometry`): the
   header's saved state carries its sort, and a sort by category or oldest
   first came back on every launch. A header clicked sorts for the session.
+- **The main window's icons name themselves on a long rest**
+  (`helpmode.PATIENT` set on the control, not the window): the window keeps
+  its tips for help, but the sidebar, Get New Mail and New Message are
+  icons, whose names have to be somewhere. Get New Mail says why when it
+  cannot look (the demo, no mailbox, no stored password): from the bar, a
+  press that did nothing and said nothing looked broken.
+- **Nothing outside the suite may build the window in the real home.** It
+  saves its settings as it closes: `./dev screenshot` drew the demo window
+  with a fresh `Settings` and, until it took a throwaway
+  `ICLOUD_TRIAGE_HOME` of its own, wrote the demo's settings over the
+  person's, mailboxes and all (`TestTheScreenshotKeepsToItself` runs it
+  with `HOME` pointed at an empty folder). Any script that builds
+  `MainWindow` sets that variable first, or runs inside pytest.
+- **The suite's stand-ins hold for the whole process** (the top of
+  `tests/conftest.py`, not fixtures): the home, the refused mail servers and
+  Keychain, and the update check that answers at once. A fixture is undone
+  as its test ends, and pytest-qt runs the event loop once more after that;
+  many fixtures only close their windows, so a window's five-second update
+  check could fire in that gap, ask GitHub and save a test's settings over
+  the person's. `isolated_home` still gives each test a fresh home; between
+  tests it is `SUITE_HOME`. `TestTheSuiteKeepsToItself` reaches the gap with
+  a module fixture that is slow to finish.
+- **The bar's first row is full at the smallest window** (760 wide): Get New
+  Mail and New Message sit at the head of the right-hand group, as one item
+  (`mail_buttons`), because beside the sidebar they made a third row there
+  and pushed the preview out of its splitter. Icon buttons carry `iconOnly`
+  (narrow padding) and an 18 px icon size: the style's own slot made them a
+  pixel taller than the words beside them. `test_viewing_modes` opens its
+  window at 760, so a change to the first row shows there first.
 - **Settings' status line keeps what was said since** (`_on_keychain_read`):
   the stored password is read as the dialog opens, off the drawing thread,
   and when it came back it cleared the line whatever was on it; now only its
   own `READING_KEYCHAIN`. A failed on-device step lost its reason that way,
   and its test failed now and then on a busy machine.
+- **A typed password belongs to its mailbox** (`SettingsDialog._account_passwords`,
+  by `Account.id`): the editor folds the form back on every keystroke, and
+  kept by address, each letter typed on the way to an address counted as a
+  mailbox of its own. OK wrote the password to the Keychain under every one,
+  typos included, and a new mailbox typed through another's address with its
+  own box empty deleted that one's password. OK now writes only the kept
+  mailboxes' entries. An address changed in place keeps its old entry: only
+  Remove deletes one, after asking, as an app password cannot be seen again.
 - **The inbox is two lists** (`MainWindow._listed`, `_sorted`): the messages
   a `ListWorker` read when the window opened (`TriageItem.analysed` False,
   shown as Not sorted yet), and the last scan's rows, shown together by
@@ -920,7 +957,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 5,839 tests
+./dev test                     # 5,857 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus

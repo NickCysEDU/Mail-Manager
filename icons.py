@@ -10,16 +10,17 @@ icon by name.
 
 from __future__ import annotations
 
+import math
 from typing import Dict, Tuple
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import (QColor, QFont, QIcon, QPainter, QPainterPath, QPen,
-                           QPixmap)
+                           QPixmap, QPolygonF)
 
 #: The names a button can ask for.
 NAMES = ("reply", "reply-all", "forward", "flag", "archive", "junk", "trash",
          "previous", "next", "attach", "send", "draft", "open", "compose",
-         "read", "unread", "move", "inbox", "folder", "sidebar",
+         "read", "unread", "get-mail", "move", "inbox", "folder", "sidebar",
          "bold", "italic", "underline", "strikethrough", "text-colour",
          "bullets", "numbers", "outdent", "indent", "align-left",
          "align-centre", "align-right", "align-justify", "link", "picture",
@@ -219,16 +220,43 @@ def _open(painter, s, colour):
 
 
 def _compose(painter, s, colour):
-    m = s * 0.18
-    painter.drawLine(QPointF(m, s - m), QPointF(s * 0.42, s - m))
-    painter.drawLine(QPointF(m, s * 0.44), QPointF(m, s - m))
-    pencil = QPainterPath()
-    pencil.moveTo(s * 0.36, s * 0.70)
-    pencil.lineTo(s * 0.78, s * 0.28)
-    pencil.lineTo(s * 0.72, s * 0.22)
-    pencil.lineTo(s * 0.30, s * 0.64)
-    pencil.closeSubpath()
-    painter.drawPath(pencil)
+    """A page with a pencil writing on it, in over its corner: Mail's own
+    New Message. The pencil was once an outline, which at the bar's size
+    closed up into one stroke and read as an arrow pointing down."""
+    # The page, left open at the top right where the pencil comes in.
+    left, top, right, bottom = s * 0.16, s * 0.24, s * 0.74, s * 0.84
+    r = s * 0.12
+    page = QPainterPath()
+    page.moveTo(right, s * 0.56)
+    page.lineTo(right, bottom - r)
+    page.quadTo(right, bottom, right - r, bottom)
+    page.lineTo(left + r, bottom)
+    page.quadTo(left, bottom, left, bottom - r)
+    page.lineTo(left, top + r)
+    page.quadTo(left, top, left + r, top)
+    page.lineTo(s * 0.44, top)
+    painter.drawPath(page)
+    # The pencil, solid: its body out past the corner, its point on the page.
+    pen = painter.pen()
+    half = pen.widthF() * 0.95
+    start, end = QPointF(s * 0.52, s * 0.50), QPointF(s * 0.86, s * 0.16)
+    length = math.hypot(end.x() - start.x(), end.y() - start.y())
+    along = ((end.x() - start.x()) / length, (end.y() - start.y()) / length)
+    across = (-along[1] * half, along[0] * half)
+
+    def side(at: QPointF, sign: int) -> QPointF:
+        return QPointF(at.x() + sign * across[0], at.y() + sign * across[1])
+
+    point = QPointF(start.x() - along[0] * s * 0.15, start.y() - along[1] * s * 0.15)
+    edge = QPen(pen)
+    edge.setWidthF(pen.widthF() * 0.5)
+    painter.setPen(edge)
+    painter.setBrush(colour)
+    painter.drawPolygon(QPolygonF([side(start, 1), side(end, 1),
+                                   side(end, -1), side(start, -1)]))
+    painter.drawPolygon(QPolygonF([side(start, 1), point, side(start, -1)]))
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.setPen(pen)
 
 
 def _envelope(painter, s, opened: bool):
@@ -496,6 +524,8 @@ _DRAWERS = {
     "archive": _archive, "junk": _junk, "trash": _trash, "previous": _previous,
     "next": _next, "attach": _attach, "send": _send, "draft": _draft,
     "open": _open, "compose": _compose, "read": _read, "unread": _unread,
+    # Mail's own Get Mail: a plain envelope.
+    "get-mail": _read,
     "move": _move, "inbox": _inbox, "folder": _folder, "sidebar": _sidebar,
     "bold": _bold, "italic": _italic, "underline": _underline,
     "strikethrough": _strikethrough, "text-colour": _text_colour,

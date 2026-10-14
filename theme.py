@@ -451,6 +451,11 @@ def stylesheet(colours: Palette, readable: bool = False,
     QToolButton[segment="true"] {{
         padding-left: {8 if readable else 7}px; padding-right: {8 if readable else 7}px;
     }}
+    /* So is a button that is only an icon: the bar's sidebar, Get New Mail
+       and New Message were each as wide as a word. */
+    QToolButton[iconOnly="true"] {{
+        padding-left: {8 if readable else 7}px; padding-right: {8 if readable else 7}px;
+    }}
     QToolButton[compact="true"] {{
         min-height: 0; min-width: 0; padding: 0; margin: 0;
         border: {border}px solid transparent;

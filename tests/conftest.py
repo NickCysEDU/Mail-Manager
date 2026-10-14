@@ -5,12 +5,15 @@ Nothing in the suite touches the network or the macOS Keychain.
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import email.message
 import imaplib
 import os
 import re
+import shutil
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -24,30 +27,60 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from imap_engine import encode_mutf7  # noqa: E402
 from models import Category, Classification, EmailMessage, FolderPlan, OtherCategory, TriageItem  # noqa: E402
 
+import config  # noqa: E402
 
-@pytest.fixture(autouse=True)
-def no_update_checks(monkeypatch):
-    """A window shown for five seconds starts an update check, which would
-    ask GitHub; here it answers at once, without the network."""
-    try:
-        import update_dialog
-    except ImportError:     # no Qt, so no window to start one
-        return
-    monkeypatch.setattr(update_dialog.Look, "run",
-                        lambda self: self.failed.emit("no network in tests"))
+# For the whole process, not in fixtures: a fixture is undone as its test
+# ends, and pytest-qt runs the event loop once more after that, so a timer
+# a test left behind ran with none of this in place. A shown window's
+# update check asked GitHub and saved the test's settings in the person's
+# own home, over theirs.
+SUITE_HOME = tempfile.mkdtemp(prefix="mail-manager-tests-")
+os.environ["ICLOUD_TRIAGE_HOME"] = SUITE_HOME
+atexit.register(shutil.rmtree, SUITE_HOME, True)
 
 
-@pytest.fixture(autouse=True)
-def no_real_mail_servers(monkeypatch):
+class _Refused(imaplib.IMAP4_SSL):
     """No test reaches a mail server. A window opening lists its inbox, so
     one shown with a password stored would try; a connection the test did
     not hand the engine itself fails at once, as an unreachable server
     does."""
-    class Refused(imaplib.IMAP4_SSL):
-        def __init__(self, *args, **kwargs):
-            raise OSError("no network in tests")
 
-    monkeypatch.setattr(imaplib, "IMAP4_SSL", Refused)
+    def __init__(self, *args, **kwargs):
+        raise OSError("no network in tests")
+
+
+imaplib.IMAP4_SSL = _Refused
+
+_real_keyring = config.CredentialStore._keyring
+
+
+def _no_real_keychain(self):
+    """A store built with an explicit backend still uses it; only the
+    fallback to the real Keychain is closed off, and it fails loudly rather
+    than hanging."""
+    if self._backend is not None:
+        return _real_keyring(self)
+    raise AssertionError(
+        "a test reached the real macOS Keychain. Pass a backend "
+        "(InMemoryCredentialStore, or CredentialStore(backend=...)) "
+        "instead - the suite must not depend on the machine it runs on.")
+
+
+config.CredentialStore._keyring = _no_real_keychain
+
+
+def _no_update_check(self):
+    """A window shown for five seconds starts an update check, which would
+    ask GitHub; here it answers at once, without the network."""
+    self.failed.emit("no network in tests")
+
+
+try:
+    import update_dialog
+except ImportError:     # no Qt, so no window to start one
+    pass
+else:
+    update_dialog.Look.run = _no_update_check
 
 
 @pytest.fixture(autouse=True)
@@ -60,30 +93,14 @@ def isolated_home(tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def no_real_keychain(monkeypatch):
-    """Make the real Keychain unreachable, and give the vault its own.
+    """Give the vault a Keychain of its own.
 
     With cryptography installed every save looks for a data key, and
     creating one on a locked or headless keychain blocks in securityd with
     nobody to approve it: on CI, a suite that never finishes.
-
-    A store built with an explicit backend still uses it; only the fallback
-    to the real thing is closed off, and it fails loudly rather than
-    hanging.
     """
-    import config
     import vault
 
-    real = config.CredentialStore._keyring
-
-    def refuse(self):
-        if self._backend is not None:
-            return real(self)
-        raise AssertionError(
-            "a test reached the real macOS Keychain. Pass a backend "
-            "(InMemoryCredentialStore, or CredentialStore(backend=...)) "
-            "instead - the suite must not depend on the machine it runs on.")
-
-    monkeypatch.setattr(config.CredentialStore, "_keyring", refuse)
     monkeypatch.setattr(vault, "_SHARED",
                         vault.Vault(config.InMemoryCredentialStore()),
                         raising=False)

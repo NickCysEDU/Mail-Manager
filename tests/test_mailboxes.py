@@ -961,6 +961,18 @@ class TestLookingAgain:
         account = window.settings.accounts[0]
         assert Place("folder", account.id, "Projects") in window.sidebar.places()
 
+    def test_the_bars_button_gets_new_mail_too(self, opened, qtbot, mime_factory):
+        window, server = opened
+        window._open_mailboxes()
+        _settle(qtbot, window)
+        assert "A reply just in" not in [i.email.subject for i in window.model.items]
+        server.messages["9"] = mime_factory(subject="A reply just in")
+        server.internaldates["9"] = _days_ago(0)
+        window.get_mail_button.click()
+        assert window._status_text == "Reading Inbox…"
+        _settle(qtbot, window)
+        assert "A reply just in" in [i.email.subject for i in window.model.items]
+
     def test_the_inbox_drops_what_has_gone_but_keeps_what_a_scan_read(
             self, opened, qtbot, item_factory):
         from workers import ScanOutcome

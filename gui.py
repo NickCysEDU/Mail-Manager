@@ -86,6 +86,7 @@ from models import (
     resolve_window,
 )
 from flowlayout import FlowLayout, Spacer
+from format_bar import tip
 from widgets import (
     ACCENT_AMBER, ACCENT_BLUE, ACCENT_GREEN, AdaptiveLineEdit, DateField,
     ElidingLabel, RoomyCombo, VersionLabel, _abandon, _chip, _format_duration, _html,
@@ -625,6 +626,8 @@ class MainWindow(QMainWindow):
                                "or folder."),
             self.category_filter: ("Filter by category", ""),
             self.show_combo: ("Filter by what to show", ""),
+            self.get_mail_button: ("Get new mail", ""),
+            self.new_message_button: ("New message", ""),
             self.scan_button: ("Scan and analyze", ""),
             self.apply_button: ("Apply approved folder moves", ""),
             self.clear_filters_button: ("Clear every filter", ""),
@@ -773,7 +776,6 @@ class MainWindow(QMainWindow):
             "Show or hide your mailboxes: the inbox, Drafts, Sent and every "
             "folder (\u2303\u2318S).")
         self.sidebar_button.toggled.connect(self._show_sidebar)
-        self._paint_sidebar_button()
         row.addWidget(self.sidebar_button)
 
         self.window_buttons: Dict[TimeWindow, QToolButton] = {}
@@ -841,6 +843,34 @@ class MainWindow(QMainWindow):
         row.addWidget(self.range_stack)
 
         row.addWidget(Spacer(16))
+
+        # Mail's own two, where Mail keeps Compose: first among the things
+        # that act, before the sorting. One item, so a narrow window wraps
+        # them together; on the left, beside the sidebar, they cost the bar
+        # a third row at the smallest size, and the preview the height of it.
+        self.get_mail_button = QToolButton()
+        self.get_mail_button.setToolTip(tip(
+            "Get New Mail", "Ctrl+Shift+N",
+            "Look again at the mailbox on screen, and at every account's folders."))
+        self.get_mail_button.clicked.connect(self._get_new_mail)
+        self.new_message_button = QToolButton()
+        self.new_message_button.setToolTip(tip(
+            "New Message", "Ctrl+N", "Write to anyone, from any of your mailboxes."))
+        self.new_message_button.clicked.connect(lambda: self.compose("new"))
+        self.mail_buttons = QWidget()
+        pair = QHBoxLayout(self.mail_buttons)
+        pair.setContentsMargins(0, 0, 0, 0)
+        pair.setSpacing(2)
+        pair.addWidget(self.get_mail_button)
+        pair.addWidget(self.new_message_button)
+        # Icons among words: each names itself on a long rest, as the message
+        # window's do, while the rest of this window keeps its tips to help.
+        for button in (self.sidebar_button, self.get_mail_button,
+                       self.new_message_button):
+            button.setProperty(helpmode.PATIENT, True)
+            button.setProperty("iconOnly", "true")
+        self._paint_bar_icons()
+        row.addWidget(self.mail_buttons)
 
         self.progress = QProgressBar()
         self.progress.setMinimumWidth(180)
@@ -968,6 +998,8 @@ class MainWindow(QMainWindow):
                             image="list.bullet.rectangle"),
             touchbar.Button("find", "Find", self._focus_search, title="",
                             image="magnifyingglass"),
+            touchbar.Button("get-mail", "Get mail", self._get_new_mail,
+                            image="envelope"),
             touchbar.Button("new-message", "New message",
                             lambda: self.compose("new"), image="square.and.pencil"),
             touchbar.Button("open-message", "Open message", self._open_selected,
@@ -1350,7 +1382,7 @@ class MainWindow(QMainWindow):
             self.help_button.blockSignals(False)
         self._apply_density(self.settings.effective_row_lines)
         self._reset_columns()
-        self._paint_sidebar_button()
+        self._paint_bar_icons()
         self.sidebar.set_accounts(self.settings.accounts)
         self.table.viewport().update()
 
@@ -3367,16 +3399,29 @@ class MainWindow(QMainWindow):
 
     def _get_new_mail(self) -> None:
         """Get New Mail: the mailbox on screen again, and every account's
-        folders."""
-        if not self._mailboxes_opened or self.demo:
+        folders. A press that can read nothing says why: from the toolbar,
+        one that did nothing and said nothing looked broken."""
+        if self.demo:
+            self._set_status("The demo's messages are samples: there is no "
+                             "mailbox to look in.")
+            return
+        if not self._mailboxes_opened:
+            return
+        if not self.settings.is_configured():
+            self._set_status("No mailbox is set up yet. Add one in Settings "
+                             "to get your mail.")
             return
         passwords = self._stored_passwords()
         for account in self.settings.accounts:
             if account.id in passwords:
                 self._list_mailboxes(account, passwords[account.id])
         place = self.sidebar.place()
-        if place not in self._listings:
-            self._list(place, passwords)
+        title = self.sidebar.title_of(place)
+        if place in self._listings:
+            self._set_status(f"Still reading {title}…")
+        elif not self._list(place, passwords):
+            self._set_status(f"Could not look in {title}: no mailbox that holds "
+                             "it has an app password stored. Add it in Settings.")
 
     def _known_uids(self, place: Place, account_id: str, folder: str) -> List[str]:
         """The UIDs one folder of one account held at the last look, and any
@@ -3394,12 +3439,21 @@ class MainWindow(QMainWindow):
         """Which listing a place shows: every inbox place shows the one."""
         return INBOX if place.is_inbox else place
 
-    def _paint_sidebar_button(self) -> None:
+    def _paint_bar_icons(self) -> None:
+        """The toolbar's icons in the button text's colour, again whenever the
+        look changes."""
         import icons
+        from PySide6.QtCore import QSize
         from PySide6.QtGui import QPalette
 
-        self.sidebar_button.setIcon(icons.icon(
-            "sidebar", self.palette().color(QPalette.ColorRole.ButtonText).name(), 18))
+        ink = self.palette().color(QPalette.ColorRole.ButtonText).name()
+        for button, name in ((self.sidebar_button, "sidebar"),
+                             (self.get_mail_button, "get-mail"),
+                             (self.new_message_button, "compose")):
+            # The size they are drawn at: the style's own slot is larger, and
+            # made the three a pixel taller than the words beside them.
+            button.setIconSize(QSize(18, 18))
+            button.setIcon(icons.icon(name, ink, 18))
 
     def _show_sidebar(self, on: bool) -> None:
         """Show or hide the mailboxes, from the View menu or the toolbar."""
@@ -4416,6 +4470,7 @@ class MainWindow(QMainWindow):
             ("⌘D", "Clear all ticks"),
             ("⌘L", "Show or hide the activity log"),
             ("⌘,", "Settings"),
+            ("⌘⇧N", "Get new mail"),
             ("⌘N", "New message"),
             ("⌘O", "Open the selected message in its own window"),
             ("⌘E / ⌘⌫", "Archive / delete the selected messages"),

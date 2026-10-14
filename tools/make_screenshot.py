@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +27,12 @@ sys.path.insert(0, str(ROOT))
 
 # Before Qt is imported, or it picks the real screen.
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+# A home of its own, fresh each run, before the app's modules read where home
+# is: the window saves its settings as it closes, and with the person's own
+# home it wrote this demo's settings over theirs.
+HOME = tempfile.mkdtemp(prefix="mail-manager-screenshot-")
+os.environ["ICLOUD_TRIAGE_HOME"] = HOME
 
 #: Wide enough that no column is elided and the preview reads properly.
 WIDTH, HEIGHT = 1680, 1050
@@ -81,7 +89,10 @@ def main(argv=None) -> int:
                              "of the paths the docs use.")
     args = parser.parse_args(argv)
 
-    image = render(args.width, args.height, dark=not args.light)
+    try:
+        image = render(args.width, args.height, dark=not args.light)
+    finally:
+        shutil.rmtree(HOME, ignore_errors=True)
     targets = [Path(p) for p in args.out] or list(TARGETS)
     for path in targets:
         path.parent.mkdir(parents=True, exist_ok=True)

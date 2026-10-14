@@ -564,6 +564,10 @@ class SettingsDialog(QDialog):
         #: Working copies. Nothing is written until OK.
         self._accounts: List[Account] = []
         self._account_index = 0
+        #: The password typed for each mailbox, by the mailbox's id. Kept by
+        #: address, every letter typed on the way to an address counted as
+        #: a mailbox of its own, and OK put the password in the Keychain
+        #: under each of them.
         self._account_passwords: Dict[str, str] = {}
         self._removed_accounts: List[Account] = []
         self._row_lines_touched = False
@@ -883,8 +887,8 @@ class SettingsDialog(QDialog):
         return "ready" if account.enabled else "ready, not scanned"
 
     def _password_for(self, account: Account) -> str:
-        if account.address in self._account_passwords:
-            return self._account_passwords[account.address]
+        if account.id in self._account_passwords:
+            return self._account_passwords[account.id]
         try:
             return self._store.get_mailbox_password(account.address)
         except CredentialError:
@@ -988,7 +992,7 @@ class SettingsDialog(QDialog):
         if address:
             # Cleaned on the way in as well as out, so what is shown, stored
             # and sent are the same.
-            self._account_passwords[address] = clean_secret(self.password_edit.text())
+            self._account_passwords[account.id] = clean_secret(self.password_edit.text())
         self._refresh_list_row(self._account_index)
 
     def _refresh_list_row(self, index: int) -> None:
@@ -3069,13 +3073,14 @@ class SettingsDialog(QDialog):
     def persist_credentials(self, settings: Settings) -> None:
         self._capture_account()
         problems = []
-        for address, secret in self._account_passwords.items():
-            if not address:
+        for account in self._accounts:
+            if not account.address or account.id not in self._account_passwords:
                 continue
             try:
-                self._store.set_mailbox_password(address, secret)
+                self._store.set_mailbox_password(
+                    account.address, self._account_passwords[account.id])
             except CredentialError as exc:
-                problems.append(f"{address}: {exc}")
+                problems.append(f"{account.address}: {exc}")
         # A mailbox that was removed should not leave its password behind.
         for account in self._removed_accounts:
             if account.address and not any(

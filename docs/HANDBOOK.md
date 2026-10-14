@@ -139,16 +139,21 @@ Existing folders with the same names are reused.
 
 ## The window
 
-The toolbar holds the time window, **Scan & Analyze**, **Apply** and **Stop
-All**. Under it: a search box, a category filter, **Show** (everything, job
-mail only, ticked only) and the tick shortcuts. The preview pane shows the
-message and the analysis; **Links** and **Attachments** open what is in it.
+The toolbar holds the sidebar, the time window, then, where Mail keeps
+Compose, **Get New Mail** (the envelope, ⇧⌘N) and **New Message** (a pencil
+on a page, ⌘N), and the sorting: **Scan & Analyze**, **Apply** and **Stop
+All**. Rest on an icon and it says what it is. Under it: a search box, a
+category filter, **Show** (everything, job mail only, ticked only) and the
+tick shortcuts. The preview pane shows the
+message and the analysis; **Reply** answers it, and **Links** and
+**Attachments** open what is in it. Archive, Junk and Delete are on the
+**Message** menu and on a right-click, with their keys.
 
 Down the left, the sidebar lists your mailboxes as Mail does: the inbox,
 Drafts, Sent, Junk, Trash and Archive, each gathering every account's, then
 each account's own folders. Choose one to see its mail: each time you do, it
-is looked at again, reading only what is new, and **View → Get New Mail**
-(⇧⌘N) looks again at the one on screen. Drag a folder onto another to move
+is looked at again, reading only what is new, and **Get New Mail** (⇧⌘N)
+looks again at the one on screen, and says why when it cannot. Drag a folder onto another to move
 it inside, between two folders to put it beside them, or onto the account's
 name for the top level; or right-click it and choose **Move To**. While you
 hold it, a bar shows where it will be listed, and the folder it goes into is
@@ -180,6 +185,7 @@ passwords are not in it.
 | ⌘F / Esc | Search / clear filters |
 | ⌃⌘S | Show or hide the sidebar |
 | ⇧⌘N | Get new mail |
+| ⌘N | New message |
 | ⌘1 to ⌘4 | Past 24 hours, 3 days, 7 days, custom |
 | ⌘A / ⌘⇧A / ⌘D | Tick all / tick confident / clear ticks |
 | ⌘B | Briefing |
@@ -418,7 +424,7 @@ See [SECURITY.md](../SECURITY.md) for reporting a problem.
 ./dev dry      # scan for real, with moves disabled
 ./dev fake     # the pipeline in the terminal, offline
 ./dev scan     # the pipeline on real mail, read-only
-./dev test     # 5,839 tests (with the evaluation sets present)
+./dev test     # 5,857 tests (with the evaluation sets present)
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 

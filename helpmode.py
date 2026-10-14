@@ -28,7 +28,8 @@ VISIBLE_FOR = 20000
 #: pointer came to rest, which Qt reports WAKE_UP after it stops.
 PATIENT_DELAY = 5000
 WAKE_UP = 700
-#: The property a window sets to ask for that.
+#: The property a window sets to ask for that, or a single control does: an
+#: icon among words, in a window that otherwise keeps its tips to help.
 PATIENT = "patientTips"
 
 
@@ -115,8 +116,8 @@ class HelpButton(QToolButton):
 
 class HelpFilter(QObject):
     """While help is on, show a widget's tooltip after a deliberate hover;
-    with it off, only in a window that asks (see PATIENT), and only after a
-    long one."""
+    with it off, only in a window or on a control that asks (see PATIENT),
+    and only after a long one."""
 
     #: Help switched on or off, for every ? to show it.
     switched = Signal(bool)
@@ -188,8 +189,8 @@ class HelpFilter(QObject):
         widget = watched if isinstance(watched, QWidget) else None
         if not self.enabled:
             QToolTip.hideText()
-            if (widget is not None and widget.window().property(PATIENT)
-                    and self._wording(widget)):
+            if (widget is not None and self._wording(widget) and (
+                    widget.property(PATIENT) or widget.window().property(PATIENT))):
                 self._wait_on(widget)
             return True                     # eaten: nothing asked for it yet
         if widget is None:
