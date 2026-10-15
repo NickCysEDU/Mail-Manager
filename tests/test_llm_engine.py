@@ -133,6 +133,33 @@ class TestPromptBuilding:
         assert "LINKS FOUND IN MESSAGE" in prompt
         assert "https://calendly.com/x" in prompt
 
+    def test_codes_and_the_keys_in_links_are_not_sent(self):
+        prompt = engine().build_prompt(self.message(
+            subject="604217 is your sign-in code",
+            body_text=("Your code is 604217. Or reset at https://accounts.example.com"
+                       "/reset/9f8a7b6c5d4e3f2a1b0c?uid=33."),
+            links=("https://accounts.example.com/reset/9f8a7b6c5d4e3f2a1b0c?uid=33",
+                   "https://accounts.example.com/reset/9f8a7b6c5d4e3f2a1b0c?uid=34")))
+        assert "604217" not in prompt and "9f8a7b6c" not in prompt and "uid=" not in prompt
+        assert "<subject>[code] is your sign-in code</subject>" in prompt
+        assert "Your code is [code]." in prompt
+        assert prompt.count("https://accounts.example.com/reset/…") == 2, \
+            "once in the text and once in the list, however many it carried"
+        assert "more link" not in prompt, "two links that became one are one"
+
+    def test_a_drafted_reply_is_not_sent_them_either(self):
+        made = engine()
+        sent = []
+        made.provider.complete = lambda system, prompt, schema, message=None: (
+            sent.append(prompt) or type("Done", (), {"payload": {}, "usage": None})())
+        made.usage.add = lambda usage: None
+        made.draft_reply(self.message(subject="Code 604217", body_text=(
+            "Your passcode is 3958-2071, see https://app.example.com/i/550e8400-e29b-41d4-"
+            "a716-446655440000?t=1")), classification=type("C", (), {"category_label": "Other"})(),
+            rule=None)
+        assert "3958" not in sent[0] and "604217" not in sent[0] and "550e8400" not in sent[0]
+        assert "https://app.example.com/i/…" in sent[0]
+
     def test_attachments_are_listed(self):
         prompt = engine().build_prompt(self.message(attachments=("offer.pdf",)))
         assert "<attachments>offer.pdf</attachments>" in prompt

@@ -41,7 +41,7 @@ class _Owner:
     """What the windows ask of the main window, remembered."""
 
     def __init__(self, count=3):
-        self.settings = SimpleNamespace(show_images=False)
+        self.settings = SimpleNamespace(load_pictures=False)
         self.model = SimpleNamespace(items=[SimpleNamespace(email=_message(str(n)), moved=False)
                                             for n in range(1, count + 1)])
         self.calls = []
@@ -125,6 +125,49 @@ class TestTheMessageWindow:
         window = MessageWindow(owner, row)
         windows.append(window)
         return owner, window
+
+    def test_its_pictures_wait_for_load_images(self, windows, monkeypatch):
+        """Not fetched until asked, as the preview does, and asking draws the
+        message again without reading it from the server again."""
+        from PySide6.QtWidgets import QApplication
+
+        from mail_window import MessageWindow
+        from triage_table import MailView
+
+        asked = []
+        monkeypatch.setattr(MailView, "_fetch", lambda self, url: asked.append(url))
+        owner = _Owner()
+        owner.model.items[0].email = _message("1", body_html=(
+            '<p>Hello</p><img src="https://pictures.example/cup.png" width="40" '
+            'height="40"><img src="https://t.example/open.gif" width="1" height="1">'))
+        window = MessageWindow(owner, 0)
+        windows.append(window)
+        assert asked == [] and window.pictures_bar.isVisibleTo(window)
+        window.show()
+        QApplication.processEvents()
+        assert window.focusWidget() is window.view, "a stray key would load them"
+        window.load_pictures_button.click()
+        assert asked == ["https://pictures.example/cup.png"]
+        assert not window.pictures_bar.isVisibleTo(window)
+        assert owner.read == ["1"]
+        window.show_row(1)
+        assert not window.pictures_bar.isVisibleTo(window), "nothing to load there"
+
+    def test_with_every_messages_pictures_wanted_there_is_no_bar(self, windows,
+                                                                 monkeypatch):
+        from mail_window import MessageWindow
+        from triage_table import MailView
+
+        asked = []
+        monkeypatch.setattr(MailView, "_fetch", lambda self, url: asked.append(url))
+        owner = _Owner()
+        owner.settings.load_pictures = True
+        owner.model.items[0].email = _message("1", body_html=(
+            '<p>Hello</p><img src="https://pictures.example/cup.png" width="40" height="40">'))
+        window = MessageWindow(owner, 0)
+        windows.append(window)
+        assert asked == ["https://pictures.example/cup.png"]
+        assert not window.pictures_bar.isVisibleTo(window)
 
     def test_it_shows_the_message_and_what_can_be_done(self, windows):
         owner, window = self._window(windows)

@@ -540,6 +540,16 @@ class TestPicturesInTheMessage:
         assert "pictures.example" not in out and "[image: A]" in out
         assert html_utils.pictures_in(out) == []
 
+    def test_what_load_images_would_fetch(self):
+        """Its pictures and those its styles name, once each; never the
+        pixel, a picture already in the message, or a file."""
+        page = self.PAGE + ('<div style="background-image: url(\'https://pictures'
+                            '.example/back.jpg\')">x</div>')
+        assert html_utils.pictures_held_back(page) == [
+            "https://pictures.example/a.png", "https://pictures.example/back.jpg"]
+        assert html_utils.pictures_held_back(
+            '<p>Hi</p><img src="https://t.example/p.gif" width="1" height="1">') == []
+
 
 class TestFontsAMessageAsksFor:
     def test_families_this_machine_lacks_are_let_go(self):
@@ -651,3 +661,53 @@ class TestTheOpeningIsWords:
     def test_it_stops_at_the_limit(self):
         got = html_utils.readable_opening("word " * 100, limit=40)
         assert len(got) == 40 and got.endswith("…")
+
+
+class TestSecretsStayHere:
+    """What a model elsewhere is not sent: a code is somebody's way into an
+    account while it lasts, and so is the key in a link. The sorter needs
+    to know one came, and where a link goes."""
+
+    @pytest.mark.parametrize("text, wanted", [
+        ("Your verification code is 604217, good for ten minutes.",
+         "Your verification code is [code], good for ten minutes."),
+        ("604 217 is your sign-in code", "[code] is your sign-in code"),
+        ("Use code: 3958-2071 to log in", "Use code: [code] to log in"),
+        ("Your temporary password is Xk7#pL9!q today.",
+         "Your temporary password is [password] today."),
+        ("Your key: 9aB3dE5fG7hI9jK1lM3nO5pQ", "Your key: [token]"),
+        ("Ticket 550e8400-e29b-41d4-a716-446655440000 is open", "Ticket [token] is open"),
+        ("Card 4024007186453 was charged", "Card [token] was charged"),
+    ])
+    def test_codes_passwords_and_keys_go(self, text, wanted):
+        assert html_utils.without_secrets(text) == wanted
+
+    @pytest.mark.parametrize("text", [
+        "The call is on 14 October at 10:30, in room 3B.",
+        "The range is 120,000 - 140,000; ring the front desk with questions.",
+        "Order 908-3316254-7701856 ships on Friday.",
+        "Ring 4930961744 or 33975318642 before noon.",
+        "A senior-software-engineer-2026 opening, and an interview-preparation-guide.",
+    ])
+    def test_the_rest_is_left_as_it_is(self, text):
+        assert html_utils.without_secrets(text) == text
+
+    @pytest.mark.parametrize("link, wanted", [
+        ("https://accounts.example.com/reset/9f8a7b6c5d4e3f2a1b0c?uid=33&sig=ab#top",
+         "https://accounts.example.com/reset/…"),
+        ("https://meet.example/j/9876543210?pwd=QWErty12", "https://meet.example/j/…"),
+        ("https://user:secret@app.example.com:8443/path", "https://app.example.com:8443/path"),
+        ("https://calendar.example/northwind/45min?month=2026-10",
+         "https://calendar.example/northwind/45min"),
+        ("https://boards.example.io/acme/jobs/2718281", "https://boards.example.io/acme/jobs/2718281"),
+        ("www.example.org/a/b?c=d.", "www.example.org/a/b."),
+        ("mailto:jobs@example.com", "mailto:jobs@example.com"),
+    ])
+    def test_a_link_keeps_where_it_goes(self, link, wanted):
+        assert html_utils.link_without_secrets(link) == wanted
+
+    def test_words_and_links_are_judged_apart(self):
+        """A port after "log in" is not a code, nor a slug in a link a key."""
+        assert html_utils.without_secrets(
+            "Log in at https://app.example.com:8443/senior-software-engineer-2026 now") == \
+            "Log in at https://app.example.com:8443/senior-software-engineer-2026 now"

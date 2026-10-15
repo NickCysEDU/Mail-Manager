@@ -1025,6 +1025,56 @@ class TestThePicturesInAMessage:
         assert asked == []
         assert "[image: coin]" in pane.rich_view._html
 
+    def test_load_images_fetches_this_messages_pictures(self, qtbot, monkeypatch):
+        """Off, as Settings starts: the message waits for Load Images, which
+        then fetches its picture and never the pixel that reports an
+        opening."""
+        pane, asked = self._pane(qtbot, monkeypatch, wanted=False)
+        assert pane.load_pictures_button.isVisibleTo(pane)
+        pane.load_pictures_button.click()
+        assert asked == ["https://pictures.example/coin.png"]
+        assert not pane.load_pictures_button.isVisibleTo(pane)
+
+    def test_the_next_message_waits_to_be_asked(self, qtbot, monkeypatch):
+        from dataclasses import replace
+
+        pane, asked = self._pane(qtbot, monkeypatch, wanted=False)
+        pane.load_pictures_button.click()
+        other = next(iter(TestTheMessageIsShownAsSent._items().values()))
+        other.email = replace(other.email, uid="2",
+                              body_html=self.HTML.replace("coin", "cup"))
+        pane.show_item(1, other)
+        assert asked == ["https://pictures.example/coin.png"]
+        assert pane.load_pictures_button.isVisibleTo(pane)
+
+    def test_no_button_with_nothing_to_load(self, qtbot, monkeypatch):
+        from dataclasses import replace
+
+        pane, _asked = self._pane(qtbot, monkeypatch, wanted=False)
+        item = pane._item
+        item.email = replace(item.email, body_html=(
+            '<p>Offer</p><img src="https://t.example/open.gif" width="1" height="1">'))
+        pane.show_item(0, item)
+        assert not pane.load_pictures_button.isVisibleTo(pane)
+        item.email = replace(item.email, body_html=self.HTML)
+        pane.show_item(0, item)
+        pane.body_mode.setCurrentIndex(1)
+        assert not pane.load_pictures_button.isVisibleTo(pane)
+
+    def test_with_every_messages_pictures_wanted_there_is_no_button(
+            self, qtbot, monkeypatch):
+        pane, asked = self._pane(qtbot, monkeypatch, wanted=True)
+        assert asked == ["https://pictures.example/coin.png"]
+        assert not pane.load_pictures_button.isVisibleTo(pane)
+
+    def test_pictures_wait_to_be_asked_for_to_begin_with(self):
+        """On for everyone once, and saved on in every settings file: the
+        setting has a new name, so the old one is not read."""
+        from config import Settings
+
+        assert Settings().load_pictures is False
+        assert Settings.from_dict({"show_images": True}).load_pictures is False
+
     def test_the_document_still_fetches_nothing_itself(self, qtbot, monkeypatch):
         from PySide6.QtCore import QUrl
         from PySide6.QtGui import QTextDocument
@@ -1039,9 +1089,9 @@ class TestThePicturesInAMessage:
         from config import InMemoryCredentialStore, Settings
         from settings_dialog import SettingsDialog
 
-        settings = Settings(icloud_email="you@icloud.example", show_images=False).normalized()
+        settings = Settings(icloud_email="you@icloud.example", load_pictures=False).normalized()
         dialog = SettingsDialog(settings, InMemoryCredentialStore())
         qtbot.addWidget(dialog)
         assert not dialog.images_check.isChecked()
         dialog.images_check.setChecked(True)
-        assert dialog.collect().show_images
+        assert dialog.collect().load_pictures

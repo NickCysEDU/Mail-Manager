@@ -283,6 +283,10 @@ class Provider:
     supports_base_url: bool = False
     #: Runs on this machine; nothing leaves it.
     on_device: bool = False
+    #: What this provider's own terms let it do with the mail it is sent,
+    #: where that is worth knowing before choosing it, and where they say so.
+    privacy_note: str = ""
+    privacy_url: str = ""
     default_model: str = ""
     models: Tuple[ModelChoice, ...] = ()
     #: USD per million tokens (input, output). Zero for local models.
@@ -517,6 +521,10 @@ class GeminiProvider(Provider):
     label = "Gemini (Google AI Studio)"
     blurb = "Very cheap and very fast. Flash-Lite costs a few cents per thousand emails."
     key_url = "https://aistudio.google.com/apikey"
+    privacy_note = ("On Google's free tier, Google may use the mail it is sent "
+                    "to improve its products, and people may read it. With "
+                    "billing on for the key's project, it does not.")
+    privacy_url = "https://ai.google.dev/gemini-api/terms"
     key_hint = "Google AI Studio keys start with “AIza”."
     can_list_models = True
     #: An alias rather than a pinned version: Google retires specific model ids
@@ -920,6 +928,18 @@ def default_model_for(name: str) -> str:
 
 #: Hosts that never leave the machine.
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0", "host.docker.internal"})
+
+
+def leaves_this_mac(name: str, base_url: str = "") -> bool:
+    """Whether this backend sends mail to a computer that is neither this one
+    nor on its network: the built-in rules and a model on this Mac never do,
+    and an endpoint of one's own here is as near."""
+    spec = provider_class(name)
+    if spec.on_device:
+        return False
+    if spec.supports_base_url and (base_url or "").strip():
+        return not _is_local(urllib.parse.urlparse(base_url.strip()).hostname or "")
+    return True
 
 
 def _is_local(host: str) -> bool:

@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import providers
-from html_utils import condense, head_and_tail
+from html_utils import condense, head_and_tail, link_without_secrets, without_secrets
 from models import Category, Classification, EmailMessage, OtherCategory
 from providers import (
     Completion,
@@ -526,10 +526,14 @@ class LLMEngine:
         raw = message.body_text or "(this message had no readable text body)"
         condensed = condense(raw) or raw
         body, truncated, original_length = head_and_tail(condensed, self.max_body_chars)
+        # Codes, passwords and the keys in links are no help in sorting a
+        # message, and are somebody's way into an account while they last.
+        body = without_secrets(body)
         if message.links:
             from html_utils import ExtractedText, notable_links
 
-            body = ExtractedText(body, message.links, notable_links(message.links)).with_link_appendix()
+            links = tuple(dict.fromkeys(link_without_secrets(link) for link in message.links))
+            body = ExtractedText(body, links, notable_links(links)).with_link_appendix()
 
         parts = [
             "<email>",
@@ -539,7 +543,7 @@ class LLMEngine:
             parts.append(f"  <reply_to>{_esc(message.reply_to)}</reply_to>")
         if message.to:
             parts.append(f"  <to>{_esc(message.to)}</to>")
-        parts.append(f"  <subject>{_esc(message.subject_display)}</subject>")
+        parts.append(f"  <subject>{_esc(without_secrets(message.subject_display))}</subject>")
         parts.append(f"  <date>{_esc(message.date_display('%Y-%m-%d %H:%M %Z'))}</date>")
         parts.append(
             f"  <bulk_mail_header_present>{'yes' if message.list_unsubscribe else 'no'}"
@@ -756,10 +760,10 @@ class LLMEngine:
         import autoreply
 
         self._abort_if_stopped()
-        body = (message.body_text or "")[: self.max_body_chars]
+        body = without_secrets((message.body_text or "")[: self.max_body_chars])
         prompt = (
             f"From: {message.sender_short} <{message.sender_email}>\n"
-            f"Subject: {message.subject_display}\n"
+            f"Subject: {without_secrets(message.subject_display)}\n"
             f"Category: {classification.category_label}\n"
             f"Replying as: {me or 'the mailbox owner'}\n"
         )

@@ -55,6 +55,7 @@ from PySide6.QtWidgets import (
 )
 
 import corrections
+import disclosure
 import llm_engine
 import profiles
 import providers
@@ -1355,7 +1356,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_model_button(self) -> None:
         self.preview.set_backend_label(self.settings.provider_label.split(" (")[0])
-        self.preview.set_pictures(self.settings.show_images)
+        self.preview.set_pictures(self.settings.load_pictures)
         spec = self.settings.provider_class
         pretty = next(
             (c.label for c in spec.models if c.value == self.settings.model),
@@ -1480,6 +1481,10 @@ class MainWindow(QMainWindow):
             self._set_status(f"Rule set switched to {label} for the rest of this scan.")
 
     def _switch_model(self, provider: str, model: str) -> None:
+        if not disclosure.ask(self, self.settings, provider, self.settings.base_url):
+            # The menu ticked the choice as it was clicked.
+            self._rebuild_model_menu()
+            return
         self.settings.provider = provider
         self.settings.model = model
         self.settings = self.settings.normalized()

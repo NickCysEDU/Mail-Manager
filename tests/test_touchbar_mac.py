@@ -742,7 +742,7 @@ def test_the_writing_windows_bar_fits_beside_the_control_strip(arch):
         from mail_window import ComposeWindow
         account = SimpleNamespace(id="a1", address="you@icloud.example",
                                   describe=lambda: "you · you@icloud.example")
-        owner = SimpleNamespace(settings=SimpleNamespace(show_images=False),
+        owner = SimpleNamespace(settings=SimpleNamespace(load_pictures=False),
                                 accounts=[account])
         writing = ComposeWindow(owner, outgoing.Draft(
             from_address="you@icloud.example"), [account], account)

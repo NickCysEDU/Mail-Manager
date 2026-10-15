@@ -23,6 +23,7 @@ import accounts
 import autoreply
 import config
 import corrections
+import disclosure
 import verdict_cache
 import helpmode
 import widgets
@@ -1131,6 +1132,12 @@ class SettingsDialog(QDialog):
         self.provider_blurb = QLabel()
         self.provider_blurb.setWordWrap(True)
         self.provider_blurb.setProperty("dim", "true")
+        # What the provider's own terms let it do with the mail, where that
+        # is worth knowing before choosing it.
+        self.provider_warning = QLabel()
+        self.provider_warning.setWordWrap(True)
+        self.provider_warning.setOpenExternalLinks(True)
+        self.provider_warning.setVisible(False)
 
         # Shown only for the on-device backend, when it needs setting up: the
         # equivalent of "get one" beside an API key field.
@@ -1272,6 +1279,7 @@ class SettingsDialog(QDialog):
 
         form.addRow("Model backend", self.provider_combo)
         form.addRow("", self.provider_blurb)
+        form.addRow("", self.provider_warning)
         form.addRow("", self.ollama_note)
         ollama_row = QHBoxLayout()
         ollama_row.addWidget(self.ollama_button)
@@ -1568,6 +1576,12 @@ class SettingsDialog(QDialog):
         spec = providers.provider_class(name)
 
         self.provider_blurb.setText(spec.blurb)
+        terms = (f' <a href="{_attr_url(spec.privacy_url)}">Their terms</a>'
+                 if spec.privacy_url else "")
+        self.provider_warning.setText(
+            f"<span style='color:{ACCENT_AMBER}'>{_html(spec.privacy_note)}</span>"
+            f"{terms}" if spec.privacy_note else "")
+        self.provider_warning.setVisible(bool(spec.privacy_note))
 
         previous = self.model_combo.currentText().strip()
         self._loading_models = True
@@ -2496,12 +2510,13 @@ class SettingsDialog(QDialog):
             "Links in mail open in your browser. With this on, the address "
             "is shown first and nothing opens until you say.")
         form.addRow("", self.links_check)
-        self.images_check = QCheckBox("Show the pictures in messages")
+        self.images_check = QCheckBox("Load the pictures in every message")
         form.addRow("", self.images_check)
         images_note = QLabel(
             "A message's pictures are fetched from wherever the sender keeps "
-            "them, which tells the sender it was opened. Off, each one is "
-            "shown as [image].")
+            "them, which tells the sender you opened it, and from where. Off, "
+            "each shows as [image] until you press Load Images over the "
+            "message.")
         images_note.setWordWrap(True)
         images_note.setProperty("dim", "true")
         form.addRow("", images_note)
@@ -2934,7 +2949,7 @@ class SettingsDialog(QDialog):
         self.readable_check.setChecked(settings.readable)
         self.help_check.setChecked(settings.help_mode)
         self.links_check.setChecked(settings.warn_on_links)
-        self.images_check.setChecked(settings.show_images)
+        self.images_check.setChecked(settings.load_pictures)
         self.updates_check.setChecked(settings.check_updates)
         self.help_check.toggled.connect(
             lambda on: self.help_button.setChecked(on))
@@ -3021,7 +3036,7 @@ class SettingsDialog(QDialog):
             density=self.density_combo.currentData() or "comfortable",
             help_mode=self.help_check.isChecked(),
             warn_on_links=self.links_check.isChecked(),
-            show_images=self.images_check.isChecked(),
+            load_pictures=self.images_check.isChecked(),
             check_updates=self.updates_check.isChecked(),
             row_lines=self.rows_spin.value(),
             row_lines_auto=self._settings.row_lines_auto and not self._row_lines_touched,
@@ -3224,6 +3239,11 @@ class SettingsDialog(QDialog):
 
     def done(self, result: int) -> None:  # noqa: N802
         """Qt funnels OK, Cancel, Escape and the close box through here."""
+        if result == QDialog.DialogCode.Accepted and not disclosure.ask(
+                self, self._settings,
+                self.provider_combo.currentData() or providers.DEFAULT_PROVIDER,
+                self.base_url_edit.text()):
+            return
         if not self._stop_ollama_workers():
             return
         self._stop_test_worker()

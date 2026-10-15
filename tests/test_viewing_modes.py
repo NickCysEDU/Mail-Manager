@@ -144,6 +144,92 @@ class TestTheMainWindow:
             f"at {size[0]}x{size[1]} with the preview {place}:\n  "
             + "\n  ".join(faults(window)))
 
+    @pytest.mark.parametrize("size", SIZES)
+    @pytest.mark.parametrize("place", ["below", "right"])
+    def test_a_message_whose_pictures_wait_has_room(self, qapp, window,
+                                                    dressed, size, place):
+        """Load Images sits with Attachments: a row of its own under the
+        header left a small window's halves without the height they need."""
+        from dataclasses import replace
+
+        dressed()
+        items = [make_item(str(i)) for i in range(8)]
+        for item in items:
+            item.email = replace(item.email, body_text="Hello", body_html=(
+                '<p>Hello</p><img src="https://pictures.example/a.png" '
+                'width="40" height="40">'))
+        window.model.set_items(items)
+        window.resize(*size)
+        window.set_preview_position(place)
+        window.table.selectRow(0)
+        qapp.processEvents()
+        preview = window.preview
+        assert preview.load_pictures_button.isVisibleTo(preview)
+        assert not faults(window), (
+            f"at {size[0]}x{size[1]} with the preview {place}:\n  "
+            + "\n  ".join(faults(window)))
+
+    @pytest.mark.parametrize("size", SIZES)
+    @pytest.mark.parametrize("place", ["below", "right"])
+    @pytest.mark.parametrize("spacing", ["comfortable", "compact", "dense"])
+    @pytest.mark.parametrize("kind", ["not sorted yet", "left alone"])
+    def test_a_message_with_a_notice_has_room(self, qapp, window, dressed,
+                                              size, place, spacing, kind):
+        """Why a row cannot be ticked, over the message: a row of its own
+        that a small window had no room for. It shows where there is."""
+        from models import NonJobRouting
+
+        dressed(spacing)
+        if kind == "left alone":
+            items = [make_item(str(i), classification={"is_job_related": False},
+                               non_job_routing=NonJobRouting.LEAVE) for i in range(8)]
+        else:
+            items = [make_item(str(i)) for i in range(8)]
+            for item in items:
+                item.analysed = False
+        window.model.set_items(items)
+        window.resize(*size)
+        window.set_preview_position(place)
+        # Settled first, as a message is chosen in a window already open:
+        # nothing resizes after, to decide again.
+        qapp.processEvents()
+        window.table.selectRow(0)
+        qapp.processEvents()
+        preview = window.preview
+        assert preview.inert_note.full_text()
+        if size == self.SIZES[0]:
+            assert preview.inert_row.isVisibleTo(preview), "room, and no notice"
+        assert not faults(window), (
+            f"at {size[0]}x{size[1]} with the preview {place}:\n  "
+            + "\n  ".join(faults(window)))
+
+    def test_a_notice_that_just_fits_stays_from_message_to_message(
+            self, qapp, window, dressed):
+        """Its own height is the halves' already while it shows, so it is
+        not counted against it a second time: a notice that just fitted
+        went at the next message and came back at the one after."""
+        dressed()
+        items = [make_item(str(i)) for i in range(8)]
+        for item in items:
+            item.analysed = False
+        window.model.set_items(items)
+        window.set_preview_position("below")
+        preview = window.preview
+        for height in range(580, 1000, 4):
+            window.resize(1280, height)
+            qapp.processEvents()
+            window.table.selectRow(0)
+            qapp.processEvents()
+            if preview.inert_row.isVisibleTo(preview):
+                break
+        else:
+            pytest.fail("no height gave the notice room")
+        for row in (1, 2, 3):
+            window.table.selectRow(row)
+            qapp.processEvents()
+            assert preview.inert_row.isVisibleTo(preview), f"gone at row {row}, {height} tall"
+        assert not faults(window)
+
     @pytest.mark.parametrize("spacing", ["comfortable", "compact", "dense"])
     def test_the_icons_stand_no_taller_than_the_words(self, qapp, window,
                                                       dressed, spacing):

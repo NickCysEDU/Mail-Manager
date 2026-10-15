@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel,
                                QPlainTextEdit, QPushButton, QSplitter, QStyle,
                                QStyledItemDelegate, QStyleOptionViewItem,
                                QTextBrowser, QToolButton, QVBoxLayout, QWidget,
-    QInputDialog, QMenu,
+    QInputDialog, QMenu, QSizePolicy,
     QStackedWidget)
 
 import html_utils
@@ -28,7 +28,7 @@ import theme
 from imap_engine import MoveReport
 from models import (CATEGORY_COLORS, OTHER_COLOR, TOPIC_COLORS, Category,
                     Disposition, TriageItem, TriageSummary)
-from widgets import (ACCENT_BLUE, ACCENT_RED, RoomyCombo, _attr_url,
+from widgets import (ACCENT_BLUE, ACCENT_RED, ElidingLabel, RoomyCombo, _attr_url,
                      _confidence_rgb, _draw_wrapped, _html, _is_dark,
                      _mono_font, _tint, _wrap, system_font)
 
@@ -51,6 +51,16 @@ def opening(email) -> str:
     if kept is None or kept[0] is not email.body_text:
         kept = email._opening = (email.body_text,
                                  html_utils.readable_opening(email.body_text))
+    return kept[1]
+
+
+def remote_pictures(email) -> list:
+    """What showing a message's pictures would fetch, kept with it as the
+    opening is: every redraw of the message asks."""
+    kept = getattr(email, "_pictures", None)
+    if kept is None or kept[0] is not email.body_html:
+        kept = email._pictures = (email.body_html,
+                                  html_utils.pictures_held_back(email.body_html))
     return kept[1]
 
 
@@ -991,6 +1001,22 @@ class PreviewPane(QWidget):
             "The message as it was sent, its plain text, or exactly what "
             "was sent to the model.")
 
+        #: Pictures for every message, from Settings; and the one message
+        #: whose pictures were asked for, which the next message does not
+        #: inherit.
+        self._pictures_on = False
+        self._pictures_for = None
+        # Up with Attachments, where a short wide pane has width to spare:
+        # a row of its own under the header left a small window's halves
+        # without the height they need, and beside the Message box it
+        # squeezed the box below its words.
+        self.load_pictures_button = QPushButton("Load Images")
+        self.load_pictures_button.setToolTip(
+            "Its pictures wait to be asked for: fetching them tells the sender "
+            "you opened it. Settings can load every message's.")
+        self.load_pictures_button.clicked.connect(self._load_pictures_here)
+        self.load_pictures_button.setVisible(False)
+
         self.rich_view = message_view()
         self.rich_view.setMinimumHeight(24)
         self.rich_view.anchorClicked.connect(
@@ -1034,10 +1060,15 @@ class PreviewPane(QWidget):
         # Why a row cannot be ticked, and the button that changes it: the
         # default state for every message that is not job mail, and confusing
         # without a word.
-        self.inert_note = QLabel("")
-        self.inert_note.setWordWrap(True)
-        self.inert_note.setTextFormat(Qt.TextFormat.RichText)
+        # One line, cut short where the pane is narrow and whole on hover:
+        # wrapped, it took three lines of a small window, and the halves
+        # under it lost the height they need.
+        self.inert_note = ElidingLabel("")
+        self.inert_note.setTextFormat(Qt.TextFormat.PlainText)
         self.inert_note.setProperty("dim", "true")
+        self.inert_note.setSizePolicy(QSizePolicy.Policy.Ignored,
+                                      QSizePolicy.Policy.Preferred)
+        self.inert_note.setMinimumWidth(80)
         self.sort_these_button = QToolButton()
         self.sort_these_button.setText("Sort this mail too")
         self.sort_these_button.setToolTip(
@@ -1051,6 +1082,8 @@ class PreviewPane(QWidget):
         inert_layout.addWidget(self.inert_note, 1)
         inert_layout.addWidget(self.sort_these_button)
         self.inert_row.setVisible(False)
+        #: Why the message on show cannot be ticked, or empty.
+        self._reason = ""
 
         left = QWidget()
         left_layout = QVBoxLayout(left)
@@ -1103,6 +1136,7 @@ class PreviewPane(QWidget):
         top.addWidget(self.links_button, 0, Qt.AlignmentFlag.AlignTop)
         top.addWidget(self.attachments_button, 0,
                       Qt.AlignmentFlag.AlignTop)
+        top.addWidget(self.load_pictures_button, 0, Qt.AlignmentFlag.AlignTop)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 8, 10, 8)
@@ -1123,6 +1157,23 @@ class PreviewPane(QWidget):
         super().resizeEvent(event)
         self._fit_header()
         self._arrange(self.width())
+        self._fit_notice()
+
+    def _fit_notice(self) -> None:
+        """The notice over the message, where the halves keep the height they
+        need under it: on a small window they had none to give, and drew
+        outside themselves. The badge in the header says the same in a few
+        words, the header's tooltip has it whole, and what Sort this mail
+        too does is on the Sorting menu.
+
+        Measured on the halves themselves, once the header has been laid out
+        for the message now on show: showing the notice takes its height from
+        them, and hiding it gives the same back."""
+        self.layout().activate()
+        cost = self.inert_row.sizeHint().height() + self.layout().spacing()
+        spare = (self.splitter.height() - self.splitter.minimumSizeHint().height()
+                 + (0 if self.inert_row.isHidden() else cost))
+        self.inert_row.setVisible(bool(self._reason) and spare >= cost)
 
     def _arrange(self, width: int) -> None:
         """Side by side when there is room for both, stacked when not."""
@@ -1265,11 +1316,12 @@ class PreviewPane(QWidget):
         message = item.email
 
         reason = item.why_not_actionable
-        self.inert_row.setVisible(bool(reason))
+        self._reason = reason
         if reason:
-            self.inert_note.setText(_html(reason))
-            # The button only helps for the one cause it can actually fix.
-            self.sort_these_button.setVisible(item.left_because_not_job)
+            self.inert_note.setText(reason)
+            self.inert_note.setToolTip(reason)
+        # The button only helps for the one cause it can actually fix.
+        self.sort_these_button.setVisible(item.left_because_not_job)
 
         badge = _disposition_badge(item)
         flags = {flag.lower() for flag in (message.flags or ())}
@@ -1289,7 +1341,8 @@ class PreviewPane(QWidget):
         )
         self.header.setToolTip(
             f"{message.subject_display}\n{message.sender_display}\n"
-            f"{message.date_display('%A %d %B %Y, %H:%M')}")
+            f"{message.date_display('%A %d %B %Y, %H:%M')}"
+            + (f"\n\n{reason}" if reason else ""))
         self._fit_header()
 
         self._updating = True
@@ -1305,11 +1358,15 @@ class PreviewPane(QWidget):
         self._render_body()
         self.analysis_label.setText(self._analysis_title())
         self.reasoning_view.setHtml(_reasoning_html(item))
+        # Last, once the header, the filing row and the button are this
+        # message's: the notice is fitted to the room they leave.
+        self._fit_notice()
 
     @Slot()
     def _render_body(self, keep_place: bool = False) -> None:
         if self._item is None:
             return
+        self.load_pictures_button.setVisible(False)
         mode = self.body_mode.currentIndex()
         if mode == 2 and self._prompt_text:
             self.body_view.setPlainText(self._prompt_text)
@@ -1335,10 +1392,18 @@ class PreviewPane(QWidget):
         drawable = bool(message.body_html) and (
             bool(message.body_text.strip()) or "<img" in message.body_html.lower())
         if mode == 0 and drawable:
+            loading = self._pictures_on or self._pictures_for is self._item
+            self.rich_view.set_pictures(loading)
             self.rich_view.show_message(message.body_html, missing, keep_place)
             self.body_stack.setCurrentWidget(self.rich_view)
+            self.load_pictures_button.setVisible(
+                not loading and bool(remote_pictures(message)))
         else:
             self.body_stack.setCurrentWidget(self.body_view)
+
+    def _load_pictures_here(self) -> None:
+        self._pictures_for = self._item
+        self._render_body(keep_place=True)
 
     def refresh_body(self, item: TriageItem) -> None:
         """The message drawn again, if it is the one on show, where it was
@@ -1350,8 +1415,8 @@ class PreviewPane(QWidget):
         self._render_body(keep_place=True)
 
     def set_pictures(self, wanted: bool) -> None:
-        """Whether a message's pictures are fetched and shown."""
-        self.rich_view.set_pictures(wanted)
+        """Whether every message's pictures are fetched and shown."""
+        self._pictures_on = bool(wanted)
         self._render_body()
 
     def _sync_attachments(self, item) -> None:

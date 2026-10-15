@@ -627,8 +627,15 @@ class TestTheMainWindowsBar:
 
         bar = touchbar.of(window)
         state = bar.flat["model"].state()
-        assert state["options"][state["index"]] == "Built-in rule set"
+        rules = state["index"]
+        assert state["options"][rules] == "Built-in rule set"
         target = state["options"].index("Claude Opus 5")
+        # A model elsewhere says first what it will be sent; refused, which
+        # is every message box's answer here, the list goes back.
+        bar.press("model", target)
+        assert window.settings.model == "rules-v1"
+        assert bar.flat["model"].state()["index"] == rules
+        window.settings.told_what_is_sent = ["anthropic"]
         bar.press("model", target)
         assert window.settings.model == "claude-opus-5"
         assert bar.flat["model"].state()["index"] == target, \

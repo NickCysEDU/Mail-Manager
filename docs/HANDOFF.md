@@ -346,6 +346,36 @@ describes the app itself.
   CIEDE2000 of at least 6.5 between every pair as the column draws them, in
   both themes; only the two greys, which both mean nothing is done, may
   match. Different hex values passed the old test at 2.5 apart.
+- **Pictures wait for Load Images** (`Settings.load_pictures`, off; named
+  afresh from `show_images`, which every settings file had saved on):
+  `PreviewPane._pictures_for` and `MessageWindow._pictures_for` hold the one
+  message asked for, and `remote_pictures` (cached on the message like the
+  opening) says whether there is anything to ask for. The preview's button
+  sits with Attachments: as a row under the header it overflowed a small
+  window's halves (`test_a_message_whose_pictures_wait_has_room`).
+- **Why a row cannot be ticked shows where there is room**
+  (`PreviewPane._fit_notice`): one line, cut short with the whole of it on
+  hover, and only where the halves keep `HALF_TALL` under it; the badge
+  says it in a few words and the header's tooltip in full. On the smallest
+  windows, with a row not sorted yet or non-job mail left alone, the halves
+  drew 9 to 23 px outside themselves. It is fitted last in `show_item`
+  (after the header and the button are this message's, with the layout
+  activated) and again on every resize; while it shows, its own height is
+  the halves' already. `test_a_message_with_a_notice_has_room` settles the
+  window before choosing a row, as a person does: selecting before the
+  resize landed hid all three mistakes this took.
+- **A model elsewhere is announced once** (`disclosure.ask`,
+  `Settings.told_what_is_sent`, `providers.leaves_this_mac`): asked in
+  `SettingsDialog.done`, `MainWindow._switch_model` (which rebuilds the menu
+  when refused: the click ticked the entry) and the setup wizard's backend
+  page. Tests answer every message box with Cancel, so one that chooses a
+  cloud backend expects the refusal or presses the dialog's own button.
+- **Secrets are taken out of what a model is sent**
+  (`html_utils.without_secrets`, `link_without_secrets`, in `build_prompt`
+  and `draft_reply`): codes, passwords, keys, and the queries, logins and
+  keys in links. Words and links are judged apart, so a port is not a code
+  and a slug not a key. The rules provider reads the message itself, not the
+  prompt, so it sorts as before; "What was sent" shows the cut prompt.
 - **A scan still reads again what the listing read**: both call
   `fetch_window` with the same size, and only the listing passes `skip`.
   Reusing the listed bodies needs each mailbox's UIDVALIDITY kept with the
@@ -979,7 +1009,7 @@ describes the app itself.
 ## Measuring
 
 ```bash
-./dev test                     # 5,877 tests
+./dev test                     # 6,001 tests
 ./dev playtest ~/Music/*.mp3   # real records through the real pane
 ./dev eval                     # the sorter on a labelled set
 python tools/corpus.py         # the SpamAssassin corpus

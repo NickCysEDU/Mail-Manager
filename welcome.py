@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 import accounts
+import disclosure
 import profiles
 import providers
 import rulesets
@@ -38,7 +39,7 @@ from accounts import Account
 import config
 from config import CredentialError, CredentialStore, Settings
 from models import APP_DISPLAY_NAME, FolderPlan
-from widgets import RoomyCombo, _attr_url
+from widgets import ACCENT_AMBER, RoomyCombo, _attr_url, _html
 
 
 def _watermark() -> Optional[QPixmap]:
@@ -341,7 +342,14 @@ class ClassifierPage(QWizardPage):
                 self.key.setText(self._store.get_provider_key(name))
             except CredentialError:
                 self.key.clear()
-        self.note.setText(f"<i>{spec.blurb}</i>")
+        warning = (f"<br><span style='color:{ACCENT_AMBER}'>"
+                   f"{_html(spec.privacy_note)}</span>" if spec.privacy_note else "")
+        self.note.setText(f"<i>{spec.blurb}</i>{warning}")
+
+    def validatePage(self) -> bool:  # noqa: N802 - Qt's name
+        """A backend elsewhere says what it will be sent before it is chosen."""
+        name = self.backend.currentData() or providers.DEFAULT_PROVIDER
+        return disclosure.ask(self, self.wizard()._settings, name)
 
     def initializePage(self) -> None:
         settings = Settings.load()

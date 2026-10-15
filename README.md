@@ -99,16 +99,19 @@ OpenAI-compatible service with your own key, in **Settings → Analysis**.
 
 ## Privacy
 
-With the built-in sorter, no message text leaves your Mac. Passwords and keys
-are kept in the Keychain, and what the app keeps about your mail is encrypted
-on disk. Once a day it asks GitHub for the latest version number; Settings
-turns that off. See [SECURITY.md](SECURITY.md).
+With the built-in sorter, no message text leaves your Mac. A model elsewhere
+is never sent the codes, passwords and keys in your mail, and the first time
+you choose one the app says what it will be sent. Pictures in a message load
+only when you ask. Passwords and keys are kept in the Keychain, and what the
+app keeps about your mail is encrypted on disk. Once a day it asks GitHub for
+the latest version number; Settings turns that off. See
+[SECURITY.md](SECURITY.md).
 
 ## Development
 
 ```bash
 ./dev demo     # the app with sample mail, no setup
-./dev test     # 5,877 tests, about eighteen minutes on four workers
+./dev test     # 6,001 tests, about eighteen minutes on four workers
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 

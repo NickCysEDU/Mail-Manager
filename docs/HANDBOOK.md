@@ -144,10 +144,11 @@ Compose, **Get New Mail** (the envelope, ⇧⌘N) and **New Message** (a pencil
 on a page, ⌘N), and the sorting: **Scan & Analyze**, **Apply** and **Stop
 All**. Rest on an icon and it says what it is. Under it: a search box, a
 category filter, **Show** (everything, job mail only, ticked only) and the
-tick shortcuts. The preview pane shows the
-message and the analysis; **Reply** answers it, and **Links** and
-**Attachments** open what is in it. Archive, Junk and Delete are on the
-**Message** menu and on a right-click, with their keys.
+tick shortcuts. The preview pane shows the message and the analysis;
+**Reply** answers it, **Links** and **Attachments** open what is in it, and
+**Load Images** fetches its pictures, which otherwise wait to be asked for.
+Archive, Junk and Delete are on the **Message** menu and on a right-click,
+with their keys.
 
 Down the left, the sidebar lists your mailboxes as Mail does: the inbox,
 Drafts, Sent, Junk, Trash and Archive, each gathering every account's, then
@@ -255,11 +256,11 @@ Double-click a message, or press Return on it, and it opens in a window of
 its own with the whole message as sent, on its own light page whatever the
 app's look. Messages are drawn by WebKit, as in Mail, so a newsletter looks
 as its sender designed it; nothing in a message runs, and nothing loads but
-its pictures, when they are wanted. With pictures off, a message with no
-dark design of its own has any pale text darkened so it can be read. A scan
-reads the start of each message; one longer than that is read whole when
-it is shown, in the preview or its window, and until it arrives the
-message says it is only the start. Along the top: Reply (⌘R), Reply All
+its pictures, when you press **Load Images** over it. With pictures off, a
+message with no dark design of its own has any pale text darkened so it can
+be read. A scan reads the start of each message; one longer than that is
+read whole when it is shown, in the preview or its window, and until it
+arrives the message says it is only the start. Along the top: Reply (⌘R), Reply All
 (⌘⇧R), Forward (⌘⇧F), Mark as Read or Unread, Flag, Move to, Archive (⌘E),
 Junk and Delete (⌘⌫). ⌘↑ and ⌘↓ walk the table in the order it is shown.
 Opening a message marks it read, as it would anywhere else. The same actions
@@ -321,9 +322,10 @@ default. Deletion on IMAP is permanent.
 
 ## Attachments and links
 
-**Message** shows a message as it was sent, pictures included: they are
-fetched from wherever the sender keeps them, which tells the sender it was
-opened, so **Settings** can turn them off, and each is then shown as [image].
+**Message** shows a message as it was sent. Its pictures are fetched from
+wherever the sender keeps them, which tells the sender it was opened and from
+where, so each is shown as [image] until you press **Load Images** over the
+message; **Settings** can load them for every message.
 **Plain text** is the text alone.
 
 **Attachments** opens a viewer for images, audio, PDF, text, and Word, Excel
@@ -408,9 +410,12 @@ button opens the release page instead.
 
 - With the built-in rules, or a model on this Mac, no message text leaves
   it. With a model elsewhere, each message a scan reads goes to that
-  service: sender, recipients, subject, date, attachment names, links and a
-  trimmed body. Its terms decide what it keeps: on Gemini's free tier,
-  Google may use what it is sent to improve its products.
+  service: sender, recipients, subject, date, attachment names, where its
+  links go and a trimmed body, with codes, passwords and keys taken out,
+  and the keys in its links. The first time such a model is chosen, the app
+  says what it will be sent and waits to be told to go ahead.
+- Its terms decide what it keeps: on Gemini's free tier, Google may use what
+  it is sent to improve its products, which Settings says beside it.
 - Passwords and keys live in the Keychain. The settings file holds no secrets
   and is `0600`.
 - The summaries kept between scans and what the app learns from corrections
@@ -428,7 +433,7 @@ See [SECURITY.md](../SECURITY.md) for reporting a problem.
 ./dev dry      # scan for real, with moves disabled
 ./dev fake     # the pipeline in the terminal, offline
 ./dev scan     # the pipeline on real mail, read-only
-./dev test     # 5,877 tests (with the evaluation sets present)
+./dev test     # 6,001 tests (with the evaluation sets present)
 ./dev eval     # sorter accuracy, on a labelled set of your own
 ```
 

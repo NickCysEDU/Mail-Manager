@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from html import unescape
 from html.parser import HTMLParser
 from typing import Iterable, List, Optional, Sequence, Set, Tuple
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urlparse, urlsplit, urlunsplit
 
 #: Tags whose entire contents are noise.
 _DROP_TAGS = {
@@ -387,6 +387,83 @@ def readable_opening(text: str, limit: int = 200) -> str:
     return words if len(words) <= limit else words[: limit - 1] + "…"
 
 
+#: A code to type in somewhere: the word for it, then the number, or the
+#: number first and the word after it. The sorter needs to know a code came,
+#: not which.
+_CODE_WORDS = (r"code|passcode|verification|verify|one[-\s]?time|otp|pin|2fa|"
+               r"two[-\s]?factor|security|log[-\s]?in|sign[-\s]?in")
+_CODE_AFTER = re.compile(
+    rf"(?i)(\b(?:{_CODE_WORDS})\b[^\n\d]{{0,40}}?)\b\d(?:[\s-]?\d){{3,9}}\b")
+_CODE_BEFORE = re.compile(
+    rf"(?i)\b\d(?:[\s-]?\d){{3,9}}\b(?=[^\n\d]{{0,30}}?\b(?:{_CODE_WORDS})\b)")
+_PASSWORD = re.compile(r"(?i)(\bpass(?:word|code|phrase)\b\s*(?:is|:)\s*)\S+")
+_WORD = re.compile(r"[A-Za-z0-9_-]{12,}")
+_UUID = re.compile(r"(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+_RUN = re.compile(r"[A-Za-z0-9]+")
+
+
+def _secret_part(segment: str, long_number: int = 9) -> bool:
+    """Whether a piece of a link's path, or a word, is a key rather than a
+    name: a long run of letters and digits, or of mixed case, an id, or a
+    number as long as a meeting's or a card's. A readable slug, a short job
+    number or a telephone number is a name."""
+    if _UUID.search(segment):
+        return True
+    for run in _RUN.findall(segment):
+        digits = sum(c.isdigit() for c in run)
+        if digits == len(run):
+            if len(run) >= long_number:
+                return True
+        elif len(run) >= 16 and digits:
+            return True
+        elif len(run) >= 24 and run[1:].lower() != run[1:]:
+            return True
+    return False
+
+
+def link_without_secrets(url: str) -> str:
+    """Where a link goes, without what it carries: no query, fragment or
+    login in it, and no part of its path that is a key."""
+    bare = url.rstrip(".,;:!?")
+    tail = url[len(bare):]
+    whole = "://" in bare
+    if not whole and not bare.lower().startswith("www."):
+        return url
+    parts = urlsplit(bare if whole else "http://" + bare)
+    if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
+        return url
+    try:
+        port = f":{parts.port}" if parts.port else ""
+    except ValueError:
+        port = ""
+    path = "/".join("…" if _secret_part(segment) else segment
+                    for segment in parts.path.split("/"))
+    kept = urlunsplit((parts.scheme, parts.hostname + port, path, "", ""))
+    return (kept if whole else kept.split("://", 1)[1]) + tail
+
+
+def _words_without_secrets(text: str) -> str:
+    text = _PASSWORD.sub(r"\1[password]", text)
+    text = _CODE_AFTER.sub(r"\1[code]", text)
+    text = _CODE_BEFORE.sub("[code]", text)
+    return _WORD.sub(lambda match: "[token]" if _secret_part(match.group(0), 12)
+                     else match.group(0), text)
+
+
+def without_secrets(text: str) -> str:
+    """Text for a model elsewhere: the codes, passwords and keys a message
+    carries taken out, and its links cut down to where they go. The words and
+    the links are judged apart: a port is not a code, nor a slug a key."""
+    text = text or ""
+    pieces, done = [], 0
+    for match in _URL_RE.finditer(text):
+        pieces.append(_words_without_secrets(text[done:match.start()]))
+        pieces.append(link_without_secrets(match.group(0)))
+        done = match.end()
+    pieces.append(_words_without_secrets(text[done:]))
+    return "".join(pieces)
+
+
 def find_urls(text: str) -> Tuple[str, ...]:
     """Recover bare URLs from plain-text bodies."""
     found: List[str] = []
@@ -522,6 +599,22 @@ def pictures_in(html: str) -> list:
     for source in re.findall(r'<img src="([^"]+)"', html):
         source = unescape(source)
         if source.lower().startswith(("http://", "https://")) and source not in found:
+            found.append(source)
+    return found
+
+
+_STYLED_PICTURE = re.compile(r"""url\(\s*['"]?\s*(https?:[^'")\s]+)""", re.I)
+
+
+def pictures_held_back(html: str) -> list:
+    """What a message would fetch were its pictures let in: its pictures and
+    those its styles name. Never the one-pixel images mail uses to report an
+    opening, which are left out either way."""
+    allowed = sanitise_for_view(html, pictures=True, keep_urls=True)
+    found = pictures_in(allowed)
+    for source in _STYLED_PICTURE.findall(allowed):
+        source = unescape(source)
+        if source not in found:
             found.append(source)
     return found
 

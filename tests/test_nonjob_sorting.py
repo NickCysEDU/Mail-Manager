@@ -202,19 +202,63 @@ class TestChoosingTopics:
 
 
 class TestThePreviewOffersTheFix:
+    @staticmethod
+    def _opened(window, width=1280, height=820):
+        """At a size the window opens at: the notice gives way only where
+        the halves under it would lose their height."""
+        from PySide6.QtWidgets import QApplication
+
+        window.resize(width, height)
+        window.show()
+        QApplication.processEvents()
+        return window
+
     def test_it_explains_an_inert_row(self, window):
+        self._opened(window)
         item = next(i for i in window.model.items
                     if not i.classification.is_job_related)
         row = window.model.items.index(item)
         window.preview.show_item(row, item)
         assert window.preview.inert_row.isVisibleTo(window.preview)
-        assert "Sorting" in window.preview.inert_note.text()
+        assert "Sorting" in window.preview.inert_note.full_text()
 
     def test_the_button_is_offered_for_the_cause_it_fixes(self, window):
+        self._opened(window)
         item = next(i for i in window.model.items
                     if not i.classification.is_job_related)
         window.preview.show_item(0, item)
         assert window.preview.sort_these_button.isVisibleTo(window.preview)
+
+    def test_it_gives_way_as_the_window_is_made_smaller(self, window):
+        """And comes back: decided again on every resize, not only when a
+        message is shown."""
+        from PySide6.QtWidgets import QApplication
+
+        self._opened(window, 1600, 1000)
+        item = next(i for i in window.model.items
+                    if not i.classification.is_job_related)
+        window.preview.show_item(0, item)
+        QApplication.processEvents()
+        assert window.preview.inert_row.isVisibleTo(window.preview)
+        window.resize(800, 580)
+        QApplication.processEvents()
+        assert not window.preview.inert_row.isVisibleTo(window.preview)
+        window.resize(1600, 1000)
+        QApplication.processEvents()
+        assert window.preview.inert_row.isVisibleTo(window.preview)
+
+    def test_on_the_smallest_window_it_gives_way_and_the_header_says_it(self, window):
+        """Three lines of reason, and then one, still took the last pixels
+        the halves had. The badge says it in a few words; hovering, whole."""
+        from PySide6.QtWidgets import QApplication
+
+        self._opened(window, 800, 580)
+        item = next(i for i in window.model.items
+                    if not i.classification.is_job_related)
+        window.preview.show_item(0, item)
+        QApplication.processEvents()
+        assert not window.preview.inert_row.isVisibleTo(window.preview)
+        assert item.why_not_actionable in window.preview.header.toolTip()
 
     def test_pressing_it_turns_sorting_on(self, window):
         item = next(i for i in window.model.items

@@ -131,8 +131,27 @@ class MessageWindow(QMainWindow):
             Qt.TextInteractionFlag.TextSelectableByMouse)
         self.who.setProperty("dim", "true")
         self.view = message_view()
-        self.view.set_pictures(bool(owner.settings.show_images))
         self.view.anchorClicked.connect(self._link)
+        #: Which message's pictures were asked for: the next one shown waits
+        #: to be asked again, unless Settings loads them for every message.
+        self._pictures_for = None
+        self.pictures_note = QLabel(
+            "Its pictures wait to be asked for: fetching them tells the sender "
+            "you opened it.")
+        self.pictures_note.setWordWrap(True)
+        self.pictures_note.setProperty("dim", "true")
+        self.load_pictures_button = QPushButton("Load Images")
+        self.load_pictures_button.setToolTip(
+            "Fetch this message's pictures. Settings can load them for every "
+            "message.")
+        self.load_pictures_button.clicked.connect(self._load_pictures_here)
+        self.pictures_bar = QWidget()
+        bar = QHBoxLayout(self.pictures_bar)
+        bar.setContentsMargins(0, 0, 0, 0)
+        bar.setSpacing(8)
+        bar.addWidget(self.pictures_note, 1)
+        bar.addWidget(self.load_pictures_button)
+        self.pictures_bar.setVisible(False)
         self.attachments_button = QPushButton("Attachments")
         self.attachments_button.clicked.connect(
             lambda: self._owner._open_attachments(self._row))
@@ -149,6 +168,7 @@ class MessageWindow(QMainWindow):
         layout = QVBoxLayout(body)
         layout.setContentsMargins(12, 10, 12, 10)
         layout.addLayout(top)
+        layout.addWidget(self.pictures_bar)
         layout.addWidget(self.view, 1)
         layout.addLayout(foot)
         self.setCentralWidget(body)
@@ -158,6 +178,37 @@ class MessageWindow(QMainWindow):
         # last buttons into the overflow menu.
         self.resize(max(980, self.toolbar.sizeHint().width() + 24), 720)
         self.show_row(row)
+        # On the message, as Mail opens one, whatever is over it: Load Images
+        # came first in the chain and took the window's first key.
+        self.view.setFocus()
+
+    def _show_body(self, item) -> None:
+        from triage_table import remote_pictures
+
+        message = item.email
+        missing = self._owner.missing_from(item)
+        self.pictures_bar.setVisible(False)
+        if message.body_html and (message.body_text.strip()
+                                  or "<img" in message.body_html.lower()):
+            loading = (bool(self._owner.settings.load_pictures)
+                       or self._pictures_for == self._key)
+            self.view.set_pictures(loading)
+            self.view.show_message(message.body_html, missing)
+            self.pictures_bar.setVisible(
+                not loading and bool(remote_pictures(message)))
+        elif message.body_text.strip():
+            self.view.setPlainText(message.body_text
+                                   + (f"\n\n[{missing}]" if missing else ""))
+        else:
+            # An HTML shell with nothing in it, or no body at all: say so,
+            # and what the message carries instead, rather than a blank page.
+            self.view.setPlainText(_nothing_to_read(message.attachments or ()))
+
+    def _load_pictures_here(self) -> None:
+        item = self.item()
+        if item is not None:
+            self._pictures_for = self._key
+            self._show_body(item)
 
     # -- What can be done -------------------------------------------------
 
@@ -354,17 +405,7 @@ class MessageWindow(QMainWindow):
             lines.append(f"<b>Mailbox:</b> {_html(message.account_label)}")
         self.who.setText("<br>".join(lines))
         names = message.attachments or ()
-        missing = self._owner.missing_from(item)
-        if message.body_html and (message.body_text.strip()
-                                  or "<img" in message.body_html.lower()):
-            self.view.show_message(message.body_html, missing)
-        elif message.body_text.strip():
-            self.view.setPlainText(message.body_text
-                                   + (f"\n\n[{missing}]" if missing else ""))
-        else:
-            # An HTML shell with nothing in it, or no body at all: say so,
-            # and what the message carries instead, rather than a blank page.
-            self.view.setPlainText(_nothing_to_read(names))
+        self._show_body(item)
         self.attachments_button.setVisible(bool(names))
         self.attachments_button.setText(
             f"Attachments ({len(names)})" if names else "Attachments")

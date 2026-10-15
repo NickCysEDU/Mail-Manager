@@ -238,9 +238,14 @@ class Settings:
     help_mode: bool = False
     #: Say where a link from a message goes before opening it.
     warn_on_links: bool = True
-    #: Show the pictures in a message, fetched from wherever it keeps them,
-    #: which tells the sender it was opened.
-    show_images: bool = True
+    #: Fetch every message's pictures as it is shown, from wherever the sender
+    #: keeps them, which tells the sender it was opened and from where. Off,
+    #: they wait for Load Images. A new name for a new default: as
+    #: `show_images` it was on, and saved on in every settings file.
+    load_pictures: bool = False
+    #: The backends that send mail away whose person has been told what each
+    #: is sent (disclosure.ask), so it is said once for each, not every time.
+    told_what_is_sent: List[str] = field(default_factory=list)
     #: Look on GitHub for a new version, at most once a day. When it last
     #: looked, and a version the person said to skip.
     check_updates: bool = True
@@ -356,6 +361,9 @@ class Settings:
             int(c) for c in (data.get("hidden_columns") or [])
             if isinstance(c, (int, float)) and 1 <= int(c) <= 32
         })
+        data["told_what_is_sent"] = list(dict.fromkeys(
+            name for name in (data.get("told_what_is_sent") or [])
+            if isinstance(name, str) and name))
         import theme as _theme
         if data["appearance_mode"] not in dict(_theme.MODES):
             data["appearance_mode"] = "system"
